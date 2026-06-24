@@ -22,7 +22,7 @@ data class Settings(
     val overlayAlpha: Float = 0.85f,
     val streamingTranslate: Boolean = true,
     val renderMode: RenderMode = RenderMode.BLOCKS,
-    val overlayPlacement: OverlayPlacement = OverlayPlacement.BELOW,
+    val overlayPlacement: OverlayPlacement = OverlayPlacement.OVERLAP,
     val overlayTheme: OverlayTheme = OverlayTheme.CLASSIC_DARK,
     /** CUSTOM 主题用：ARGB int，比如 0xE6000000.toInt() 半透明黑。 */
     val customBgColor: Int = 0xE6000000.toInt(),
@@ -51,7 +51,7 @@ data class Settings(
     val deeplApiKey: String = "",
     val deeplPro: Boolean = false,
     /** 悬浮按钮直径（dp）。 */
-    val floatingButtonSizeDp: Int = 56,
+    val floatingButtonSizeDp: Int = 40,
     /** 译文允许换行（关闭后强制单行，可能横向溢出但更紧凑）。 */
     val overlayAllowWrap: Boolean = true,
     /** 启用碰撞检测：上下左右四个方向都避免遮挡其它原文 box。 */
@@ -67,7 +67,7 @@ data class Settings(
      * box 取 union。漫画 / 字幕场景百度等引擎经常把一句话拆成多段，开启后能让译文
      * 不再分裂成多个互相重叠的小框。默认开。
      */
-    val mergeAdjacentBlocks: Boolean = true,
+    val mergeAdjacentBlocks: Boolean = false,
     /**
      * 用户在 LanguagePicker 里星标过的语言代码，按收藏顺序保存。
      * 列表里在最前，源语言 / 目标语言两个选择器共享同一份。
