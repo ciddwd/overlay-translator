@@ -62,6 +62,7 @@ class SettingsViewModel @Inject constructor(
         preprocess: PreprocessOptions,
         a11yVolume: Boolean,
         floatingButtonSizeDp: Int,
+        floatingButtonSnapToEdge: Boolean,
         allowWrap: Boolean,
         avoidCollision: Boolean,
         apiTimeoutSeconds: Int,
@@ -107,6 +108,7 @@ class SettingsViewModel @Inject constructor(
                 preprocess = preprocess,
                 a11yVolumeTrigger = a11yVolume,
                 floatingButtonSizeDp = floatingButtonSizeDp.coerceIn(32, 96),
+                floatingButtonSnapToEdge = floatingButtonSnapToEdge,
                 overlayAllowWrap = allowWrap,
                 overlayAvoidCollision = avoidCollision,
                 apiTimeoutSeconds = apiTimeoutSeconds.coerceIn(5, 300),
@@ -124,6 +126,14 @@ class SettingsViewModel @Inject constructor(
 
     suspend fun savePaddleMirror(url: String) {
         repo.update { it.copy(paddleModelMirrorUrl = url.trim()) }
+    }
+
+    /**
+     * 单独保存「悬浮球吸附边缘」开关。切换时立即落盘 + 立即触发 CaptureService 响应，
+     * 不走 [save] 的 dirty/save 流程——用户切了开关期望立即生效，不需要再点保存。
+     */
+    suspend fun saveFloatingSnapEdge(enabled: Boolean) {
+        repo.update { it.copy(floatingButtonSnapToEdge = enabled) }
     }
 
     /**

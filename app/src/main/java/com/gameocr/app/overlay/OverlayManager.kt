@@ -47,6 +47,7 @@ class OverlayManager(
     private var blocksView: View? = null
     private var loadingView: View? = null
     private var errorView: View? = null
+    private var countdownView: View? = null
     private val blockViews = mutableMapOf<Int, TextView>()
 
     private val overlayType: Int = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -160,6 +161,92 @@ class OverlayManager(
     fun dismissError() {
         errorView?.let { runCatching { wm.removeView(it) } }
         errorView = null
+    }
+
+    /**
+     * 循环模式启动倒计时圆圈。屏幕正中显示灰底白字大圆圈（3 → 2 → 1），圆下方一行小字提示。
+     *
+     * **关键约束**：MediaProjection 会把所有 system overlay 一起截到画面里——若倒计时圆圈
+     * 还在屏幕上时执行 `captureOnce()`，OCR 会把"3 自动翻译开启中"这类文字翻译出来贴回屏幕。
+     * 所以 [onFinish] 必须在 `wm.removeView` **之后** + 一个小的 VSYNC 缓冲后才回调，调用方
+     * 在 `onFinish` 里启动第一次截屏即可保证画面干净。
+     *
+     * 重复调用会先取消上一个倒计时。
+     */
+    fun showStartCountdown(seconds: Int = 3, hintText: String, onFinish: () -> Unit) {
+        cancelStartCountdown()
+
+        val density = context.resources.displayMetrics.density
+        val circleSize = (140 * density).toInt()
+        val gapDp = (12 * density).toInt()
+
+        val countText = TextView(context).apply {
+            text = seconds.toString()
+            setTextColor(0xFFFFFFFF.toInt())
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 56f)
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            gravity = Gravity.CENTER
+        }
+        val circle = FrameLayout(context).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(0xE6303030.toInt())
+            }
+            addView(
+                countText,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT
+                )
+            )
+        }
+        val hintTv = TextView(context).apply {
+            text = hintText
+            setTextColor(0xFFFFFFFF.toInt())
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            gravity = Gravity.CENTER
+        }
+        val container = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+        }
+        container.addView(circle, LinearLayout.LayoutParams(circleSize, circleSize))
+        container.addView(
+            hintTv,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = gapDp }
+        )
+
+        val params = newLayoutParams().apply {
+            width = WindowManager.LayoutParams.WRAP_CONTENT
+            height = WindowManager.LayoutParams.WRAP_CONTENT
+            gravity = Gravity.CENTER
+        }
+        runCatching { wm.addView(container, params) }
+        countdownView = container
+
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+        fun tick(left: Int) {
+            if (countdownView !== container) return // 已被 cancelStartCountdown
+            if (left <= 0) {
+                runCatching { wm.removeView(container) }
+                if (countdownView === container) countdownView = null
+                // 给 WindowManager ~3 帧时间让圆圈真正从屏幕消失，再放调用方进 captureOnce
+                handler.postDelayed({ onFinish() }, 80L)
+                return
+            }
+            countText.text = left.toString()
+            handler.postDelayed({ tick(left - 1) }, 1000L)
+        }
+        tick(seconds)
+    }
+
+    /** 倒计时未结束时调用：移除圆圈，**不** 触发 onFinish（适合「用户中途又切回 OFF」的场景）。 */
+    fun cancelStartCountdown() {
+        countdownView?.let { runCatching { wm.removeView(it) } }
+        countdownView = null
     }
 
     /**

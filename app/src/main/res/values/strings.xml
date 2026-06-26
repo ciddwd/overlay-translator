@@ -352,9 +352,18 @@
 
     <!-- CaptureService toast -->
     <string name="toast_loop_off">自动翻译已关闭</string>
-    <string name="toast_loop_on">自动翻译已开启（每 %1$s 秒一次，再次长按关闭）</string>
+    <string name="toast_loop_on">自动翻译已开启（每 %1$s 秒一次）</string>
     <string name="toast_capture_failed">截屏失败：未拿到画面，建议重新启动捕获</string>
     <string name="toast_ocr_failed_format">OCR 失败 [%1$s]：%2$s</string>
+
+    <!-- 悬浮球弧形菜单（长按弹出） -->
+    <string name="menu_loop_translate">循环翻译</string>
+    <string name="menu_loop_translate_active">关闭循环</string>
+    <string name="menu_pick_region">截图区域</string>
+    <string name="menu_open_main">返回主应用</string>
+    <string name="loop_countdown_hint">自动翻译开启中…</string>
+    <string name="settings_floating_snap_edge_label">悬浮球吸附边缘</string>
+    <string name="settings_floating_snap_edge_hint">松手后弹性贴边并 1/3 藏到屏外（待机半透明），按下时自动唤醒拉回。关闭后松手停在原位、不藏边。</string>
 
     <!-- 内置日志（LogRepository 写入的 message） -->
     <string name="log_msg_loop_off">循环模式关闭</string>

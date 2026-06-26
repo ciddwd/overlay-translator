@@ -66,6 +66,14 @@ data class Settings(
     val youdaoAppSecret: String = "",
     /** 悬浮按钮直径（dp）。 */
     val floatingButtonSizeDp: Int = 40,
+    /**
+     * 悬浮按钮 X 坐标（px，gravity=TOP|START 参考左上角）。-1 表示未保存过，按代码默认值
+     * `(16dp, screenH/4)` 初始化。松手吸边后由 [FloatingButtonManager] 写回。
+     */
+    val floatingButtonX: Int = -1,
+    val floatingButtonY: Int = -1,
+    /** 松手是否自动吸附最近边（贴边时 1/3 藏出屏外 + 半透明待机）。关时松手停在原位。 */
+    val floatingButtonSnapToEdge: Boolean = true,
     /** 译文允许换行（关闭后强制单行，可能横向溢出但更紧凑）。 */
     val overlayAllowWrap: Boolean = true,
     /** 启用碰撞检测：上下左右四个方向都避免遮挡其它原文 box。 */

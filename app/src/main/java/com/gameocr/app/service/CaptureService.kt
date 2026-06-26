@@ -26,6 +26,7 @@ import com.gameocr.app.ocr.OcrEngine
 import com.gameocr.app.ocr.TextBlock
 import com.gameocr.app.overlay.FloatingButtonManager
 import com.gameocr.app.overlay.OverlayManager
+import com.gameocr.app.overlay.RegionPickerOverlay
 import com.gameocr.app.translate.TranslationException
 import com.gameocr.app.translate.Translator
 import dagger.hilt.android.AndroidEntryPoint
@@ -71,6 +72,7 @@ class CaptureService : Service() {
     private var projection: MediaProjection? = null
     private var floatingButton: FloatingButtonManager? = null
     private var overlay: OverlayManager? = null
+    private var regionPicker: RegionPickerOverlay? = null
 
     private val deduper = FrameDeduper()
     private var loopJob: Job? = null
@@ -151,12 +153,26 @@ class CaptureService : Service() {
         floatingButton = FloatingButtonManager(
             this,
             onSingleTap = { triggerOnce() },
-            onLongPress = { toggleLoopMode() }
-        )
-        // 异步读 settings 应用大小后再 show，避免阻塞 startForeground 流程
+            // 长按 = 弹弧形菜单；菜单第一项「循环翻译」继续走 toggleLoopMode
+            onLongPress = { toggleLoopMode() },
+            settingsRepository = settingsRepository,
+            ioScope = scope
+        ).also {
+            // 截图区域调整：用悬浮窗版替代旧的 Activity 跳转——不再切走游戏 / 漫画，且重复
+            // 点菜单也只弹一次（show 内部去重）。
+            it.onMenuPickRegion = { showRegionPickerOverlay() }
+            it.onMenuOpenMainActivity = { startActivity(
+                Intent(this, com.gameocr.app.ui.MainActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            ) }
+        }
+        // 异步读 settings 应用大小 + 还原上次松手位置后再 show，避免阻塞 startForeground 流程
         scope.launch {
             val s = settingsRepository.get()
             floatingButton?.sizeDp = s.floatingButtonSizeDp
+            floatingButton?.initialX = s.floatingButtonX
+            floatingButton?.initialY = s.floatingButtonY
+            floatingButton?.snapToEdgeEnabled = s.floatingButtonSnapToEdge
             mainScope.launch { floatingButton?.show() }
         }
 
@@ -185,7 +201,11 @@ class CaptureService : Service() {
             loopMode = false
             loopJob?.cancel()
             loopJob = null
-            mainScope.launch { floatingButton?.setLoopActive(false, 0L) }
+            mainScope.launch {
+                // 中途切回 OFF：若倒计时圆圈还没消失，立刻撤掉
+                overlay?.cancelStartCountdown()
+                floatingButton?.setLoopActive(false, 0L)
+            }
             Timber.i("Loop mode OFF")
             logRepository.info(LogRepository.Category.CAPTURE, getString(R.string.log_msg_loop_off))
             // 国产 ROM 后台 Service toast 静默丢弃，用悬浮提示双保险
@@ -194,20 +214,12 @@ class CaptureService : Service() {
             mainScope.launch { overlay?.showInfoHint(msg) }
         } else {
             loopMode = true
-            loopJob = scope.launch {
-                while (isActive && loopMode) {
-                    captureOnce()
-                    val s = settingsRepository.get()
-                    val interval = if (s.captureLoopIntervalMs <= 0) 2000L else s.captureLoopIntervalMs
-                    delay(interval)
-                }
-            }
-            // 同步启动圆球外圈进度环 + 显示开启提示。interval 在循环 ON 时拿一次快照，
-            // 期间用户改 interval 想看到刷新需要重新切换循环。
+            // 先弹屏幕中央 3-2-1 倒计时圆圈，圆圈 removeView + ~80ms VSYNC 缓冲后才启动 loopJob，
+            // 保证首次 captureOnce 截屏时画面干净（圆圈已消失）。toast + showInfoHint 提示条本身
+            // 不在主 OCR 区域，可能被截到但概率低 & 影响小，保留以提供更可靠的视觉反馈。
             scope.launch {
                 val s = settingsRepository.get()
                 val interval = if (s.captureLoopIntervalMs <= 0) 2000L else s.captureLoopIntervalMs
-                // 用户实际设的间隔渲染到 toast 文案里。整秒显示整数，否则带 1 位小数。
                 val secsStr = if (interval % 1000L == 0L) {
                     (interval / 1000L).toString()
                 } else {
@@ -216,12 +228,61 @@ class CaptureService : Service() {
                 val msg = getString(R.string.toast_loop_on, secsStr)
                 toast(msg)
                 mainScope.launch {
-                    floatingButton?.setLoopActive(true, interval)
-                    overlay?.showInfoHint(msg)
+                    overlay?.showStartCountdown(
+                        seconds = 3,
+                        hintText = getString(R.string.loop_countdown_hint)
+                    ) {
+                        // onFinish 时圆圈已经 removeView 且 ~80ms VSYNC 缓冲过
+                        if (!loopMode) return@showStartCountdown // 倒计时途中被关掉
+                        floatingButton?.setLoopActive(true, interval)
+                        overlay?.showInfoHint(msg)
+                        loopJob = scope.launch {
+                            while (isActive && loopMode) {
+                                captureOnce()
+                                val s2 = settingsRepository.get()
+                                val ivl = if (s2.captureLoopIntervalMs <= 0) 2000L else s2.captureLoopIntervalMs
+                                delay(ivl)
+                            }
+                        }
+                    }
                 }
             }
             Timber.i("Loop mode ON")
             logRepository.info(LogRepository.Category.CAPTURE, getString(R.string.log_msg_loop_on))
+        }
+    }
+
+    /**
+     * 启动悬浮窗版区域选择。流程：
+     *  1) 拉框前隐藏悬浮球（避免遮挡 + 防止它跑进选区影响后续截屏 OCR）
+     *  2) 把当前 captureRegion 作为初始框传入，用户可在原基础上调整
+     *  3) 确认 → 写回 Settings；取消 → 不写
+     *  4) 不管哪种结束都恢复悬浮球
+     *
+     * 重复点菜单时通过 [RegionPickerOverlay.isShown] 去重，永远只有一个 picker。
+     */
+    private fun showRegionPickerOverlay() {
+        val picker = regionPicker ?: RegionPickerOverlay(this).also { regionPicker = it }
+        if (picker.isShown()) return
+        mainScope.launch {
+            val initial = settingsRepository.get().captureRegion?.let {
+                android.graphics.Rect(it.left, it.top, it.right, it.bottom)
+            }
+            floatingButton?.hide()
+            picker.show(
+                initial = initial,
+                onConfirm = { rect ->
+                    scope.launch {
+                        settingsRepository.update {
+                            it.copy(captureRegion = CaptureRegion(rect.left, rect.top, rect.right, rect.bottom))
+                        }
+                    }
+                    mainScope.launch { floatingButton?.show() }
+                },
+                onCancel = {
+                    mainScope.launch { floatingButton?.show() }
+                }
+            )
         }
     }
 
@@ -571,6 +632,9 @@ class CaptureService : Service() {
                 it.sizeDp = settings.floatingButtonSizeDp
                 mainScope.launch { it.applyResize() }
             }
+            // applySnapPreference 内部启动 SpringAnimation，必须在主线程；settings flow
+            // collect 跑在 Dispatchers.Default，不切主线程会 IllegalStateException 闪退。
+            mainScope.launch { it.applySnapPreference(settings.floatingButtonSnapToEdge) }
         }
     }
 
@@ -585,6 +649,8 @@ class CaptureService : Service() {
         overlay = null
         floatingButton?.hide()
         floatingButton = null
+        regionPicker?.dismiss()
+        regionPicker = null
         screenshotter?.release()
         screenshotter = null
         projection?.stop()

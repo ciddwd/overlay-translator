@@ -63,6 +63,9 @@ class SettingsRepository @Inject constructor(
         val DeeplKey = stringPreferencesKey("deepl_key")
         val DeeplPro = booleanPreferencesKey("deepl_pro")
         val FloatingSize = intPreferencesKey("floating_button_size_dp")
+        val FloatingX = intPreferencesKey("floating_button_x")
+        val FloatingY = intPreferencesKey("floating_button_y")
+        val FloatingSnapEdge = booleanPreferencesKey("floating_button_snap_edge")
         // 收藏的语言代码列表，逗号分隔（"ja,zh-CN,en"）。逗号不可能出现在 BCP-47 tag 里，分隔安全。
         val PinnedLangs = stringPreferencesKey("pinned_languages")
         val OverlayWrap = booleanPreferencesKey("overlay_allow_wrap")
@@ -124,6 +127,9 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.DeeplKey] = next.deeplApiKey
             prefs[Keys.DeeplPro] = next.deeplPro
             prefs[Keys.FloatingSize] = next.floatingButtonSizeDp
+            prefs[Keys.FloatingX] = next.floatingButtonX
+            prefs[Keys.FloatingY] = next.floatingButtonY
+            prefs[Keys.FloatingSnapEdge] = next.floatingButtonSnapToEdge
             prefs[Keys.PinnedLangs] = next.pinnedLanguages.joinToString(",")
             prefs[Keys.OverlayWrap] = next.overlayAllowWrap
             prefs[Keys.OverlayCollision] = next.overlayAvoidCollision
@@ -197,6 +203,9 @@ class SettingsRepository @Inject constructor(
             deeplApiKey = this[Keys.DeeplKey] ?: default.deeplApiKey,
             deeplPro = this[Keys.DeeplPro] ?: default.deeplPro,
             floatingButtonSizeDp = this[Keys.FloatingSize] ?: default.floatingButtonSizeDp,
+            floatingButtonX = this[Keys.FloatingX] ?: default.floatingButtonX,
+            floatingButtonY = this[Keys.FloatingY] ?: default.floatingButtonY,
+            floatingButtonSnapToEdge = this[Keys.FloatingSnapEdge] ?: default.floatingButtonSnapToEdge,
             pinnedLanguages = this[Keys.PinnedLangs]
                 ?.split(',')
                 ?.map { it.trim() }

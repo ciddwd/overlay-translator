@@ -161,6 +161,7 @@ fun SettingsScreen(
     var preBinarize by remember { mutableStateOf(false) }
     var a11yVolume by remember { mutableStateOf(false) }
     var floatingSize by remember { mutableStateOf(56f) }
+    var floatingSnapEdge by remember { mutableStateOf(true) }
     var allowWrap by remember { mutableStateOf(true) }
     var avoidCollision by remember { mutableStateOf(true) }
     var apiTimeoutSec by remember { mutableStateOf(30f) }
@@ -228,6 +229,7 @@ fun SettingsScreen(
         youdaoAppKey = youdaoAppKey,
         youdaoAppSecret = youdaoAppSecret,
         floatingButtonSizeDp = floatingSize.toInt(),
+        floatingButtonSnapToEdge = floatingSnapEdge,
         overlayAllowWrap = allowWrap,
         overlayAvoidCollision = avoidCollision,
         apiTimeoutSeconds = apiTimeoutSec.toInt(),
@@ -261,6 +263,7 @@ fun SettingsScreen(
             preprocess = PreprocessOptions(preUpscale, preInvert, preBinarize),
             a11yVolume = a11yVolume,
             floatingButtonSizeDp = floatingSize.toInt(),
+            floatingButtonSnapToEdge = floatingSnapEdge,
             allowWrap = allowWrap,
             avoidCollision = avoidCollision,
             apiTimeoutSeconds = apiTimeoutSec.toInt(),
@@ -629,6 +632,7 @@ fun SettingsScreen(
             preBinarize = s.preprocess.binarize
             a11yVolume = s.a11yVolumeTrigger
             floatingSize = s.floatingButtonSizeDp.toFloat()
+            floatingSnapEdge = s.floatingButtonSnapToEdge
             pinnedLanguages = s.pinnedLanguages
             allowWrap = s.overlayAllowWrap
             avoidCollision = s.overlayAvoidCollision
@@ -1361,6 +1365,13 @@ fun SettingsScreen(
                     onValueChange = { floatingSize = it },
                     valueRange = 32f..96f,
                     steps = (96 - 32) / 4 - 1
+                )
+
+                SwitchRow(stringResource(R.string.settings_floating_snap_edge_label), floatingSnapEdge) { floatingSnapEdge = it }
+                Text(
+                    stringResource(R.string.settings_floating_snap_edge_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 
