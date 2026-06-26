@@ -81,7 +81,8 @@ class FloatingButtonManager(
 
     private fun createDisplayBoundWm(): WindowManager {
         val defaultWm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return defaultWm
+        // createWindowContext(display, type, options) 是 API 31 (S)，2-arg 版本 (API 30) 不绑定指定 display
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return defaultWm
         return runCatching {
             val dm = context.getSystemService(Context.DISPLAY_SERVICE) as android.hardware.display.DisplayManager
             val display = dm.getDisplay(android.view.Display.DEFAULT_DISPLAY) ?: return@runCatching defaultWm
