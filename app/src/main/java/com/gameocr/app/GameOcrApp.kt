@@ -4,6 +4,7 @@ import android.app.Application
 import com.gameocr.app.data.CrashRecorder
 import com.gameocr.app.data.LogRepository
 import com.gameocr.app.data.SettingsRepository
+import com.gameocr.app.di.PrivateCleartextInterceptor
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
@@ -18,6 +19,7 @@ class GameOcrApp : Application() {
 
     @Inject lateinit var logRepository: LogRepository
     @Inject lateinit var settingsRepository: SettingsRepository
+    @Inject lateinit var cleartextInterceptor: PrivateCleartextInterceptor
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -40,6 +42,7 @@ class GameOcrApp : Application() {
         appScope.launch {
             settingsRepository.settings.collect { settings ->
                 CrashRecorder.updateSettingsSummary(CrashRecorder.formatSettings(settings))
+                cleartextInterceptor.allowedHosts = settings.cleartextAllowedHosts.toSet()
             }
         }
     }

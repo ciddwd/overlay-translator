@@ -35,7 +35,7 @@ class UpdateChecker @Inject constructor(
             val req = Request.Builder()
                 .url(LATEST_RELEASE_URL)
                 .header("Accept", "application/vnd.github+json")
-                .header("User-Agent", "GameOcr/${BuildConfig.VERSION_NAME}")
+                .header("User-Agent", "ScreenTranslator/${BuildConfig.VERSION_NAME}")
                 .build()
             httpClient.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) error("HTTP ${resp.code}")

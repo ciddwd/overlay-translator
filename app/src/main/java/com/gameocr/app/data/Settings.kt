@@ -61,6 +61,27 @@ data class Settings(
     val translatorEngine: TranslatorEngine = TranslatorEngine.OPENAI,
     val deeplApiKey: String = "",
     val deeplPro: Boolean = false,
+    /**
+     * DeepL 请求 / 响应协议。**与 [deeplBaseUrl] 解耦**，因为有的自架是 deeplx 协议、有的是
+     * DeepL 官方兼容代理；URL 不应该决定协议。默认走 OFFICIAL 不破坏老配置。
+     */
+    val deeplProtocol: DeeplProtocol = DeeplProtocol.OFFICIAL,
+    /**
+     * DeepL 自定义 base URL（含末尾 `/`，例如 `http://localhost:1188/`）。
+     * 空 = 按 [deeplPro] 选官方端点（free / pro）。自架 deeplx / Cloudflare worker 的用户填这里。
+     * 非空时 [deeplPro] 失效（自定义后端不区分 free/pro），test connection 也改用 `translate` 探活。
+     */
+    val deeplBaseUrl: String = "",
+    /**
+     * 自定义 base URL 时的鉴权方式：false = `DeepL-Auth-Key <token>`（官方格式），true = `Bearer <token>`（部分 deeplx 部署）。
+     * 仅在 [deeplBaseUrl] 非空时生效。鉴权用的 token 是 [deeplCustomToken]（**不是** [deeplApiKey]），避免把官方 key 误发给自架/第三方端点。
+     */
+    val deeplBearerAuth: Boolean = false,
+    /**
+     * 自定义 base URL 模式下专用的访问 token。与 [deeplApiKey]（官方 free/pro key）**完全隔离**，
+     * 防止用户切换 URL 时把官方 key 泄漏给第三方。留空 = 不发 Authorization（裸 deeplx 无鉴权场景）。
+     */
+    val deeplCustomToken: String = "",
     /** 有道智云一套 AppKey/Secret，OCR (ocrapi) 与图片翻译 (ocrtransapi) 共用。 */
     val youdaoAppKey: String = "",
     val youdaoAppSecret: String = "",
@@ -74,6 +95,16 @@ data class Settings(
     val floatingButtonY: Int = -1,
     /** 松手是否自动吸附最近边（贴边时 1/3 藏出屏外 + 半透明待机）。关时松手停在原位。 */
     val floatingButtonSnapToEdge: Boolean = true,
+    /**
+     * 长按菜单关闭 / 操作完悬浮按钮后，若 3 秒未再次触摸则自动吸附最近边。
+     * 仅在 [floatingButtonSnapToEdge] 也开启时生效。默认关，避免吓到老用户。
+     */
+    val floatingButtonAutoDock: Boolean = false,
+    /**
+     * 吸附时距实际屏幕物理边的内偏移（dp，0–40）。0 = 紧贴系统边；> 0 时让出 inset 宽度，
+     * 用来避开全面屏左右边手势触发区。
+     */
+    val floatingButtonDockInsetDp: Int = 0,
     /** 译文允许换行（关闭后强制单行，可能横向溢出但更紧凑）。 */
     val overlayAllowWrap: Boolean = true,
     /** 启用碰撞检测：上下左右四个方向都避免遮挡其它原文 box。 */
@@ -98,7 +129,13 @@ data class Settings(
      * 用户在 LanguagePicker 里星标过的语言代码，按收藏顺序保存。
      * 列表里在最前，源语言 / 目标语言两个选择器共享同一份。
      */
-    val pinnedLanguages: List<String> = emptyList()
+    val pinnedLanguages: List<String> = emptyList(),
+    /**
+     * 明文 HTTP 白名单 host 列表（仅 hostname / IP，不含 scheme / port / path）。
+     * 默认严格模式仅放行私有/回环地址；这里追加的 host 也允许明文访问，用于无 HTTPS 的可信外网服务。
+     * **安全提示**：明文可被中间人窃听/篡改，仅在你确认链路可信时启用。
+     */
+    val cleartextAllowedHosts: List<String> = emptyList()
 ) {
     companion object {
         /**
@@ -130,6 +167,25 @@ enum class MergeStrength {
     STANDARD,
     /** 视觉小说 / 长段密集场景：严格阈值（gap 0.8x、垂直 0.5x、相交 50%），少误合但段落易拆开。 */
     CONSERVATIVE
+}
+
+@Serializable
+enum class DeeplProtocol {
+    /**
+     * DeepL 官方 v2/translate 协议：`Authorization: DeepL-Auth-Key`，body 是 form-urlencoded
+     * (`text=...&target_lang=...`)，响应 `{translations:[{text,...}]}`。
+     */
+    OFFICIAL,
+    /**
+     * deeplx 协议（OwO-Network/DeepLX 及其常见 fork）：body 是 JSON
+     * (`{text, source_lang, target_lang}`)，响应 `{code, data, ...}`，不支持 batch。
+     */
+    DEEPLX,
+    /**
+     * 混合：先用 deeplx 翻译，若 deeplx 失败 / 返回空，则用 DeepL 官方 key 补译。
+     * 需要 deeplx Base URL（必填）+ DeepL 官方 API Key（用作 fallback）同时配置。
+     */
+    AUTO
 }
 
 @Serializable

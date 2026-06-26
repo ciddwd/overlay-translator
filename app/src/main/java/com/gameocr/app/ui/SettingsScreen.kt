@@ -86,6 +86,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.runtime.DisposableEffect
+import com.gameocr.app.overlay.EdgeInsetPreviewOverlay
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -121,6 +124,11 @@ fun SettingsScreen(
     var translatorEngine by remember { mutableStateOf(TranslatorEngine.OPENAI) }
     var deeplKey by remember { mutableStateOf("") }
     var deeplPro by remember { mutableStateOf(false) }
+    var deeplBaseUrl by remember { mutableStateOf("") }
+    var deeplBearerAuth by remember { mutableStateOf(false) }
+    var deeplCustomToken by remember { mutableStateOf("") }
+    var deeplProtocol by remember { mutableStateOf(com.gameocr.app.data.DeeplProtocol.OFFICIAL) }
+    var deeplAdvancedExpanded by remember { mutableStateOf(false) }
     // 有道智云一套 key（OCR + 图片翻译共用）
     var youdaoAppKey by remember { mutableStateOf("") }
     var youdaoAppSecret by remember { mutableStateOf("") }
@@ -162,11 +170,31 @@ fun SettingsScreen(
     var a11yVolume by remember { mutableStateOf(false) }
     var floatingSize by remember { mutableStateOf(56f) }
     var floatingSnapEdge by remember { mutableStateOf(true) }
+    var floatingAutoDock by remember { mutableStateOf(false) }
+    var floatingDockInset by remember { mutableStateOf(0f) }
+    // 悬浮按钮"贴边距离" slider 的实时预览：屏幕两侧画 inset 宽度的半透粉条。
+    // 默认 false——进设置就显示条带太突兀；用户在 slider 旁手动开启「预览」后才覆盖到屏幕上。
+    var insetPreviewActive by remember { mutableStateOf(false) }
+    val density = LocalDensity.current
+    val insetPreview = remember { EdgeInsetPreviewOverlay(context) }
+    LaunchedEffect(insetPreviewActive, floatingDockInset, floatingSnapEdge) {
+        if (insetPreviewActive && floatingSnapEdge) {
+            val px = with(density) { floatingDockInset.dp.roundToPx() }
+            insetPreview.update(px)
+        } else {
+            insetPreview.hide()
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose { insetPreview.hide() }
+    }
     var allowWrap by remember { mutableStateOf(true) }
     var avoidCollision by remember { mutableStateOf(true) }
     var apiTimeoutSec by remember { mutableStateOf(30f) }
     var mergeAdjacent by remember { mutableStateOf(true) }
     var mergeStrength by remember { mutableStateOf(com.gameocr.app.data.MergeStrength.STANDARD) }
+    // 明文 HTTP 白名单：用户每行一个 host，UI 上用 String，保存时 split("\n")
+    var cleartextHostsText by remember { mutableStateOf("") }
     // 星标语言：本地镜像。togglePinLanguage 立即落盘，下次 ON_RESUME / load() 拉回最新；
     // 这里也乐观更新一份本地状态，UI 立刻反映。
     var pinnedLanguages by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -226,15 +254,22 @@ fun SettingsScreen(
         translatorEngine = translatorEngine,
         deeplApiKey = deeplKey,
         deeplPro = deeplPro,
+        deeplProtocol = deeplProtocol,
+        deeplBaseUrl = deeplBaseUrl,
+        deeplBearerAuth = deeplBearerAuth,
+        deeplCustomToken = deeplCustomToken,
         youdaoAppKey = youdaoAppKey,
         youdaoAppSecret = youdaoAppSecret,
         floatingButtonSizeDp = floatingSize.toInt(),
         floatingButtonSnapToEdge = floatingSnapEdge,
+        floatingButtonAutoDock = floatingAutoDock,
+        floatingButtonDockInsetDp = floatingDockInset.toInt(),
         overlayAllowWrap = allowWrap,
         overlayAvoidCollision = avoidCollision,
         apiTimeoutSeconds = apiTimeoutSec.toInt(),
         mergeAdjacentBlocks = mergeAdjacent,
-        mergeStrength = mergeStrength
+        mergeStrength = mergeStrength,
+        cleartextAllowedHosts = parseCleartextHosts(cleartextHostsText)
     )
     // derivedStateOf 让 lambda 在依赖 state 变化时才重新计算 equals
     val dirty by remember {
@@ -264,14 +299,21 @@ fun SettingsScreen(
             a11yVolume = a11yVolume,
             floatingButtonSizeDp = floatingSize.toInt(),
             floatingButtonSnapToEdge = floatingSnapEdge,
+            floatingButtonAutoDock = floatingAutoDock,
+            floatingButtonDockInsetDp = floatingDockInset.toInt(),
             allowWrap = allowWrap,
             avoidCollision = avoidCollision,
             apiTimeoutSeconds = apiTimeoutSec.toInt(),
             mergeAdjacentBlocks = mergeAdjacent,
             mergeStrength = mergeStrength,
+            cleartextAllowedHosts = parseCleartextHosts(cleartextHostsText),
             translatorEngine = translatorEngine,
             deeplKey = deeplKey,
             deeplPro = deeplPro,
+            deeplProtocol = deeplProtocol,
+            deeplBaseUrl = deeplBaseUrl,
+            deeplBearerAuth = deeplBearerAuth,
+            deeplCustomToken = deeplCustomToken,
             paddleMirror = paddleMirror,
             youdaoAppKey = youdaoAppKey,
             youdaoAppSecret = youdaoAppSecret
@@ -601,6 +643,10 @@ fun SettingsScreen(
             youdaoAppKey = s.youdaoAppKey
             youdaoAppSecret = s.youdaoAppSecret
             deeplPro = s.deeplPro
+            deeplProtocol = s.deeplProtocol
+            deeplBaseUrl = s.deeplBaseUrl
+            deeplBearerAuth = s.deeplBearerAuth
+            deeplCustomToken = s.deeplCustomToken
             textSize = s.overlayTextSizeSp.toFloat()
             alpha = s.overlayAlpha
             loopInterval = s.captureLoopIntervalMs.toString()
@@ -633,12 +679,15 @@ fun SettingsScreen(
             a11yVolume = s.a11yVolumeTrigger
             floatingSize = s.floatingButtonSizeDp.toFloat()
             floatingSnapEdge = s.floatingButtonSnapToEdge
+            floatingAutoDock = s.floatingButtonAutoDock
+            floatingDockInset = s.floatingButtonDockInsetDp.toFloat()
             pinnedLanguages = s.pinnedLanguages
             allowWrap = s.overlayAllowWrap
             avoidCollision = s.overlayAvoidCollision
             apiTimeoutSec = s.apiTimeoutSeconds.toFloat()
             mergeAdjacent = s.mergeAdjacentBlocks
             mergeStrength = s.mergeStrength
+            cleartextHostsText = s.cleartextAllowedHosts.joinToString("\n")
             // 同一个 snapshot 内 capture 初始 Settings——既走 buildSnapshot() 单源路径，
             // 又跟所有 state 在同一原子 apply 里，不会被中间帧看到。
             initialSettings = buildSnapshot()
@@ -826,12 +875,96 @@ fun SettingsScreen(
                         placeholder = stringResource(R.string.settings_deepl_key_placeholder),
                         modifier = Modifier.fillMaxWidth()
                     )
-                    SwitchRow(stringResource(R.string.settings_deepl_use_pro), deeplPro) { deeplPro = it }
+                    SwitchRow(
+                        stringResource(R.string.settings_deepl_use_pro),
+                        deeplPro,
+                        // OFFICIAL / AUTO 协议都会走官方端点（AUTO 用作 fallback），Pro 都生效；纯 DEEPLX 协议下 Pro 无意义
+                        enabled = deeplProtocol != com.gameocr.app.data.DeeplProtocol.DEEPLX
+                    ) { deeplPro = it }
                     Text(
                         stringResource(R.string.settings_deepl_tip),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+
+                    // —— 高级（自架 / deeplx）——
+                    // 折叠掉避免吓到只用官方 DeepL 的用户；展开有自定义 URL + Bearer
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { deeplAdvancedExpanded = !deeplAdvancedExpanded }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            (if (deeplAdvancedExpanded) "▼ " else "▶ ") +
+                                stringResource(R.string.settings_deepl_advanced_header),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    if (deeplAdvancedExpanded) {
+                        Text(
+                            stringResource(R.string.settings_deepl_protocol_label),
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            EngineChip(deeplProtocol, com.gameocr.app.data.DeeplProtocol.OFFICIAL,
+                                stringResource(R.string.settings_deepl_protocol_official)) { deeplProtocol = it }
+                            EngineChip(deeplProtocol, com.gameocr.app.data.DeeplProtocol.DEEPLX,
+                                stringResource(R.string.settings_deepl_protocol_deeplx)) { deeplProtocol = it }
+                            EngineChip(deeplProtocol, com.gameocr.app.data.DeeplProtocol.AUTO,
+                                stringResource(R.string.settings_deepl_protocol_auto)) { deeplProtocol = it }
+                        }
+                        Text(
+                            stringResource(when (deeplProtocol) {
+                                com.gameocr.app.data.DeeplProtocol.OFFICIAL -> R.string.settings_deepl_protocol_official_hint
+                                com.gameocr.app.data.DeeplProtocol.DEEPLX -> R.string.settings_deepl_protocol_deeplx_hint
+                                com.gameocr.app.data.DeeplProtocol.AUTO -> R.string.settings_deepl_protocol_auto_hint
+                            }),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        OutlinedTextField(
+                            value = deeplBaseUrl,
+                            onValueChange = { deeplBaseUrl = it },
+                            label = { Text(stringResource(R.string.settings_deepl_base_url)) },
+                            placeholder = { Text(stringResource(R.string.settings_deepl_base_url_placeholder)) },
+                            modifier = Modifier.fillMaxWidth(), singleLine = true
+                        )
+                        Text(
+                            stringResource(R.string.settings_deepl_base_url_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        SecretTextField(
+                            value = deeplCustomToken,
+                            onValueChange = { deeplCustomToken = it },
+                            label = stringResource(R.string.settings_deepl_custom_token),
+                            placeholder = stringResource(R.string.settings_deepl_custom_token_placeholder),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Text(
+                            stringResource(R.string.settings_deepl_custom_token_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        SwitchRow(
+                            stringResource(R.string.settings_deepl_bearer_label),
+                            deeplBearerAuth,
+                            // DEEPLX / AUTO 都用 customToken，Bearer 才有意义；OFFICIAL 不读
+                            enabled = deeplProtocol != com.gameocr.app.data.DeeplProtocol.OFFICIAL
+                        ) { deeplBearerAuth = it }
+                        Text(
+                            stringResource(R.string.settings_deepl_bearer_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.alpha(
+                                if (deeplProtocol != com.gameocr.app.data.DeeplProtocol.OFFICIAL) 1f else 0.4f
+                            )
+                        )
+                    }
                 } else if (translatorEngine == TranslatorEngine.YOUDAO_PICTRANS) {
                     // YOUDAO_PICTRANS：端到端引擎，OCR + 翻译一起出，会绕过 ocrEngine 设置
                     SecretTextField(
@@ -880,6 +1013,10 @@ fun SettingsScreen(
                                     model = model,
                                     deeplKey = deeplKey,
                                     deeplPro = deeplPro,
+                                    deeplProtocol = deeplProtocol,
+                                    deeplBaseUrl = deeplBaseUrl,
+                                    deeplBearerAuth = deeplBearerAuth,
+                                    deeplCustomToken = deeplCustomToken,
                                     youdaoAppKey = youdaoAppKey,
                                     youdaoAppSecret = youdaoAppSecret,
                                     apiTimeoutSeconds = apiTimeoutSec.toInt()
@@ -1359,6 +1496,10 @@ fun SettingsScreen(
                     )
                 }
 
+            }
+
+            // —— 悬浮按钮 ——
+            SectionCard(title = stringResource(R.string.settings_section_floating), anchorKey = SectionKeys.FLOATING, onAnchor = onAnchor) {
                 Text(stringResource(R.string.settings_floating_size_format, floatingSize.toInt()), style = MaterialTheme.typography.labelLarge)
                 Slider(
                     value = floatingSize,
@@ -1372,6 +1513,47 @@ fun SettingsScreen(
                     stringResource(R.string.settings_floating_snap_edge_hint),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                SwitchRow(
+                    stringResource(R.string.settings_floating_auto_dock_label),
+                    floatingAutoDock,
+                    enabled = floatingSnapEdge
+                ) { floatingAutoDock = it }
+                Text(
+                    stringResource(R.string.settings_floating_auto_dock_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.alpha(if (floatingSnapEdge) 1f else 0.4f)
+                )
+
+                Text(
+                    stringResource(R.string.settings_floating_dock_inset_format, floatingDockInset.toInt()),
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.alpha(if (floatingSnapEdge) 1f else 0.4f)
+                )
+                Slider(
+                    value = floatingDockInset,
+                    onValueChange = { floatingDockInset = it },
+                    valueRange = 0f..40f,
+                    steps = 39,
+                    enabled = floatingSnapEdge
+                )
+                OutlinedButton(
+                    onClick = { insetPreviewActive = !insetPreviewActive },
+                    enabled = floatingSnapEdge,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(stringResource(
+                        if (insetPreviewActive) R.string.settings_floating_dock_inset_preview_stop
+                        else R.string.settings_floating_dock_inset_preview_start
+                    ))
+                }
+                Text(
+                    stringResource(R.string.settings_floating_dock_inset_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.alpha(if (floatingSnapEdge) 1f else 0.4f)
                 )
             }
 
@@ -1411,6 +1593,24 @@ fun SettingsScreen(
                     stringResource(R.string.settings_api_timeout_hint),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Text(
+                    stringResource(R.string.settings_cleartext_hosts_label),
+                    style = MaterialTheme.typography.labelLarge
+                )
+                OutlinedTextField(
+                    value = cleartextHostsText,
+                    onValueChange = { cleartextHostsText = it },
+                    placeholder = { Text(stringResource(R.string.settings_cleartext_hosts_placeholder)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = false,
+                    minLines = 2
+                )
+                Text(
+                    stringResource(R.string.settings_cleartext_hosts_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
                 )
             }
 
@@ -1555,6 +1755,7 @@ private object SectionKeys {
     const val OCR = "ocr"
     const val PREPROCESS = "preprocess"
     const val OVERLAY = "overlay"
+    const val FLOATING = "floating"
     const val TRIGGER = "trigger"
     const val NETWORK = "network"
     const val APP_LANG = "app_lang"
@@ -1565,6 +1766,10 @@ private object SectionKeys {
  * 搜索索引条目。sectionLabel/itemLabel 走 res id 跟随系统语言；keywords 同时塞中英文，
  * 让用户用任何一种语言搜索都能命中（i18n 后用户可能习惯输入哪种都说不定）。
  */
+/** 把 UI 多行输入框文本拆成 host 列表，trim 每行、去空。保存 / snapshot 对比都走这里保证一致。 */
+private fun parseCleartextHosts(text: String): List<String> =
+    text.split('\n').map { it.trim() }.filter { it.isNotEmpty() }
+
 private data class SearchEntry(
     val sectionKey: String,
     @androidx.annotation.StringRes val sectionLabelRes: Int,
@@ -1808,7 +2013,7 @@ private fun ThemeModeSelector() {
 }
 
 @Composable
-private fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+private fun SwitchRow(label: String, checked: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.fillMaxWidth()
@@ -1816,6 +2021,7 @@ private fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Un
         Switch(
             checked = checked,
             onCheckedChange = onChange,
+            enabled = enabled,
             colors = SwitchDefaults.colors(
                 checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
                 checkedTrackColor = MaterialTheme.colorScheme.primary,
@@ -1825,7 +2031,10 @@ private fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Un
                 uncheckedBorderColor = MaterialTheme.colorScheme.outline
             )
         )
-        Text(text = label, modifier = Modifier.padding(start = 12.dp))
+        Text(
+            text = label,
+            modifier = Modifier.padding(start = 12.dp).alpha(if (enabled) 1f else 0.4f)
+        )
     }
 }
 

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  允许明文（http://）流量整体放开，是为了支持用户自架 deeplx 之类的局域网 / localhost 服务。
+  实际"非 HTTPS 仅允许私有网段"的安全约束在 OkHttp 拦截器 PrivateCleartextInterceptor 里强制：
+  对公网 hostname 的 http 请求会被直接拒绝并报错。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

@@ -62,10 +62,16 @@ class SettingsRepository @Inject constructor(
         val TranslatorEng = stringPreferencesKey("translator_engine")
         val DeeplKey = stringPreferencesKey("deepl_key")
         val DeeplPro = booleanPreferencesKey("deepl_pro")
+        val DeeplProtocol = stringPreferencesKey("deepl_protocol")
+        val DeeplBaseUrl = stringPreferencesKey("deepl_base_url")
+        val DeeplBearerAuth = booleanPreferencesKey("deepl_bearer_auth")
+        val DeeplCustomToken = stringPreferencesKey("deepl_custom_token")
         val FloatingSize = intPreferencesKey("floating_button_size_dp")
         val FloatingX = intPreferencesKey("floating_button_x")
         val FloatingY = intPreferencesKey("floating_button_y")
         val FloatingSnapEdge = booleanPreferencesKey("floating_button_snap_edge")
+        val FloatingAutoDock = booleanPreferencesKey("floating_button_auto_dock")
+        val FloatingDockInset = intPreferencesKey("floating_button_dock_inset_dp")
         // 收藏的语言代码列表，逗号分隔（"ja,zh-CN,en"）。逗号不可能出现在 BCP-47 tag 里，分隔安全。
         val PinnedLangs = stringPreferencesKey("pinned_languages")
         val OverlayWrap = booleanPreferencesKey("overlay_allow_wrap")
@@ -79,6 +85,8 @@ class SettingsRepository @Inject constructor(
         val MergeStrengthKey = stringPreferencesKey("ocr_merge_strength")
         val YoudaoAppKey = stringPreferencesKey("youdao_app_key")
         val YoudaoAppSecret = stringPreferencesKey("youdao_app_secret")
+        // 明文 HTTP 白名单 host，以 \n 分隔保存（hostname 不含 \n，分隔安全）
+        val CleartextHosts = stringPreferencesKey("cleartext_allowed_hosts")
     }
 
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
@@ -126,10 +134,16 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.TranslatorEng] = next.translatorEngine.name
             prefs[Keys.DeeplKey] = next.deeplApiKey
             prefs[Keys.DeeplPro] = next.deeplPro
+            prefs[Keys.DeeplProtocol] = next.deeplProtocol.name
+            prefs[Keys.DeeplBaseUrl] = next.deeplBaseUrl
+            prefs[Keys.DeeplBearerAuth] = next.deeplBearerAuth
+            prefs[Keys.DeeplCustomToken] = next.deeplCustomToken
             prefs[Keys.FloatingSize] = next.floatingButtonSizeDp
             prefs[Keys.FloatingX] = next.floatingButtonX
             prefs[Keys.FloatingY] = next.floatingButtonY
             prefs[Keys.FloatingSnapEdge] = next.floatingButtonSnapToEdge
+            prefs[Keys.FloatingAutoDock] = next.floatingButtonAutoDock
+            prefs[Keys.FloatingDockInset] = next.floatingButtonDockInsetDp
             prefs[Keys.PinnedLangs] = next.pinnedLanguages.joinToString(",")
             prefs[Keys.OverlayWrap] = next.overlayAllowWrap
             prefs[Keys.OverlayCollision] = next.overlayAvoidCollision
@@ -142,6 +156,7 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.MergeStrengthKey] = next.mergeStrength.name
             prefs[Keys.YoudaoAppKey] = next.youdaoAppKey
             prefs[Keys.YoudaoAppSecret] = next.youdaoAppSecret
+            prefs[Keys.CleartextHosts] = next.cleartextAllowedHosts.joinToString("\n")
         }
     }
 
@@ -202,10 +217,17 @@ class SettingsRepository @Inject constructor(
                 .getOrDefault(default.translatorEngine),
             deeplApiKey = this[Keys.DeeplKey] ?: default.deeplApiKey,
             deeplPro = this[Keys.DeeplPro] ?: default.deeplPro,
+            deeplProtocol = runCatching { DeeplProtocol.valueOf(this[Keys.DeeplProtocol] ?: "") }
+                .getOrDefault(default.deeplProtocol),
+            deeplBaseUrl = this[Keys.DeeplBaseUrl] ?: default.deeplBaseUrl,
+            deeplBearerAuth = this[Keys.DeeplBearerAuth] ?: default.deeplBearerAuth,
+            deeplCustomToken = this[Keys.DeeplCustomToken] ?: default.deeplCustomToken,
             floatingButtonSizeDp = this[Keys.FloatingSize] ?: default.floatingButtonSizeDp,
             floatingButtonX = this[Keys.FloatingX] ?: default.floatingButtonX,
             floatingButtonY = this[Keys.FloatingY] ?: default.floatingButtonY,
             floatingButtonSnapToEdge = this[Keys.FloatingSnapEdge] ?: default.floatingButtonSnapToEdge,
+            floatingButtonAutoDock = this[Keys.FloatingAutoDock] ?: default.floatingButtonAutoDock,
+            floatingButtonDockInsetDp = this[Keys.FloatingDockInset] ?: default.floatingButtonDockInsetDp,
             pinnedLanguages = this[Keys.PinnedLangs]
                 ?.split(',')
                 ?.map { it.trim() }
@@ -226,7 +248,12 @@ class SettingsRepository @Inject constructor(
             mergeStrength = runCatching { MergeStrength.valueOf(this[Keys.MergeStrengthKey] ?: "") }
                 .getOrDefault(default.mergeStrength),
             youdaoAppKey = this[Keys.YoudaoAppKey] ?: default.youdaoAppKey,
-            youdaoAppSecret = this[Keys.YoudaoAppSecret] ?: default.youdaoAppSecret
+            youdaoAppSecret = this[Keys.YoudaoAppSecret] ?: default.youdaoAppSecret,
+            cleartextAllowedHosts = this[Keys.CleartextHosts]
+                ?.split('\n')
+                ?.map { it.trim() }
+                ?.filter { it.isNotEmpty() }
+                ?: default.cleartextAllowedHosts
         )
     }
 }

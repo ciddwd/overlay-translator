@@ -173,6 +173,8 @@ class CaptureService : Service() {
             floatingButton?.initialX = s.floatingButtonX
             floatingButton?.initialY = s.floatingButtonY
             floatingButton?.snapToEdgeEnabled = s.floatingButtonSnapToEdge
+            floatingButton?.autoDockEnabled = s.floatingButtonAutoDock
+            floatingButton?.dockEdgeInsetPx = (s.floatingButtonDockInsetDp * resources.displayMetrics.density).toInt()
             mainScope.launch { floatingButton?.show() }
         }
 
@@ -635,6 +637,8 @@ class CaptureService : Service() {
             // applySnapPreference 内部启动 SpringAnimation，必须在主线程；settings flow
             // collect 跑在 Dispatchers.Default，不切主线程会 IllegalStateException 闪退。
             mainScope.launch { it.applySnapPreference(settings.floatingButtonSnapToEdge) }
+            it.autoDockEnabled = settings.floatingButtonAutoDock
+            it.dockEdgeInsetPx = (settings.floatingButtonDockInsetDp * resources.displayMetrics.density).toInt()
         }
     }
 

@@ -49,6 +49,25 @@ class FloatingButtonManager(
     @Volatile var onMenuOpenMainActivity: () -> Unit = {}
     /** 吸附边缘开关（用户在 Settings 里可关）。关时松手保持原位 + 不藏半边。 */
     @Volatile var snapToEdgeEnabled: Boolean = true
+    /** 3s 无操作自动吸附。需 [snapToEdgeEnabled] 同时为 true 才生效（由 [scheduleAutoDock] 守门）。 */
+    @Volatile var autoDockEnabled: Boolean = false
+        set(value) {
+            field = value
+            if (!value) cancelAutoDock()
+        }
+    /**
+     * 吸附距实际屏幕边的内偏移（px）。0 = 紧贴系统边。由 Settings 的 dp 值转换后注入。
+     *
+     * 球当前 dock 着时改 inset 会立刻触发一次 snapToEdge 让它平滑滑到新位置——否则用户在
+     * 设置里改完保存后还得手动拖一下才能看到新边距。
+     */
+    @Volatile var dockEdgeInsetPx: Int = 0
+        set(value) {
+            if (field == value) return
+            field = value
+            val v = view ?: return
+            if (dockSide != DockSide.NONE) v.post { snapToEdge() }
+        }
     /** 当前是否处于循环模式（影响菜单第一项的视觉指示）。由 CaptureService 通过 setLoopActive 同步。 */
     @Volatile private var isLooping: Boolean = false
 
@@ -60,6 +79,29 @@ class FloatingButtonManager(
     private var snapAnimX: SpringAnimation? = null
     private var snapAnimY: SpringAnimation? = null
     private var arcMenuView: View? = null
+
+    private val autoDockHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val autoDockRunnable = Runnable {
+        // 触发时再校验一次：吸附总开关开、autoDock 开、球已 show、当前未在 dock 态。
+        val v = view ?: return@Runnable
+        if (!snapToEdgeEnabled || !autoDockEnabled) return@Runnable
+        if (dockSide != DockSide.NONE) return@Runnable
+        // 复用 snapToEdge 的弹性吸边动画
+        snapToEdge()
+        v.alpha = 1.0f
+    }
+
+    /** 启动 3s 倒计时。重复调用会取消上次。守门条件不满足时 noop。 */
+    private fun scheduleAutoDock() {
+        if (!snapToEdgeEnabled || !autoDockEnabled) return
+        if (dockSide != DockSide.NONE) return
+        autoDockHandler.removeCallbacks(autoDockRunnable)
+        autoDockHandler.postDelayed(autoDockRunnable, AUTO_DOCK_DELAY_MS)
+    }
+
+    private fun cancelAutoDock() {
+        autoDockHandler.removeCallbacks(autoDockRunnable)
+    }
 
     /** 容器是 [LiquidFloatingContainer]（FrameLayout 子类），dock 时它自己画液态尾巴 path。 */
     private val liquidView: LiquidFloatingContainer? get() = view as? LiquidFloatingContainer
@@ -175,6 +217,8 @@ class FloatingButtonManager(
 
     fun hide() {
         dismissArcMenu()
+        // 必须在 dismissArcMenu 之后 cancel——dismiss 末尾会 scheduleAutoDock，否则会留下指向已销毁 view 的 runnable
+        cancelAutoDock()
         snapAnimX?.cancel(); snapAnimX = null
         snapAnimY?.cancel(); snapAnimY = null
         progressView?.stop()
@@ -201,6 +245,7 @@ class FloatingButtonManager(
     fun applySnapPreference(enabled: Boolean) {
         val prev = snapToEdgeEnabled
         snapToEdgeEnabled = enabled
+        if (!enabled) cancelAutoDock()  // 总开关关 → autoDock 也作废
         view ?: return  // 还没 show，只记字段
         if (prev == enabled) return
         if (enabled) snapToEdge() else leaveDockedEdge()
@@ -267,10 +312,11 @@ class FloatingButtonManager(
         snapAnimX?.cancel(); snapAnimY?.cancel()
 
         if (snapToEdgeEnabled) {
-            // 球完整贴边：X = 0 或 screenW - size，圆球完全在屏内、贴墙立着 + 半透待机
+            // 球完整贴边：X = inset 或 screenW - size - inset，圆球完全在屏内、贴墙立着 + 半透待机
             val centerX = params.x + size / 2
             val dockLeft = centerX < screenW / 2
-            val targetX = if (dockLeft) 0 else (screenW - size).coerceAtLeast(0)
+            val inset = dockEdgeInsetPx.coerceAtLeast(0)
+            val targetX = if (dockLeft) inset else (screenW - size - inset).coerceAtLeast(0)
             setDockSide(if (dockLeft) DockSide.LEFT else DockSide.RIGHT)
 
             snapAnimX = SpringAnimation(FloatValueHolder(params.x.toFloat())).apply {
@@ -393,7 +439,8 @@ class FloatingButtonManager(
         target.setOnTouchListener { v, ev ->
             when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    // 用户重新按下：取消正在跑的吸边动画 + 若处于藏起来的待机态，把球拉回全显
+                    // 用户重新按下：取消自动贴边倒计时 + 正在跑的吸边动画 + 若处于藏起来的待机态，把球拉回全显
+                    cancelAutoDock()
                     snapAnimY?.cancel()
                     val wokeX = wakeFromSnap()
                     downX = ev.rawX
@@ -515,6 +562,12 @@ class FloatingButtonManager(
             val top = (cy + centerOffsetY - itemSize / 2f).toInt()
                 .coerceIn(0, (screenH - itemSize).coerceAtLeast(0))
 
+            // 起始 translationX/Y：把按钮视觉起点放在悬浮球中心，动画到目标位置 → "从球里旋出来"的轨迹感
+            val btnCenterX = left + itemSize / 2f
+            val btnCenterY = top + itemSize / 2f
+            val startTransX = cx - btnCenterX
+            val startTransY = cy - btnCenterY
+
             val btn = ImageView(context).apply {
                 setImageResource(item.iconRes)
                 setBackgroundResource(item.bgRes)
@@ -523,8 +576,11 @@ class FloatingButtonManager(
                 isClickable = true
                 setOnClickListener { item.onTap() }
                 alpha = 0f
-                scaleX = 0.6f
-                scaleY = 0.6f
+                scaleX = 0.4f
+                scaleY = 0.4f
+                rotation = -360f
+                translationX = startTransX
+                translationY = startTransY
             }
             val lp = FrameLayout.LayoutParams(itemSize, itemSize).apply {
                 leftMargin = left
@@ -532,11 +588,15 @@ class FloatingButtonManager(
             }
             root.addView(btn, lp)
 
-            // 错峰入场：圆球向外"绽放"的感觉
+            // 旋出入场：从球中心边旋转边飞出，OvershootInterpolator 让落位时轻微"过冲"再回弹
             btn.animate()
-                .alpha(1f).scaleX(1f).scaleY(1f)
-                .setStartDelay(40L * idx)
-                .setDuration(220L)
+                .alpha(MENU_ITEM_ALPHA)
+                .scaleX(1f).scaleY(1f)
+                .rotation(0f)
+                .translationX(0f).translationY(0f)
+                .setStartDelay(50L * idx)
+                .setDuration(380L)
+                .setInterpolator(android.view.animation.OvershootInterpolator(1.2f))
                 .start()
         }
 
@@ -563,5 +623,14 @@ class FloatingButtonManager(
     private fun dismissArcMenu() {
         arcMenuView?.let { runCatching { wm.removeView(it) } }
         arcMenuView = null
+        // 长按菜单关闭后，若开启了自动贴边则 3s 无操作自动吸边。单点（onSingleTap）不走这里。
+        scheduleAutoDock()
+    }
+
+    companion object {
+        /** 自动贴边倒计时（ms）。固定 3s，未做成可配（产品决策）。 */
+        private const val AUTO_DOCK_DELAY_MS: Long = 3000L
+        /** 弧形菜单按钮稳定后的 alpha。略低于 1，给点透明感能透出后面的内容但又不影响图标识别。 */
+        private const val MENU_ITEM_ALPHA: Float = 0.85f
     }
 }

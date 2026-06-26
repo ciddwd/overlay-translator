@@ -2,7 +2,7 @@
 
 [简体中文](README.md) · **English**
 
-# PingYi
+# Screen Translator
 
 **Real-time on-screen translator for Android · capture → OCR → translate → overlay**
 
@@ -27,7 +27,8 @@ No ROOT, fully self-contained, designed for visual novels, manga, game dialogue 
 ## ✨ Features
 
 - **Capture**: MediaProjection + ImageReader (foreground service with `mediaProjection` type, Android 14+ compatible); optional Shizuku path to skip the per-session permission dialog
-- **Trigger**: tap the floating button for one-shot, long-press to toggle loop mode (every 2 s by default, dHash diff skips static frames, **skips a round while the previous overlay is still on screen** to avoid flicker; an outer ring on the floating ball visualises the countdown); optional accessibility service to bind **Vol+ and Vol- held together for 300 ms** as a global trigger
+- **Trigger**: tap the floating button for one-shot, long-press opens an arc menu (rotated fly-out animation, 0.85 alpha); loop mode every 2 s by default, dHash diff skips static frames, **skips a round while the previous overlay is still on screen** to avoid flicker; an outer ring on the floating ball visualises the countdown; optional accessibility service to bind **Vol+ and Vol- held together for 300 ms** as a global trigger
+- **Floating ball edge dock**: liquid "hugging" dock geometry (Dynamic Island-style); configurable inset from the physical screen edge (0–40 dp, dodges gesture zones, with live pink preview overlay); auto-dock after 3 s idle (optional)
 - **Region selection**: full-screen rubber-band, remembers the last region, avoids OCR noise from the rest of the screen
 - **OCR engines** (router, swap in settings; UI grouped **On-device / Cloud**):
   - On-device: ML Kit (Latin / Japanese / Chinese / Korean, AUTO switches by character set), PaddleOCR PP-OCRv5 mobile (ONNX Runtime)
@@ -35,7 +36,7 @@ No ROOT, fully self-contained, designed for visual novels, manga, game dialogue 
 - **Source language ↔ OCR linkage**: when you change source language, the app checks whether the current OCR engine can recognize it; if not it recommends a better engine; if you're on cloud OCR with a generic language mode but a precise one is available, it offers an upgrade. The reverse also works: if you change the OCR side, it suggests adjusting source language to match — instead of undoing what you just did.
 - **Translation engines** (router + **Test connection** button):
   - OpenAI-compatible chat completions (DeepSeek / SiliconFlow / Zhipu / Ollama / OpenAI …) with SSE streaming; Test fetches the model list to populate a picker
-  - DeepL (free / Pro auto-detected; Test returns current month's used / total character quota)
+  - DeepL (free / Pro auto-detected; Test returns current month's used / total character quota) + **self-hosted deeplx support**: protocol selector (official / deeplx / auto fallback), independent Custom Token field that prevents the official key from being leaked to third parties, Bearer / DeepL-Auth-Key auto-pick
   - **Youdao PicTrans** (ocrtransapi, end-to-end: ships the full screenshot, returns translated regions in one call — **bypasses the OCR engine setting**; auto-rotates box coordinates by orientation)
   - **Google** (unofficial endpoint, no key required; proxy required inside mainland China)
 - **Overlay**:
@@ -56,6 +57,31 @@ No ROOT, fully self-contained, designed for visual novels, manga, game dialogue 
   - **Update check**: auto on app open (throttled 24 h) + manual button; calls GitHub Releases API directly, falls back to "Open release page" if the API is unreachable
   - **Crash recorder**: uncaught exceptions + native crashes / ANR / OOM kill (Android 11+) are stored with device info + a redacted settings snapshot + the stacktrace, viewable / exportable from the log screen after restart
   - Vendor ROM compatibility shortcuts (auto-start / battery whitelist for Xiaomi / OPPO / VIVO / Huawei / Samsung)
+  - **Cleartext HTTP locked to private subnets**: only LAN / 127.0.0.1 / link-local can use `http://` by default; public hosts must use HTTPS. Extra hosts can be whitelisted in the "Network" section
+  - **i18n fallback fix**: untranslated system languages (Uyghur, Hindi, etc.) now fall back to English instead of accidentally showing Chinese
+
+## 📊 Comparison with similar apps
+
+> Rough reference compiled from publicly available info in 2026; the other apps may have moved on. PRs welcome to correct.
+
+Focused on the "game / manga on-screen translation" niche:
+
+| Aspect | **Screen Translator (this)** | Gaminik (proprietary) | Aiyike (proprietary) | Google Translate | Immersive Translate |
+|---|---|---|---|---|---|
+| Free / no ads | ✅ | Subscription | In-app purchase | ✅ | ✅ |
+| Open source | ✅ Apache 2.0 | ❌ | ❌ | ❌ | Partial |
+| **Floating-ball overlay translation** | ✅ liquid dock | ✅ | ✅ | ❌ | ❌ (weak on mobile) |
+| On-device OCR (no image upload) | ✅ ML Kit / PaddleOCR | ❌ (cloud-first) | ❌ (cloud-first) | ✅ | ❌ |
+| Pluggable OCR engines | ✅ 8 options | Limited | Limited | ❌ (own only) | ❌ |
+| Pluggable translation engines | ✅ 5+ incl. LLM | Limited | Limited | ❌ (own only) | ✅ |
+| Self-hosted backend (deeplx etc.) + AUTO fallback | ✅ | ❌ | ❌ | ❌ | ❌ |
+| LLM translation (GPT / DeepSeek / Ollama / self-host) + SSE streaming | ✅ | Partial | Partial | ❌ | ✅ |
+| Shizuku capture (skip per-session permission dialog) | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Manga / subtitle OCR paragraph merge (incl. vertical, furigana filter) | ✅ 3 strengths | ❌ | ❌ | ❌ | ❌ |
+| Strict isolation of official key vs. third-party token | ✅ separate Custom Token | — | — | — | — |
+| Cleartext HTTP restricted to private subnets + whitelist | ✅ | — | — | — | — |
+
+**Positioning**: in the "game / manga on-screen translation" niche, be the only one that is **open source + on-device-engine-capable + self-host-friendly**. The differentiation against incumbents lives in *privacy / self-hosting / engine choice*, not in OCR or translation quality itself (anyone can plug into the same cloud OCR and DeepL/LLM engines).
 
 ## 📸 Screenshots
 
@@ -83,7 +109,7 @@ No ROOT, fully self-contained, designed for visual novels, manga, game dialogue 
 
 ## 📦 Install
 
-1. Grab the latest `GameOcr-x.y.z.apk` from [Releases](../../releases)
+1. Grab the latest `ScreenTranslator-x.y.z.apk` from [Releases](../../releases)
 2. Tap it on your Android device (first time you'll need to allow "Install unknown apps" in system settings)
 3. Grant **Overlay** and **Notification** permissions on first launch
 
@@ -396,7 +422,7 @@ git tag v0.3.0
 git push origin v0.3.0
 
 # 3. Watch the Release workflow in the Actions tab
-#    Once green, GameOcr-0.2.0.apk and .sha256 land on the Releases page
+#    Once green, ScreenTranslator-0.2.0.apk and .sha256 land on the Releases page
 ```
 
 Common CI failures:

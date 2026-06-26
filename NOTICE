@@ -1,0 +1,17 @@
+Screen Translator (屏译)
+Copyright 2026 ciddwd
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+See the LICENSE file in the project root for the full text.
+
+This product includes software developed by The Android Open Source Project,
+JetBrains s.r.o. (Kotlin / kotlinx libraries), Square Inc. (OkHttp), and
+various other open-source contributors. Most upstream dependencies are
+distributed under the Apache License 2.0; some are under MIT, BSD, or other
+permissive licenses. See the project's Gradle dependency tree (libs.versions.toml)
+for the authoritative list.

@@ -27,14 +27,21 @@ object AppModule {
         ignoreUnknownKeys = true
         encodeDefaults = true
         explicitNulls = false
+        // 当 JSON 字段是 null 但 data class 字段是非 null 类型时，回退到字段默认值而不抛错。
+        // 防御外部 API（如 deeplx 返回 alternatives:null）的"宽松"响应破坏解析。
+        coerceInputValues = true
     }
 
     @Provides
     @Singleton
-    fun provideOkHttp(): OkHttpClient = OkHttpClient.Builder()
+    fun provideOkHttp(
+        privateCleartextInterceptor: PrivateCleartextInterceptor
+    ): OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
+        // 明文 HTTP 仅允许私有/回环地址 + 用户显式白名单 host。详见拦截器注释。
+        .addInterceptor(privateCleartextInterceptor)
         .apply {
             if (BuildConfig.DEBUG) {
                 addInterceptor(HttpLoggingInterceptor().apply {

@@ -5,6 +5,7 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
+import android.view.View
 import android.widget.FrameLayout
 import kotlin.math.sqrt
 
@@ -31,6 +32,7 @@ internal class LiquidFloatingContainer(context: Context) : FrameLayout(context) 
         set(value) {
             if (field != value) {
                 field = value
+                updateChildTranslation()
                 invalidate()
             }
         }
@@ -39,6 +41,7 @@ internal class LiquidFloatingContainer(context: Context) : FrameLayout(context) 
         set(value) {
             if (field != value) {
                 field = value
+                updateChildTranslation()
                 invalidate()
             }
         }
@@ -82,14 +85,52 @@ internal class LiquidFloatingContainer(context: Context) : FrameLayout(context) 
     private val strokePath = Path()
     private val ballRect = RectF()
 
+    /** P（屏幕边接触点）相对 Q（球切点）沿屏幕边方向再延伸的距离 / r，决定挂钩"长度"。 */
+    private val tailReach = 0.3f
+
+    /** quadratic 控制点法向偏移 / r，决定挂钩"凹陷深度"（朝球心方向）。 */
+    private val tailDepth = 0.4f
+
     init {
         // FrameLayout 默认 willNotDraw=true，不会调 onDraw / dispatchDraw 内的自定义绘制；打开它
         setWillNotDraw(false)
     }
 
+    /**
+     * dock 状态下球必须紧贴屏幕边（球面最远点 = edgeX），否则球与边之间会出现一段
+     * fill 颜色的"水柱"。container 中心 = width/2 但 dock 时 cx = r 或 width - r，
+     * 子 view 需同步 translation 才能让图标停留在球的视觉中心。
+     */
+    private fun visualCx(): Float {
+        val r = ballRadius
+        return when (side) {
+            DockSide.LEFT -> r
+            DockSide.RIGHT -> width - r
+            DockSide.NONE -> width / 2f
+        }
+    }
+
+    private fun updateChildTranslation() {
+        if (width == 0 || ballRadius <= 0f) return
+        val tx = visualCx() - width / 2f
+        for (i in 0 until childCount) {
+            getChildAt(i).translationX = tx
+        }
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        updateChildTranslation()
+    }
+
+    override fun onViewAdded(child: View?) {
+        super.onViewAdded(child)
+        updateChildTranslation()
+    }
+
     override fun dispatchDraw(canvas: Canvas) {
         if (ballRadius > 0f) {
-            val cx = width / 2f
+            val cx = visualCx()
             val cy = height / 2f
             when (side) {
                 DockSide.NONE -> drawCircle(canvas, cx, cy)
@@ -108,51 +149,46 @@ internal class LiquidFloatingContainer(context: Context) : FrameLayout(context) 
     }
 
     /**
-     * 画"球 + 凹底座"（依照用户第二张图的几何）：
+     * 画"球 + 液态挂钩"：球紧贴屏幕边（[cx] 已在 dock 时由 [visualCx] 调整为 r 或 width-r），
+     * 屏幕边在球的上下方各形成一段**朝球心方向凹陷**的弧（quadratic），从屏幕边出发凹向球切点。
      *
-     * 1. **底座**：两条 quadratic 弧从球切点 Q1/Q2 出发，**接触屏幕边**于 P1/P2 两点
-     *    （P1 P2 之间只留 0.2r 的极短屏幕边段，避免出现长的"垂直边"）。
-     *    控制点放在 Q1-P1 中点朝球心方向偏移 depth → 曲线朝"球与屏幕边形成的内角"凹陷。
-     *    fill 用「上弧 + 短屏幕边 + 下弧 + 球近侧弧」闭合；stroke 只描两条弧。
-     * 2. **球本体**：drawCircle 画完整圆 fill + 完整圆描边。
-     *
-     * 视觉：球紧贴屏幕边，下方一对"耳朵"状凹陷弧把球扶在墙上。
+     * - Q1/Q2：球面 ±60° 切点（贴左 = 球面 240°/120°；贴右 = 300°/60°）。
+     * - P1/P2：屏幕边接触点，沿屏幕边方向再延伸 [tailReach]·r（P1 上方、P2 下方）。
+     *   P 远离 cy 后，两条挂钩弧不再"漏斗中间细"，呈现独立的上下凹勾。
+     * - 控制点：Q-P 中点沿 **朝球心方向** 的法向偏移 [tailDepth]·r —— 让弧线从屏幕边
+     *   出发先凹向球心，再贴住球切点（与 quadratic 平滑切线一致）。
+     * - fill：屏幕边 P1 → Q1 → 球近侧 120° 弧 → Q2 → 屏幕边 P2 → close。
+     * - 球紧贴边 + dock 时 cx=r，球面最远点 = edgeX，路径无任何"水柱"直边。
      */
     private fun drawLiquid(canvas: Canvas, cx: Float, cy: Float, edgeX: Float, leftSide: Boolean) {
         val r = ballRadius
-        val sign = if (leftSide) -1f else 1f
+        val sign = if (leftSide) -1f else 1f       // 球切点相对 cx 的偏向
 
+        // 球面 ±60° 切点
         val cosT = 0.5f
         val sinT = 0.866f
         val qx = cx + sign * cosT * r
         val q1y = cy - sinT * r
         val q2y = cy + sinT * r
 
-        // P1 / P2 几乎合并到 cy 附近（中间细），形成"收腰"
-        val p1y = cy - 0.1f * r
-        val p2y = cy + 0.1f * r
+        val reach = tailReach * r
+        val depth = tailDepth * r
+        val p1y = q1y - reach
+        val p2y = q2y + reach
 
-        // 控制点偏移方向严格沿 Q1-P1 直线的**法向**（垂直方向），不是朝球心方向。
-        // 之前用"朝球心方向"几乎与 Q1-P1 直线本身平行，弧线鼓不出来，看起来像漏斗的直线
-        // 边。改成法向后，弧线才能真正在中段"鼓"出 depth/2 的高度。
-        val depth = 0.5f * r
-
-        // 上半弧：Q1 → P1 法向控制点
+        // 上半弧 (Q1 → P1) quadratic 控制点：Q-P 中点朝球心方向法向偏移
         val midUpX = (qx + edgeX) * 0.5f
         val midUpY = (q1y + p1y) * 0.5f
         val dxUp = edgeX - qx
         val dyUp = p1y - q1y
         val dLenUp = sqrt(dxUp * dxUp + dyUp * dyUp)
-        val nUpX = -dyUp / dLenUp     // 顺时针 90° 法向
+        val nUpX = -dyUp / dLenUp
         val nUpY = dxUp / dLenUp
-        // 选择朝球心那一侧的法向（让弧线鼓向球心 = ")"开口朝屏幕边）
-        val toCxUp = cx - midUpX
-        val toCyUp = cy - midUpY
-        val signNUp = if (nUpX * toCxUp + nUpY * toCyUp > 0f) 1f else -1f
+        val signNUp = if (nUpX * (cx - midUpX) + nUpY * (cy - midUpY) > 0f) 1f else -1f
         val ctrlUpX = midUpX + signNUp * nUpX * depth
         val ctrlUpY = midUpY + signNUp * nUpY * depth
 
-        // 下半弧（镜像）
+        // 下半弧 (Q2 → P2) 镜像
         val midDnX = (qx + edgeX) * 0.5f
         val midDnY = (q2y + p2y) * 0.5f
         val dxDn = edgeX - qx
@@ -160,28 +196,25 @@ internal class LiquidFloatingContainer(context: Context) : FrameLayout(context) 
         val dLenDn = sqrt(dxDn * dxDn + dyDn * dyDn)
         val nDnX = -dyDn / dLenDn
         val nDnY = dxDn / dLenDn
-        val toCxDn = cx - midDnX
-        val toCyDn = cy - midDnY
-        val signNDn = if (nDnX * toCxDn + nDnY * toCyDn > 0f) 1f else -1f
+        val signNDn = if (nDnX * (cx - midDnX) + nDnY * (cy - midDnY) > 0f) 1f else -1f
         val ctrlDnX = midDnX + signNDn * nDnX * depth
         val ctrlDnY = midDnY + signNDn * nDnY * depth
 
-        // 球近侧弧（底座 fill 包到球的近侧半圆，与球同色无缝）
-        // 贴左：Q1=240° Q2=120° 近侧=左半圆 sweep +120°
-        // 贴右：Q1=300° Q2=60°  近侧=右半圆 sweep -120°
+        // 球近侧弧（Q1 → Q2 沿屏幕边那侧）
         val nearStart: Float
         val nearSweep: Float
-        if (leftSide) { nearStart = 120f; nearSweep = 120f }
-        else { nearStart = 60f; nearSweep = -120f }
+        if (leftSide) { nearStart = 240f; nearSweep = -120f }
+        else { nearStart = 300f; nearSweep = 120f }
         ballRect.set(cx - r, cy - r, cx + r, cy + r)
 
-        // 底座 fill
+        // 底座 fill：屏幕边 P1 → 上挂钩 → 球近侧弧 → 下挂钩 → 屏幕边 P2 → close
+        // 球紧贴边时 fill 区域的"屏幕边段"完全在 edgeX 直线上，但 P2 → P1 仅是 close()
+        // 自动补上的极短回程（同在 X=edgeX 上的直线，不可见，无视觉直边问题）。
         fillPath.reset()
-        fillPath.moveTo(qx, q1y)
-        fillPath.quadTo(ctrlUpX, ctrlUpY, edgeX, p1y)
-        fillPath.lineTo(edgeX, p2y)   // 极短 (0.2r) 屏幕边段
-        fillPath.quadTo(ctrlDnX, ctrlDnY, qx, q2y)
+        fillPath.moveTo(edgeX, p1y)
+        fillPath.quadTo(ctrlUpX, ctrlUpY, qx, q1y)
         fillPath.arcTo(ballRect, nearStart, nearSweep, false)
+        fillPath.quadTo(ctrlDnX, ctrlDnY, edgeX, p2y)
         fillPath.close()
         canvas.drawPath(fillPath, fillPaint)
 
@@ -190,12 +223,11 @@ internal class LiquidFloatingContainer(context: Context) : FrameLayout(context) 
         if (strokeWidthPx > 0f) {
             canvas.drawCircle(cx, cy, r - strokeWidthPx / 2f, strokePaint)
 
-            // 底座描边：只描两条 quadratic 弧
             strokePath.reset()
-            strokePath.moveTo(qx, q1y)
-            strokePath.quadTo(ctrlUpX, ctrlUpY, edgeX, p1y)
-            strokePath.moveTo(edgeX, p2y)
-            strokePath.quadTo(ctrlDnX, ctrlDnY, qx, q2y)
+            strokePath.moveTo(edgeX, p1y)
+            strokePath.quadTo(ctrlUpX, ctrlUpY, qx, q1y)
+            strokePath.moveTo(qx, q2y)
+            strokePath.quadTo(ctrlDnX, ctrlDnY, edgeX, p2y)
             canvas.drawPath(strokePath, strokePaint)
         }
     }
