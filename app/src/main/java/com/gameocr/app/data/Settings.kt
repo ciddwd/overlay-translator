@@ -18,6 +18,12 @@ data class Settings(
     val ocrEngine: OcrEngineKind = OcrEngineKind.ML_KIT_AUTO,
     val captureLoopIntervalMs: Long = 2000L,
     val captureRegion: CaptureRegion? = null,
+    /**
+     * 保存 [captureRegion] 时的屏幕物理尺寸（px）。用于读取 region 时按当前屏幕尺寸自动 rescale，
+     * 避免用户竖屏框完一区域，旋转横屏后 region 坐标错位。0 = 历史数据（没记录），跳过 rescale。
+     */
+    val captureRegionSavedScreenW: Int = 0,
+    val captureRegionSavedScreenH: Int = 0,
     val overlayTextSizeSp: Int = 14,
     val overlayAlpha: Float = 0.85f,
     val streamingTranslate: Boolean = true,
@@ -85,6 +91,15 @@ data class Settings(
     /** 有道智云一套 AppKey/Secret，OCR (ocrapi) 与图片翻译 (ocrtransapi) 共用。 */
     val youdaoAppKey: String = "",
     val youdaoAppSecret: String = "",
+    /** 火山引擎机器翻译 AccessKey ID（SignV4 鉴权用）。 */
+    val volcAccessKeyId: String = "",
+    val volcSecretAccessKey: String = "",
+    /** 火山引擎区域，国内默认 cn-north-1（目前火山翻译只开放这一个区域）。 */
+    val volcRegion: String = "cn-north-1",
+    /** 百度翻译开放平台 APPID（fanyi-api.baidu.com，**不是**百度智能云 OCR 那套）。 */
+    val baiduFanyiAppId: String = "",
+    /** 百度翻译开放平台密钥，签名用 md5(appid+q+salt+key)。 */
+    val baiduFanyiSecretKey: String = "",
     /** 悬浮按钮直径（dp）。 */
     val floatingButtonSizeDp: Int = 40,
     /**
@@ -105,6 +120,24 @@ data class Settings(
      * 用来避开全面屏左右边手势触发区。
      */
     val floatingButtonDockInsetDp: Int = 0,
+    /**
+     * 悬浮窗口（[RenderMode.FLOATING_WINDOW]）位置 / 大小。-1 表示首次未保存过 → 居中并使用默认尺寸。
+     * 拖动 / 缩放后由 [overlay.DraggableOverlayWindow] 写回。
+     */
+    val floatingWindowX: Int = -1,
+    val floatingWindowY: Int = -1,
+    val floatingWindowWidthDp: Int = 320,
+    val floatingWindowHeightDp: Int = 180,
+    /** 悬浮窗口内容形态：原文+译文 / 仅译文。 */
+    val floatingWindowContentMode: FloatingWindowContentMode = FloatingWindowContentMode.SRC_AND_DST,
+    /** 锁定悬浮窗口位置/大小：true 时不可拖拽 / 不可缩放（避免游戏中误触）。 */
+    val floatingWindowLocked: Boolean = false,
+    /**
+     * 自定义主题的边框样式（仿 CSS border-style）。仅在 [overlayTheme] = CUSTOM 时生效，
+     * 对 BLOCKS 模式 box + FLOATING_WINDOW 模式的悬浮窗都生效。0.3.x 字段名 floatingWindowBorderStyle
+     * 已被 silent-migrate 到这里。
+     */
+    val customBorderStyle: BorderStyle = BorderStyle.SOLID,
     /** 译文允许换行（关闭后强制单行，可能横向溢出但更紧凑）。 */
     val overlayAllowWrap: Boolean = true,
     /** 启用碰撞检测：上下左右四个方向都避免遮挡其它原文 box。 */
@@ -202,7 +235,23 @@ enum class TranslatorEngine {
     /**
      * Google 翻译（非官方端点，无需 key）。谷歌可能随时限流 / 改端点 / 拒绝。国内需代理。
      */
-    GOOGLE
+    GOOGLE,
+    /**
+     * 火山引擎机器翻译（open.volcengineapi.com）。原生支持 TextList 批量；走 Volcengine SignV4
+     * 鉴权（service=translate / region=cn-north-1）。需要在火山控制台开通"机器翻译"并拿 AK/SK。
+     */
+    VOLC,
+    /**
+     * 百度翻译开放平台（fanyi-api.baidu.com）。**与 [Settings.baiduOcrApiKey] 完全不是同一个产品**
+     * （那是百度智能云 OCR）。签名简单：md5(appid+q+salt+key)；个人免费档 1QPS / 5万字符/月。
+     */
+    BAIDU_FANYI,
+    /**
+     * 腾讯云翻译 TMT（tmt.tencentcloudapi.com）。**复用 [Settings.tencentSecretId] /
+     * [Settings.tencentSecretKey] / [Settings.tencentRegion]** 同一套腾讯云子账号——
+     * 因为属于同一个腾讯云账号体系，让用户填两遍只会困惑。
+     */
+    TENCENT
 }
 
 /** 常用目标语言预设（也允许 settings.targetLang 自由填）。 */
@@ -401,8 +450,31 @@ data class PreprocessOptions(
 enum class RenderMode {
     /** 译文紧贴每段原文下方（按 OCR boundingBox）。 */
     BLOCKS,
-    /** 屏幕底部整条横幅，列出所有原文 → 译文。 */
-    BANNER
+    /** 可拖拽 / 可缩放的悬浮窗口，列出所有原文 → 译文。0.3.x 之前叫 BANNER（屏幕底部整条横幅）。 */
+    FLOATING_WINDOW
+}
+
+/** 悬浮窗口（[RenderMode.FLOATING_WINDOW]）的内容形态。 */
+@Serializable
+enum class FloatingWindowContentMode {
+    /** 每段「原文 + 译文」上下排列。 */
+    SRC_AND_DST,
+    /** 仅显示译文，段间用分隔线。更紧凑。 */
+    DST_ONLY
+}
+
+/**
+ * 悬浮窗口边框样式。SOLID 是默认（跟 CSS `border-style: solid` 等价）。
+ * 仅在主题本身有 stroke 时生效（AMBER_GOLD / PAPER_LIGHT / FROST_GLASS / CUSTOM with width>0）；
+ * CLASSIC_DARK 默认无边，选啥样式都不画。
+ */
+@Serializable
+enum class BorderStyle {
+    SOLID,
+    DASHED,
+    DOTTED,
+    DOUBLE,
+    GROOVE
 }
 
 @Serializable

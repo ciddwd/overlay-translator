@@ -29,6 +29,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.sp
@@ -134,6 +135,13 @@ fun SettingsScreen(
     // 有道智云一套 key（OCR + 图片翻译共用）
     var youdaoAppKey by remember { mutableStateOf("") }
     var youdaoAppSecret by remember { mutableStateOf("") }
+    // 火山引擎机器翻译 AK/SK + region（SignV4）
+    var volcAk by remember { mutableStateOf("") }
+    var volcSk by remember { mutableStateOf("") }
+    var volcRegion by remember { mutableStateOf("cn-north-1") }
+    // 百度翻译开放平台 APPID + 密钥（与百度智能云 OCR 完全不是一回事）
+    var baiduFanyiAppId by remember { mutableStateOf("") }
+    var baiduFanyiSecret by remember { mutableStateOf("") }
     // 翻译引擎"测试连接"按钮的瞬时状态：testing / 结果文字 / 成功色 / OpenAI 拉到的 model 列表。
     // 不进 Settings，纯 UI 状态；切换 engine 不清空（用户切回去还能看到上次的结果）。
     var testRunning by remember { mutableStateOf(false) }
@@ -146,6 +154,13 @@ fun SettingsScreen(
     var loopInterval by remember { mutableStateOf("1000") }
     var streaming by remember { mutableStateOf(true) }
     var renderMode by remember { mutableStateOf(RenderMode.BLOCKS) }
+    var floatingWindowContentMode by remember {
+        mutableStateOf(com.gameocr.app.data.FloatingWindowContentMode.SRC_AND_DST)
+    }
+    var floatingWindowLocked by remember { mutableStateOf(false) }
+    var customBorderStyle by remember {
+        mutableStateOf(com.gameocr.app.data.BorderStyle.SOLID)
+    }
     var placement by remember { mutableStateOf(OverlayPlacement.BELOW) }
     var overlayTheme by remember { mutableStateOf(OverlayTheme.CLASSIC_DARK) }
     var customBg by remember { mutableStateOf(0xE6000000.toInt()) }
@@ -161,6 +176,9 @@ fun SettingsScreen(
     var baiduLanguage by remember { mutableStateOf(com.gameocr.app.data.BaiduOcrLanguage.CHN_ENG) }
     var tencentId by remember { mutableStateOf("") }
     var tencentKey by remember { mutableStateOf("") }
+    // Region 同时被 OCR (ocr.tencentcloudapi.com) 和 TMT (tmt.tencentcloudapi.com) 使用；
+    // OCR 端点不分 region（X-TC-Region 仅占位），TMT 端点对 region 敏感（默认 ap-guangzhou 通用）。
+    var tencentRegion by remember { mutableStateOf("ap-guangzhou") }
     var tencentEndpoint by remember { mutableStateOf(com.gameocr.app.data.TencentOcrEndpoint.GENERAL_BASIC) }
     var tencentLanguage by remember { mutableStateOf(com.gameocr.app.data.TencentOcrLanguage.AUTO) }
     var paddleMirror by remember { mutableStateOf("") }
@@ -249,6 +267,7 @@ fun SettingsScreen(
         baiduOcrLanguage = baiduLanguage,
         tencentSecretId = tencentId,
         tencentSecretKey = tencentKey,
+        tencentRegion = tencentRegion,
         tencentOcrEndpoint = tencentEndpoint,
         tencentOcrLanguage = tencentLanguage,
         paddleModelMirrorUrl = paddleMirror,
@@ -262,6 +281,11 @@ fun SettingsScreen(
         deeplCustomToken = deeplCustomToken,
         youdaoAppKey = youdaoAppKey,
         youdaoAppSecret = youdaoAppSecret,
+        volcAccessKeyId = volcAk,
+        volcSecretAccessKey = volcSk,
+        volcRegion = volcRegion,
+        baiduFanyiAppId = baiduFanyiAppId,
+        baiduFanyiSecretKey = baiduFanyiSecret,
         floatingButtonSizeDp = floatingSize.toInt(),
         floatingButtonSnapToEdge = floatingSnapEdge,
         floatingButtonAutoDock = floatingAutoDock,
@@ -295,7 +319,8 @@ fun SettingsScreen(
             ocrEngine = ocrEngine,
             baiduKey = baiduKey, baiduSecret = baiduSecret, baiduEndpoint = baiduEndpoint,
             baiduLanguage = baiduLanguage,
-            tencentId = tencentId, tencentKey = tencentKey, tencentEndpoint = tencentEndpoint,
+            tencentId = tencentId, tencentKey = tencentKey, tencentRegion = tencentRegion,
+            tencentEndpoint = tencentEndpoint,
             tencentLanguage = tencentLanguage,
             preprocess = PreprocessOptions(preUpscale, preInvert, preBinarize),
             a11yVolume = a11yVolume,
@@ -318,7 +343,12 @@ fun SettingsScreen(
             deeplCustomToken = deeplCustomToken,
             paddleMirror = paddleMirror,
             youdaoAppKey = youdaoAppKey,
-            youdaoAppSecret = youdaoAppSecret
+            youdaoAppSecret = youdaoAppSecret,
+            volcAccessKeyId = volcAk,
+            volcSecretAccessKey = volcSk,
+            volcRegion = volcRegion,
+            baiduFanyiAppId = baiduFanyiAppId,
+            baiduFanyiSecretKey = baiduFanyiSecret
         )
     }
 
@@ -643,6 +673,11 @@ fun SettingsScreen(
             translatorEngine = s.translatorEngine
             deeplKey = s.deeplApiKey
             youdaoAppKey = s.youdaoAppKey
+            volcAk = s.volcAccessKeyId
+            volcSk = s.volcSecretAccessKey
+            volcRegion = s.volcRegion
+            baiduFanyiAppId = s.baiduFanyiAppId
+            baiduFanyiSecret = s.baiduFanyiSecretKey
             youdaoAppSecret = s.youdaoAppSecret
             deeplPro = s.deeplPro
             deeplProtocol = s.deeplProtocol
@@ -654,6 +689,9 @@ fun SettingsScreen(
             loopInterval = s.captureLoopIntervalMs.toString()
             streaming = s.streamingTranslate
             renderMode = s.renderMode
+            floatingWindowContentMode = s.floatingWindowContentMode
+            floatingWindowLocked = s.floatingWindowLocked
+            customBorderStyle = s.customBorderStyle
             placement = s.overlayPlacement
             overlayTheme = s.overlayTheme
             customBg = s.customBgColor
@@ -669,6 +707,7 @@ fun SettingsScreen(
             baiduLanguage = s.baiduOcrLanguage
             tencentId = s.tencentSecretId
             tencentKey = s.tencentSecretKey
+            tencentRegion = s.tencentRegion
             tencentEndpoint = s.tencentOcrEndpoint
             tencentLanguage = s.tencentOcrLanguage
             paddleMirror = s.paddleModelMirrorUrl
@@ -809,6 +848,9 @@ fun SettingsScreen(
                     EngineChip(translatorEngine, TranslatorEngine.DEEPL, stringResource(R.string.settings_engine_deepl)) { translatorEngine = it }
                     EngineChip(translatorEngine, TranslatorEngine.YOUDAO_PICTRANS, stringResource(R.string.settings_engine_youdao_pictrans)) { translatorEngine = it }
                     EngineChip(translatorEngine, TranslatorEngine.GOOGLE, stringResource(R.string.settings_engine_google)) { translatorEngine = it }
+                    EngineChip(translatorEngine, TranslatorEngine.VOLC, stringResource(R.string.settings_engine_volc)) { translatorEngine = it }
+                    EngineChip(translatorEngine, TranslatorEngine.BAIDU_FANYI, stringResource(R.string.settings_engine_baidu_fanyi)) { translatorEngine = it }
+                    EngineChip(translatorEngine, TranslatorEngine.TENCENT, stringResource(R.string.settings_engine_tencent)) { translatorEngine = it }
                 }
                 // 切换引擎时清掉上一引擎的测试结果——继续显示会让用户以为新引擎"已经测过"。
                 LaunchedEffect(translatorEngine) {
@@ -986,6 +1028,76 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                } else if (translatorEngine == TranslatorEngine.VOLC) {
+                    // 火山引擎机器翻译：AK + SK + region；SignV4 鉴权
+                    SecretTextField(
+                        value = volcAk, onValueChange = { volcAk = it },
+                        label = stringResource(R.string.settings_volc_access_key_id),
+                        placeholder = stringResource(R.string.settings_volc_ak_placeholder),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    SecretTextField(
+                        value = volcSk, onValueChange = { volcSk = it },
+                        label = stringResource(R.string.settings_volc_secret_access_key),
+                        placeholder = stringResource(R.string.settings_volc_sk_placeholder),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = volcRegion, onValueChange = { volcRegion = it },
+                        label = { Text(stringResource(R.string.settings_volc_region)) },
+                        placeholder = { Text("cn-north-1") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Text(
+                        stringResource(R.string.settings_volc_tip),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else if (translatorEngine == TranslatorEngine.BAIDU_FANYI) {
+                    // 百度翻译开放平台（fanyi-api.baidu.com）—— 与百度智能云 OCR 不是一回事
+                    OutlinedTextField(
+                        value = baiduFanyiAppId, onValueChange = { baiduFanyiAppId = it },
+                        label = { Text(stringResource(R.string.settings_baidu_fanyi_app_id)) },
+                        placeholder = { Text(stringResource(R.string.settings_baidu_fanyi_app_id_placeholder)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    SecretTextField(
+                        value = baiduFanyiSecret, onValueChange = { baiduFanyiSecret = it },
+                        label = stringResource(R.string.settings_baidu_fanyi_secret_key),
+                        placeholder = stringResource(R.string.settings_baidu_fanyi_secret_key_placeholder),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Text(
+                        stringResource(R.string.settings_baidu_fanyi_tip),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else if (translatorEngine == TranslatorEngine.TENCENT) {
+                    // 腾讯云翻译：与 OCR 共用同一套 SecretId/Key/Region（state 双向绑定，
+                    // 在这里改和在 OCR 区改完全等价）。region 默认 ap-guangzhou，TMT 各地域通用。
+                    OutlinedTextField(
+                        value = tencentId, onValueChange = { tencentId = it },
+                        label = { Text(stringResource(R.string.settings_tencent_id_label)) },
+                        modifier = Modifier.fillMaxWidth(), singleLine = true
+                    )
+                    SecretTextField(
+                        value = tencentKey, onValueChange = { tencentKey = it },
+                        label = stringResource(R.string.settings_tencent_key_label),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = tencentRegion, onValueChange = { tencentRegion = it },
+                        label = { Text(stringResource(R.string.settings_tencent_region)) },
+                        placeholder = { Text("ap-guangzhou") },
+                        modifier = Modifier.fillMaxWidth(), singleLine = true
+                    )
+                    Text(
+                        stringResource(R.string.settings_tencent_trans_tip),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 } else {
                     // GOOGLE：无 key，仅提示风险
                     Text(
@@ -1021,7 +1133,15 @@ fun SettingsScreen(
                                     deeplCustomToken = deeplCustomToken,
                                     youdaoAppKey = youdaoAppKey,
                                     youdaoAppSecret = youdaoAppSecret,
-                                    apiTimeoutSeconds = apiTimeoutSec.toInt()
+                                    apiTimeoutSeconds = apiTimeoutSec.toInt(),
+                                    volcAccessKeyId = volcAk,
+                                    volcSecretAccessKey = volcSk,
+                                    volcRegion = volcRegion,
+                                    baiduFanyiAppId = baiduFanyiAppId,
+                                    baiduFanyiSecretKey = baiduFanyiSecret,
+                                    tencentSecretId = tencentId,
+                                    tencentSecretKey = tencentKey,
+                                    tencentRegion = tencentRegion
                                 )
                                 testRunning = false
                                 testSuccess = result.success
@@ -1279,6 +1399,12 @@ fun SettingsScreen(
                         label = stringResource(R.string.settings_tencent_key_label),
                         modifier = Modifier.fillMaxWidth()
                     )
+                    OutlinedTextField(
+                        value = tencentRegion, onValueChange = { tencentRegion = it },
+                        label = { Text(stringResource(R.string.settings_tencent_region)) },
+                        placeholder = { Text("ap-guangzhou") },
+                        modifier = Modifier.fillMaxWidth(), singleLine = true
+                    )
                     Text(
                         stringResource(R.string.settings_tencent_endpoint_label),
                         style = MaterialTheme.typography.labelLarge
@@ -1417,6 +1543,32 @@ fun SettingsScreen(
                         border = customBorder, onBorderChange = { customBorder = it },
                         borderW = customBorderW, onBorderWChange = { customBorderW = it }
                     )
+                    // 边框样式：仅在 CUSTOM 主题下显示。SOLID/DASHED/DOTTED 一行，DOUBLE/GROOVE 一行（避开 ExperimentalLayoutApi）。
+                    Text(stringResource(R.string.settings_floating_window_border_style_label), style = MaterialTheme.typography.labelLarge)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        EngineChip(customBorderStyle, com.gameocr.app.data.BorderStyle.SOLID, stringResource(R.string.settings_border_style_solid)) {
+                            customBorderStyle = it
+                            scope.launch { viewModel.saveCustomBorderStyle(it) }
+                        }
+                        EngineChip(customBorderStyle, com.gameocr.app.data.BorderStyle.DASHED, stringResource(R.string.settings_border_style_dashed)) {
+                            customBorderStyle = it
+                            scope.launch { viewModel.saveCustomBorderStyle(it) }
+                        }
+                        EngineChip(customBorderStyle, com.gameocr.app.data.BorderStyle.DOTTED, stringResource(R.string.settings_border_style_dotted)) {
+                            customBorderStyle = it
+                            scope.launch { viewModel.saveCustomBorderStyle(it) }
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        EngineChip(customBorderStyle, com.gameocr.app.data.BorderStyle.DOUBLE, stringResource(R.string.settings_border_style_double)) {
+                            customBorderStyle = it
+                            scope.launch { viewModel.saveCustomBorderStyle(it) }
+                        }
+                        EngineChip(customBorderStyle, com.gameocr.app.data.BorderStyle.GROOVE, stringResource(R.string.settings_border_style_groove)) {
+                            customBorderStyle = it
+                            scope.launch { viewModel.saveCustomBorderStyle(it) }
+                        }
+                    }
                 }
 
                 Text(stringResource(R.string.settings_textsize_label_format, textSize.toInt()), style = MaterialTheme.typography.labelLarge)
@@ -1434,6 +1586,7 @@ fun SettingsScreen(
                     customFg = customFg,
                     customBorder = customBorder,
                     customBorderW = customBorderW,
+                    customBorderStyle = customBorderStyle,
                     textSize = textSize,
                     alpha = alpha
                 )
@@ -1442,7 +1595,44 @@ fun SettingsScreen(
                 Text(stringResource(R.string.settings_render_mode_label), style = MaterialTheme.typography.labelLarge)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     EngineChip(renderMode, RenderMode.BLOCKS, stringResource(R.string.settings_render_blocks_chip)) { renderMode = it }
-                    EngineChip(renderMode, RenderMode.BANNER, stringResource(R.string.settings_render_banner_chip)) { renderMode = it }
+                    EngineChip(renderMode, RenderMode.FLOATING_WINDOW, stringResource(R.string.settings_render_floating_window_chip)) { renderMode = it }
+                }
+
+                if (renderMode == RenderMode.FLOATING_WINDOW) {
+                    // 悬浮窗口内容形态：原文+译文 / 仅译文。立即生效，不进 save 流程。
+                    Text(stringResource(R.string.settings_floating_window_content_label), style = MaterialTheme.typography.labelLarge)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        EngineChip(
+                            floatingWindowContentMode,
+                            com.gameocr.app.data.FloatingWindowContentMode.SRC_AND_DST,
+                            stringResource(R.string.settings_floating_window_content_src_and_dst)
+                        ) {
+                            floatingWindowContentMode = it
+                            scope.launch { viewModel.saveFloatingWindowContentMode(it) }
+                        }
+                        EngineChip(
+                            floatingWindowContentMode,
+                            com.gameocr.app.data.FloatingWindowContentMode.DST_ONLY,
+                            stringResource(R.string.settings_floating_window_content_dst_only)
+                        ) {
+                            floatingWindowContentMode = it
+                            scope.launch { viewModel.saveFloatingWindowContentMode(it) }
+                        }
+                    }
+                    SwitchRow(stringResource(R.string.settings_floating_window_locked), floatingWindowLocked) {
+                        floatingWindowLocked = it
+                        scope.launch { viewModel.saveFloatingWindowLocked(it) }
+                    }
+                    Text(
+                        stringResource(R.string.settings_floating_window_locked_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    androidx.compose.material3.OutlinedButton(onClick = {
+                        scope.launch { viewModel.resetFloatingWindowGeometry() }
+                    }) {
+                        Text(stringResource(R.string.settings_floating_window_reset_geometry))
+                    }
                 }
 
                 if (renderMode == RenderMode.BLOCKS) {
@@ -1623,7 +1813,7 @@ fun SettingsScreen(
             // 搜索下拉：浮在 Column 之上。匹配项点击后滚到对应 section 顶部并关闭搜索。
             if (searchActive && searchQuery.isNotBlank()) {
                 val matches = remember(searchQuery) {
-                    SETTING_ITEMS.filter { it.matches(context, searchQuery) }.take(10)
+                    SETTING_ITEMS.filter { it.matches(context, searchQuery) }.take(20)
                 }
                 Card(
                     modifier = Modifier
@@ -1664,12 +1854,14 @@ fun SettingsScreen(
 }
 
 /**
- * 译文样式实时预览卡。展示一段假的"原文 + 译文"，按当前 theme/字号/透明度/自定义色/边框渲染。
+ * 译文样式实时预览卡。展示一段假的"原文 + 译文"，按当前 theme/字号/透明度/自定义色/边框/边框样式渲染。
  *
- * 与 [com.gameocr.app.overlay.OverlayManager] 的视觉保持一致：
+ * 与 [com.gameocr.app.overlay.OverlayManager] / [com.gameocr.app.overlay.DraggableOverlayWindow] 的视觉保持一致：
  * - 主题颜色映射见 [overlayThemeColors]（务必与 OverlayManager 同步）
  * - alpha 整体应用到 box（模拟 view.setAlpha 的效果，叠加自身像素 alpha）
  * - 棋盘格底色用 linear gradient 模拟实际屏幕背景，让透明度变化肉眼可见
+ * - 边框样式：仅 CUSTOM 主题下读 [customBorderStyle]，预设主题恒为 SOLID（与 DraggableOverlayWindow 一致）；
+ *   DASH/DOT 间距、DOUBLE 间隙、GROOVE 明暗各 ±40% 全部复制 OverlayManager / DraggableOverlayWindow 的硬编码
  */
 @Composable
 private fun OverlayPreviewCard(
@@ -1678,10 +1870,14 @@ private fun OverlayPreviewCard(
     customFg: Int,
     customBorder: Int,
     customBorderW: Float,
+    customBorderStyle: com.gameocr.app.data.BorderStyle,
     textSize: Float,
     alpha: Float
 ) {
     val colors = overlayThemeColors(theme, customBg, customFg, customBorder, customBorderW.toInt())
+    // 仅 CUSTOM 主题 + borderDp > 0 时让用户选的 borderStyle 生效；与 DraggableOverlayWindow 一致
+    val effectiveBorderStyle = if (theme == OverlayTheme.CUSTOM)
+        customBorderStyle else com.gameocr.app.data.BorderStyle.SOLID
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(
             stringResource(R.string.settings_overlay_preview_label),
@@ -1708,15 +1904,12 @@ private fun OverlayPreviewCard(
                         Color(colors.bg),
                         shape = RoundedCornerShape(6.dp)
                     )
-                    .let { m ->
-                        if (colors.borderDp > 0) {
-                            m.border(
-                                colors.borderDp.dp,
-                                Color(colors.border),
-                                RoundedCornerShape(6.dp)
-                            )
-                        } else m
-                    }
+                    .borderStyleOverlay(
+                        borderDp = colors.borderDp,
+                        borderColor = colors.border,
+                        borderStyle = effectiveBorderStyle,
+                        cornerRadiusDp = 6f
+                    )
                     .padding(horizontal = 12.dp, vertical = 10.dp)
             ) {
                 Text(
@@ -1727,6 +1920,143 @@ private fun OverlayPreviewCard(
             }
         }
     }
+}
+
+/**
+ * 按 [borderStyle] 在 box 上画一圈边框，五种样式行为复制
+ * [com.gameocr.app.overlay.DraggableOverlayWindow.shellBackground]：
+ * - SOLID：单条 stroke
+ * - DASHED：dashPathEffect(8dp on, 5dp off)
+ * - DOTTED：dashPathEffect(2dp on, 3dp off)
+ * - DOUBLE：外圈 + 内圈两条同色 stroke，间距 = w + 3dp
+ * - GROOVE：外圈暗色 (-40%)、内圈亮色 (+40%)，inset = w
+ *
+ * borderDp <= 0 时直接 noop。
+ */
+private fun Modifier.borderStyleOverlay(
+    borderDp: Int,
+    borderColor: Int,
+    borderStyle: com.gameocr.app.data.BorderStyle,
+    cornerRadiusDp: Float
+): Modifier = this.then(
+    Modifier.drawBehind {
+        if (borderDp <= 0) return@drawBehind
+        val w = borderDp.dp.toPx()
+        val cornerPx = cornerRadiusDp.dp.toPx()
+        val color = Color(borderColor)
+        // stroke 居中绘制，rect 往内 inset w/2 才能让外缘正好贴 box 边
+        val inset = w / 2f
+        val outerRect = androidx.compose.ui.geometry.Rect(
+            left = inset,
+            top = inset,
+            right = size.width - inset,
+            bottom = size.height - inset
+        )
+        val outerRadius = (cornerPx - inset).coerceAtLeast(0f)
+        when (borderStyle) {
+            com.gameocr.app.data.BorderStyle.SOLID -> drawRoundRect(
+                color = color,
+                topLeft = androidx.compose.ui.geometry.Offset(outerRect.left, outerRect.top),
+                size = androidx.compose.ui.geometry.Size(outerRect.width, outerRect.height),
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(outerRadius),
+                style = androidx.compose.ui.graphics.drawscope.Stroke(width = w)
+            )
+            com.gameocr.app.data.BorderStyle.DASHED -> drawRoundRect(
+                color = color,
+                topLeft = androidx.compose.ui.geometry.Offset(outerRect.left, outerRect.top),
+                size = androidx.compose.ui.geometry.Size(outerRect.width, outerRect.height),
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(outerRadius),
+                style = androidx.compose.ui.graphics.drawscope.Stroke(
+                    width = w,
+                    pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(
+                        floatArrayOf(8.dp.toPx(), 5.dp.toPx())
+                    )
+                )
+            )
+            com.gameocr.app.data.BorderStyle.DOTTED -> drawRoundRect(
+                color = color,
+                topLeft = androidx.compose.ui.geometry.Offset(outerRect.left, outerRect.top),
+                size = androidx.compose.ui.geometry.Size(outerRect.width, outerRect.height),
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(outerRadius),
+                style = androidx.compose.ui.graphics.drawscope.Stroke(
+                    width = w,
+                    pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(
+                        floatArrayOf(2.dp.toPx(), 3.dp.toPx())
+                    )
+                )
+            )
+            com.gameocr.app.data.BorderStyle.DOUBLE -> {
+                // 外圈
+                drawRoundRect(
+                    color = color,
+                    topLeft = androidx.compose.ui.geometry.Offset(outerRect.left, outerRect.top),
+                    size = androidx.compose.ui.geometry.Size(outerRect.width, outerRect.height),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(outerRadius),
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = w)
+                )
+                // 内圈：间距 = w + 3dp（与 LayerDrawable.setLayerInset 一致）
+                val gap = w + 3.dp.toPx()
+                val innerInset = inset + gap
+                val innerRect = androidx.compose.ui.geometry.Rect(
+                    left = innerInset, top = innerInset,
+                    right = size.width - innerInset, bottom = size.height - innerInset
+                )
+                if (innerRect.width > 0f && innerRect.height > 0f) {
+                    drawRoundRect(
+                        color = color,
+                        topLeft = androidx.compose.ui.geometry.Offset(innerRect.left, innerRect.top),
+                        size = androidx.compose.ui.geometry.Size(innerRect.width, innerRect.height),
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(
+                            (outerRadius - gap).coerceAtLeast(0f)
+                        ),
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = w)
+                    )
+                }
+            }
+            com.gameocr.app.data.BorderStyle.GROOVE -> {
+                // 外圈暗色
+                drawRoundRect(
+                    color = Color(shadeArgb(borderColor, -0.4f)),
+                    topLeft = androidx.compose.ui.geometry.Offset(outerRect.left, outerRect.top),
+                    size = androidx.compose.ui.geometry.Size(outerRect.width, outerRect.height),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(outerRadius),
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = w)
+                )
+                // 内圈亮色，inset = w
+                val innerInset = inset + w
+                val innerRect = androidx.compose.ui.geometry.Rect(
+                    left = innerInset, top = innerInset,
+                    right = size.width - innerInset, bottom = size.height - innerInset
+                )
+                if (innerRect.width > 0f && innerRect.height > 0f) {
+                    drawRoundRect(
+                        color = Color(shadeArgb(borderColor, 0.4f)),
+                        topLeft = androidx.compose.ui.geometry.Offset(innerRect.left, innerRect.top),
+                        size = androidx.compose.ui.geometry.Size(innerRect.width, innerRect.height),
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(
+                            (outerRadius - w).coerceAtLeast(0f)
+                        ),
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = w)
+                    )
+                }
+            }
+        }
+    }
+)
+
+/** 与 [com.gameocr.app.overlay.DraggableOverlayWindow.shadeColor] 行为一致。factor>0 加亮、<0 加暗。 */
+private fun shadeArgb(color: Int, factor: Float): Int {
+    val a = (color shr 24) and 0xFF
+    val r = (color shr 16) and 0xFF
+    val g = (color shr 8) and 0xFF
+    val b = color and 0xFF
+    val nr = if (factor >= 0) r + ((255 - r) * factor).toInt() else (r * (1 + factor)).toInt()
+    val ng = if (factor >= 0) g + ((255 - g) * factor).toInt() else (g * (1 + factor)).toInt()
+    val nb = if (factor >= 0) b + ((255 - b) * factor).toInt() else (b * (1 + factor)).toInt()
+    return (a shl 24) or
+        (nr.coerceIn(0, 255) shl 16) or
+        (ng.coerceIn(0, 255) shl 8) or
+        nb.coerceIn(0, 255)
 }
 
 /** 主题 → ARGB 颜色映射。与 [com.gameocr.app.overlay.OverlayManager] 内的硬编码必须保持一致。 */
@@ -1792,40 +2122,71 @@ private data class SearchEntry(
  * keywords 混合中英文：英文系统下用户用英文输入仍能搜到中文 section / 反之亦然。
  */
 private val SETTING_ITEMS: List<SearchEntry> = listOf(
+    // —— 翻译后端 ——
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_translator_engine, listOf("OpenAI", "DeepL", "LLM", "翻译引擎")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_base_url, listOf("base url")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_api_key, listOf("api key")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_model_name, listOf("model", "模型名")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_deepl_api_key, listOf("deepl")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_deepl_pro, listOf("deepl pro")),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_deepl_advanced, listOf("deeplx", "bearer", "official", "protocol", "自架", "高级", "协议", "deepl base url")),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_youdao_pictrans, listOf("youdao", "有道", "图片翻译", "pictrans", "ocrtransapi", "端到端")),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_google, listOf("google", "谷歌", "translate")),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_volc, listOf("volc", "volcengine", "火山", "字节", "doubao", "bytedance", "access key", "AK", "SK", "region", "区域")),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_baidu_fanyi, listOf("baidu fanyi", "百度翻译", "fanyi-api", "appid", "开放平台")),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_tencent_translator, listOf("tencent", "腾讯", "tmt", "tmtcloud", "腾讯云翻译")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_source_lang, listOf("source", "源语言")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_target_lang, listOf("target", "目标语言")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_prompt, listOf("prompt", "提示词", "system")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_streaming, listOf("streaming", "流式")),
 
+    // —— OCR 引擎 ——
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_ocr_switch, listOf("ML Kit", "百度", "腾讯", "Paddle", "OCR engine")),
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_paddle_download, listOf("ONNX", "v5", "镜像", "mirror")),
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_baidu_api_key, listOf("baidu", "百度")),
+    SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_baidu_endpoint, listOf("百度", "baidu", "general", "accurate", "webimage", "含位置", "标准版", "高精度")),
+    SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_baidu_lang, listOf("百度", "baidu", "language", "语种", "CHN_ENG", "JAP", "KOR", "auto_detect")),
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_tencent_secret, listOf("tencent", "腾讯")),
+    SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_tencent_endpoint, listOf("tencent", "腾讯", "general basic", "general accurate", "recognize agent", "高精度", "智能 agent")),
+    SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_tencent_lang, listOf("tencent", "腾讯", "language", "语种", "mix", "zh_rare", "auto")),
+    SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_tencent_region, listOf("tencent", "腾讯", "region", "区域", "ap-guangzhou", "广州")),
+    SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_youdao_ocr, listOf("youdao", "有道", "ocrapi", "app key", "app secret")),
 
+    // —— 图像预处理 ——
     SearchEntry(SectionKeys.PREPROCESS, R.string.settings_section_preprocess, R.string.settings_search_item_upscale, listOf("upscale", "放大", "上采样")),
     SearchEntry(SectionKeys.PREPROCESS, R.string.settings_section_preprocess, R.string.settings_search_item_invert, listOf("invert", "反色", "暗底白字")),
     SearchEntry(SectionKeys.PREPROCESS, R.string.settings_section_preprocess, R.string.settings_search_item_binarize, listOf("binarize", "otsu", "二值化")),
 
-    SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_render_mode, listOf("紧贴", "横幅", "banner", "render", "display mode")),
+    // —— 显示 ——
+    SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_render_mode, listOf("紧贴", "横幅", "banner", "render", "display mode", "floating window", "悬浮窗")),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_placement, listOf("下方", "上方", "覆盖", "below", "above", "overlap", "placement")),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_offset, listOf("offset", "微调")),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_overlay_theme, listOf("深色", "浅色", "纸张", "霜玻璃", "琥珀", "theme", "dark", "light", "frost", "amber")),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_custom_theme, listOf("custom", "border", "自定义", "边框")),
+    SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_border_style, listOf("solid", "dashed", "dotted", "double", "groove", "实线", "虚线", "点线", "双线", "凹槽", "边框样式")),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_text_size, listOf("font size", "字号", "字体大小")),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_alpha, listOf("alpha", "opacity", "透明度")),
-    SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_floating_size, listOf("floating", "圆球", "悬浮")),
+    SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_floating_window_content, listOf("floating window", "悬浮窗", "原文+译文", "仅译文", "src dst", "content mode")),
+    SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_floating_window_locked, listOf("lock", "锁定", "悬浮窗")),
+    SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_allow_wrap, listOf("wrap", "换行", "single line", "多行")),
+    SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_avoid_collision, listOf("collision", "碰撞", "避撞", "重叠")),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_merge_adjacent, listOf("merge", "合并", "重叠", "拆段")),
+    SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_merge_strength, listOf("strength", "强度", "保守", "标准", "激进", "conservative", "standard", "aggressive")),
 
+    // —— 悬浮按钮 ——
+    // 注意：floating_size 历史误指 OVERLAY，0.3.x 起改成 FLOATING（实际控件在 floating section）。
+    SearchEntry(SectionKeys.FLOATING, R.string.settings_section_floating, R.string.settings_search_item_floating_size, listOf("floating", "圆球", "悬浮", "size", "大小")),
+    SearchEntry(SectionKeys.FLOATING, R.string.settings_section_floating, R.string.settings_search_item_floating_snap, listOf("snap", "贴边", "edge")),
+    SearchEntry(SectionKeys.FLOATING, R.string.settings_section_floating, R.string.settings_search_item_floating_auto_dock, listOf("auto dock", "自动停靠", "停靠", "藏边")),
+    SearchEntry(SectionKeys.FLOATING, R.string.settings_section_floating, R.string.settings_search_item_floating_dock_inset, listOf("inset", "贴边距离", "手势", "全面屏", "gesture")),
+
+    // —— 触发器 ——
     SearchEntry(SectionKeys.TRIGGER, R.string.settings_section_trigger, R.string.settings_search_item_loop_interval, listOf("loop", "循环")),
     SearchEntry(SectionKeys.TRIGGER, R.string.settings_section_trigger, R.string.settings_search_item_a11y_volume, listOf("无障碍", "a11y", "accessibility", "volume", "音量")),
 
+    // —— 网络 ——
     SearchEntry(SectionKeys.NETWORK, R.string.settings_section_network, R.string.settings_search_item_api_timeout, listOf("timeout", "超时", "网络", "network")),
+    SearchEntry(SectionKeys.NETWORK, R.string.settings_section_network, R.string.settings_search_item_cleartext_hosts, listOf("cleartext", "http", "明文", "白名单", "host", "自架", "私有")),
 
     SearchEntry(SectionKeys.APP_LANG, R.string.settings_section_app_lang, R.string.settings_section_app_lang, listOf("language", "locale", "语言", "中文", "english", "i18n")),
 

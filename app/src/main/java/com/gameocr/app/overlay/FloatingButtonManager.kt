@@ -199,6 +199,12 @@ class FloatingButtonManager(
         wm.addView(container, params)
         view = container
         layoutParams = params
+
+        // 启动时如果开了吸附但上次保存的位置不在边（用户上次拖到中间没吸边），自动吸一下。
+        // post 到下一帧确保 view layout 完成再 snap，否则 SpringAnimation 用错的 start value 跳变。
+        if (snapToEdgeEnabled) {
+            container.post { snapToEdge() }
+        }
     }
 
     /** 改完 [sizeDp] 后调用以即时生效，无需重启服务。 */
@@ -311,6 +317,12 @@ class FloatingButtonManager(
         snapAnimY?.cancel(); snapAnimY = null
         progressView?.stop()
         progressView = null
+        // 保留 hide 前的最后位置——下次 show() 用 initialX/initialY 重建，否则会回到 service 启动
+        // 时灌入的旧 settings 值（用户在弧菜单选区域后，调整完区域回来球就跳回原点的根因）。
+        layoutParams?.let {
+            initialX = it.x
+            initialY = it.y
+        }
         view?.let {
             runCatching { wm.removeView(it) }
             view = null

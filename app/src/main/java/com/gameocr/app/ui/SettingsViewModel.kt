@@ -57,6 +57,7 @@ class SettingsViewModel @Inject constructor(
         baiduLanguage: com.gameocr.app.data.BaiduOcrLanguage,
         tencentId: String,
         tencentKey: String,
+        tencentRegion: String,
         tencentEndpoint: com.gameocr.app.data.TencentOcrEndpoint,
         tencentLanguage: com.gameocr.app.data.TencentOcrLanguage,
         preprocess: PreprocessOptions,
@@ -80,7 +81,12 @@ class SettingsViewModel @Inject constructor(
         deeplCustomToken: String,
         paddleMirror: String,
         youdaoAppKey: String,
-        youdaoAppSecret: String
+        youdaoAppSecret: String,
+        volcAccessKeyId: String,
+        volcSecretAccessKey: String,
+        volcRegion: String,
+        baiduFanyiAppId: String,
+        baiduFanyiSecretKey: String
     ) {
         repo.update {
             it.copy(
@@ -110,6 +116,7 @@ class SettingsViewModel @Inject constructor(
                 baiduOcrLanguage = baiduLanguage,
                 tencentSecretId = tencentId.trim(),
                 tencentSecretKey = tencentKey.trim(),
+                tencentRegion = tencentRegion.trim().ifBlank { "ap-guangzhou" },
                 tencentOcrEndpoint = tencentEndpoint,
                 tencentOcrLanguage = tencentLanguage,
                 preprocess = preprocess,
@@ -133,7 +140,12 @@ class SettingsViewModel @Inject constructor(
                 deeplCustomToken = deeplCustomToken.trim(),
                 paddleModelMirrorUrl = paddleMirror.trim(),
                 youdaoAppKey = youdaoAppKey.trim(),
-                youdaoAppSecret = youdaoAppSecret.trim()
+                youdaoAppSecret = youdaoAppSecret.trim(),
+                volcAccessKeyId = volcAccessKeyId.trim(),
+                volcSecretAccessKey = volcSecretAccessKey.trim(),
+                volcRegion = volcRegion.trim().ifBlank { "cn-north-1" },
+                baiduFanyiAppId = baiduFanyiAppId.trim(),
+                baiduFanyiSecretKey = baiduFanyiSecretKey.trim()
             )
         }
     }
@@ -148,6 +160,33 @@ class SettingsViewModel @Inject constructor(
      */
     suspend fun saveFloatingSnapEdge(enabled: Boolean) {
         repo.update { it.copy(floatingButtonSnapToEdge = enabled) }
+    }
+
+    /** 悬浮窗口内容形态（原文+译文 / 仅译文）。立即落盘 + 即时生效，不走 [save] 流程。 */
+    suspend fun saveFloatingWindowContentMode(mode: com.gameocr.app.data.FloatingWindowContentMode) {
+        repo.update { it.copy(floatingWindowContentMode = mode) }
+    }
+
+    /** 悬浮窗口锁定开关：锁定后禁用拖拽 / resize。 */
+    suspend fun saveFloatingWindowLocked(locked: Boolean) {
+        repo.update { it.copy(floatingWindowLocked = locked) }
+    }
+
+    /** CUSTOM 主题的边框样式（SOLID / DASHED / DOTTED / DOUBLE / GROOVE），立即生效。 */
+    suspend fun saveCustomBorderStyle(style: com.gameocr.app.data.BorderStyle) {
+        repo.update { it.copy(customBorderStyle = style) }
+    }
+
+    /** 重置悬浮窗口位置 / 大小到默认（X=Y=-1 居中，W/H 回默认）。 */
+    suspend fun resetFloatingWindowGeometry() {
+        repo.update {
+            it.copy(
+                floatingWindowX = -1,
+                floatingWindowY = -1,
+                floatingWindowWidthDp = 320,
+                floatingWindowHeightDp = 180
+            )
+        }
     }
 
     /**
@@ -254,7 +293,15 @@ class SettingsViewModel @Inject constructor(
         deeplCustomToken: String,
         youdaoAppKey: String,
         youdaoAppSecret: String,
-        apiTimeoutSeconds: Int
+        apiTimeoutSeconds: Int,
+        volcAccessKeyId: String = "",
+        volcSecretAccessKey: String = "",
+        volcRegion: String = "cn-north-1",
+        baiduFanyiAppId: String = "",
+        baiduFanyiSecretKey: String = "",
+        tencentSecretId: String = "",
+        tencentSecretKey: String = "",
+        tencentRegion: String = ""
     ): TestResult {
         val base = repo.get()
         val temp = base.copy(
@@ -270,6 +317,14 @@ class SettingsViewModel @Inject constructor(
             deeplCustomToken = deeplCustomToken.trim(),
             youdaoAppKey = youdaoAppKey.trim(),
             youdaoAppSecret = youdaoAppSecret.trim(),
+            volcAccessKeyId = volcAccessKeyId.trim().ifBlank { base.volcAccessKeyId },
+            volcSecretAccessKey = volcSecretAccessKey.trim().ifBlank { base.volcSecretAccessKey },
+            volcRegion = volcRegion.trim().ifBlank { base.volcRegion },
+            baiduFanyiAppId = baiduFanyiAppId.trim().ifBlank { base.baiduFanyiAppId },
+            baiduFanyiSecretKey = baiduFanyiSecretKey.trim().ifBlank { base.baiduFanyiSecretKey },
+            tencentSecretId = tencentSecretId.trim().ifBlank { base.tencentSecretId },
+            tencentSecretKey = tencentSecretKey.trim().ifBlank { base.tencentSecretKey },
+            tencentRegion = tencentRegion.trim().ifBlank { base.tencentRegion },
             apiTimeoutSeconds = apiTimeoutSeconds.coerceIn(5, 300)
         )
         return routingTranslator.testConnection(temp)

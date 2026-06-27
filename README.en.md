@@ -52,8 +52,8 @@ Game / manga / visual novel on screen → tap the floating ball → translation 
 
 ### 🎨 How the overlay looks
 
-- **Two placements**: stuck to the source text, or a single banner at the bottom of the screen
-- **5 color themes** + font size, opacity, border — all tweakable
+- **Two render modes**: glued to each source box (BLOCKS), or packed into a **draggable / resizable floating window** — perfect for games with on-screen joysticks and buttons; you can lock the window to prevent accidental touches
+- **5 color themes** + font size, opacity, border style (solid / dashed / dotted / double / groove) — preview updates live
 - **Comic / subtitle optimizations**: sentences split across multiple OCR boxes get merged before translating; vertical Japanese is read right-to-left; tiny ruby-text columns (furigana) next to kanji are filtered out so you don't get duplicate translations
 - **Marquee for long lines**: in single-line mode, long translations scroll horizontally instead of being truncated with "…"
 
@@ -76,9 +76,11 @@ Game / manga / visual novel on screen → tap the floating ball → translation 
 | Free / no ads | ✅ | Subscription or IAP | ✅ | ✅ |
 | Open source | ✅ Apache 2.0 | ❌ | ❌ | Partial |
 | Floating-ball overlay translation | ✅ | ✅ | ❌ | ❌ (weak on mobile) |
-| On-device OCR (no image upload) | ✅ | ❌ (cloud-first) | ✅ | ❌ |
-| Pluggable OCR + translation engines (incl. LLM) | ✅ | Limited | ❌ | Translation only |
-| Self-hosted backend (deeplx / local LLM) | ✅ | ❌ | ❌ | ❌ |
+| On-device OCR (no image upload) | ✅ ML Kit + PaddleOCR | ❌ (cloud-first) | ✅ | ❌ |
+| Pluggable OCR engines | ✅ 5 on-device + 3 cloud | Limited | ❌ | ❌ |
+| Pluggable translation engines | ✅ 7: LLM / DeepL / DeepLX / Youdao / Google / Volcengine / Baidu / Tencent | 1–2 fixed | ❌ | Translation only |
+| Self-hosted backend (deeplx / local LLM / custom Bearer) | ✅ | ❌ | ❌ | ❌ |
+| Floating-window mode (lockable, gesture-proof) | ✅ | ❌ | ❌ | ❌ |
 | Comic vertical / furigana / subtitle paragraph merge | ✅ | ❌ | ❌ | ❌ |
 
 **Positioning**: in the "game / manga on-screen translation" niche, be the only one that is **open source + on-device-engine-capable + self-host-friendly**. The differentiation against incumbents lives in *privacy / self-hosting / engine choice*, not in OCR or translation quality itself (anyone can plug into the same cloud OCR and DeepL/LLM engines).
@@ -106,8 +108,16 @@ Game / manga / visual novel on screen → tap the floating ball → translation 
 | App language / theme / translator | OCR engine / preprocessing |
 |---|---|
 | <img src="docs/screenshots/settings-top.png" width="280" alt="Settings top" /> | <img src="docs/screenshots/settings-ocr.png" width="280" alt="OCR engine settings" /> |
-| **Overlay style preview** | **Box merge / floating ball** |
-| <img src="docs/screenshots/settings-display.png" width="280" alt="Overlay display settings" /> | <img src="docs/screenshots/settings-floating.png" width="280" alt="Box merge & floating ball settings" /> |
+| **Overlay style preview (BLOCKS mode)** | **Floating-window mode options** |
+| <img src="docs/screenshots/settings-display.png" width="280" alt="Overlay display settings (BLOCKS mode)" /> | <img src="docs/screenshots/settings-display-floating.png" width="280" alt="Floating-window mode settings" /> |
+| **Box merge / floating ball** | |
+| <img src="docs/screenshots/settings-floating.png" width="280" alt="Box merge & floating ball settings" /> | |
+
+**Floating-window mode** — collects all source / translated lines into one draggable, resizable overlay so translations don't cover game controls (joysticks, action buttons, dialog-advance keys). The window can be **locked**: unlocked shows a close button + bottom resize handle and accepts drag / pinch; locked strips them away, leaving only the text and ignoring every gesture — no more accidental drags during gameplay.
+
+| Unlocked (drag / resize / close) | Locked (gesture-proof, content only) |
+|---|---|
+| <img src="docs/screenshots/floating-window-unlocked.jpg" width="420" alt="Floating window unlocked" /> | <img src="docs/screenshots/floating-window-locked.jpg" width="420" alt="Floating window locked" /> |
 
 ## 📦 Install
 
@@ -178,11 +188,18 @@ You can override the mirror URL in settings, or import the files manually from l
 
 **Google** (unofficial endpoint): no key needed, free. **Proxy required inside mainland China**; Google may rate-limit or change the endpoint at any time — for learning only.
 
+**Volcengine Translate** (ByteDance's translation service): enable "Machine Translation" in the Volcengine console, then paste the two keys it generates (AK / SK). Leave the region as default. Holds up well under loop mode without getting throttled.
+
+**Baidu Translate** (heads-up: **not the same account as the "Baidu" OCR above** — sign up separately at the Baidu Translate Open Platform): paste APPID + secret key. The free personal tier is roughly 50k characters per month, enough for a few visual-novel sessions a day.
+
+**Tencent Translate**: shares one key pair with the Tencent OCR above. If you already filled SecretId / SecretKey in the OCR section, nothing else to do here.
+
 ### Display
 
-- **Render mode**: BLOCKS (per OCR box, glued to source) / BANNER (one bar at the bottom)
+- **Render mode**: BLOCKS (per OCR box, glued to source) / **Floating window** (a draggable, resizable overlay — see the [screenshots section](#-screenshots))
 - **Placement** (BLOCKS only): below / overlap / above + pixel-level x/y offset
-- **Theme**: 5 presets + custom (bg / fg / border ARGB)
+- **Floating window**: switch between "source + translation" and "translation only" content modes; **lock** the window to disable dragging and resizing during gameplay; a "Reset position / size" button restores defaults in one tap
+- **Theme**: 5 presets + custom (bg / fg / border ARGB + border style: solid / dashed / dotted / double / groove)
 - **Avoidance & merge**: collision detection clamps translation width so it doesn't bleed into neighbouring OCR boxes; OCR-side box merging offers **Conservative / Standard / Aggressive** strengths — Conservative suits VNs / dense passages, Standard fits most scenes, Aggressive suits comic bubbles split into many columns (may occasionally merge adjacent bubbles)
 
 ## ⚠️ Known limitations

@@ -61,10 +61,14 @@
             android:noHistory="true" />
 
         <!-- 截屏前台服务：mediaProjection 用于默认截屏；specialUse 用于 Shizuku 路径 -->
+        <!-- configChanges 必须包含 orientation+screenSize+screenLayout+smallestScreenSize：
+             旋转屏幕时由 Service 自己接 onConfigurationChanged，按比例重算悬浮窗位置 +
+             updateViewLayout。否则旋转后悬浮窗位置会废（竖屏 y=200 横屏可能落到状态栏后）。 -->
         <service
             android:name=".service.CaptureService"
             android:exported="false"
-            android:foregroundServiceType="mediaProjection|specialUse">
+            android:foregroundServiceType="mediaProjection|specialUse"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Shizuku-based on-demand screen capture for OCR translation" />
@@ -97,6 +101,13 @@
         <meta-data
             android:name="com.google.mlkit.vision.DEPENDENCIES"
             android:value="ocr,ocr_japanese,ocr_chinese" />
+
+        <!-- MIUI / HyperOS 特殊配置：允许 overlay window 在横屏延伸到 long-edge cutout
+             区域，否则系统默认 letterbox 让 window 不能覆盖 cutout，左边露物理屏黑条。
+             不是 Google 标准 API（PhoneWindowManager 硬限制），仅小米 OEM 提供放开通道。 -->
+        <meta-data
+            android:name="notch.config"
+            android:value="portrait|landscape" />
 
     </application>
 

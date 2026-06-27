@@ -11,9 +11,8 @@ import com.gameocr.app.data.SettingsRepository
 import com.gameocr.app.data.TencentOcrEndpoint
 import com.gameocr.app.data.TencentOcrLanguage
 import com.gameocr.app.data.withApiTimeout
+import com.gameocr.app.util.TencentSigner
 import dagger.hilt.android.qualifiers.ApplicationContext
-import javax.crypto.Mac
-import javax.crypto.spec.SecretKeySpec
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
@@ -30,11 +29,6 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import timber.log.Timber
 import java.io.ByteArrayOutputStream
-import java.security.MessageDigest
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import java.util.TimeZone
 
 /**
  * 腾讯云 OCR - 通用印刷体识别（GeneralBasicOCR）。
@@ -215,53 +209,20 @@ class TencentOcrEngine @Inject constructor(
         version: String,
         payload: String
     ): Pair<TencentOcrResponse, String> {
-        val timestamp = System.currentTimeMillis() / 1000L
-        val date = utcDate(timestamp)
-        val credentialScope = "$date/$service/tc3_request"
-
-        // 1. Canonical Request
-        val payloadHash = sha256Hex(payload)
-        val canonicalHeaders =
-            "content-type:application/json; charset=utf-8\nhost:$host\nx-tc-action:${action.lowercase()}\n"
-        val signedHeaders = "content-type;host;x-tc-action"
-        val canonicalRequest = listOf(
-            "POST",
-            "/",
-            "",
-            canonicalHeaders,
-            signedHeaders,
-            payloadHash
-        ).joinToString("\n")
-
-        // 2. String to Sign
-        val stringToSign = listOf(
-            "TC3-HMAC-SHA256",
-            timestamp.toString(),
-            credentialScope,
-            sha256Hex(canonicalRequest)
-        ).joinToString("\n")
-
-        // 3. Signature
-        val secretDate = hmacSha256(("TC3$secretKey").toByteArray(), date)
-        val secretService = hmacSha256(secretDate, service)
-        val secretSigning = hmacSha256(secretService, "tc3_request")
-        val signature = bytesToHex(hmacSha256(secretSigning, stringToSign))
-
-        val authorization =
-            "TC3-HMAC-SHA256 Credential=$secretId/$credentialScope, SignedHeaders=$signedHeaders, Signature=$signature"
-
+        val headers = TencentSigner.signTc3(
+            secretId = secretId,
+            secretKey = secretKey,
+            service = service,
+            host = host,
+            region = region,
+            action = action,
+            version = version,
+            payload = payload
+        )
         val body = payload.toRequestBody("application/json; charset=utf-8".toMediaType())
-        val request = Request.Builder()
-            .url("https://$host/")
-            .header("Authorization", authorization)
-            .header("Content-Type", "application/json; charset=utf-8")
-            .header("Host", host)
-            .header("X-TC-Action", action)
-            .header("X-TC-Timestamp", timestamp.toString())
-            .header("X-TC-Version", version)
-            .header("X-TC-Region", region)
-            .post(body)
-            .build()
+        val builder = Request.Builder().url("https://$host/").post(body)
+        headers.forEach { (k, v) -> builder.header(k, v) }
+        val request = builder.build()
 
         return httpClient.newCall(request).execute().use { r ->
             val raw = r.body?.string().orEmpty()
@@ -276,25 +237,6 @@ class TencentOcrEngine @Inject constructor(
             parsed to raw
         }
     }
-
-    private fun utcDate(epochSeconds: Long): String {
-        val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }
-        return sdf.format(Date(epochSeconds * 1000))
-    }
-
-    private fun sha256Hex(s: String): String {
-        val md = MessageDigest.getInstance("SHA-256")
-        return bytesToHex(md.digest(s.toByteArray(Charsets.UTF_8)))
-    }
-
-    private fun hmacSha256(key: ByteArray, data: String): ByteArray {
-        val mac = Mac.getInstance("HmacSHA256")
-        mac.init(SecretKeySpec(key, "HmacSHA256"))
-        return mac.doFinal(data.toByteArray(Charsets.UTF_8))
-    }
-
-    private fun bytesToHex(bytes: ByteArray): String =
-        bytes.joinToString("") { "%02x".format(it) }
 
     override fun close() { /* 共享 OkHttp，不释放 */ }
 

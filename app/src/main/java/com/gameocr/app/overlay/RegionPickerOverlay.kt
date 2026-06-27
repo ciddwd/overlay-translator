@@ -27,7 +27,33 @@ import com.gameocr.app.capture.RegionPickerView
  */
 class RegionPickerOverlay(private val context: Context) {
 
-    private val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+    private val overlayType: Int = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+    } else {
+        @Suppress("DEPRECATION")
+        WindowManager.LayoutParams.TYPE_PHONE
+    }
+
+    /**
+     * 拿跟随屏幕旋转的 WindowManager（仿 [com.gameocr.app.overlay.FloatingButtonManager]）。
+     * Service / Application context 的默认 WindowManager 不跟随旋转——横屏 cutout 让出 inset 后
+     * window 原点被推到物理 cutout 之后，左边露出物理屏黑边。API 31+ 用
+     * `createWindowContext(display, type, options)` 拿挂在指定 display 上的 context，其 WM
+     * 会跟随该 display 当前方向。API < 31 退回默认 wm（已知 limitation）。
+     */
+    private val wm: WindowManager by lazy {
+        val defaultWm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return@lazy defaultWm
+        runCatching {
+            val dm = context.getSystemService(Context.DISPLAY_SERVICE)
+                as android.hardware.display.DisplayManager
+            val display = dm.getDisplay(android.view.Display.DEFAULT_DISPLAY)
+                ?: return@runCatching defaultWm
+            val windowContext = context.createWindowContext(display, overlayType, null)
+            windowContext.getSystemService(WindowManager::class.java) ?: defaultWm
+        }.getOrElse { defaultWm }
+    }
+
     private var container: FrameLayout? = null
 
     fun isShown(): Boolean = container != null
@@ -35,14 +61,19 @@ class RegionPickerOverlay(private val context: Context) {
     fun show(
         initial: Rect?,
         onConfirm: (Rect) -> Unit,
-        onCancel: () -> Unit
+        onCancel: () -> Unit,
+        /** 双击选择整屏触发。语义跟主屏「清除选框」一致：清掉 captureRegion 让下次走整屏。
+         *  默认走 onCancel（不清；保留兼容） */
+        onClearAll: () -> Unit = onCancel
     ) {
         if (container != null) return
 
+        lateinit var doClearAll: () -> Unit
         val picker = RegionPickerView(
             context = context,
             initial = initial,
-            onCancel = onCancel
+            onCancel = onCancel,
+            onClearAllRequested = { doClearAll() }
         )
 
         lateinit var doCancel: () -> Unit
@@ -89,6 +120,10 @@ class RegionPickerOverlay(private val context: Context) {
                 onCancel()
             }
         }
+        doClearAll = {
+            dismiss()
+            onClearAll()
+        }
 
         val updateToolbarPos: (Rect?) -> Unit = { rect ->
             placeToolbar(root, toolbar, rect)
@@ -96,15 +131,12 @@ class RegionPickerOverlay(private val context: Context) {
         picker.onRectChanged = updateToolbarPos
         root.post { updateToolbarPos(picker.currentRect()) }
 
-        val overlayType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        } else {
-            @Suppress("DEPRECATION")
-            WindowManager.LayoutParams.TYPE_PHONE
-        }
+        // 拿屏幕物理真实分辨率（不受 inset / system bar / cutout 让位影响）。
+        // MATCH_PARENT 在 HyperOS 横屏会被让出 cutout inset → window 左边露物理屏黑边。
+        // 显式给具体像素值绕过 framework 解释。
+        val (physW, physH) = physicalScreenSize()
         val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
+            physW, physH,
             overlayType,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
@@ -121,6 +153,20 @@ class RegionPickerOverlay(private val context: Context) {
             }
         }
         runCatching { wm.addView(root, params) }
+    }
+
+    /** 屏幕物理真实分辨率。直接用 [android.view.Display.getRealMetrics]——这是 framework 原生接口，
+     *  返回的是物理屏的真实分辨率，跟 cutout / system bar / inset 无关。
+     *  比 [WindowManager.getCurrentWindowMetrics] 可靠：后者在挂 window context 的 wm 上可能返回
+     *  工作区而非物理屏（HyperOS 横屏实测）。 */
+    private fun physicalScreenSize(): Pair<Int, Int> {
+        val dm = android.util.DisplayMetrics()
+        val displayManager = context.getSystemService(Context.DISPLAY_SERVICE)
+            as android.hardware.display.DisplayManager
+        val display = displayManager.getDisplay(android.view.Display.DEFAULT_DISPLAY)
+        @Suppress("DEPRECATION")
+        display.getRealMetrics(dm)
+        return dm.widthPixels to dm.heightPixels
     }
 
     fun dismiss() {

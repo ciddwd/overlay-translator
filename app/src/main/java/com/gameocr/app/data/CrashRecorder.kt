@@ -62,13 +62,11 @@ object CrashRecorder {
         line("tencentRegion", s.tencentRegion)
         line("paddleModelMirrorUrl", if (s.paddleModelMirrorUrl.isBlank()) "<default>" else "<custom>")
 
-        // 翻译
+        // 翻译：通用 + LLM
         line("translatorEngine", s.translatorEngine)
         line("baseUrl", mask(s.baseUrl))           // 可能含自架地址，脱敏
         line("apiKey", mask(s.apiKey))
         line("model", s.model)                      // 模型名不敏感，照实
-        line("deeplApiKey", mask(s.deeplApiKey))
-        line("deeplPro", s.deeplPro)
         line("sourceLang", s.sourceLang)
         line("targetLang", s.targetLang)
         // prompt 可能含用户自定义指令；只显示前 60 字 + 总长度，便于判断"是否默认 prompt"
@@ -76,10 +74,36 @@ object CrashRecorder {
         line("promptTemplate", "$promptHead... (${s.promptTemplate.length} chars)")
         line("streamingTranslate", s.streamingTranslate)
 
+        // 翻译：DeepL
+        line("deeplApiKey", mask(s.deeplApiKey))
+        line("deeplPro", s.deeplPro)
+        line("deeplProtocol", s.deeplProtocol)
+        line("deeplBaseUrl", if (s.deeplBaseUrl.isBlank()) "<unset>" else "<custom>")
+        line("deeplBearerAuth", s.deeplBearerAuth)
+        line("deeplCustomToken", mask(s.deeplCustomToken))
+
+        // 翻译：有道智云（OCR + 图片翻译共用）
+        line("youdaoAppKey", mask(s.youdaoAppKey))
+        line("youdaoAppSecret", mask(s.youdaoAppSecret))
+
+        // 翻译：火山引擎
+        line("volcAccessKeyId", mask(s.volcAccessKeyId))
+        line("volcSecretAccessKey", mask(s.volcSecretAccessKey))
+        line("volcRegion", s.volcRegion)
+
+        // 翻译：百度翻译开放平台（fanyi-api，与百度 OCR 不同账号）
+        line("baiduFanyiAppId", mask(s.baiduFanyiAppId))
+        line("baiduFanyiSecretKey", mask(s.baiduFanyiSecretKey))
+
         // 截图 + 触发
         line("captureRegion", s.captureRegion?.let {
             "${it.right - it.left}x${it.bottom - it.top}@(${it.left},${it.top})"
         } ?: "<full screen>")
+        // region 保存时的屏幕物理尺寸——排查"竖→横屏后框选错位"必备
+        line("captureRegionSavedScreen",
+            if (s.captureRegionSavedScreenW == 0 && s.captureRegionSavedScreenH == 0) "<legacy>"
+            else "${s.captureRegionSavedScreenW}x${s.captureRegionSavedScreenH}"
+        )
         line("captureLoopIntervalMs", s.captureLoopIntervalMs)
         line("preferShizukuCapture", s.preferShizukuCapture)
         line("a11yVolumeTrigger", s.a11yVolumeTrigger)
@@ -97,13 +121,38 @@ object CrashRecorder {
         line("overlayAlpha", s.overlayAlpha)
         line("overlayAllowWrap", s.overlayAllowWrap)
         line("overlayAvoidCollision", s.overlayAvoidCollision)
+        line("overlayOffsetX", s.overlayOffsetX)
+        line("overlayOffsetY", s.overlayOffsetY)
+        // CUSTOM 主题颜色（int ARGB → hex 字符串便于人肉对比；非敏感不脱敏）
+        line("customBgColor", "0x${"%08X".format(s.customBgColor)}")
+        line("customFgColor", "0x${"%08X".format(s.customFgColor)}")
+        line("customBorderColor", "0x${"%08X".format(s.customBorderColor)}")
+        line("customBorderWidth", s.customBorderWidth)
+        line("customBorderStyle", s.customBorderStyle)
+
+        // 悬浮球
         line("floatingButtonSizeDp", s.floatingButtonSizeDp)
+        line("floatingButtonX", s.floatingButtonX)
+        line("floatingButtonY", s.floatingButtonY)
+        line("floatingButtonSnapToEdge", s.floatingButtonSnapToEdge)
+        line("floatingButtonAutoDock", s.floatingButtonAutoDock)
+        line("floatingButtonDockInsetDp", s.floatingButtonDockInsetDp)
+
+        // 悬浮窗口（FLOATING_WINDOW 模式）
+        line("floatingWindowX", s.floatingWindowX)
+        line("floatingWindowY", s.floatingWindowY)
+        line("floatingWindowWidthDp", s.floatingWindowWidthDp)
+        line("floatingWindowHeightDp", s.floatingWindowHeightDp)
+        line("floatingWindowContentMode", s.floatingWindowContentMode)
+        line("floatingWindowLocked", s.floatingWindowLocked)
 
         // 高级
         line("apiTimeoutSeconds", s.apiTimeoutSeconds)
         line("mergeAdjacentBlocks", s.mergeAdjacentBlocks)
         line("mergeStrength", s.mergeStrength)
         line("pinnedLanguages", s.pinnedLanguages.joinToString(",").ifEmpty { "<empty>" })
+        // 明文 HTTP 白名单（hostname 不算敏感，可看是否用户开了哪些自架站点）
+        line("cleartextAllowedHosts", s.cleartextAllowedHosts.joinToString(",").ifEmpty { "<empty>" })
     }
 
     /** 设备 + 屏幕信息（不会变，理论上 install 时算一次就够，简化成每次写文件时取）。 */

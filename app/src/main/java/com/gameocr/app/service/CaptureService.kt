@@ -84,8 +84,15 @@ class CaptureService : Service() {
 
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
         super.onConfigurationChanged(newConfig)
-        // 屏幕方向变了把圆球 clamp 到可见区域
+        // 屏幕方向变了把圆球 + 悬浮窗口 + 截屏区域都按比例重算位置。
+        // captureRegion 走 SettingsRepository.rescaleCaptureRegionIfNeeded——
+        // 它用 saved 元数据按当前屏幕尺寸自动算比例，比"上次 onConfigurationChanged 拿到的尺寸"更稳。
         floatingButton?.onConfigurationChanged()
+        mainScope.launch { overlay?.onConfigurationChanged() }
+        scope.launch {
+            val dm = resources.displayMetrics
+            settingsRepository.rescaleCaptureRegionIfNeeded(dm.widthPixels, dm.heightPixels)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -93,11 +100,18 @@ class CaptureService : Service() {
             ACTION_START -> handleStart(intent)
             ACTION_STOP -> stopSelf()
             ACTION_TRIGGER_ONCE -> triggerOnce()
+            ACTION_PICK_REGION -> showRegionPickerOverlay()
         }
         return START_NOT_STICKY
     }
 
     private fun handleStart(intent: Intent) {
+        // Service 启动时主动 rescale 一次 captureRegion——如果用户在 service 没跑时旋转了屏幕，
+        // 这里把 region 校正到当前屏幕方向。
+        scope.launch {
+            val dmInit = resources.displayMetrics
+            settingsRepository.rescaleCaptureRegionIfNeeded(dmInit.widthPixels, dmInit.heightPixels)
+        }
         // 如果已经启动过，先 cleanup 旧资源避免悬浮窗叠加 / 截屏链路泄漏。
         // 用户重复点"启动"按钮、或者切换 Shizuku ↔ MediaProjection 路径都走这条。
         cleanupCapture()
@@ -147,7 +161,7 @@ class CaptureService : Service() {
             Timber.i("CaptureService started with MediaProjection path")
         }
 
-        overlay = OverlayManager(this)
+        overlay = OverlayManager(this, settingsRepository, scope)
         floatingButton = FloatingButtonManager(
             this,
             onSingleTap = { triggerOnce() },
@@ -188,6 +202,33 @@ class CaptureService : Service() {
         }
 
         CaptureServiceState.setRunning(true)
+
+        // Shizuku 路径 dry-run：即使 availability == READY，未通过 ADB / root 配对的 Shizuku 也会
+        // 让 newProcess(screencap) 失败（exit=1）。立刻跑一次截屏，失败则用悬浮错误条引导用户改
+        // 用 MediaProjection 并 stopSelf——比让他看到通用「截屏失败」反复试错好。
+        if (useShizuku) {
+            scope.launch {
+                val shotter = screenshotter ?: return@launch
+                val test = shotter.capture()
+                if (test == null) {
+                    Timber.w("Shizuku dry-run failed; stopping service")
+                    logRepository.error(
+                        LogRepository.Category.CAPTURE,
+                        getString(R.string.log_msg_shizuku_dry_run_failed)
+                    )
+                    mainScope.launch {
+                        overlay?.showErrorHint(
+                            getString(R.string.toast_shizuku_dry_run_failed),
+                            durationMs = 8000L
+                        )
+                    }
+                    kotlinx.coroutines.delay(8500L)
+                    stopSelf()
+                } else {
+                    test.recycle()
+                }
+            }
+        }
     }
 
     private fun triggerOnce() {
@@ -208,15 +249,13 @@ class CaptureService : Service() {
             }
             Timber.i("Loop mode OFF")
             logRepository.info(LogRepository.Category.CAPTURE, getString(R.string.log_msg_loop_off))
-            // 国产 ROM 后台 Service toast 静默丢弃，用悬浮提示双保险
             val msg = getString(R.string.toast_loop_off)
-            toast(msg)
             mainScope.launch { overlay?.showInfoHint(msg) }
         } else {
             loopMode = true
             // 先弹屏幕中央 3-2-1 倒计时圆圈，圆圈 removeView + ~80ms VSYNC 缓冲后才启动 loopJob，
-            // 保证首次 captureOnce 截屏时画面干净（圆圈已消失）。toast + showInfoHint 提示条本身
-            // 不在主 OCR 区域，可能被截到但概率低 & 影响小，保留以提供更可靠的视觉反馈。
+            // 保证首次 captureOnce 截屏时画面干净（圆圈已消失）。showInfoHint 提示条不在主 OCR 区域，
+            // 可能被截到但概率低 & 影响小，保留以提供更可靠的视觉反馈。
             scope.launch {
                 val s = settingsRepository.get()
                 val interval = if (s.captureLoopIntervalMs <= 0) 2000L else s.captureLoopIntervalMs
@@ -226,8 +265,11 @@ class CaptureService : Service() {
                     String.format(java.util.Locale.US, "%.1f", interval / 1000.0)
                 }
                 val msg = getString(R.string.toast_loop_on, secsStr)
-                toast(msg)
                 mainScope.launch {
+                    // 悬浮提示放在倒计时之前：先让用户看到「自动翻译已开启（每 xx 秒一次）」的参数确认，
+                    // 再看 3-2-1 圆圈。showInfoHint 默认 1800ms 自动消失，倒计时还在进行时就已经淡出，
+                    // 不会跟圆圈视觉打架；且 OCR 在倒计时结束 +80ms 才开始，不会截到提示条。
+                    overlay?.showInfoHint(msg)
                     overlay?.showStartCountdown(
                         seconds = 3,
                         hintText = getString(R.string.loop_countdown_hint)
@@ -235,7 +277,6 @@ class CaptureService : Service() {
                         // onFinish 时圆圈已经 removeView 且 ~80ms VSYNC 缓冲过
                         if (!loopMode) return@showStartCountdown // 倒计时途中被关掉
                         floatingButton?.setLoopActive(true, interval)
-                        overlay?.showInfoHint(msg)
                         loopJob = scope.launch {
                             while (isActive && loopMode) {
                                 captureOnce()
@@ -265,6 +306,9 @@ class CaptureService : Service() {
         val picker = regionPicker ?: RegionPickerOverlay(this).also { regionPicker = it }
         if (picker.isShown()) return
         mainScope.launch {
+            // 拿当前屏幕尺寸先把 region rescale 一遍，确保 initial 显示在当前方向的正确位置。
+            val dm = resources.displayMetrics
+            settingsRepository.rescaleCaptureRegionIfNeeded(dm.widthPixels, dm.heightPixels)
             val initial = settingsRepository.get().captureRegion?.let {
                 android.graphics.Rect(it.left, it.top, it.right, it.bottom)
             }
@@ -273,27 +317,32 @@ class CaptureService : Service() {
                 initial = initial,
                 onConfirm = { rect ->
                     scope.launch {
+                        val dm2 = resources.displayMetrics
                         settingsRepository.update {
-                            it.copy(captureRegion = CaptureRegion(rect.left, rect.top, rect.right, rect.bottom))
+                            it.copy(
+                                captureRegion = CaptureRegion(rect.left, rect.top, rect.right, rect.bottom),
+                                captureRegionSavedScreenW = dm2.widthPixels,
+                                captureRegionSavedScreenH = dm2.heightPixels
+                            )
                         }
                     }
                     mainScope.launch { floatingButton?.show() }
                 },
                 onCancel = {
                     mainScope.launch { floatingButton?.show() }
+                },
+                onClearAll = {
+                    // 双击 = 选择整屏：跟主屏「清除选框」按钮完全一致——captureRegion=null，下次截屏走整屏。
+                    scope.launch {
+                        settingsRepository.update { it.copy(captureRegion = null) }
+                    }
+                    mainScope.launch { floatingButton?.show() }
                 }
             )
         }
     }
 
-    private fun toast(msg: String, long: Boolean = false) {
-        val duration = if (long) android.widget.Toast.LENGTH_LONG else android.widget.Toast.LENGTH_SHORT
-        mainScope.launch {
-            android.widget.Toast.makeText(this@CaptureService, msg, duration).show()
-        }
-    }
-
-    /** 截断过长的错误信息：toast 显示完整 stack trace 体验差，截到 ~140 字以内可读即可。 */
+    /** 截断过长的错误信息：完整 stack trace 在悬浮错误条里体验差，截到 ~140 字以内可读即可。 */
     private fun shortError(t: Throwable): String {
         val raw = t.message?.takeIf { it.isNotBlank() } ?: t.javaClass.simpleName
         return if (raw.length > 140) raw.take(140) + "…" else raw
@@ -316,10 +365,12 @@ class CaptureService : Service() {
                 Timber.w("Screenshot capture returned null")
                 logRepository.error(LogRepository.Category.CAPTURE, getString(R.string.log_msg_capture_failed))
                 val msg = getString(R.string.toast_capture_failed)
-                toast(msg, long = true)
                 mainScope.launch { overlay?.showErrorHint(msg) }
                 return
             }
+            // 在拿 settings 之前先 rescale region，免得拿到的是旧屏幕方向的坐标。
+            val dmNow = resources.displayMetrics
+            settingsRepository.rescaleCaptureRegionIfNeeded(dmNow.widthPixels, dmNow.heightPixels)
             val settings = settingsRepository.get()
             applyOverlayConfig(settings)
 
@@ -348,7 +399,6 @@ class CaptureService : Service() {
                         t
                     )
                     val msg = getString(R.string.toast_ocr_failed_format, settings.translatorEngine.name, shortError(t))
-                    toast(msg, long = true)
                     mainScope.launch { overlay?.showErrorHint(msg) }
                     workBitmap.recycle()
                     return
@@ -384,10 +434,9 @@ class CaptureService : Service() {
                     t
                 )
                 // 提示给用户：不然只看到 loading 圈转一下就消失，必须翻日志才知道是 OCR 失败。
-                // toast 在 HyperOS / MIUI 等 ROM 上对后台 Service 会被静默丢弃，所以同时用
-                // 悬浮窗显示错误条（走 loading 圈同链路，已验证可见）双保险。
+                // 用悬浮错误条显示（走 loading 圈同链路），跨 ROM 一致——不走 Toast，因为后台
+                // Service Toast 在 HyperOS / MIUI 等国产 ROM 上会被静默丢弃。
                 val msg = getString(R.string.toast_ocr_failed_format, settings.ocrEngine.name, shortError(t))
-                toast(msg, long = true)
                 mainScope.launch { overlay?.showErrorHint(msg) }
                 if (preprocessed !== workBitmap) preprocessed.recycle()
                 workBitmap.recycle()
@@ -420,7 +469,7 @@ class CaptureService : Service() {
 
             when (settings.renderMode) {
                 RenderMode.BLOCKS -> renderBlocks(blocks, settings)
-                RenderMode.BANNER -> renderBanner(blocks, settings)
+                RenderMode.FLOATING_WINDOW -> renderFloatingWindow(blocks, settings)
             }
         } finally {
             // 兜底：所有提前 return / 异常路径下都要把 loading 圈关掉，避免"一直转圈"。
@@ -455,7 +504,7 @@ class CaptureService : Service() {
             RenderMode.BLOCKS -> withContext(Dispatchers.Main) {
                 overlay?.showBlocks(items)
             }
-            RenderMode.BANNER -> withContext(Dispatchers.Main) {
+            RenderMode.FLOATING_WINDOW -> withContext(Dispatchers.Main) {
                 overlay?.showFullScreen(items.map { (b, dst) -> b.text to dst })
             }
         }
@@ -514,12 +563,18 @@ class CaptureService : Service() {
         }
     }
 
-    private suspend fun renderBanner(blocks: List<TextBlock>, settings: Settings) {
-        // 横幅模式：等所有翻译完成后整屏一次性显示。这里也走批处理（如果引擎支持）。
+    /**
+     * 悬浮窗口模式（[RenderMode.FLOATING_WINDOW]）：
+     * - 批引擎（如 DeepL `prefersBatchFor=true`）：等批 HTTP 完成后整批 `showFullScreen`
+     * - 流引擎 + `streamingTranslate=true`：先 `prepareFloatingWindow` 铺占位"…"，
+     *   每段 `translateOne` 流式回调到 `updateFloatingWindowText`，与 BLOCKS 模式同等体验
+     * - 流引擎但关了 streaming：逐段同步 `translate()`，最后整批显示
+     */
+    private suspend fun renderFloatingWindow(blocks: List<TextBlock>, settings: Settings) {
         val routing = translator as? com.gameocr.app.translate.RoutingTranslator
         val useBatch = routing?.prefersBatchFor(settings) ?: translator.prefersBatch
-        val pairs = withContext(Dispatchers.IO) {
-            if (useBatch) {
+        if (useBatch) {
+            val pairs = withContext(Dispatchers.IO) {
                 val sources = blocks.map { it.text }
                 val translated = runCatching { translator.translateBatch(sources, settings) }
                     .getOrElse { t ->
@@ -535,25 +590,24 @@ class CaptureService : Service() {
                     logRepository.pair(LogRepository.Category.TRANSLATE, b.text, dst)
                     b.text to dst
                 }
-            } else {
-                blocks.map { block ->
-                    val dst = runCatching {
-                        translator.translate(block.text, settings) ?: block.text
-                    }.getOrElse { t ->
-                        Timber.w(t, "Translate failed")
-                        logRepository.error(
-                            LogRepository.Category.TRANSLATE,
-                            getString(R.string.log_msg_translate_failed_simple),
-                            t
-                        )
-                        "[!] " + (t.message ?: "")
-                    }
-                    logRepository.pair(LogRepository.Category.TRANSLATE, block.text, dst)
-                    block.text to dst
-                }
             }
+            withContext(Dispatchers.Main) { overlay?.showFullScreen(pairs) }
+            return
         }
-        withContext(Dispatchers.Main) { overlay?.showFullScreen(pairs) }
+        // 流模式：先铺占位 → 边翻译边更新。streamingTranslate 关闭时 translateOne 内部走
+        // 一次性 translate()，回调一次最终值，行为退化为"逐段同步显示"。
+        withContext(Dispatchers.Main) {
+            overlay?.prepareFloatingWindow(blocks.map { it.text })
+        }
+        scope.launch {
+            blocks.mapIndexed { idx, block ->
+                async {
+                    translateOne(block.text, settings) { partial ->
+                        mainScope.launch { overlay?.updateFloatingWindowText(idx, partial) }
+                    }
+                }
+            }.awaitAll()
+        }
     }
 
     private suspend fun translateOne(
@@ -620,6 +674,14 @@ class CaptureService : Service() {
             customBorderWidthDp = settings.customBorderWidth
             allowWrap = settings.overlayAllowWrap
             avoidCollision = settings.overlayAvoidCollision
+            floatingWindowContentMode = settings.floatingWindowContentMode
+            customBorderStyle = settings.customBorderStyle
+        }
+        // syncFloatingWindowFromSettings 内部会重设 rootView.background / setContent，必须主线程。
+        // applyOverlayConfig 自身被 settings flow collect 在 Dispatchers.Default 上调用，
+        // 直接调用会抛 CalledFromWrongThreadException。
+        mainScope.launch {
+            overlay?.syncFloatingWindowFromSettings(settings)
         }
         // 圆球大小也同步（已 show 后改 sizeDp 调 applyResize 即时生效）
         floatingButton?.let {
@@ -667,6 +729,8 @@ class CaptureService : Service() {
         const val ACTION_START = "com.gameocr.app.action.START"
         const val ACTION_STOP = "com.gameocr.app.action.STOP"
         const val ACTION_TRIGGER_ONCE = "com.gameocr.app.action.TRIGGER_ONCE"
+        /** 主屏框选区域时走这条——floating window 模式，绕开 Activity 的横屏 long-edge cutout letterbox。 */
+        const val ACTION_PICK_REGION = "com.gameocr.app.action.PICK_REGION"
         const val EXTRA_RESULT_CODE = "extra_result_code"
         const val EXTRA_RESULT_DATA = "extra_result_data"
         const val EXTRA_USE_SHIZUKU = "extra_use_shizuku"

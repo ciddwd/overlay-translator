@@ -8,13 +8,17 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
 
-/** 按 [Settings.translatorEngine] 路由到 OpenAI 兼容 / DeepL / 有道图片翻译。 */
+/** 按 [Settings.translatorEngine] 路由到 OpenAI 兼容 / DeepL / 有道图片翻译 / Google /
+ *  火山 / 百度翻译 / 腾讯云翻译。新增引擎只需在此加构造参数 + [engineFor] 的 when 分支。 */
 @Singleton
 class RoutingTranslator @Inject constructor(
     private val openAi: OpenAiTranslator,
     private val deepl: DeepLTranslator,
     private val youdaoPicTrans: YoudaoPicTransTranslator,
-    private val google: GoogleTranslator
+    private val google: GoogleTranslator,
+    private val volc: VolcTranslator,
+    private val baiduFanyi: BaiduFanyiTranslator,
+    private val tencent: TencentTranslator
 ) : Translator {
     override suspend fun translate(source: String, settings: Settings): String? =
         engineFor(settings).translate(source, settings)
@@ -49,5 +53,8 @@ class RoutingTranslator @Inject constructor(
         TranslatorEngine.DEEPL -> deepl
         TranslatorEngine.YOUDAO_PICTRANS -> youdaoPicTrans
         TranslatorEngine.GOOGLE -> google
+        TranslatorEngine.VOLC -> volc
+        TranslatorEngine.BAIDU_FANYI -> baiduFanyi
+        TranslatorEngine.TENCENT -> tencent
     }
 }

@@ -31,7 +31,10 @@ import android.view.View
 class RegionPickerView(
     context: Context,
     private val initial: Rect?,
-    private val onCancel: () -> Unit
+    private val onCancel: () -> Unit,
+    /** "双击 = 选择整屏" 触发时调用。语义跟主屏「清除选框」一致：清掉 captureRegion 让下次截屏走整屏，
+     *  而不是画一个铺满屏幕的 rect 让用户再按 ✓。null 时退化为旧行为（设 rect=全屏 + 等用户确认）。 */
+    private val onClearAllRequested: (() -> Unit)? = null
 ) : View(context) {
 
     /** rect 变化时通知调用方（浮层按钮用它做跟随定位）。null 表示当前没有有效框。 */
@@ -247,17 +250,24 @@ class RegionPickerView(
             MotionEvent.ACTION_UP -> {
                 val r = rect
                 if (r == null || r.width() < 20 || r.height() < 20) {
-                    // 点击：双击算整屏
+                    // 点击：双击 = 选择整屏。语义跟主屏「清除选框」一致——清掉 captureRegion 走整屏，
+                    // 不画一个铺满屏幕的 rect 等用户确认。无回调时退化为旧行为。
                     val now = System.currentTimeMillis()
                     if (now - lastTapTime < 300) {
-                        rect = Rect(0, 0, width, height)
-                        mode = Mode.ADJUSTING
                         lastTapTime = 0
+                        val handler = onClearAllRequested
+                        if (handler != null) {
+                            handler.invoke()
+                        } else {
+                            rect = Rect(0, 0, width, height)
+                            mode = Mode.ADJUSTING
+                            invalidate()
+                        }
                     } else {
                         lastTapTime = now
                         rect = null
+                        invalidate()
                     }
-                    invalidate()
                 } else {
                     mode = Mode.ADJUSTING
                     invalidate()

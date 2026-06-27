@@ -130,6 +130,14 @@ fun MainScreen(
         }
     }
 
+    // binder 死亡 / 重启 / shell 特权变化都会触发重算 Availability，避免「Shizuku 被外部
+    // 停了 / 未配对但 UI 还停留在『就绪 ✓』」的不一致。比仅在 ON_RESUME 探测可靠。
+    val shizukuBinderAlive by viewModel.shizukuBinderAlive.collectAsState()
+    val shizukuShellOk by viewModel.shizukuShellPrivilegeOk.collectAsState()
+    LaunchedEffect(shizukuBinderAlive, shizukuShellOk) {
+        shizukuAvail = viewModel.shizukuAvailability(context)
+    }
+
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -326,6 +334,7 @@ fun MainScreen(
                         startMode == StartMode.MEDIA_PROJECTION -> R.string.main_hint_media_projection
                         shizukuAvail == ShizukuCapabilities.Availability.READY -> R.string.main_hint_shizuku_ready
                         shizukuAvail == ShizukuCapabilities.Availability.INSTALLED_NOT_GRANTED -> R.string.main_hint_shizuku_not_granted
+                        shizukuAvail == ShizukuCapabilities.Availability.INSTALLED_NOT_PAIRED -> R.string.main_hint_shizuku_not_paired
                         shizukuAvail == ShizukuCapabilities.Availability.NOT_RUNNING -> R.string.main_hint_shizuku_not_running
                         else -> R.string.main_hint_shizuku_not_installed
                     }
@@ -354,7 +363,24 @@ fun MainScreen(
             ActionCard(title = stringResource(R.string.main_section_region)) {
                 OutlinedButton(
                     modifier = Modifier.fillMaxWidth(),
-                    onClick = { context.startActivity(RegionPickerActivity.newIntent(context)) }
+                    onClick = {
+                        // serviceRunning 时走 CaptureService 的 overlay 路径——floating window 模式，
+                        // 绕开 Activity 在 HyperOS 横屏 long-edge cutout 上被强制 letterbox 的 OS 级硬限制。
+                        // overlay 是 TYPE_APPLICATION_OVERLAY，会直接覆盖到当前主屏上方，无需切走 Activity。
+                        // service 没跑时 fallback 到老 Activity 路径（这种场景通常竖屏，letterbox 影响小）。
+                        if (serviceRunning) {
+                            val intent = Intent(context, CaptureService::class.java).apply {
+                                action = CaptureService.ACTION_PICK_REGION
+                            }
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                ContextCompat.startForegroundService(context, intent)
+                            } else {
+                                context.startService(intent)
+                            }
+                        } else {
+                            context.startActivity(RegionPickerActivity.newIntent(context))
+                        }
+                    }
                 ) { Text(stringResource(R.string.main_btn_pick_region)) }
                 if (region != null) {
                     // 跟「选择截屏区域」按钮同样的 OutlinedButton 样式，视觉对等；
@@ -583,6 +609,7 @@ private fun StatusCard(
                     when (shizukuAvail) {
                         ShizukuCapabilities.Availability.READY -> R.string.main_status_shizuku_ready
                         ShizukuCapabilities.Availability.INSTALLED_NOT_GRANTED -> R.string.main_status_shizuku_not_granted
+                        ShizukuCapabilities.Availability.INSTALLED_NOT_PAIRED -> R.string.main_status_shizuku_not_paired
                         ShizukuCapabilities.Availability.NOT_RUNNING -> R.string.main_status_shizuku_not_running
                         ShizukuCapabilities.Availability.NOT_INSTALLED -> R.string.main_status_shizuku_not_installed
                     }
@@ -661,4 +688,8 @@ class MainViewModel @Inject constructor(
     fun shizukuAvailability(context: android.content.Context): ShizukuCapabilities.Availability =
         shizukuCapabilities.availability(context)
     suspend fun ensureShizukuPermission(): Boolean = shizukuManager.requestPermission()
+    /** 透传 Shizuku binder 状态 flow——UI collect 后状态变化立即重算 Availability。 */
+    val shizukuBinderAlive: kotlinx.coroutines.flow.StateFlow<Boolean> = shizukuManager.binderAlive
+    /** Shizuku 是否拿到了 shell 特权（已配对）。binder 通但未配对时为 false。 */
+    val shizukuShellPrivilegeOk: kotlinx.coroutines.flow.StateFlow<Boolean> = shizukuManager.shellPrivilegeOk
 }

@@ -6,6 +6,7 @@ import android.content.Intent
 import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.os.Bundle
 import android.util.TypedValue
 import android.view.Gravity
@@ -42,9 +43,38 @@ class RegionPickerActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // 让 Activity window 延伸到 cutout / 状态栏 / 导航栏区域——否则横屏 HyperOS 会把 view
+        // letterbox 在 cutout 安全区内（实测 3200x1440 屏只拿到 3053x1293），左右各少 147px。
+        // 必须同时设：
+        //   1) layoutInDisplayCutoutMode = ALWAYS（API 28+）
+        //   2) setDecorFitsSystemWindows(false)（API 30+）或 SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN（老 API）
+        //   3) status / navigation bar 透明，避免渲染遮挡画框
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            window.attributes = window.attributes.apply {
+                layoutInDisplayCutoutMode =
+                    android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(false)
+        } else {
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility =
+                android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
+                android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+        }
+        window.statusBarColor = android.graphics.Color.TRANSPARENT
+        window.navigationBarColor = android.graphics.Color.TRANSPARENT
+
         // captureRegion 是屏幕绝对坐标；本 Activity 全屏，view 坐标系跟屏幕一致，可直接当 initial。
         // 用 runBlocking 读一次：DataStore 第一次 collect 很快，Activity 启动这点延迟可忽略。
-        val saved = runBlocking { settingsRepository.get().captureRegion }
+        // 先按当前屏幕尺寸把 region rescale 一次——用户上次保存的可能是另一方向的坐标。
+        val saved = runBlocking {
+            val dm = resources.displayMetrics
+            settingsRepository.rescaleCaptureRegionIfNeeded(dm.widthPixels, dm.heightPixels)
+            settingsRepository.get().captureRegion
+        }
         val initial = saved?.takeIf { it.isValid() }?.let {
             Rect(it.left, it.top, it.right, it.bottom)
         }
@@ -52,7 +82,9 @@ class RegionPickerActivity : ComponentActivity() {
         val pickerView = RegionPickerView(
             context = this,
             initial = initial,
-            onCancel = { finish() }
+            onCancel = { finish() },
+            // 双击 = 选择整屏：跟主屏「清除选框」一致 —— captureRegion=null，下次截屏走整屏。
+            onClearAllRequested = { clearAndFinish() }
         )
 
         val toolbar = buildToolbar(
@@ -185,7 +217,21 @@ class RegionPickerActivity : ComponentActivity() {
     private fun saveAndFinish(rect: Rect) {
         scope.launch {
             val region = CaptureRegion(rect.left, rect.top, rect.right, rect.bottom)
-            settingsRepository.update { it.copy(captureRegion = region) }
+            val dm = resources.displayMetrics
+            // 同时写当前屏幕尺寸——下次读 region 时如果屏幕方向变了，按 saved/current 比例自动 rescale。
+            settingsRepository.update { it.copy(
+                captureRegion = region,
+                captureRegionSavedScreenW = dm.widthPixels,
+                captureRegionSavedScreenH = dm.heightPixels
+            ) }
+            finish()
+        }
+    }
+
+    /** 双击整屏路径：跟主屏「清除选框」一致，写 null + 关闭 picker。 */
+    private fun clearAndFinish() {
+        scope.launch {
+            settingsRepository.update { it.copy(captureRegion = null) }
             finish()
         }
     }

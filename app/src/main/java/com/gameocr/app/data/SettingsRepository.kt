@@ -38,6 +38,8 @@ class SettingsRepository @Inject constructor(
         val TextSize = intPreferencesKey("overlay_text_size")
         val Alpha = floatPreferencesKey("overlay_alpha")
         val Region = stringPreferencesKey("capture_region_json")
+        val RegionSavedW = intPreferencesKey("capture_region_saved_screen_w")
+        val RegionSavedH = intPreferencesKey("capture_region_saved_screen_h")
         val Streaming = booleanPreferencesKey("streaming_translate")
         val RenderModeKey = stringPreferencesKey("render_mode")
         val Upscale = booleanPreferencesKey("pre_upscale")
@@ -72,6 +74,15 @@ class SettingsRepository @Inject constructor(
         val FloatingSnapEdge = booleanPreferencesKey("floating_button_snap_edge")
         val FloatingAutoDock = booleanPreferencesKey("floating_button_auto_dock")
         val FloatingDockInset = intPreferencesKey("floating_button_dock_inset_dp")
+        val FloatingWindowX = intPreferencesKey("floating_window_x")
+        val FloatingWindowY = intPreferencesKey("floating_window_y")
+        val FloatingWindowW = intPreferencesKey("floating_window_width_dp")
+        val FloatingWindowH = intPreferencesKey("floating_window_height_dp")
+        val FloatingWindowContentMode = stringPreferencesKey("floating_window_content_mode")
+        val FloatingWindowLocked = booleanPreferencesKey("floating_window_locked")
+        val CustomBorderStyle = stringPreferencesKey("custom_border_style")
+        /** 0.3.x 旧 key，silent migrate 到 CustomBorderStyle。 */
+        val LegacyFloatingWindowBorderStyle = stringPreferencesKey("floating_window_border_style")
         // 收藏的语言代码列表，逗号分隔（"ja,zh-CN,en"）。逗号不可能出现在 BCP-47 tag 里，分隔安全。
         val PinnedLangs = stringPreferencesKey("pinned_languages")
         val OverlayWrap = booleanPreferencesKey("overlay_allow_wrap")
@@ -85,6 +96,11 @@ class SettingsRepository @Inject constructor(
         val MergeStrengthKey = stringPreferencesKey("ocr_merge_strength")
         val YoudaoAppKey = stringPreferencesKey("youdao_app_key")
         val YoudaoAppSecret = stringPreferencesKey("youdao_app_secret")
+        val VolcAccessKeyId = stringPreferencesKey("volc_access_key_id")
+        val VolcSecretAccessKey = stringPreferencesKey("volc_secret_access_key")
+        val VolcRegion = stringPreferencesKey("volc_region")
+        val BaiduFanyiAppId = stringPreferencesKey("baidu_fanyi_app_id")
+        val BaiduFanyiSecretKey = stringPreferencesKey("baidu_fanyi_secret_key")
         // 明文 HTTP 白名单 host，以 \n 分隔保存（hostname 不含 \n，分隔安全）
         val CleartextHosts = stringPreferencesKey("cleartext_allowed_hosts")
     }
@@ -94,6 +110,47 @@ class SettingsRepository @Inject constructor(
     val settings: Flow<Settings> = context.dataStore.data.map { prefs -> prefs.toSettings() }
 
     suspend fun get(): Settings = settings.first()
+
+    /**
+     * 任何用到 [Settings.captureRegion] 的入口都应该先调一次：把上次保存时屏幕尺寸跟当前
+     * 屏幕尺寸比较，不同就按比例 rescale region 写回，更新 saved 字段。这样旋转屏幕时
+     * 无论 Service 在没在跑、Activity 重建多少次，region 都保持「相对位置」语义一致。
+     *
+     * - 历史数据（saved=0）：当前作为新的 savedScreen 写回，region 不动（用户原来在哪屏幕方向
+     *   保存的不知道，保守当成「当前方向就是原方向」）。
+     * - savedScreen == currentScreen：不动。
+     * - 不同：按 currentW/savedW、currentH/savedH 线性 rescale。
+     *
+     * 返回 rescale 后的 region（已经写回 DataStore）。
+     */
+    suspend fun rescaleCaptureRegionIfNeeded(currentW: Int, currentH: Int) {
+        if (currentW <= 0 || currentH <= 0) return
+        val s = get()
+        val region = s.captureRegion ?: return
+        val savedW = s.captureRegionSavedScreenW
+        val savedH = s.captureRegionSavedScreenH
+        if (savedW <= 0 || savedH <= 0) {
+            update { it.copy(
+                captureRegionSavedScreenW = currentW,
+                captureRegionSavedScreenH = currentH
+            ) }
+            return
+        }
+        if (savedW == currentW && savedH == currentH) return
+        val scaleX = currentW.toFloat() / savedW
+        val scaleY = currentH.toFloat() / savedH
+        val newRegion = CaptureRegion(
+            left = (region.left * scaleX).toInt().coerceIn(0, currentW),
+            top = (region.top * scaleY).toInt().coerceIn(0, currentH),
+            right = (region.right * scaleX).toInt().coerceIn(0, currentW),
+            bottom = (region.bottom * scaleY).toInt().coerceIn(0, currentH)
+        )
+        update { it.copy(
+            captureRegion = newRegion,
+            captureRegionSavedScreenW = currentW,
+            captureRegionSavedScreenH = currentH
+        ) }
+    }
 
     suspend fun update(transform: (Settings) -> Settings) {
         context.dataStore.edit { prefs ->
@@ -110,6 +167,8 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.TextSize] = next.overlayTextSizeSp
             prefs[Keys.Alpha] = next.overlayAlpha
             prefs[Keys.Region] = next.captureRegion?.let { json.encodeToString(it) } ?: ""
+            prefs[Keys.RegionSavedW] = next.captureRegionSavedScreenW
+            prefs[Keys.RegionSavedH] = next.captureRegionSavedScreenH
             prefs[Keys.Streaming] = next.streamingTranslate
             prefs[Keys.RenderModeKey] = next.renderMode.name
             prefs[Keys.Upscale] = next.preprocess.upscale2x
@@ -144,6 +203,13 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.FloatingSnapEdge] = next.floatingButtonSnapToEdge
             prefs[Keys.FloatingAutoDock] = next.floatingButtonAutoDock
             prefs[Keys.FloatingDockInset] = next.floatingButtonDockInsetDp
+            prefs[Keys.FloatingWindowX] = next.floatingWindowX
+            prefs[Keys.FloatingWindowY] = next.floatingWindowY
+            prefs[Keys.FloatingWindowW] = next.floatingWindowWidthDp
+            prefs[Keys.FloatingWindowH] = next.floatingWindowHeightDp
+            prefs[Keys.FloatingWindowContentMode] = next.floatingWindowContentMode.name
+            prefs[Keys.FloatingWindowLocked] = next.floatingWindowLocked
+            prefs[Keys.CustomBorderStyle] = next.customBorderStyle.name
             prefs[Keys.PinnedLangs] = next.pinnedLanguages.joinToString(",")
             prefs[Keys.OverlayWrap] = next.overlayAllowWrap
             prefs[Keys.OverlayCollision] = next.overlayAvoidCollision
@@ -156,6 +222,11 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.MergeStrengthKey] = next.mergeStrength.name
             prefs[Keys.YoudaoAppKey] = next.youdaoAppKey
             prefs[Keys.YoudaoAppSecret] = next.youdaoAppSecret
+            prefs[Keys.VolcAccessKeyId] = next.volcAccessKeyId
+            prefs[Keys.VolcSecretAccessKey] = next.volcSecretAccessKey
+            prefs[Keys.VolcRegion] = next.volcRegion
+            prefs[Keys.BaiduFanyiAppId] = next.baiduFanyiAppId
+            prefs[Keys.BaiduFanyiSecretKey] = next.baiduFanyiSecretKey
             prefs[Keys.CleartextHosts] = next.cleartextAllowedHosts.joinToString("\n")
         }
     }
@@ -187,9 +258,15 @@ class SettingsRepository @Inject constructor(
             captureRegion = this[Keys.Region]?.takeIf { it.isNotBlank() }?.let {
                 runCatching { json.decodeFromString<CaptureRegion>(it) }.getOrNull()
             },
+            captureRegionSavedScreenW = this[Keys.RegionSavedW] ?: default.captureRegionSavedScreenW,
+            captureRegionSavedScreenH = this[Keys.RegionSavedH] ?: default.captureRegionSavedScreenH,
             streamingTranslate = this[Keys.Streaming] ?: default.streamingTranslate,
-            renderMode = runCatching { RenderMode.valueOf(this[Keys.RenderModeKey] ?: "") }
-                .getOrDefault(default.renderMode),
+            // 0.3.x 之前 RenderMode 叫 BANNER，0.4 改名为 FLOATING_WINDOW。silent migrate 老值。
+            renderMode = (this[Keys.RenderModeKey] ?: "").let { raw ->
+                runCatching { RenderMode.valueOf(raw) }.getOrElse {
+                    if (raw == "BANNER") RenderMode.FLOATING_WINDOW else default.renderMode
+                }
+            },
             preprocess = PreprocessOptions(
                 upscale2x = this[Keys.Upscale] ?: default.preprocess.upscale2x,
                 invert = this[Keys.Invert] ?: default.preprocess.invert,
@@ -228,6 +305,17 @@ class SettingsRepository @Inject constructor(
             floatingButtonSnapToEdge = this[Keys.FloatingSnapEdge] ?: default.floatingButtonSnapToEdge,
             floatingButtonAutoDock = this[Keys.FloatingAutoDock] ?: default.floatingButtonAutoDock,
             floatingButtonDockInsetDp = this[Keys.FloatingDockInset] ?: default.floatingButtonDockInsetDp,
+            floatingWindowX = this[Keys.FloatingWindowX] ?: default.floatingWindowX,
+            floatingWindowY = this[Keys.FloatingWindowY] ?: default.floatingWindowY,
+            floatingWindowWidthDp = this[Keys.FloatingWindowW] ?: default.floatingWindowWidthDp,
+            floatingWindowHeightDp = this[Keys.FloatingWindowH] ?: default.floatingWindowHeightDp,
+            floatingWindowContentMode = runCatching {
+                FloatingWindowContentMode.valueOf(this[Keys.FloatingWindowContentMode] ?: "")
+            }.getOrDefault(default.floatingWindowContentMode),
+            floatingWindowLocked = this[Keys.FloatingWindowLocked] ?: default.floatingWindowLocked,
+            customBorderStyle = runCatching {
+                BorderStyle.valueOf(this[Keys.CustomBorderStyle] ?: this[Keys.LegacyFloatingWindowBorderStyle] ?: "")
+            }.getOrDefault(default.customBorderStyle),
             pinnedLanguages = this[Keys.PinnedLangs]
                 ?.split(',')
                 ?.map { it.trim() }
@@ -249,6 +337,11 @@ class SettingsRepository @Inject constructor(
                 .getOrDefault(default.mergeStrength),
             youdaoAppKey = this[Keys.YoudaoAppKey] ?: default.youdaoAppKey,
             youdaoAppSecret = this[Keys.YoudaoAppSecret] ?: default.youdaoAppSecret,
+            volcAccessKeyId = this[Keys.VolcAccessKeyId] ?: default.volcAccessKeyId,
+            volcSecretAccessKey = this[Keys.VolcSecretAccessKey] ?: default.volcSecretAccessKey,
+            volcRegion = this[Keys.VolcRegion] ?: default.volcRegion,
+            baiduFanyiAppId = this[Keys.BaiduFanyiAppId] ?: default.baiduFanyiAppId,
+            baiduFanyiSecretKey = this[Keys.BaiduFanyiSecretKey] ?: default.baiduFanyiSecretKey,
             cleartextAllowedHosts = this[Keys.CleartextHosts]
                 ?.split('\n')
                 ?.map { it.trim() }

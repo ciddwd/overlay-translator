@@ -13,18 +13,26 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.gameocr.app.R
+import com.gameocr.app.data.BorderStyle
+import com.gameocr.app.data.FloatingWindowContentMode
 import com.gameocr.app.data.OverlayPlacement
 import com.gameocr.app.data.OverlayTheme
+import com.gameocr.app.data.Settings
+import com.gameocr.app.data.SettingsRepository
 import com.gameocr.app.ocr.TextBlock
+import kotlinx.coroutines.CoroutineScope
 
 /**
  * 译文叠加渲染。
- * - [showFullScreen]：整屏底部一条横幅，列出所有原文 → 译文。
+ * - [showFullScreen]：可拖拽 / 可缩放的悬浮窗口（[DraggableOverlayWindow]），列出所有原文 → 译文；
+ *   流式翻译走 [prepareFloatingWindow] + [updateFloatingWindowText]，逐段填入。
  * - [showBlocks]：按每段文本的 boundingBox 紧贴原文下方贴一行译文。
  * - [showLoadingHint]：点击瞬间立刻显示，给用户反馈，避免几秒空窗。
  */
 class OverlayManager(
     private val context: Context,
+    private val settingsRepository: SettingsRepository,
+    private val ioScope: CoroutineScope,
     @Volatile var textSizeSp: Int = 14,
     @Volatile var alpha: Float = 0.85f,
     @Volatile var regionOffset: android.graphics.Point = android.graphics.Point(0, 0),
@@ -39,16 +47,31 @@ class OverlayManager(
     /** 允许译文换行。关闭后强制单行（可能横向溢出原文宽度）。 */
     @Volatile var allowWrap: Boolean = true,
     /** 启用碰撞检测：限制译文不挤进相邻原文的 box。关闭后只受屏幕边界约束。 */
-    @Volatile var avoidCollision: Boolean = true
+    @Volatile var avoidCollision: Boolean = true,
+    /** 悬浮窗口内容形态。CaptureService 在 applyOverlayConfig 时同步。 */
+    @Volatile var floatingWindowContentMode: FloatingWindowContentMode =
+        FloatingWindowContentMode.SRC_AND_DST,
+    /** CUSTOM 主题的边框样式（仅 CUSTOM 主题生效）。CaptureService 同步。 */
+    @Volatile var customBorderStyle: BorderStyle = BorderStyle.SOLID
 ) {
 
     private val wm by lazy { context.getSystemService(Context.WINDOW_SERVICE) as WindowManager }
-    private var bannerView: View? = null
     private var blocksView: View? = null
     private var loadingView: View? = null
     private var errorView: View? = null
     private var countdownView: View? = null
     private val blockViews = mutableMapOf<Int, TextView>()
+
+    /** 悬浮窗口（[com.gameocr.app.data.RenderMode.FLOATING_WINDOW]）外壳。lazy 创建。 */
+    private val floatingWindow: DraggableOverlayWindow by lazy {
+        DraggableOverlayWindow(context, settingsRepository, ioScope)
+    }
+    /** 悬浮窗口流式模式下：idx → 译文 TextView。null 表示当前不是流式状态。 */
+    private var floatingDstViews: MutableMap<Int, TextView>? = null
+    /** 上一次悬浮窗口内容（用户改配色保存时重建内容，立即生效）。Pair = (src, dst)。 */
+    private var lastFloatingPairs: MutableList<Pair<String, String>>? = null
+    /** 上一次是流式还是整批显示。重建 content 时决定 floatingDstViews 是否要重建。 */
+    private var lastFloatingStreaming: Boolean = false
 
     private val overlayType: Int = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
         WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -303,39 +326,155 @@ class OverlayManager(
         }, durationMs)
     }
 
+    /**
+     * 悬浮窗口模式（[com.gameocr.app.data.RenderMode.FLOATING_WINDOW]）：一次性整批渲染。
+     * 批模式翻译（如 DeepL）走这条；流模式走 [prepareFloatingWindow] + [updateFloatingWindowText]。
+     */
     fun showFullScreen(pairs: List<Pair<String, String>>) {
         clearLoading()
         clear()
         if (pairs.isEmpty()) return
+        lastFloatingPairs = pairs.toMutableList()
+        lastFloatingStreaming = false
+        floatingWindow.applySettings()
+        val content = buildFloatingContent(pairs, streaming = false)
+        if (floatingWindow.isShown()) {
+            floatingWindow.setContent(content)
+        } else {
+            floatingWindow.show(content, onDismiss = { clear() })
+        }
+    }
 
+    /**
+     * 流式翻译启动：先把所有原文铺到窗口里，每段译文用占位 "…"，等 [updateFloatingWindowText]
+     * 逐段填入。等价于 [showBlocks] 之于 BLOCKS 模式，但内容渲染在悬浮窗里。
+     */
+    fun prepareFloatingWindow(sources: List<String>) {
+        clearLoading()
+        clear()
+        if (sources.isEmpty()) return
+        val placeholder = sources.map { it to "…" }
+        lastFloatingPairs = placeholder.toMutableList()
+        lastFloatingStreaming = true
+        floatingWindow.applySettings()
+        val content = buildFloatingContent(placeholder, streaming = true)
+        if (floatingWindow.isShown()) {
+            floatingWindow.setContent(content)
+        } else {
+            floatingWindow.show(content, onDismiss = { clear() })
+        }
+    }
+
+    /** 流式：更新第 [index] 段译文。需先调过 [prepareFloatingWindow]。 */
+    fun updateFloatingWindowText(index: Int, text: String) {
+        floatingDstViews?.get(index)?.text = text
+        // 同步缓存的 pairs，让 syncFloatingWindowFromSettings 重建 content 时拿到最新译文
+        lastFloatingPairs?.let { list ->
+            if (index in list.indices) {
+                val (src, _) = list[index]
+                list[index] = src to text
+            }
+        }
+    }
+
+    /** 仅悬浮窗口模式有效：是否当前可见（用于循环模式 hasActiveBlocks 等价的判定，目前未用）。 */
+    fun isFloatingWindowShown(): Boolean = floatingWindow.isShown()
+
+    /**
+     * 重新加载 DraggableOverlayWindow 字段：在 applyOverlayConfig 时由外部调用，确保
+     * 已显示的窗口跟着主题 / contentMode 变化。
+     */
+    /**
+     * **线程约束：必须在主线程调用**。内部会改 rootView.background / setContent，View 系统只
+     * 接受主线程操作。调用方（CaptureService.applyOverlayConfig）记得 mainScope.launch 包一层。
+     */
+    fun syncFloatingWindowFromSettings(settings: Settings) {
+        floatingWindow.applyFromSettings(settings)
+        // 配色 / 字号 / 内容模式变了 → 重建内容，让用户在 Settings 改完立即看到效果。
+        // 不在显示中或者从没渲染过则不动。
+        val pairs = lastFloatingPairs ?: return
+        if (!floatingWindow.isShown()) return
+        val content = buildFloatingContent(pairs, streaming = lastFloatingStreaming)
+        floatingWindow.setContent(content)
+    }
+
+    /** 重置悬浮窗口位置/大小到默认（居中 + 默认尺寸）；UI 上的"恢复默认"按钮回调到这里。 */
+    fun resetFloatingWindow() {
+        floatingWindow.resetToDefault()
+    }
+
+    /** 屏幕方向变化时被 CaptureService.onConfigurationChanged 调用——按比例重算悬浮窗位置。 */
+    fun onConfigurationChanged() {
+        floatingWindow.onConfigurationChanged()
+    }
+
+    /**
+     * 构造悬浮窗口内容 View（不含外壳——外壳由 DraggableOverlayWindow 提供）。
+     * 按 [floatingWindowContentMode] 分支：
+     *  - SRC_AND_DST：每段「・原文」+「译文」上下两行
+     *  - DST_ONLY：只显示译文，段间用分隔线
+     */
+    private fun buildFloatingContent(
+        pairs: List<Pair<String, String>>,
+        streaming: Boolean
+    ): View {
         val container = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            background = themeBg()
-            this.alpha = this@OverlayManager.alpha
-            setPadding(24, 16, 24, 16)
+            val padH = (16 * context.resources.displayMetrics.density).toInt()
+            val padV = (12 * context.resources.displayMetrics.density).toInt()
+            setPadding(padH, padV, padH, padV)
         }
-        pairs.forEach { (src, dst) ->
-            container.addView(TextView(context).apply {
-                text = "・$src"
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, (textSizeSp - 1).toFloat())
-                setTextColor(themeFgMutedColor())
-            })
-            container.addView(TextView(context).apply {
+        val newDstViews = if (streaming) mutableMapOf<Int, TextView>() else null
+        val isSrcAndDst = floatingWindowContentMode == FloatingWindowContentMode.SRC_AND_DST
+
+        pairs.forEachIndexed { idx, (src, dst) ->
+            if (isSrcAndDst) {
+                container.addView(TextView(context).apply {
+                    text = "・$src"
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, (textSizeSp - 1).coerceAtLeast(10).toFloat())
+                    setTextColor(themeFgMutedColor())
+                })
+            }
+            val dstView = TextView(context).apply {
                 text = dst
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, textSizeSp.toFloat())
                 setTextColor(themeFgColor())
-            })
-        }
-        container.setOnClickListener { clear() }
+                if (isSrcAndDst) {
+                    val mt = (2 * context.resources.displayMetrics.density).toInt()
+                    val mb = (8 * context.resources.displayMetrics.density).toInt()
+                    setPadding(0, mt, 0, mb)
+                }
+            }
+            container.addView(dstView)
+            newDstViews?.put(idx, dstView)
 
-        val params = newLayoutParams().apply {
-            width = WindowManager.LayoutParams.MATCH_PARENT
-            height = WindowManager.LayoutParams.WRAP_CONTENT
-            gravity = Gravity.BOTTOM or Gravity.START
-            y = 96
+            // DST_ONLY 模式：段间细分隔线（不为最后一段加）
+            if (!isSrcAndDst && idx < pairs.size - 1) {
+                val divider = View(context).apply {
+                    setBackgroundColor(themeFgMutedColor() and 0x40FFFFFF.toInt())
+                }
+                val lp = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    (1 * context.resources.displayMetrics.density).toInt()
+                ).apply {
+                    val m = (6 * context.resources.displayMetrics.density).toInt()
+                    topMargin = m
+                    bottomMargin = m
+                }
+                container.addView(divider, lp)
+            }
         }
-        runCatching { wm.addView(container, params) }
-        bannerView = container
+        floatingDstViews = newDstViews
+        return container
+    }
+
+    private fun DraggableOverlayWindow.applySettings() {
+        theme = this@OverlayManager.theme
+        alpha = this@OverlayManager.alpha
+        customBg = this@OverlayManager.customBg
+        customFg = this@OverlayManager.customFg
+        customBorder = this@OverlayManager.customBorder
+        customBorderWidthDp = this@OverlayManager.customBorderWidthDp
     }
 
     fun showBlocks(blocks: List<Pair<TextBlock, String>>) {
@@ -468,9 +607,10 @@ class OverlayManager(
     fun clear() {
         clearLoading()
         dismissError()
-        bannerView?.let { runCatching { wm.removeView(it) } }
+        floatingWindow.hide()
+        floatingDstViews = null
+        lastFloatingPairs = null
         blocksView?.let { runCatching { wm.removeView(it) } }
-        bannerView = null
         blocksView = null
         blockViews.clear()
     }
@@ -489,6 +629,11 @@ class OverlayManager(
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            // 历史教训：曾经加过 FLAG_SECURE 阻止 MediaProjection 截到自己的 overlay，理论上
+            // SurfaceFlinger 只单独排除该层但物理屏正常。可惜 MIUI / HyperOS 的反盗版逻辑
+            // 看到屏幕上有 FLAG_SECURE 层就直接拒绝整张 MediaProjection 输出，Shizuku
+            // screencap 也 exit=1。代价远大于自循环防护，已撤回。BLOCKS 模式自循环靠
+            // [hasActiveBlocks] 跳过逻辑保护；FLOATING_WINDOW 模式可能截到自己界面但不会崩。
             PixelFormat.TRANSLUCENT
         ).apply {
             // 把 cutout / system bar 也算进 layout 区域，确保 overlay (0,0) = 物理屏幕 (0,0)
@@ -528,13 +673,21 @@ class OverlayManager(
             OverlayTheme.FROST_GLASS -> 0xCC1E293B.toInt()
             OverlayTheme.CUSTOM -> customBg
         })
+        val density = context.resources.displayMetrics.density
         when (theme) {
             OverlayTheme.AMBER_GOLD -> setStroke(2, 0xFFB8860B.toInt())
             OverlayTheme.PAPER_LIGHT -> setStroke(1, 0xFFB68850.toInt())
             OverlayTheme.FROST_GLASS -> setStroke(1, 0xFF60A5FA.toInt())
             OverlayTheme.CUSTOM -> if (customBorderWidthDp > 0) {
-                val px = (customBorderWidthDp * context.resources.displayMetrics.density).toInt()
-                setStroke(px, customBorder)
+                val px = (customBorderWidthDp * density).toInt()
+                // BLOCKS 模式的 box 用 GradientDrawable，只支持 SOLID/DASHED/DOTTED；
+                // DOUBLE/GROOVE 需要 LayerDrawable，在小 box 上视觉混乱，统一回退到 SOLID。
+                // 完整 5 种样式仅在 FLOATING_WINDOW 模式（DraggableOverlayWindow.shellBackground）生效。
+                when (customBorderStyle) {
+                    BorderStyle.DASHED -> setStroke(px, customBorder, 8f * density, 5f * density)
+                    BorderStyle.DOTTED -> setStroke(px, customBorder, 2f * density, 3f * density)
+                    else -> setStroke(px, customBorder)
+                }
             }
             else -> { /* CLASSIC_DARK: 无边 */ }
         }
