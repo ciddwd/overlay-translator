@@ -32,9 +32,11 @@ Game / manga / visual novel on screen → tap the floating ball → translation 
 
 ### 🖱️ How to trigger
 
-- **Floating ball**: tap for one-shot translation; long-press opens an arc menu (loop translate / re-pick region / back to main app)
+- **Tap the floating ball**: defaults to translating the whole screen; switchable to **Word-pick mode** — one tap lets you draw a rectangle around just the word or phrase you want translated (more precise)
+- **Long-press the floating ball**: opens an arc menu with the common actions one finger can reach: loop / re-pick region / switch between **"Translate full screen"** and **"Translate a word"** / back to main. **Order is reorderable** in settings; extra buttons paginate with a "Next page" button automatically
 - **Loop mode**: auto-translate every 2 s; static frames are skipped automatically — read a novel without lifting your finger
 - **Volume two-key**: hold **Vol+ and Vol−** together for 0.3 s to trigger; your hands stay on the game (requires enabling the bundled accessibility service)
+- **From any other app**: long-press to select some text in any app → tap "Screen Translator" in the system menu → translation card pops up immediately, no need to switch back to this app first
 
 ### 🔍 OCR (read the text on screen)
 
@@ -49,6 +51,15 @@ Game / manga / visual novel on screen → tap the floating ball → translation 
 - **Youdao Pic-Trans**: skips the OCR step entirely — send the screenshot, get back boxes with translations. Great for comics.
 - **Google**: no key, free (proxy required inside mainland China)
 - Every engine has a **Test connection** button; DeepL additionally reports remaining monthly free quota
+
+### 🔤 Word lookup (one tap = mini dictionary)
+
+Not just full-screen translation. Draw a rectangle around a single word or phrase and a card pops up with:
+
+- **Translation** — every engine returns this
+- **Pronunciation / part of speech / multiple definitions / example sentence pairs** — only when an **LLM engine** is selected (Baidu / Tencent / DeepL etc. only return a plain translation)
+- A "Copy source" and "Copy translation" button on the card; long-press any text inside to copy too
+- Great for game / manga / VN vocabulary you don't recognize — one second per word, faster than switching to a dictionary app
 
 ### 🎨 How the overlay looks
 
@@ -82,6 +93,9 @@ Game / manga / visual novel on screen → tap the floating ball → translation 
 | Self-hosted backend (deeplx / local LLM / custom Bearer) | ✅ | ❌ | ❌ | ❌ |
 | Floating-window mode (lockable, gesture-proof) | ✅ | ❌ | ❌ | ❌ |
 | Comic vertical / furigana / subtitle paragraph merge | ✅ | ❌ | ❌ | ❌ |
+| Word-lookup card (phonetics / POS / definitions / examples) | ✅ full dictionary on LLM engines | ❓ | ⚠️ inside Google Translate app only | ⚠️ weak on mobile |
+| Translate selected text from any app | ✅ via system text-selection menu | ❓ | ✅ "Tap to Translate" | ❌ |
+| Reorderable & paginated floating-ball arc menu | ✅ | ❌ | ❌ | ❌ |
 
 **Positioning**: in the "game / manga on-screen translation" niche, be the only one that is **open source + on-device-engine-capable + self-host-friendly**. The differentiation against incumbents lives in *privacy / self-hosting / engine choice*, not in OCR or translation quality itself (anyone can plug into the same cloud OCR and DeepL/LLM engines).
 
@@ -118,6 +132,12 @@ Game / manga / visual novel on screen → tap the floating ball → translation 
 | Unlocked (drag / resize / close) | Locked (gesture-proof, content only) |
 |---|---|
 | <img src="docs/screenshots/floating-window-unlocked.jpg" width="420" alt="Floating window unlocked" /> | <img src="docs/screenshots/floating-window-locked.jpg" width="420" alt="Floating window locked" /> |
+
+**Arc menu (long-press) & word-lookup card** — Left: the arc menu that fans out when you long-press the ball: loop / re-pick region / switch between "Translate full screen" and "Translate a word" / back to main app (the button order is freely reorderable in settings). Right: the card you get after circling a single word on screen — pronunciation, part of speech, multiple definitions and example sentences (the full dictionary requires an LLM-based engine).
+
+| Arc menu on long-press | Word-lookup card (with mini dictionary) |
+|---|---|
+| <img src="docs/screenshots/arc-menu.png" width="320" alt="Arc menu fanning out from the floating ball" /> | <img src="docs/screenshots/word-select.png" width="320" alt="Word-lookup card with phonetics, POS, definitions and examples" /> |
 
 ## 📦 Install
 
@@ -209,27 +229,27 @@ You can override the mirror URL in settings, or import the files manually from l
 - Anti-cheat networked games may flag MediaProjection as a screen-recorder cheat — this project is for single-player / VN / manga only.
 - Screens marked `FLAG_SECURE` (some banking / video apps) capture as black; this project does not bypass it.
 - PaddleOCR on-device inference takes 1–3 s per shot on entry-level devices (Snapdragon 7-series or lower). Use region selection alongside.
-- Chinese ROMs (HyperOS / MIUI, etc.) silently drop background-Service toasts; OCR / network failures, loop toggle, etc. now use floating overlays (red error bar auto-dismisses in 4.5 s, gray info bar in 1.8 s).
-- Auto-start permission is a vendor-specific concept and **Android has no public API to query it** — the button is always tappable and just opens the ROM's own auto-start list for you to flip the switch manually. Battery whitelist uses the standard system API and shows "Already enabled" once granted.
 
 ## 🗺️ Roadmap
 
 ### ✅ Done
 
-- [x] **Core pipeline** (M0): capture → OCR → translation → overlay, end-to-end
-- [x] **UX polish** (M1): region memory, streamed translation, source-glued rendering, ROM guides, EN/CN UI + light/dark themes, in-settings search
-- [x] **Smarts & stability** (M2): Korean recognition, volume two-key global trigger, source-lang ↔ OCR linkage hints, paragraph merge with 3 strengths, loop progress ring, auto-saved crash reports, update prompts
-- [x] **Engine expansion** (M3 · 0.3.x): test-connection button on every engine, Youdao OCR + PicTrans, Google translate, Tencent agent paragraph grouping, furigana filter, marquee scrolling for long lines
+- [x] **Make it usable** (M0): capture → read text → translate → show on screen, the whole chain working
+- [x] **Easy to live with** (M1): remember capture region / show translation as it streams / glue to source text / Chinese-ROM background guides / EN+CN UI + light/dark themes / in-settings search
+- [x] **Smarter and steadier** (M2): Korean OCR, volume two-key global trigger, smart OCR recommendation when source language changes, three paragraph-merge strengths, loop progress ring, auto-saved crash reports, update prompts
+- [x] **Engine expansion** (M3 · 0.3.x): "Test connection" on every translator, added Youdao OCR + PicTrans + Google translate, Tencent agent paragraph grouping, furigana filter on manga, marquee scrolling for long lines
+- [x] **From whole screen to single word** (M4 · 0.3.4+): word-lookup card with mini dictionary (phonetics / POS / definitions / examples), one-tap toggle between "Translate full screen" and "Translate a word" on the floating ball, reorderable arc-menu, "Translate with Screen Translator" entry in the system text-selection menu
 
 ### 📋 Planned
 
-- [ ] Background-aware overlay (auto color + adaptive font size, replacing the solid rectangle)
-- [ ] On-device manga-specific OCR (manga-ocr model)
-- [ ] Custom overlay fonts (upload your own .ttf)
-- [ ] Advanced Shizuku path (more robust no-permission-dialog capture)
-- [ ] Translation conversation history
-- [ ] Text-to-speech for translations
-- [ ] Glossary (fixed translations for names / items)
+- [ ] **Translation blends into the artwork** — smart color picking + adaptive font size, replacing the solid-color rectangle so it looks "painted in" instead of stuck on top
+- [ ] **Manga-tuned OCR** — integrate the manga-ocr model for cleaner vertical-Japanese recognition
+- [ ] **Custom overlay font** — upload your favourite `.ttf` for translations
+- [ ] **Shizuku capture fast enough for loop mode** — the current Shizuku path already skips the per-session permission dialog but tops out at ~5 FPS (one-shot only); upgrade it to a stable channel that holds up in loop mode
+- [ ] **Translation history** — scroll back to previous screens you've translated
+- [ ] **Read-aloud (TTS)** — listen to translations while you play
+- [ ] **Glossary / term lock** — pin a fixed translation for names and items so they stay consistent across screens
+- [ ] **Offline dictionary fallback** — give definitions even on plain-MT engines like Baidu / Tencent / DeepL that don't return dictionary data on their own
 
 ## 🤝 Contributing
 

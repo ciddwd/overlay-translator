@@ -103,6 +103,12 @@ class SettingsRepository @Inject constructor(
         val BaiduFanyiSecretKey = stringPreferencesKey("baidu_fanyi_secret_key")
         // 明文 HTTP 白名单 host，以 \n 分隔保存（hostname 不含 \n，分隔安全）
         val CleartextHosts = stringPreferencesKey("cleartext_allowed_hosts")
+        // 弧菜单按钮顺序：逗号分隔 MenuItemId.name 列表。MenuItemId.name 不含逗号，分隔安全。
+        val FloatingMenuOrder = stringPreferencesKey("floating_menu_item_order")
+        // 主球当前技能（FULL_SCREEN / WORD_SELECT）
+        val FloatingSkillKey = stringPreferencesKey("floating_button_skill")
+        // 划词翻译词典 prompt
+        val DictionaryPrompt = stringPreferencesKey("dictionary_prompt")
     }
 
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
@@ -228,6 +234,9 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.BaiduFanyiAppId] = next.baiduFanyiAppId
             prefs[Keys.BaiduFanyiSecretKey] = next.baiduFanyiSecretKey
             prefs[Keys.CleartextHosts] = next.cleartextAllowedHosts.joinToString("\n")
+            prefs[Keys.FloatingMenuOrder] = next.floatingMenuItemOrder.joinToString(",") { it.name }
+            prefs[Keys.FloatingSkillKey] = next.floatingButtonSkill.name
+            prefs[Keys.DictionaryPrompt] = next.dictionaryPrompt
         }
     }
 
@@ -346,7 +355,25 @@ class SettingsRepository @Inject constructor(
                 ?.split('\n')
                 ?.map { it.trim() }
                 ?.filter { it.isNotEmpty() }
-                ?: default.cleartextAllowedHosts
+                ?: default.cleartextAllowedHosts,
+            // 弧菜单按钮顺序：脏数据 / 未知 id silently 丢弃；丢失的已知 id 自动补齐到末尾，
+            // 保证 ALL_ORDER 里所有 id 都出现一次。这样后续新版本加新菜单项，老用户也能看到。
+            floatingMenuItemOrder = run {
+                val raw = this[Keys.FloatingMenuOrder]
+                if (raw.isNullOrBlank()) return@run default.floatingMenuItemOrder
+                val parsed = raw.split(',')
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                    .mapNotNull { tok -> runCatching { MenuItemId.valueOf(tok) }.getOrNull() }
+                    .distinct()
+                if (parsed.isEmpty()) return@run default.floatingMenuItemOrder
+                // 补齐缺失的已知 id
+                val missing = FloatingMenu.ALL_ORDER.filter { it !in parsed }
+                parsed + missing
+            },
+            floatingButtonSkill = runCatching { FloatingSkill.valueOf(this[Keys.FloatingSkillKey] ?: "") }
+                .getOrDefault(default.floatingButtonSkill),
+            dictionaryPrompt = this[Keys.DictionaryPrompt] ?: context.getString(R.string.default_dictionary_prompt)
         )
     }
 }

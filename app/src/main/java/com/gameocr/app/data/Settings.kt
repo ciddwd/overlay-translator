@@ -168,7 +168,28 @@ data class Settings(
      * 默认严格模式仅放行私有/回环地址；这里追加的 host 也允许明文访问，用于无 HTTPS 的可信外网服务。
      * **安全提示**：明文可被中间人窃听/篡改，仅在你确认链路可信时启用。
      */
-    val cleartextAllowedHosts: List<String> = emptyList()
+    val cleartextAllowedHosts: List<String> = emptyList(),
+    /**
+     * 悬浮球长按弧菜单按钮顺序。每页最多 [FloatingMenu.PAGE_SIZE] 项，超出由 FloatingButtonManager
+     * 自动在末位插入「下一组」翻页项。新装用户 / 老用户升级时默认为
+     * [FloatingMenu.DEFAULT_ORDER]（沿用原 3 项 + 主球技能槽）。
+     *
+     * `FULL_SCREEN_SKILL` / `WORD_SELECT` 在 registry 里互斥——展开菜单时只显示「与当前
+     * [floatingButtonSkill] 相反」的那一个，点击切 skill。所以 order 里只用一个 slot 表示
+     * 「技能切换槽」，约定写 `FULL_SCREEN_SKILL`。
+     */
+    val floatingMenuItemOrder: List<MenuItemId> = FloatingMenu.DEFAULT_ORDER,
+    /**
+     * 主球单击触发的「技能」。FULL_SCREEN 走全屏 OCR+翻译；WORD_SELECT 进入划词框选 overlay。
+     * 长按菜单里的「技能槽」按钮显示当前对立项，点了切换 + 球图标互换。
+     */
+    val floatingButtonSkill: FloatingSkill = FloatingSkill.FULL_SCREEN,
+    /**
+     * 划词翻译：单词模式专用的 LLM 词典 prompt 模板（仅 OpenAI 兼容引擎生效）。
+     * 用占位符 `{source}` / `{target}` 同 [promptTemplate]。返回 JSON 让卡片显示音标 / 词性 /
+     * 释义 / 例句；解析失败回退到 [promptTemplate]。读取时若 key 缺省，按 UI locale 给出本地化默认。
+     */
+    val dictionaryPrompt: String = DEFAULT_DICTIONARY_PROMPT
 ) {
     companion object {
         /**
@@ -185,7 +206,82 @@ data class Settings(
 3. 只输出译文，不加解释、不加引号。
 原文：
 """
+
+        /**
+         * 划词翻译的词典模式默认 prompt。要求 LLM 在输入是单词时返回严格 JSON——
+         * 解析失败由 CaptureService 回退到纯翻译，不报错；解析成功则把 phonetic / pos /
+         * definitions / examples 显示在卡片字典区。
+         */
+        const val DEFAULT_DICTIONARY_PROMPT: String = """你是一名{source}→{target}的双语词典助手。请把用户输入当作一个单词或固定短语来处理，**只输出**下面格式的 JSON，不要加 markdown、代码块、解释。
+{
+  "phonetic": "音标或读音（{source}; 无则空串）",
+  "pos": ["词性，{target}缩写，如 名/动/形 或 n./v./adj.; 无则空数组"],
+  "definitions": ["{target}释义 1", "{target}释义 2"],
+  "examples": [
+    { "src": "{source}例句", "dst": "{target}译文" }
+  ]
+}
+要求：
+1. 必须是合法 JSON，键名与上面完全一致；
+2. 没有信息的字段用空串或空数组占位；
+3. 例句最多 2 条，太多删减；
+4. 不要把整段当句子翻译，只做词典查询。
+"""
     }
+}
+
+/**
+ * 主球单击技能。FULL_SCREEN 走 CaptureService.triggerOnce()（全屏 OCR+翻译）；
+ * WORD_SELECT 走 CaptureService.triggerWordSelect()（拖矩形 → 单段翻译卡片）。
+ */
+@Serializable
+enum class FloatingSkill {
+    FULL_SCREEN,
+    WORD_SELECT
+}
+
+/**
+ * 悬浮球弧菜单按钮 ID。在 `overlay/MenuItemRegistry.kt` 集中绑定到图标 / 文案 / 回调。
+ *
+ * `FULL_SCREEN_SKILL` 是「技能槽」占位 ID：在 menu 里它代表「与当前 [FloatingSkill] 相反」
+ * 的那一项 —— 当前 skill = FULL_SCREEN 时显示 WORD_SELECT 入口图标，反之亦然。
+ * 这样 [Settings.floatingMenuItemOrder] 只需要一个 slot，不会产生「同时显示两个互斥按钮」的奇怪状态。
+ */
+@Serializable
+enum class MenuItemId {
+    LOOP,
+    REGION,
+    HOME,
+    FULL_SCREEN_SKILL
+}
+
+/** 弧菜单分页 / 默认顺序常量。 */
+object FloatingMenu {
+    /** 每页最多按钮数。第 4 位若有更多项就放「下一组」翻页键。 */
+    const val PAGE_SIZE: Int = 4
+
+    /**
+     * 全部已知 MenuItemId 的稳定顺序（用于读 Settings 时补齐遗漏 + 默认值）。
+     * 任何不在此列表的 id（未来新增引脚 / 引入第三方 plugin）都视为未知 silently 跳过。
+     */
+    val ALL_ORDER: List<MenuItemId> = listOf(
+        MenuItemId.LOOP,
+        MenuItemId.REGION,
+        MenuItemId.HOME,
+        MenuItemId.FULL_SCREEN_SKILL
+    )
+
+    /**
+     * 首次安装默认顺序：循环、选区、划词技能槽、返回主应用。
+     * 把「技能槽」放在「返回主应用」之前——拖球到菜单时手指先经过的位置留给「常用动作」，
+     * HOME 作为"离场"动作放最后符合直觉。
+     */
+    val DEFAULT_ORDER: List<MenuItemId> = listOf(
+        MenuItemId.LOOP,
+        MenuItemId.REGION,
+        MenuItemId.FULL_SCREEN_SKILL,
+        MenuItemId.HOME
+    )
 }
 
 /**

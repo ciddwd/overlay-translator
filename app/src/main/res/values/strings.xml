@@ -387,6 +387,9 @@
     <string name="settings_search_item_floating_auto_dock">Floating button auto-dock</string>
     <string name="settings_search_item_floating_dock_inset">Floating button dock inset</string>
     <string name="settings_search_item_cleartext_hosts">Cleartext HTTP allowlist</string>
+    <string name="settings_search_item_arc_menu_order">Arc menu button order</string>
+    <string name="settings_search_item_dictionary_prompt">Dictionary prompt (Word Select)</string>
+    <string name="settings_search_item_floating_window_reset">Reset floating window geometry</string>
     <string name="settings_paddle_status_missing_hint">PaddleOCR not downloaded (fill mirror URL, then tap Download)</string>
     <string name="settings_paddle_download_failed_format">Download failed: %1$s</string>
     <string name="settings_paddle_imported_format">Imported %1$d files → %2$s</string>
@@ -523,6 +526,8 @@
     <string name="update_dialog_failed_format">%1$s\n\nApi.github.com may be unreachable from some networks; tap below to open the Release page manually.</string>
     <string name="update_dialog_btn_download">Download</string>
     <string name="update_dialog_btn_later">Later</string>
+    <string name="update_dialog_btn_skip">Skip this version</string>
+    <string name="update_auto_checking">Checking for updates…</string>
     <string name="update_dialog_btn_ok">OK</string>
     <string name="update_dialog_btn_close">Close</string>
     <string name="update_dialog_btn_open_release">Open Release page</string>
@@ -672,4 +677,61 @@
     <string name="lang_zh_cn">Chinese (Simplified)</string>
     <string name="lang_zh_tw">Chinese (Traditional)</string>
     <string name="lang_zu">Zulu</string>
+
+    <!-- 0.4: arc menu skill switching + word selection translation -->
+    <string name="menu_word_select">Word Select</string>
+    <string name="menu_full_screen_skill">Full-screen Translate</string>
+    <string name="menu_next_page">Next Page</string>
+    <string name="floating_skill_full_screen_label">Full-screen Translate</string>
+    <string name="floating_skill_word_select_label">Word Select Translate</string>
+    <string name="toast_skill_switched_full_screen">Tap the ball to translate full screen</string>
+    <string name="toast_skill_switched_word_select">Tap the ball to drag a selection</string>
+
+    <!-- Word selection overlay -->
+    <string name="word_select_hint_drawing">Drag a rectangle around text to translate</string>
+    <string name="word_select_btn_translate">Translate</string>
+    <string name="word_select_btn_cancel">Cancel</string>
+    <string name="word_select_btn_redraw">Redraw</string>
+
+    <!-- Translation card -->
+    <string name="word_card_loading">Translating…</string>
+    <string name="word_card_no_text">No text recognized in the selected area</string>
+    <string name="word_card_dismiss">Close</string>
+    <string name="word_card_label_phonetic">Phonetic</string>
+    <string name="word_card_label_pos">Part of speech</string>
+    <string name="word_card_label_definitions">Definitions</string>
+    <string name="word_card_label_examples">Examples</string>
+    <string name="word_card_btn_copy_source">Copy source</string>
+    <string name="word_card_btn_copy_translation">Copy translation</string>
+    <string name="word_card_btn_copied">Copied ✓</string>
+
+    <!-- 系统文字选中菜单的「屏译翻译」入口 -->
+    <string name="process_text_label">Screen Translator</string>
+    <string name="process_text_translating">Translating…</string>
+    <string name="process_text_translate_failed">Translation failed</string>
+    <string name="process_text_need_overlay">Screen Translator needs the \"Display over other apps\" permission</string>
+    <string name="toast_word_select_ocr_failed_format">OCR (%1$s) failed: %2$s</string>
+    <string name="toast_word_select_translate_failed_format">Translate (%1$s) failed: %2$s</string>
+
+    <!-- Settings: arc menu order -->
+    <string name="settings_section_arc_menu">Arc Menu Buttons</string>
+    <string name="settings_arc_menu_order_desc">Drag to reorder. The first %1$d items show in the menu; the rest move to the next page (a Next-page button auto-fills the last slot).</string>
+    <string name="settings_arc_menu_item_loop">Loop / Stop Loop</string>
+    <string name="settings_arc_menu_item_region">Pick Region</string>
+    <string name="settings_arc_menu_item_home">Open App</string>
+    <string name="settings_arc_menu_item_skill_format">Switch ball action — %1$s</string>
+    <string name="settings_arc_menu_drag_handle">Drag</string>
+
+    <!-- Settings: dictionary prompt -->
+    <string name="settings_dictionary_prompt_title">Dictionary Prompt (Word Select, OpenAI-compatible only)</string>
+    <string name="settings_dictionary_prompt_desc">When the selected region looks like a single word, the LLM is asked for structured phonetic + definitions instead of plain translation. Non-OpenAI engines fall back to plain translation.</string>
+    <string name="settings_dictionary_prompt_reset">Reset to default</string>
+    <string name="settings_prompt_reset_confirm_title">Reset translation prompt?</string>
+    <string name="settings_dictionary_prompt_reset_confirm_title">Reset dictionary prompt?</string>
+    <string name="settings_reset_confirm_message">Your current custom prompt will be overwritten by the default for this UI language. This can\'t be undone.</string>
+    <string name="settings_reset_confirm_yes">Reset</string>
+    <string name="settings_reset_confirm_no">Cancel</string>
+
+    <!-- Default dictionary prompt -->
+    <string name="default_dictionary_prompt">You are a {source}→{target} bilingual dictionary assistant. Treat the user input as a single word or fixed phrase and output ONLY the following JSON — no markdown, no code fence, no explanation.\n{\n  \"phonetic\": \"phonetic / pronunciation in {source}; empty string if unknown\",\n  \"pos\": [\"part of speech in {target}, e.g. n./v./adj.; empty array if unknown\"],\n  \"definitions\": [\"definition 1 in {target}\", \"definition 2 in {target}\"],\n  \"examples\": [\n    { \"src\": \"{source} example\", \"dst\": \"{target} translation\" }\n  ]\n}\nRules:\n1. Must be valid JSON with exactly these keys;\n2. Use empty string / empty array for missing info;\n3. At most 2 examples;\n4. Never translate the whole thing as a sentence — always a dictionary lookup.\n</string>
 </resources>

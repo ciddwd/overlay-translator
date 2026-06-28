@@ -48,6 +48,9 @@ class RoutingTranslator @Inject constructor(
     ): List<Pair<TextBlock, String>> =
         engineFor(settings).ocrAndTranslate(bitmap, settings)
 
+    override suspend fun translateWord(source: String, settings: Settings): WordResult? =
+        engineFor(settings).translateWord(source, settings)
+
     private fun engineFor(settings: Settings): Translator = when (settings.translatorEngine) {
         TranslatorEngine.OPENAI -> openAi
         TranslatorEngine.DEEPL -> deepl

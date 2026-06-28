@@ -5,6 +5,9 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,6 +29,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -56,6 +60,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -98,11 +103,12 @@ fun MainScreen(
     var showClearRegionDialog by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // 主屏一进就触发自动检查更新。autoCheckIfDue 内部 24h 节流，频繁进出主屏不会浪费 API
-     // 额度；只有 hasUpdate 时才弹 dialog，已最新 / 失败 静默不打扰。
+    // 主屏一进就触发自动检查更新。autoCheckIfDue 内部 1h 节流，频繁进出主屏不会浪费 API
+     // 额度；只有 hasUpdate（且不是用户已跳过的版本）时才弹 dialog，已最新 / 失败 静默不打扰。
     // hiltViewModel<UpdateViewModel>() 与 AboutContent 内部那个调用拿到同一实例，dialog 共享 state。
     val updateVm: com.gameocr.app.update.UpdateViewModel = hiltViewModel()
     val topUpdateState by updateVm.state.collectAsState()
+    val autoChecking by updateVm.autoChecking.collectAsState()
     LaunchedEffect(Unit) { updateVm.autoCheckIfDue() }
     // dialog 必须挂在 MainScreen 顶层，否则用户没滚到"关于"卡看不到自动检测的弹窗。
     // 0.3.0 及之前 dialog 只在 AboutContent 内挂载，导致"自动检测确实跑了但用户感觉没反应"。
@@ -116,8 +122,16 @@ fun MainScreen(
                 context.startActivity(intent)
             }
             updateVm.reset()
-        }
+        },
+        onSkipVersion = { v -> updateVm.skipVersion(v) }
     )
+
+    // 自动检查中的全屏 Loading 遮罩。VM 内有 600ms 最小展示，保证用户来得及看见。
+    // 半透明 scrim + clickable 拦截点击防止用户瞎点；fillMaxSize 覆盖整屏（Dialog 例外，
+    // Dialog 在另一窗口层之上，不会被这个遮罩盖住）。
+    if (autoChecking) {
+        AutoUpdateCheckOverlay()
+    }
 
     // Shizuku 就绪时默认选 Shizuku（用户未手动切换过的前提下）。
     // 进入页面时 shizukuAvail 还在初始 NOT_INSTALLED，等 ON_RESUME 探测完才真实；
@@ -490,7 +504,8 @@ private fun AboutContent() {
 private fun UpdateResultDialog(
     state: com.gameocr.app.update.UpdateViewModel.State,
     onDismiss: () -> Unit,
-    onOpenRelease: (String) -> Unit
+    onOpenRelease: (String) -> Unit,
+    onSkipVersion: (String) -> Unit = {}
 ) {
     when (state) {
         is com.gameocr.app.update.UpdateViewModel.State.Loaded -> {
@@ -531,10 +546,16 @@ private fun UpdateResultDialog(
                         }
                     }
                 },
+                // 有更新时把「跳过此版本」「稍后」并排塞进 dismissButton 槽位（AlertDialog 只有两个 button slot）
                 dismissButton = if (info.hasUpdate) {
                     {
-                        TextButton(onClick = onDismiss) {
-                            Text(stringResource(R.string.update_dialog_btn_later))
+                        Row {
+                            TextButton(onClick = { onSkipVersion(info.latestVersion) }) {
+                                Text(stringResource(R.string.update_dialog_btn_skip))
+                            }
+                            TextButton(onClick = onDismiss) {
+                                Text(stringResource(R.string.update_dialog_btn_later))
+                            }
                         }
                     }
                 } else null
@@ -673,6 +694,34 @@ private fun ActionCard(title: String, content: @Composable () -> Unit) {
 }
 
 /** 用户在主屏选择的截屏服务启动方式。仅 App 进程内记忆，不持久化（用户每次启动后默认 MediaProjection）。 */
+/**
+ * 自动检查更新时的全屏 Loading 遮罩：半透明 scrim + 中央 spinner + 「检查更新…」文案。
+ * - `clickable` 但 indication=null + 空 onClick 用来吞掉点击事件，防止用户在遮罩期间瞎点底下控件。
+ * - 不挡 [AlertDialog]：Dialog 是独立 Window 层，会盖在这个遮罩之上。
+ */
+@Composable
+private fun AutoUpdateCheckOverlay() {
+    val source = remember { MutableInteractionSource() }
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.45f))
+            .clickable(interactionSource = source, indication = null) { /* 吞点击 */ },
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            CircularProgressIndicator(color = Color.White)
+            Text(
+                text = stringResource(R.string.update_auto_checking),
+                color = Color.White
+            )
+        }
+    }
+}
+
 private enum class StartMode { MEDIA_PROJECTION, SHIZUKU }
 
 @HiltViewModel

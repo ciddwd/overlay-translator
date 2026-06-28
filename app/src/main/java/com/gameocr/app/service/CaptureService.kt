@@ -23,11 +23,16 @@ import com.gameocr.app.data.SettingsRepository
 import com.gameocr.app.ocr.BitmapPreprocessor
 import com.gameocr.app.ocr.OcrEngine
 import com.gameocr.app.ocr.TextBlock
+import com.gameocr.app.data.FloatingSkill
 import com.gameocr.app.overlay.FloatingButtonManager
 import com.gameocr.app.overlay.OverlayManager
 import com.gameocr.app.overlay.RegionPickerOverlay
+import com.gameocr.app.overlay.TranslationCardOverlay
+import com.gameocr.app.overlay.WordSelectOverlay
 import com.gameocr.app.translate.TranslationException
 import com.gameocr.app.translate.Translator
+import com.gameocr.app.translate.WordHeuristic
+import com.gameocr.app.translate.WordResult
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
@@ -72,6 +77,8 @@ class CaptureService : Service() {
     private var floatingButton: FloatingButtonManager? = null
     private var overlay: OverlayManager? = null
     private var regionPicker: RegionPickerOverlay? = null
+    private var wordSelect: WordSelectOverlay? = null
+    private var translationCard: TranslationCardOverlay? = null
 
     private var loopJob: Job? = null
     // 订阅 SettingsRepository.settings flow，让设置页保存后所有显示项立即生效
@@ -127,12 +134,13 @@ class CaptureService : Service() {
             useShizuku -> android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
             else -> android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
         }
-        ServiceCompat.startForeground(
-            this,
-            CaptureNotification.NOTIF_ID,
-            CaptureNotification.build(this),
-            fgType
-        )
+        // Android 14+ HyperOS/MIUI 上常见 race：MediaProjectionRequestActivity onActivityResult
+        // 收到 RESULT_OK 后立即 startForegroundService，此时 `android:project_media` app-op
+        // grant 尚未异步落地，startForeground 抛 SecurityException 闪退。
+        // workaround：捕获异常后 postDelayed 重试一次，给 op 200ms 落地时间；仍失败再 stopSelf。
+        if (!startForegroundCompat(fgType, intent)) {
+            return
+        }
 
         if (useShizuku) {
             screenshotter = ShizukuScreenshotter()
@@ -164,8 +172,15 @@ class CaptureService : Service() {
         overlay = OverlayManager(this, settingsRepository, scope)
         floatingButton = FloatingButtonManager(
             this,
-            onSingleTap = { triggerOnce() },
-            // 长按 = 弹弧形菜单；菜单第一项「循环翻译」继续走 toggleLoopMode
+            // 主球单击：按当前 skill 路由。FloatingButtonManager.skill 由 settings collect 同步保持最新；
+            // 这里读 floatingButton?.skill 而不是构造时快照，保证用户从菜单切技能后立刻生效。
+            onSingleTap = {
+                when (floatingButton?.skill ?: FloatingSkill.FULL_SCREEN) {
+                    FloatingSkill.FULL_SCREEN -> triggerOnce()
+                    FloatingSkill.WORD_SELECT -> triggerWordSelect()
+                }
+            },
+            // 长按弧菜单的第一项「循环翻译」继续走 toggleLoopMode
             onLongPress = { toggleLoopMode() },
             settingsRepository = settingsRepository,
             ioScope = scope
@@ -177,6 +192,10 @@ class CaptureService : Service() {
                 Intent(this, com.gameocr.app.ui.MainActivity::class.java)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
             ) }
+            // 主球技能切换：菜单点了「划词翻译 / 全屏翻译」时由 FloatingButtonManager 触发，
+            // 这里负责持久化到 Settings + 弹个 info 提示告知新行为；图标切换由 FloatingButtonManager
+            // 在 applySkillIcon 里同步。
+            it.onSwitchSkill = { newSkill -> applyFloatingSkill(newSkill) }
         }
         // 异步读 settings 应用大小 + 还原上次松手位置后再 show，避免阻塞 startForeground 流程
         scope.launch {
@@ -187,6 +206,8 @@ class CaptureService : Service() {
             floatingButton?.snapToEdgeEnabled = s.floatingButtonSnapToEdge
             floatingButton?.autoDockEnabled = s.floatingButtonAutoDock
             floatingButton?.dockEdgeInsetPx = (s.floatingButtonDockInsetDp * resources.displayMetrics.density).toInt()
+            floatingButton?.menuItemOrder = s.floatingMenuItemOrder
+            floatingButton?.skill = s.floatingButtonSkill
             mainScope.launch { floatingButton?.show() }
         }
 
@@ -231,10 +252,222 @@ class CaptureService : Service() {
         }
     }
 
+    /**
+     * 包裹 [ServiceCompat.startForeground]，处理 Android 14+ HyperOS/MIUI 上的 `android:project_media`
+     * app-op race：MediaProjectionRequestActivity 拿到 RESULT_OK 后 op grant 是异步的，立刻 startForeground
+     * 可能在 op 还没落地时抛 `SecurityException`。
+     *
+     * 流程：
+     *  1) 直接尝试 startForeground —— 多数 ROM 正常工作
+     *  2) 抛 SecurityException → postDelayed 200ms 后重试一次（给 op 落地时间）
+     *  3) 重试成功 → 重新跑一遍 handleStart（cleanupCapture 幂等，重入安全）
+     *  4) 重试失败 → 弹 Toast 引导 + stopSelf
+     *
+     * @return true 代表 startForeground 同步成功，调用方可继续后续初始化；false 代表已进入异步
+     *  重试模式，调用方应立刻 return（避免在前台未确立时初始化截屏 / 悬浮窗）。
+     */
+    private fun startForegroundCompat(fgType: Int, originalIntent: Intent): Boolean {
+        val tryStart = {
+            ServiceCompat.startForeground(
+                this,
+                CaptureNotification.NOTIF_ID,
+                CaptureNotification.build(this),
+                fgType
+            )
+        }
+        return try {
+            tryStart()
+            true
+        } catch (se: SecurityException) {
+            Timber.w(se, "startForeground SecurityException; retry in 200ms")
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                try {
+                    tryStart()
+                    Timber.i("startForeground retry succeeded; rerunning handleStart")
+                    handleStart(originalIntent)
+                } catch (e2: SecurityException) {
+                    Timber.e(e2, "startForeground retry also failed")
+                    logRepository.error(
+                        LogRepository.Category.CAPTURE,
+                        "startForeground SecurityException after retry: ${e2.message}",
+                        e2
+                    )
+                    stopSelf()
+                }
+            }, 200L)
+            false
+        }
+    }
+
     private fun triggerOnce() {
         // 立刻给视觉反馈，避免几秒空窗
         mainScope.launch { overlay?.showLoadingHint() }
         scope.launch { captureOnce() }
+    }
+
+    /**
+     * 划词翻译入口：先 hide 球，弹 WordSelectOverlay 让用户拖矩形，确认后截屏 → crop 该区域 →
+     * OCR → 判定单词 → translate / translateWord → 弹 TranslationCardOverlay。
+     *
+     * 全程错误用 [OverlayManager.showErrorHint] 红条提示（跟主链路同链路），不弹 Toast。
+     */
+    private fun triggerWordSelect() {
+        val ws = wordSelect ?: WordSelectOverlay(this).also { wordSelect = it }
+        if (ws.isShown()) return
+        mainScope.launch {
+            floatingButton?.hide()
+            ws.show(
+                onTranslate = { rect ->
+                    mainScope.launch { floatingButton?.show() }
+                    scope.launch { runWordSelectPipeline(rect) }
+                },
+                onCancel = {
+                    mainScope.launch { floatingButton?.show() }
+                }
+            )
+        }
+    }
+
+    /** 框选后真正跑流水线。screenshot → crop → OCR → translate → 弹卡片。 */
+    private suspend fun runWordSelectPipeline(rect: android.graphics.Rect) {
+        if (!captureLock.tryLock()) return
+        try {
+            mainScope.launch { overlay?.showLoadingHint() }
+            val shotter = screenshotter ?: return
+            val full = shotter.capture()
+            if (full == null) {
+                val msg = getString(R.string.toast_capture_failed)
+                mainScope.launch { overlay?.showErrorHint(msg) }
+                return
+            }
+            val settings = settingsRepository.get()
+            // 用 word-select rect 裁剪，**不**走 settings.captureRegion——划词是一次性独立选区
+            val cropped = try {
+                cropRect(full, rect)
+            } catch (t: Throwable) {
+                full.recycle()
+                throw t
+            }
+            full.recycle()
+            if (cropped == null) {
+                val msg = getString(R.string.word_card_no_text)
+                mainScope.launch { overlay?.showErrorHint(msg) }
+                return
+            }
+            val ocrBlocks = try {
+                ocrEngine.recognize(cropped, settings.ocrEngine)
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                cropped.recycle()
+                throw ce
+            } catch (t: Throwable) {
+                Timber.w(t, "Word-select OCR failed")
+                logRepository.error(
+                    LogRepository.Category.OCR,
+                    getString(R.string.log_msg_ocr_failed_format, settings.ocrEngine.name),
+                    t
+                )
+                val msg = getString(
+                    R.string.toast_word_select_ocr_failed_format,
+                    settings.ocrEngine.name,
+                    shortError(t)
+                )
+                mainScope.launch { overlay?.showErrorHint(msg) }
+                cropped.recycle()
+                return
+            }
+            cropped.recycle()
+            val text = ocrBlocks.joinToString(" ") { it.text.trim() }.trim()
+            if (text.isEmpty()) {
+                val msg = getString(R.string.word_card_no_text)
+                mainScope.launch { overlay?.showErrorHint(msg) }
+                return
+            }
+            logRepository.info(
+                LogRepository.Category.OCR,
+                getString(R.string.log_msg_ocr_results_format, ocrBlocks.size, settings.ocrEngine.name, text)
+            )
+
+            val isWord = WordHeuristic.isWord(text, settings.sourceLang)
+            val routing = translator as? com.gameocr.app.translate.RoutingTranslator
+            // 词典化：只在「单词 + OpenAI 兼容引擎」时尝试 LLM JSON prompt；其他全部走纯翻译
+            val wordResult: WordResult? = if (isWord &&
+                settings.translatorEngine == com.gameocr.app.data.TranslatorEngine.OPENAI
+            ) {
+                runCatching {
+                    withContext(Dispatchers.IO) {
+                        (routing ?: translator).translateWord(text, settings)
+                    }
+                }.getOrNull()
+            } else null
+
+            // 纯翻译：词典化成功时也跑一次（用作主显示），失败时回退
+            val translation: String? = runCatching {
+                withContext(Dispatchers.IO) {
+                    translator.translate(text, settings)
+                }
+            }.getOrElse { t ->
+                Timber.w(t, "Word-select translate failed")
+                logRepository.error(
+                    LogRepository.Category.TRANSLATE,
+                    getString(R.string.log_msg_translate_failed_format, settings.translatorEngine.name),
+                    t
+                )
+                // 翻译失败但 wordResult 有 definitions 时仍可展示卡片
+                if (wordResult == null) {
+                    val msg = getString(
+                        R.string.toast_word_select_translate_failed_format,
+                        settings.translatorEngine.name,
+                        shortError(t)
+                    )
+                    mainScope.launch { overlay?.showErrorHint(msg) }
+                    return
+                }
+                null
+            }
+            if (translation != null) {
+                logRepository.pair(LogRepository.Category.TRANSLATE, text, translation)
+            }
+            val displayedTranslation = translation
+                ?: wordResult?.definitions?.firstOrNull()
+                ?: ""
+            mainScope.launch {
+                val card = translationCard ?: TranslationCardOverlay(this@CaptureService).also {
+                    translationCard = it
+                }
+                card.show(text, displayedTranslation.ifBlank { null }, wordResult, settings)
+            }
+        } finally {
+            mainScope.launch { overlay?.dismissLoading() }
+            captureLock.unlock()
+        }
+    }
+
+    /** 按 rect 裁出 bitmap。rect 越界自动夹回；裁出后 ≤ 8px 任一边视为无效返回 null。 */
+    private fun cropRect(src: Bitmap, rect: android.graphics.Rect): Bitmap? {
+        val l = rect.left.coerceIn(0, src.width)
+        val t = rect.top.coerceIn(0, src.height)
+        val r = rect.right.coerceIn(0, src.width)
+        val b = rect.bottom.coerceIn(0, src.height)
+        if (r - l <= 8 || b - t <= 8) return null
+        return Bitmap.createBitmap(src, l, t, r - l, b - t)
+    }
+
+    /**
+     * 切换主球技能：写 Settings 持久化 + 同步 floatingButton 字段 + 弹个 info 提示告诉用户
+     * 新行为。settings flow collect 也会触发 applyOverlayConfig 把图标同步，但这里直接调
+     * applySkillIcon 避免一次跨线程延迟。
+     */
+    private fun applyFloatingSkill(newSkill: FloatingSkill) {
+        scope.launch {
+            settingsRepository.update { it.copy(floatingButtonSkill = newSkill) }
+        }
+        floatingButton?.skill = newSkill
+        mainScope.launch { floatingButton?.applySkillIcon() }
+        val msgRes = when (newSkill) {
+            FloatingSkill.FULL_SCREEN -> R.string.toast_skill_switched_full_screen
+            FloatingSkill.WORD_SELECT -> R.string.toast_skill_switched_word_select
+        }
+        mainScope.launch { overlay?.showInfoHint(getString(msgRes)) }
     }
 
     private fun toggleLoopMode() {
@@ -694,6 +927,12 @@ class CaptureService : Service() {
             mainScope.launch { it.applySnapPreference(settings.floatingButtonSnapToEdge) }
             it.autoDockEnabled = settings.floatingButtonAutoDock
             it.dockEdgeInsetPx = (settings.floatingButtonDockInsetDp * resources.displayMetrics.density).toInt()
+            it.menuItemOrder = settings.floatingMenuItemOrder
+            // 技能字段同步 + 即时图标切换（settings 改 skill 也会到这里）
+            if (it.skill != settings.floatingButtonSkill) {
+                it.skill = settings.floatingButtonSkill
+                mainScope.launch { it.applySkillIcon() }
+            }
         }
     }
 
@@ -710,6 +949,10 @@ class CaptureService : Service() {
         floatingButton = null
         regionPicker?.dismiss()
         regionPicker = null
+        wordSelect?.dismiss()
+        wordSelect = null
+        translationCard?.dismiss()
+        translationCard = null
         screenshotter?.release()
         screenshotter = null
         projection?.stop()

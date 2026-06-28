@@ -18,15 +18,15 @@ import com.gameocr.app.R
 import com.gameocr.app.capture.RegionPickerView
 
 /**
- * 悬浮窗版区域选择。复用 [RegionPickerView] + 同款 toolbar，但用 [WindowManager.addView]
- * 覆盖在当前 app 之上，不切走前台 Activity——用户在游戏 / 漫画里操作不出戏，也不会
- * 重复入栈（[RegionPickerActivity] 那条 [android.content.Intent.FLAG_ACTIVITY_NEW_TASK]
- * 老路径只剩 MainScreen 仍在用）。
+ * 划词翻译用的悬浮窗框选层。复用 [RegionPickerView] 的双阶段拖框 / handle 微调能力，但与
+ * [RegionPickerOverlay] 有两点不同：
+ *  - 语义是「一次性翻译」，**不**把 rect 写回 Settings.captureRegion；
+ *  - toolbar 只有「翻译 / 取消 / 重画」三个键，翻译键文案区别于「确认」。
  *
- * 全屏 view + 不加 [WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE] → 拦截所有触摸，
- * 拉框期间后台应用收不到误操作。
+ * 与 RegionPickerOverlay 共享：display-bound WindowManager、cutout layout 一致性，确保
+ * 选区坐标对齐物理屏幕原点。
  */
-class RegionPickerOverlay(private val context: Context) {
+class WordSelectOverlay(private val context: Context) {
 
     private val overlayType: Int = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
         WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -35,13 +35,6 @@ class RegionPickerOverlay(private val context: Context) {
         WindowManager.LayoutParams.TYPE_PHONE
     }
 
-    /**
-     * 拿跟随屏幕旋转的 WindowManager（仿 [com.gameocr.app.overlay.FloatingButtonManager]）。
-     * Service / Application context 的默认 WindowManager 不跟随旋转——横屏 cutout 让出 inset 后
-     * window 原点被推到物理 cutout 之后，左边露出物理屏黑边。API 31+ 用
-     * `createWindowContext(display, type, options)` 拿挂在指定 display 上的 context，其 WM
-     * 会跟随该 display 当前方向。API < 31 退回默认 wm（已知 limitation）。
-     */
     private val wm: WindowManager by lazy {
         val defaultWm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return@lazy defaultWm
@@ -60,32 +53,28 @@ class RegionPickerOverlay(private val context: Context) {
     fun isShown(): Boolean = container != null
 
     fun show(
-        initial: Rect?,
-        onConfirm: (Rect) -> Unit,
-        onCancel: () -> Unit,
-        /** 双击选择整屏触发。语义跟主屏「清除选框」一致：清掉 captureRegion 让下次走整屏。
-         *  默认走 onCancel（不清；保留兼容） */
-        onClearAll: () -> Unit = onCancel
+        onTranslate: (Rect) -> Unit,
+        onCancel: () -> Unit
     ) {
         if (container != null) return
 
-        lateinit var doClearAll: () -> Unit
         val picker = RegionPickerView(
             context = context,
-            initial = initial,
+            initial = null,
             onCancel = onCancel,
-            onClearAllRequested = { doClearAll() }
+            // 划词模式下不支持「双击=清除」语义，双击直接 cancel。
+            onClearAllRequested = { dismiss(); onCancel() }
         )
 
         lateinit var doCancel: () -> Unit
-        lateinit var doConfirm: () -> Unit
+        lateinit var doTranslate: () -> Unit
         val toolbar = buildToolbar(
             onRedo = { picker.resetToDrawing() },
             onCancel = { doCancel() },
-            onConfirm = { doConfirm() }
+            onTranslate = { doTranslate() }
         )
 
-        // 自定义 FrameLayout：拦截返回键 = 取消框选。
+        // 自定义 FrameLayout：拦截返回键 = 取消划词。
         // window 去掉了 FLAG_NOT_FOCUSABLE 才能拿到按键事件，否则返回键漏到底层 app（游戏）。
         val root = object : FrameLayout(context) {
             override fun dispatchKeyEvent(event: KeyEvent): Boolean {
@@ -125,19 +114,15 @@ class RegionPickerOverlay(private val context: Context) {
             dismiss()
             onCancel()
         }
-        doConfirm = {
+        doTranslate = {
             val r = picker.currentRect()
             if (r != null && r.width() >= 20 && r.height() >= 20) {
                 dismiss()
-                onConfirm(r)
+                onTranslate(r)
             } else {
                 dismiss()
                 onCancel()
             }
-        }
-        doClearAll = {
-            dismiss()
-            onClearAll()
         }
 
         val updateToolbarPos: (Rect?) -> Unit = { rect ->
@@ -146,16 +131,9 @@ class RegionPickerOverlay(private val context: Context) {
         picker.onRectChanged = updateToolbarPos
         root.post { updateToolbarPos(picker.currentRect()) }
 
-        // 拿屏幕物理真实分辨率（不受 inset / system bar / cutout 让位影响）。
-        // MATCH_PARENT 在 HyperOS 横屏会被让出 cutout inset → window 左边露物理屏黑边。
-        // 显式给具体像素值绕过 framework 解释。
         val (physW, physH) = physicalScreenSize()
         // 不加 FLAG_NOT_FOCUSABLE：需要拿到按键事件来拦截返回键（避免漏给底层 app 导致游戏退出）。
-        // 副作用排查：
-        //  - 失去 FLAG_NOT_TOUCH_MODAL：本来就要拦截所有触摸（全屏 MATCH_PARENT，无 window 外区域），无影响。
-        //  - 抢底层 app focus：模态全屏选择期间用户只跟 overlay 交互，期望行为。
-        //  - IME 交互：补 FLAG_ALT_FOCUSABLE_IM = "不与 IME 交互，且可覆盖 IME 区"，
-        //    防御部分 ROM 在 focusable window 弹出时唤起输入法。
+        // 副作用同 RegionPickerOverlay，补 FLAG_ALT_FOCUSABLE_IM 防 IME 干扰。
         val params = WindowManager.LayoutParams(
             physW, physH,
             overlayType,
@@ -176,10 +154,6 @@ class RegionPickerOverlay(private val context: Context) {
         runCatching { wm.addView(root, params) }
     }
 
-    /** 屏幕物理真实分辨率。直接用 [android.view.Display.getRealMetrics]——这是 framework 原生接口，
-     *  返回的是物理屏的真实分辨率，跟 cutout / system bar / inset 无关。
-     *  比 [WindowManager.getCurrentWindowMetrics] 可靠：后者在挂 window context 的 wm 上可能返回
-     *  工作区而非物理屏（HyperOS 横屏实测）。 */
     private fun physicalScreenSize(): Pair<Int, Int> {
         val dm = android.util.DisplayMetrics()
         val displayManager = context.getSystemService(Context.DISPLAY_SERVICE)
@@ -198,7 +172,7 @@ class RegionPickerOverlay(private val context: Context) {
     private fun buildToolbar(
         onRedo: () -> Unit,
         onCancel: () -> Unit,
-        onConfirm: () -> Unit
+        onTranslate: () -> Unit
     ): LinearLayout {
         val bg = GradientDrawable().apply {
             cornerRadius = dp(28).toFloat()
@@ -208,9 +182,9 @@ class RegionPickerOverlay(private val context: Context) {
             orientation = LinearLayout.HORIZONTAL
             background = bg
             setPadding(dp(8), dp(8), dp(8), dp(8))
-            addView(buildButton(context.getString(R.string.region_picker_btn_redo), onRedo))
-            addView(buildButton(context.getString(R.string.region_picker_btn_cancel), onCancel))
-            addView(buildButton(context.getString(R.string.region_picker_btn_confirm), onConfirm, primary = true))
+            addView(buildButton(context.getString(R.string.word_select_btn_redraw), onRedo))
+            addView(buildButton(context.getString(R.string.word_select_btn_cancel), onCancel))
+            addView(buildButton(context.getString(R.string.word_select_btn_translate), onTranslate, primary = true))
         }
     }
 
@@ -236,7 +210,6 @@ class RegionPickerOverlay(private val context: Context) {
         }
     }
 
-    /** rect 变化时把 toolbar 重新摆位（贴 rect 下方/上方/底部，避开选区）。 */
     private fun placeToolbar(container: FrameLayout, toolbar: ViewGroup, rect: Rect?) {
         val parentW = container.width
         val parentH = container.height

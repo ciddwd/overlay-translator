@@ -177,6 +177,16 @@ class SettingsViewModel @Inject constructor(
         repo.update { it.copy(customBorderStyle = style) }
     }
 
+    /** 弧菜单按钮顺序：拖拽完即时落盘 + 生效，不走主 [save] 流程的 dirty 判定。 */
+    suspend fun saveArcMenuOrder(order: List<com.gameocr.app.data.MenuItemId>) {
+        repo.update { it.copy(floatingMenuItemOrder = order) }
+    }
+
+    /** 划词翻译词典 Prompt（仅 OpenAI 兼容引擎用），即时落盘。 */
+    suspend fun saveDictionaryPrompt(prompt: String) {
+        repo.update { it.copy(dictionaryPrompt = prompt) }
+    }
+
     /** 重置悬浮窗口位置 / 大小到默认（X=Y=-1 居中，W/H 回默认）。 */
     suspend fun resetFloatingWindowGeometry() {
         repo.update {

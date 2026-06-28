@@ -97,6 +97,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.gameocr.app.R
+import com.gameocr.app.data.MenuItemId
 import com.gameocr.app.data.OcrEngineKind
 import com.gameocr.app.data.OverlayPlacement
 import com.gameocr.app.data.OverlayTheme
@@ -104,6 +105,12 @@ import com.gameocr.app.data.PreprocessOptions
 import com.gameocr.app.data.RenderMode
 import com.gameocr.app.data.Settings
 import com.gameocr.app.data.TranslatorEngine
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.zIndex
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.layout.height
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -192,6 +199,13 @@ fun SettingsScreen(
     var floatingSnapEdge by remember { mutableStateOf(true) }
     var floatingAutoDock by remember { mutableStateOf(false) }
     var floatingDockInset by remember { mutableStateOf(0f) }
+    // 弧菜单按钮顺序 + 划词词典 prompt：拖动 / 编辑后即时通过 vm 的 saveArcMenuOrder / saveDictionaryPrompt
+    // 单字段落盘，**不**走主 save 的 dirty 流程（用户期望立刻生效，无需点保存）。
+    var menuOrder by remember { mutableStateOf<List<MenuItemId>>(emptyList()) }
+    // 当前主球技能。技能槽（FULL_SCREEN_SKILL）那一行的文案要跟着它动态显示「切到对方」：
+    // 当前 FULL_SCREEN → 显示「— 划词翻译」；当前 WORD_SELECT → 显示「— 全屏翻译」
+    var currentSkill by remember { mutableStateOf(com.gameocr.app.data.FloatingSkill.FULL_SCREEN) }
+    var dictionaryPrompt by remember { mutableStateOf("") }
     // 悬浮按钮"贴边距离" slider 的实时预览：屏幕两侧画 inset 宽度的半透粉条。
     // 默认 false——进设置就显示条带太突兀；用户在 slider 旁手动开启「预览」后才覆盖到屏幕上。
     var insetPreviewActive by remember { mutableStateOf(false) }
@@ -722,6 +736,9 @@ fun SettingsScreen(
             floatingSnapEdge = s.floatingButtonSnapToEdge
             floatingAutoDock = s.floatingButtonAutoDock
             floatingDockInset = s.floatingButtonDockInsetDp.toFloat()
+            menuOrder = s.floatingMenuItemOrder
+            currentSkill = s.floatingButtonSkill
+            dictionaryPrompt = s.dictionaryPrompt
             pinnedLanguages = s.pinnedLanguages
             allowWrap = s.overlayAllowWrap
             avoidCollision = s.overlayAvoidCollision
@@ -1259,11 +1276,77 @@ fun SettingsScreen(
                         }
                     }
 
+                    // 二次确认对话框：自定义 prompt 一旦覆盖无法撤销，避免误点。
+                    var showResetMainPromptDialog by remember { mutableStateOf(false) }
+                    var showResetDictPromptDialog by remember { mutableStateOf(false) }
                     val defaultPrompt = stringResource(R.string.default_prompt)
-                    TextButton(onClick = { prompt = defaultPrompt }) {
+                    TextButton(onClick = { showResetMainPromptDialog = true }) {
                         Text(stringResource(R.string.settings_prompt_reset))
                     }
+                    if (showResetMainPromptDialog) {
+                        AlertDialog(
+                            onDismissRequest = { showResetMainPromptDialog = false },
+                            title = { Text(stringResource(R.string.settings_prompt_reset_confirm_title)) },
+                            text = { Text(stringResource(R.string.settings_reset_confirm_message)) },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    prompt = defaultPrompt
+                                    showResetMainPromptDialog = false
+                                }) { Text(stringResource(R.string.settings_reset_confirm_yes)) }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { showResetMainPromptDialog = false }) {
+                                    Text(stringResource(R.string.settings_reset_confirm_no))
+                                }
+                            }
+                        )
+                    }
                     SwitchRow(stringResource(R.string.settings_streaming), streaming) { streaming = it }
+
+                    // 划词翻译词典 Prompt（仅 OpenAI 兼容引擎用，跟主翻译 Prompt 同源所以放一起）
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                    Text(
+                        stringResource(R.string.settings_dictionary_prompt_title),
+                        style = MaterialTheme.typography.labelLarge
+                    )
+                    Text(
+                        stringResource(R.string.settings_dictionary_prompt_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = dictionaryPrompt,
+                        onValueChange = { v ->
+                            dictionaryPrompt = v
+                            scope.launch { viewModel.saveDictionaryPrompt(v) }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 3,
+                        maxLines = 12
+                    )
+                    val defaultDictPrompt = stringResource(R.string.default_dictionary_prompt)
+                    TextButton(onClick = { showResetDictPromptDialog = true }) {
+                        Text(stringResource(R.string.settings_dictionary_prompt_reset))
+                    }
+                    if (showResetDictPromptDialog) {
+                        AlertDialog(
+                            onDismissRequest = { showResetDictPromptDialog = false },
+                            title = { Text(stringResource(R.string.settings_dictionary_prompt_reset_confirm_title)) },
+                            text = { Text(stringResource(R.string.settings_reset_confirm_message)) },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    dictionaryPrompt = defaultDictPrompt
+                                    scope.launch { viewModel.saveDictionaryPrompt(defaultDictPrompt) }
+                                    showResetDictPromptDialog = false
+                                }) { Text(stringResource(R.string.settings_reset_confirm_yes)) }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { showResetDictPromptDialog = false }) {
+                                    Text(stringResource(R.string.settings_reset_confirm_no))
+                                }
+                            }
+                        )
+                    }
                 }
             }
 
@@ -1749,6 +1832,30 @@ fun SettingsScreen(
                 )
             }
 
+            // —— 弧菜单按钮顺序 ——
+            SectionCard(
+                title = stringResource(R.string.settings_section_arc_menu),
+                anchorKey = SectionKeys.ARC_MENU,
+                onAnchor = onAnchor
+            ) {
+                Text(
+                    stringResource(
+                        R.string.settings_arc_menu_order_desc,
+                        com.gameocr.app.data.FloatingMenu.PAGE_SIZE
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                ArcMenuOrderEditor(
+                    order = menuOrder,
+                    currentSkill = currentSkill,
+                    onReorder = { next ->
+                        menuOrder = next
+                        scope.launch { viewModel.saveArcMenuOrder(next) }
+                    }
+                )
+            }
+
             // —— 触发器 ——
             SectionCard(title = stringResource(R.string.settings_section_trigger), anchorKey = SectionKeys.TRIGGER, onAnchor = onAnchor) {
                 OutlinedTextField(
@@ -2088,6 +2195,7 @@ private object SectionKeys {
     const val PREPROCESS = "preprocess"
     const val OVERLAY = "overlay"
     const val FLOATING = "floating"
+    const val ARC_MENU = "arc_menu"
     const val TRIGGER = "trigger"
     const val NETWORK = "network"
     const val APP_LANG = "app_lang"
@@ -2138,15 +2246,16 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_source_lang, listOf("source", "源语言")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_target_lang, listOf("target", "目标语言")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_prompt, listOf("prompt", "提示词", "system")),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_dictionary_prompt, listOf("dictionary", "词典", "划词", "word select", "phonetic", "音标", "释义", "definition", "prompt")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_streaming, listOf("streaming", "流式")),
 
     // —— OCR 引擎 ——
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_ocr_switch, listOf("ML Kit", "百度", "腾讯", "Paddle", "OCR engine")),
-    SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_paddle_download, listOf("ONNX", "v5", "镜像", "mirror")),
-    SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_baidu_api_key, listOf("baidu", "百度")),
+    SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_paddle_download, listOf("ONNX", "v5", "镜像", "mirror", "本地导入", "local import", "import", "导入", "delete", "删除")),
+    SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_baidu_api_key, listOf("baidu", "百度", "secret key", "secret", "密钥")),
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_baidu_endpoint, listOf("百度", "baidu", "general", "accurate", "webimage", "含位置", "标准版", "高精度")),
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_baidu_lang, listOf("百度", "baidu", "language", "语种", "CHN_ENG", "JAP", "KOR", "auto_detect")),
-    SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_tencent_secret, listOf("tencent", "腾讯")),
+    SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_tencent_secret, listOf("tencent", "腾讯", "secret id", "secret key", "secretid", "secretkey", "密钥")),
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_tencent_endpoint, listOf("tencent", "腾讯", "general basic", "general accurate", "recognize agent", "高精度", "智能 agent")),
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_tencent_lang, listOf("tencent", "腾讯", "language", "语种", "mix", "zh_rare", "auto")),
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_tencent_region, listOf("tencent", "腾讯", "region", "区域", "ap-guangzhou", "广州")),
@@ -2168,6 +2277,7 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_alpha, listOf("alpha", "opacity", "透明度")),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_floating_window_content, listOf("floating window", "悬浮窗", "原文+译文", "仅译文", "src dst", "content mode")),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_floating_window_locked, listOf("lock", "锁定", "悬浮窗")),
+    SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_floating_window_reset, listOf("reset", "重置", "还原", "默认", "default", "floating window", "悬浮窗", "geometry", "几何", "位置", "尺寸", "size")),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_allow_wrap, listOf("wrap", "换行", "single line", "多行")),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_avoid_collision, listOf("collision", "碰撞", "避撞", "重叠")),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_merge_adjacent, listOf("merge", "合并", "重叠", "拆段")),
@@ -2179,6 +2289,9 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
     SearchEntry(SectionKeys.FLOATING, R.string.settings_section_floating, R.string.settings_search_item_floating_snap, listOf("snap", "贴边", "edge")),
     SearchEntry(SectionKeys.FLOATING, R.string.settings_section_floating, R.string.settings_search_item_floating_auto_dock, listOf("auto dock", "自动停靠", "停靠", "藏边")),
     SearchEntry(SectionKeys.FLOATING, R.string.settings_section_floating, R.string.settings_search_item_floating_dock_inset, listOf("inset", "贴边距离", "手势", "全面屏", "gesture")),
+
+    // —— 弧菜单按钮顺序 ——
+    SearchEntry(SectionKeys.ARC_MENU, R.string.settings_section_arc_menu, R.string.settings_search_item_arc_menu_order, listOf("arc menu", "弧菜单", "弧形", "顺序", "order", "reorder", "排序", "拖动", "menu", "按钮", "page", "翻页", "loop", "region", "home", "skill", "技能", "划词")),
 
     // —— 触发器 ——
     SearchEntry(SectionKeys.TRIGGER, R.string.settings_section_trigger, R.string.settings_search_item_loop_interval, listOf("loop", "循环")),
@@ -2604,4 +2717,139 @@ private fun PaddleSection(
             modifier = Modifier.fillMaxWidth()
         ) { Text(stringResource(R.string.settings_paddle_btn_delete)) }
     }
+}
+
+/**
+ * 弧菜单按钮顺序编辑器。Compose 原生拖拽排序：
+ * - 被拖项 zIndex 升层，graphicsLayer.translationY 跟手；
+ * - 非拖项按 (draggedIdx, targetIdx) 计算「让位偏移」，animateFloatAsState 平滑过渡，
+ *   targetIdx = draggedIdx + round(dragOffsetY / slotHeightPx)；
+ * - 落位用相同 round 公式，保证落点与视觉一致。
+ */
+@Composable
+private fun ArcMenuOrderEditor(
+    order: List<MenuItemId>,
+    currentSkill: com.gameocr.app.data.FloatingSkill,
+    onReorder: (List<MenuItemId>) -> Unit
+) {
+    val itemHeight = 56.dp
+    val itemSpacing = 6.dp
+    // 一个槽 = item + 行间距，落位 / 让位都按这个步长算
+    val slotHeightPx = with(LocalDensity.current) { (itemHeight + itemSpacing).toPx() }
+    var draggedIdx by remember { mutableStateOf(-1) }
+    var dragOffsetY by remember { mutableStateOf(0f) }
+
+    val targetIdx = if (draggedIdx < 0) -1
+        else (draggedIdx + (dragOffsetY / slotHeightPx).roundToInt())
+            .coerceIn(0, order.size - 1)
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        order.forEachIndexed { idx, id ->
+            val isDragged = idx == draggedIdx
+            // 让位规则：拖动项 idx → 目标 targetIdx，途经的项整体向反方向挪 1 个 slot
+            val displacementPx = when {
+                draggedIdx < 0 || isDragged -> 0f
+                // 向下拖：原本在拖动项下方、且 ≤ targetIdx 的项要往上让一格
+                draggedIdx < idx && idx <= targetIdx -> -slotHeightPx
+                // 向上拖：原本在拖动项上方、且 ≥ targetIdx 的项要往下让一格
+                draggedIdx > idx && idx >= targetIdx -> slotHeightPx
+                else -> 0f
+            }
+            val animatedDisplacement by animateFloatAsState(
+                targetValue = displacementPx,
+                label = "arc_menu_displace_$idx"
+            )
+            val translation = if (isDragged) dragOffsetY else animatedDisplacement
+            val bgColor = if (isDragged) MaterialTheme.colorScheme.primaryContainer
+                else MaterialTheme.colorScheme.surfaceVariant
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(itemHeight)
+                    // 被拖项浮到最上层，避免后绘制的 Row 把它盖住
+                    .zIndex(if (isDragged) 1f else 0f)
+                    .graphicsLayer { translationY = translation }
+                    .background(bgColor, shape = RoundedCornerShape(8.dp))
+                    .padding(horizontal = 12.dp)
+                    .pointerInput(order, idx) {
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = {
+                                draggedIdx = idx
+                                dragOffsetY = 0f
+                            },
+                            onDrag = { _, drag ->
+                                dragOffsetY += drag.y
+                            },
+                            onDragEnd = {
+                                val slots = (dragOffsetY / slotHeightPx).roundToInt()
+                                val target = (idx + slots).coerceIn(0, order.size - 1)
+                                if (target != idx) {
+                                    val next = order.toMutableList().apply {
+                                        val moved = removeAt(idx)
+                                        add(target, moved)
+                                    }
+                                    onReorder(next)
+                                }
+                                draggedIdx = -1
+                                dragOffsetY = 0f
+                            },
+                            onDragCancel = {
+                                draggedIdx = -1
+                                dragOffsetY = 0f
+                            }
+                        )
+                    }
+            ) {
+                // 左侧：三横杠拖动手柄（自绘 vector），明示「这一行可拖动」
+                Icon(
+                    painter = androidx.compose.ui.res.painterResource(R.drawable.ic_drag_handle),
+                    contentDescription = stringResource(R.string.settings_arc_menu_drag_handle),
+                    modifier = Modifier.size(24.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Box(modifier = Modifier.width(12.dp))
+                // 中间：菜单项真实图标
+                Icon(
+                    painter = androidx.compose.ui.res.painterResource(menuItemIconRes(id)),
+                    contentDescription = null,
+                    modifier = Modifier.size(24.dp),
+                    tint = MaterialTheme.colorScheme.onSurface
+                )
+                Box(modifier = Modifier.width(12.dp))
+                Text(
+                    menuItemLabel(id, currentSkill),
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            Box(modifier = Modifier.height(itemSpacing))
+        }
+    }
+}
+
+@Composable
+private fun menuItemLabel(id: MenuItemId, currentSkill: com.gameocr.app.data.FloatingSkill): String = when (id) {
+    MenuItemId.LOOP -> stringResource(R.string.settings_arc_menu_item_loop)
+    MenuItemId.REGION -> stringResource(R.string.settings_arc_menu_item_region)
+    MenuItemId.HOME -> stringResource(R.string.settings_arc_menu_item_home)
+    // 技能槽：跟弧菜单实际显示一致，文案 = 「切换主球操作 — <切换目标>」。
+    // 未来加新 FloatingSkill 值时只需扩展 menuItemIconRes / 这里的 when，无需改文案模板。
+    MenuItemId.FULL_SCREEN_SKILL -> {
+        val nextSkillName = stringResource(
+            when (currentSkill) {
+                com.gameocr.app.data.FloatingSkill.FULL_SCREEN -> R.string.menu_word_select
+                com.gameocr.app.data.FloatingSkill.WORD_SELECT -> R.string.menu_full_screen_skill
+            }
+        )
+        stringResource(R.string.settings_arc_menu_item_skill_format, nextSkillName)
+    }
+}
+
+private fun menuItemIconRes(id: MenuItemId): Int = when (id) {
+    MenuItemId.LOOP -> R.drawable.ic_menu_loop
+    MenuItemId.REGION -> R.drawable.ic_menu_region
+    MenuItemId.HOME -> R.drawable.ic_menu_home
+    // 技能槽：用「划词翻译」图标表示这是「切换主球技能」槽位（默认 FULL_SCREEN 时菜单显示划词入口）
+    MenuItemId.FULL_SCREEN_SKILL -> R.drawable.ic_menu_word_select
 }

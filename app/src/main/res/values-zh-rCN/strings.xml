@@ -387,6 +387,9 @@
     <string name="settings_search_item_floating_auto_dock">悬浮按钮自动停靠</string>
     <string name="settings_search_item_floating_dock_inset">悬浮按钮贴边距离</string>
     <string name="settings_search_item_cleartext_hosts">明文 HTTP 白名单</string>
+    <string name="settings_search_item_arc_menu_order">弧菜单按钮顺序</string>
+    <string name="settings_search_item_dictionary_prompt">划词翻译词典 Prompt</string>
+    <string name="settings_search_item_floating_window_reset">重置悬浮窗口几何尺寸</string>
     <string name="settings_paddle_status_missing_hint">PaddleOCR 模型未下载（填镜像 URL 后点下载）</string>
     <string name="settings_paddle_download_failed_format">下载失败: %1$s</string>
     <string name="settings_paddle_imported_format">导入 %1$d 个文件 → %2$s</string>
@@ -523,6 +526,8 @@
     <string name="update_dialog_failed_format">%1$s\n\n国内访问 api.github.com 可能不稳定，可以点下方按钮手动打开 Release 页。</string>
     <string name="update_dialog_btn_download">下载</string>
     <string name="update_dialog_btn_later">稍后</string>
+    <string name="update_dialog_btn_skip">跳过此版本</string>
+    <string name="update_auto_checking">检查更新…</string>
     <string name="update_dialog_btn_ok">好的</string>
     <string name="update_dialog_btn_close">关闭</string>
     <string name="update_dialog_btn_open_release">打开 Release 页</string>
@@ -672,4 +677,61 @@
     <string name="lang_zh_cn">中文（简体）</string>
     <string name="lang_zh_tw">中文（繁体）</string>
     <string name="lang_zu">祖鲁语</string>
+
+    <!-- 0.4：弧菜单技能切换 + 划词翻译 -->
+    <string name="menu_word_select">划词翻译</string>
+    <string name="menu_full_screen_skill">全屏翻译</string>
+    <string name="menu_next_page">下一组</string>
+    <string name="floating_skill_full_screen_label">全屏翻译</string>
+    <string name="floating_skill_word_select_label">划词翻译</string>
+    <string name="toast_skill_switched_full_screen">主球已切换：单击=全屏翻译</string>
+    <string name="toast_skill_switched_word_select">主球已切换：单击=拖动框选翻译</string>
+
+    <!-- 划词选区 overlay -->
+    <string name="word_select_hint_drawing">拖一个矩形框选要翻译的文字</string>
+    <string name="word_select_btn_translate">翻译</string>
+    <string name="word_select_btn_cancel">取消</string>
+    <string name="word_select_btn_redraw">重画</string>
+
+    <!-- 划词翻译卡片 -->
+    <string name="word_card_loading">翻译中…</string>
+    <string name="word_card_no_text">选中区域内没识别到文字</string>
+    <string name="word_card_dismiss">关闭</string>
+    <string name="word_card_label_phonetic">读音</string>
+    <string name="word_card_label_pos">词性</string>
+    <string name="word_card_label_definitions">释义</string>
+    <string name="word_card_label_examples">例句</string>
+    <string name="word_card_btn_copy_source">复制原文</string>
+    <string name="word_card_btn_copy_translation">复制译文</string>
+    <string name="word_card_btn_copied">已复制 ✓</string>
+
+    <!-- 系统文字选中菜单的「屏译翻译」入口 -->
+    <string name="process_text_label">屏译翻译</string>
+    <string name="process_text_translating">翻译中…</string>
+    <string name="process_text_translate_failed">翻译失败</string>
+    <string name="process_text_need_overlay">屏译翻译需要「显示在其他应用上层」权限</string>
+    <string name="toast_word_select_ocr_failed_format">OCR (%1$s) 失败: %2$s</string>
+    <string name="toast_word_select_translate_failed_format">翻译 (%1$s) 失败: %2$s</string>
+
+    <!-- 设置：弧菜单按钮顺序 -->
+    <string name="settings_section_arc_menu">弧形菜单按钮</string>
+    <string name="settings_arc_menu_order_desc">拖动条目调整顺序。前 %1$d 项在第一页显示；超出的项会进入下一组（最后一格自动补成「下一组」翻页按钮）。</string>
+    <string name="settings_arc_menu_item_loop">循环翻译 / 停止循环</string>
+    <string name="settings_arc_menu_item_region">截图区域</string>
+    <string name="settings_arc_menu_item_home">返回主应用</string>
+    <string name="settings_arc_menu_item_skill_format">切换主球操作 — %1$s</string>
+    <string name="settings_arc_menu_drag_handle">拖动</string>
+
+    <!-- 设置：词典 Prompt -->
+    <string name="settings_dictionary_prompt_title">词典 Prompt（划词翻译，仅 OpenAI 兼容引擎生效）</string>
+    <string name="settings_dictionary_prompt_desc">选中区域看起来像单个单词时，使用此 prompt 向 LLM 询问音标 + 词性 + 释义 + 例句的结构化结果，而不是当成句子直接翻译。其他翻译引擎不读这个字段，直接走普通翻译。</string>
+    <string name="settings_dictionary_prompt_reset">恢复默认</string>
+    <string name="settings_prompt_reset_confirm_title">恢复默认翻译 Prompt？</string>
+    <string name="settings_dictionary_prompt_reset_confirm_title">恢复默认词典 Prompt？</string>
+    <string name="settings_reset_confirm_message">当前自定义的 Prompt 会被当前界面语言对应的默认 Prompt 覆盖，无法撤销。</string>
+    <string name="settings_reset_confirm_yes">恢复默认</string>
+    <string name="settings_reset_confirm_no">取消</string>
+
+    <!-- 默认词典 Prompt -->
+    <string name="default_dictionary_prompt">你是一名{source}→{target}的双语词典助手。请把用户输入当作一个单词或固定短语来处理，**只输出**下面格式的 JSON，不要加 markdown、代码块、解释。\n{\n  \"phonetic\": \"音标或读音（{source}; 无则空串）\",\n  \"pos\": [\"词性，{target}缩写，如 名/动/形 或 n./v./adj.; 无则空数组\"],\n  \"definitions\": [\"{target}释义 1\", \"{target}释义 2\"],\n  \"examples\": [\n    { \"src\": \"{source}例句\", \"dst\": \"{target}译文\" }\n  ]\n}\n要求：\n1. 必须是合法 JSON，键名与上面完全一致；\n2. 没有信息的字段用空串或空数组占位；\n3. 例句最多 2 条，太多删减；\n4. 不要把整段当句子翻译，只做词典查询。\n</string>
 </resources>

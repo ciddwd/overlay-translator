@@ -14,6 +14,9 @@ import androidx.dynamicanimation.animation.FloatValueHolder
 import androidx.dynamicanimation.animation.SpringAnimation
 import androidx.dynamicanimation.animation.SpringForce
 import com.gameocr.app.R
+import com.gameocr.app.data.FloatingMenu
+import com.gameocr.app.data.FloatingSkill
+import com.gameocr.app.data.MenuItemId
 import com.gameocr.app.data.SettingsRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -70,6 +73,31 @@ class FloatingButtonManager(
         }
     /** 当前是否处于循环模式（影响菜单第一项的视觉指示）。由 CaptureService 通过 setLoopActive 同步。 */
     @Volatile private var isLooping: Boolean = false
+
+    /**
+     * 主球当前技能。决定 [onSingleTap] 触发的行为 + 球本体显示的图标。
+     * 由 CaptureService 在 settings collect 同步；菜单点「技能切换」按钮时也走它。
+     */
+    @Volatile var skill: FloatingSkill = FloatingSkill.FULL_SCREEN
+
+    /** 弧菜单按钮顺序（来自 Settings.floatingMenuItemOrder）。CaptureService 在 settings collect 时同步。 */
+    @Volatile var menuItemOrder: List<MenuItemId> = FloatingMenu.DEFAULT_ORDER
+
+    /**
+     * 主球技能切换回调：菜单里点了「划词翻译 / 全屏翻译」时调用。
+     * 由 CaptureService 注入，负责持久化 + 弹 info 提示 + 同步图标。
+     */
+    @Volatile var onSwitchSkill: (FloatingSkill) -> Unit = {}
+
+    /** 主球图标 ImageView 引用，applySkillIcon 时改 src。 */
+    private var mainIcon: ImageView? = null
+
+    /**
+     * 长按腾位：弹菜单前若球距屏幕边不够展开扇形，把球 spring 到安全位置；菜单关闭时再 spring 回原位。
+     * 非 null 表示当前菜单是「腾位后弹的」，dismissArcMenu 末尾负责回滚。
+     */
+    private var positionBeforeMenu: Pair<Int, Int>? = null
+
 
     /**
      * Service / Application context 的默认 WindowManager 不跟随屏幕旋转（旋转后 currentWindowMetrics
@@ -149,12 +177,13 @@ class FloatingButtonManager(
         val containerH = (size * 1.4f).toInt()
 
         val iv = ImageView(context).apply {
-            setImageResource(R.drawable.ic_overlay_button)
+            setImageResource(skillIconRes())
             // 球本体（圆形 / 液态）由 LiquidFloatingContainer 在 dispatchDraw 里画，
             // ImageView 只显示图标，不再设 bg_floating_button（避免与 path 错位）
             val pad = (size * 0.18f).toInt()
             setPadding(pad, pad, pad, pad)
         }
+        mainIcon = iv
         // 循环模式进度环：叠加在 iv 上层 size×size 居中，stop 状态不绘任何东西
         val progress = LoopProgressView(context)
         val container = LiquidFloatingContainer(context).apply {
@@ -310,13 +339,21 @@ class FloatingButtonManager(
     }
 
     fun hide() {
-        dismissArcMenu()
+        // hide 时若菜单还在 + 球已腾位 → 先把球位「回滚 到 positionBeforeMenu」再保存，不然下次
+        // show() 用的 initialX/initialY 会是腾位后的临时位置，球永久跳到屏幕中部。
+        positionBeforeMenu?.let { (origX, origY) ->
+            layoutParams?.x = origX
+            layoutParams?.y = origY
+        }
+        positionBeforeMenu = null
+        dismissArcMenu(restorePosition = false)
         // 必须在 dismissArcMenu 之后 cancel——dismiss 末尾会 scheduleAutoDock，否则会留下指向已销毁 view 的 runnable
         cancelAutoDock()
         snapAnimX?.cancel(); snapAnimX = null
         snapAnimY?.cancel(); snapAnimY = null
         progressView?.stop()
         progressView = null
+        mainIcon = null
         // 保留 hide 前的最后位置——下次 show() 用 initialX/initialY 重建，否则会回到 service 启动
         // 时灌入的旧 settings 值（用户在弧菜单选区域后，调整完区域回来球就跳回原点的根因）。
         layoutParams?.let {
@@ -408,11 +445,11 @@ class FloatingButtonManager(
         val containerW = params.width
         val containerH = params.height
 
-        // Y 用 containerH（不是 width）clamp，避免球落入状态栏 / 导航栏死区
-        val targetY = params.y.coerceIn(
-            safeTop,
-            (screenH - containerH - safeBottom).coerceAtLeast(safeTop)
-        )
+        // Y 直接用 menuYRange()——既保证不入状态栏 / 导航栏死区，又留出弧菜单展开需要的
+        // 垂直空间。openArcMenuPage 的腾位判定也用同一个 range，避免「snap 在边界 + 腾位
+        // 又判越界」的死循环。
+        val yRange = menuYRange()
+        val targetY = params.y.coerceIn(yRange.first, yRange.last.coerceAtLeast(yRange.first))
 
         snapAnimX?.cancel(); snapAnimY?.cancel()
 
@@ -520,6 +557,56 @@ class FloatingButtonManager(
         if (active) pv.start(intervalMs) else pv.stop()
     }
 
+    /** 立即把球的主图标按当前 [skill] 切换。CaptureService 在切技能时 + settings collect 同步时调。 */
+    fun applySkillIcon() {
+        mainIcon?.setImageResource(skillIconRes())
+    }
+
+    private fun skillIconRes(): Int = when (skill) {
+        FloatingSkill.FULL_SCREEN -> R.drawable.ic_overlay_button
+        FloatingSkill.WORD_SELECT -> R.drawable.ic_overlay_button_word
+    }
+
+    /**
+     * 「球中心 cy 到屏幕可见区上 / 下边的最小安全距离」（px，**不含**系统栏 inset）。
+     *
+     * 按按钮**外缘**距 cy 的距离算（`radius * sin(spread) + itemRadius`），保证最远那颗按钮
+     * 完全在可见区内。系统栏 / 导航栏 inset 由调用方再叠加（[menuYRange]）。
+     *
+     * 永远按 PAGE_SIZE 最大扇形（±54°）算最坏情况，避免 snapToEdge 和 openArcMenuPage 因
+     * 实际页按钮数不同导致 verticalSafe 不一致触发死循环 spring。
+     */
+    fun menuVerticalSafePx(): Int {
+        val density = context.resources.displayMetrics.density
+        val ballRadiusPx = (sizeDp.coerceIn(28, 128) / 2f * density).toInt()
+        val itemSize = (sizeDp * 0.85f * density).toInt().coerceAtLeast((40 * density).toInt())
+        val itemRadiusPx = itemSize / 2
+        val gapPx = (28 * density).toInt()
+        val radius = ballRadiusPx + itemRadiusPx + gapPx
+        val maxSpread = Math.toRadians(54.0)
+        return (radius * Math.sin(maxSpread) + itemRadiusPx).toInt()
+    }
+
+    /**
+     * 球可以放且**不会让菜单按钮被系统栏遮住**的 `params.y` 范围。
+     * 等价于：球中心 cy ∈ [safeTop + menuSafe, screenH - safeBottom - menuSafe]，转回 params.y 坐标系。
+     *
+     * 小屏 / 大球时 lower > upper（不存在满足条件的位置）→ 退化成 [lower, lower]，至少保证球能放下、
+     * 菜单最多被切一点（比挤成一团好）。
+     */
+    private fun menuYRange(): IntRange {
+        val density = context.resources.displayMetrics.density
+        val (_, screenH) = currentScreenSize()
+        val sys = systemInsetsLtrb()
+        val safeTop = sys[1].coerceAtLeast((30 * density).toInt())
+        val safeBottom = sys[3].coerceAtLeast((48 * density).toInt())
+        val containerH = ((sizeDp.coerceIn(28, 128) * 1.4f) * density).toInt()
+        val menuSafe = menuVerticalSafePx()
+        val lower = safeTop + menuSafe - containerH / 2
+        val upper = screenH - safeBottom - menuSafe - containerH / 2
+        return if (upper >= lower) lower..upper else lower..lower
+    }
+
     @SuppressLint("ClickableViewAccessibility")
     private fun attachTouchListener(target: View, params: WindowManager.LayoutParams) {
         // 用系统标准 touchSlop 的 2 倍，避免轻微抖动被误判为"拖动"导致单击丢失
@@ -602,58 +689,116 @@ class FloatingButtonManager(
     }
 
     /**
-     * 弹出 3 项弧形菜单。基础朝向按悬浮球当前位置自动选 4 方向之一（向右 / 向左 / 向下 / 向上），
-     * 3 个子按钮在以悬浮球为中心、半径 R 的圆弧上分布在 baseAngle ± 45°。
-     *
-     * 全屏一层透明背景吸收点击关闭；点子按钮不冒泡到背景。Z 序上比悬浮球 view 后加，
-     * 期间无法再触发圆球单击 / 长按，符合菜单展开的语义。
+     * 长按弹弧形菜单入口。流程：
+     *  1) 按 [menuItemOrder] 构造 spec → paginate 切页（每页最多 [FloatingMenu.PAGE_SIZE] 项，
+     *     超出末位变「下一组」按钮）；
+     *  2) 估算首页扇形空间，若球当前位置塞不下扇形，先 spring 到「最近的安全位」，再展开。
+     *     这样按钮**不需要缩小、不需要折叠**，避免越界；菜单关闭时 spring 回原位（仿 MIUI 悬浮球）；
+     *  3) 翻页时不回滚球位置（保留腾位状态，下一页用同一位置展开）。
      */
-    private fun showArcMenu() {
-        if (arcMenuView != null) return
-        val params = layoutParams ?: return
+    private fun showArcMenu() = openArcMenuPage(0)
+
+    /** 真正展开某一页菜单（含必要时的腾位 spring）。翻页按钮 / 入口都走这里。 */
+    private fun openArcMenuPage(pageIndex: Int) {
+        android.util.Log.d(TAG_MENU, "openArcMenuPage(page=$pageIndex) arcMenuView=${arcMenuView != null} positionBeforeMenu=$positionBeforeMenu")
+        if (arcMenuView != null) {
+            android.util.Log.d(TAG_MENU, "  skip: arcMenuView already exists")
+            return
+        }
+        val params = layoutParams ?: run {
+            android.util.Log.w(TAG_MENU, "  abort: layoutParams null")
+            return
+        }
+
+        val allItems = MenuItemRegistry.build(
+            context = context,
+            ids = menuItemOrder,
+            currentSkill = skill,
+            isLooping = isLooping,
+            callbacks = MenuItemRegistry.Callbacks(
+                onLoop = { dismissArcMenu(); onLongPress() },
+                onRegion = { dismissArcMenu(); onMenuPickRegion() },
+                onOpenMain = { dismissArcMenu(); onMenuOpenMainActivity() },
+                onSwitchToFullScreen = { dismissArcMenu(); onSwitchSkill(FloatingSkill.FULL_SCREEN) },
+                onSwitchToWordSelect = { dismissArcMenu(); onSwitchSkill(FloatingSkill.WORD_SELECT) }
+            )
+        )
+        val pages = MenuItemRegistry.paginate(allItems) { nextIdx ->
+            // 翻页：关菜单但**不**回滚球位（保留腾位状态，下一页用同一位置开），再开下一页
+            dismissArcMenu(restorePosition = false)
+            view?.post { openArcMenuPage(nextIdx) }
+        }
+        val pageItems = pages.getOrNull(pageIndex) ?: pages.firstOrNull() ?: return
+        if (pageItems.isEmpty()) return
 
         val density = context.resources.displayMetrics.density
         val (screenW, screenH) = currentScreenSize()
         val ballRadiusPx = (sizeDp / 2f * density).toInt()
-        // cx 用**球视觉中心**（dock LEFT 球贴 container 左缘、RIGHT 贴右缘），不是 container 中心。
-        // 这样长按时即便球还在 dock 状态、菜单按钮分布也以球为准，不会偏 0.3r。
-        val ballCxInContainer = when (dockSide) {
+        val itemSize = (sizeDp * 0.85f * density).toInt().coerceAtLeast((40 * density).toInt())
+        val itemRadiusPx = itemSize / 2
+        val gapPx = (28 * density).toInt()
+        val radius = ballRadiusPx + itemRadiusPx + gapPx
+        val itemCount = pageItems.size
+        // 3 项保留原 ±45°；4 项 ±54°（间距 36° > 35.4° 不重叠，108° 扇形）。每页 ≤ PAGE_SIZE。
+        val spread = when {
+            itemCount <= 1 -> 0.0
+            itemCount == 2 -> Math.PI / 6
+            itemCount == 3 -> Math.PI / 4
+            else -> Math.toRadians(54.0)
+        }
+        // 用 snapToEdge 同源 verticalSafe（按 PAGE_SIZE 最坏情况），避免「snapToEdge 把球贴边
+        // 后 openArcMenuPage 又判定 needsMove」死循环。
+        val verticalSafe = menuVerticalSafePx()
+
+        // 算球当前中心位置
+        val cx = params.x + when (dockSide) {
             DockSide.LEFT -> ballRadiusPx
             DockSide.RIGHT -> params.width - ballRadiusPx
             DockSide.NONE -> params.width / 2
         }
-        val cx = params.x + ballCxInContainer
         val cy = params.y + params.height / 2
 
-        val itemSize = (sizeDp * 0.85f * density).toInt().coerceAtLeast((40 * density).toInt())
-        // radius = "球半径 + 按钮半径 + 28dp 间隙"，保证按钮边距球边永远 ≥ 28dp。
-        val itemRadiusPx = itemSize / 2
-        val gapPx = (28 * density).toInt()
-        val radius = ballRadiusPx + itemRadiusPx + gapPx
-        val space = radius + itemSize  // 三个按钮分布所需的最小可用空间
+        // 腾位判定（按需）：用 menuYRange() —— 含 status bar / nav bar inset。球当前 y 在 range
+        // 外才 spring；range 内直接展开，不打扰用户。翻页时 positionBeforeMenu != null 跳过 spring。
+        val yRange = menuYRange()
+        val needsMove = params.y < yRange.first || params.y > yRange.last
+        android.util.Log.d(TAG_MENU, "  itemCount=$itemCount params=(${params.x},${params.y},${params.width}x${params.height}) screen=${screenW}x${screenH} dock=$dockSide cy=$cy yRange=$yRange needsMove=$needsMove positionBeforeMenu=$positionBeforeMenu")
+        if (needsMove && positionBeforeMenu == null) {
+            positionBeforeMenu = params.x to params.y
+            val targetY = params.y.coerceIn(yRange.first, yRange.last.coerceAtLeast(yRange.first))
+            android.util.Log.d(TAG_MENU, "  → spring ball y ${params.y} -> $targetY, x unchanged ${params.x}")
+            springBallToThen(params.x, targetY) {
+                android.util.Log.d(TAG_MENU, "  ← spring settled, reopen page=$pageIndex")
+                openArcMenuPage(pageIndex)
+            }
+            return
+        }
+        val space = radius + itemSize  // legacy 检查仅作 baseAngle 估算输入
 
         // 选基础朝向：4 角时取对角 45° 反弹（最大可用空间），4 边时取垂直反弹
-        val usableLeft = 0
-        val usableRight = screenW
         val nearTop = cy - space < 0
         val nearBottom = cy + space > screenH
-        val nearLeft = cx - space < usableLeft
-        val nearRight = cx + space > usableRight
+        val nearLeft = cx - space < 0
+        val nearRight = cx + space > screenW
         val baseAngle: Double = when {
-            nearTop && nearLeft -> Math.PI / 4                 // 左上角 → 弹右下
-            nearTop && nearRight -> 3 * Math.PI / 4            // 右上角 → 弹左下
-            nearBottom && nearLeft -> -Math.PI / 4             // 左下角 → 弹右上
-            nearBottom && nearRight -> -3 * Math.PI / 4        // 右下角 → 弹左上
-            nearTop -> Math.PI / 2                              // 顶边：向下
-            nearBottom -> -Math.PI / 2                          // 底边：向上
-            cx < (usableLeft + usableRight) / 2 -> 0.0          // 左半：向右
-            else -> Math.PI                                     // 右半：向左
+            nearTop && nearLeft -> Math.PI / 4
+            nearTop && nearRight -> 3 * Math.PI / 4
+            nearBottom && nearLeft -> -Math.PI / 4
+            nearBottom && nearRight -> -3 * Math.PI / 4
+            nearTop -> Math.PI / 2
+            nearBottom -> -Math.PI / 2
+            cx < screenW / 2 -> 0.0
+            else -> Math.PI
         }
-        val spread = Math.PI / 4  // ±45°
-        // raw 顺序由 baseAngle 决定 sin 方向，左弹/底弹时会反序。统一按"屏幕上→下"或
-        // "屏幕左→右"排序，让菜单 3 项的视觉顺序与项目顺序（循环/区域/主应用）一致。
-        val rawAngles = doubleArrayOf(baseAngle - spread, baseAngle, baseAngle + spread)
-        val isVertical = Math.abs(Math.sin(baseAngle)) > 0.9   // 朝上/下时按 cos 排（左→右），否则按 sin 排（上→下）
+        // 角度均匀分布在 [baseAngle - spread, baseAngle + spread]
+        val rawAngles = if (itemCount == 1) {
+            doubleArrayOf(baseAngle)
+        } else {
+            DoubleArray(itemCount) { i ->
+                baseAngle - spread + 2 * spread * i / (itemCount - 1)
+            }
+        }
+        val isVertical = Math.abs(Math.sin(baseAngle)) > 0.9
         val angles = rawAngles.sortedBy {
             if (isVertical) Math.cos(it) else Math.sin(it)
         }.toDoubleArray()
@@ -665,31 +810,14 @@ class FloatingButtonManager(
             setOnClickListener { dismissArcMenu() }
         }
 
-        // 菜单第一项「循环翻译」按当前循环状态切换：ON 时蓝底 + 「关闭循环」文案；OFF 时默认深灰
-        val loopLabelRes = if (isLooping) R.string.menu_loop_translate_active else R.string.menu_loop_translate
-        val loopBgRes = if (isLooping) R.drawable.bg_arc_menu_item_active else R.drawable.bg_arc_menu_item
-
-        data class MenuItem(val iconRes: Int, val bgRes: Int, val labelRes: Int, val onTap: () -> Unit)
-        val items = listOf(
-            MenuItem(R.drawable.ic_menu_loop, loopBgRes, loopLabelRes) {
-                dismissArcMenu(); onLongPress()
-            },
-            MenuItem(R.drawable.ic_menu_region, R.drawable.bg_arc_menu_item, R.string.menu_pick_region) {
-                dismissArcMenu(); onMenuPickRegion()
-            },
-            MenuItem(R.drawable.ic_menu_home, R.drawable.bg_arc_menu_item, R.string.menu_open_main) {
-                dismissArcMenu(); onMenuOpenMainActivity()
-            }
-        )
-
         val iconPad = (itemSize * 0.22f).toInt()
-        items.forEachIndexed { idx, item ->
+        pageItems.forEachIndexed { idx, item ->
             val angle = angles[idx]
             val centerOffsetX = (radius * Math.cos(angle)).toFloat()
             val centerOffsetY = (radius * Math.sin(angle)).toFloat()
             val rawLeft = (cx + centerOffsetX - itemSize / 2f).toInt()
             val rawTop = (cy + centerOffsetY - itemSize / 2f).toInt()
-            val left = rawLeft.coerceIn(usableLeft, (usableRight - itemSize).coerceAtLeast(usableLeft))
+            val left = rawLeft.coerceIn(0, (screenW - itemSize).coerceAtLeast(0))
             val top = rawTop.coerceIn(0, (screenH - itemSize).coerceAtLeast(0))
 
             // 起始 translationX/Y：把按钮视觉起点放在悬浮球中心，动画到目标位置 → "从球里旋出来"的轨迹感
@@ -749,15 +877,73 @@ class FloatingButtonManager(
                 layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
             }
         }
-        runCatching { wm.addView(root, menuParams) }
+        val addResult = runCatching { wm.addView(root, menuParams) }
         arcMenuView = root
+        android.util.Log.d(TAG_MENU, "  addView root success=${addResult.isSuccess} buttons=${pageItems.size} baseAngle=${"%.2f".format(Math.toDegrees(baseAngle))}° spread=±${"%.2f".format(Math.toDegrees(spread))}°")
+        addResult.exceptionOrNull()?.let { android.util.Log.e(TAG_MENU, "  addView failed", it) }
     }
 
-    private fun dismissArcMenu() {
+    private fun dismissArcMenu(restorePosition: Boolean = true) {
+        android.util.Log.d(TAG_MENU, "dismissArcMenu(restore=$restorePosition) hadView=${arcMenuView != null} positionBeforeMenu=$positionBeforeMenu")
         arcMenuView?.let { runCatching { wm.removeView(it) } }
         arcMenuView = null
-        // 长按菜单关闭后，若开启了自动贴边则 3s 无操作自动吸边。单点（onSingleTap）不走这里。
+        if (restorePosition) {
+            positionBeforeMenu?.let { (origX, origY) ->
+                positionBeforeMenu = null
+                android.util.Log.d(TAG_MENU, "  rollback ball to ($origX,$origY)")
+                springBallTo(origX, origY)
+            }
+        }
         scheduleAutoDock()
+    }
+
+    /** SpringAnimation 平滑 spring 球到 (targetX, targetY)。供腾位 / 回滚 / 翻页复用。 */
+    private fun springBallTo(targetX: Int, targetY: Int) = springBallToThen(targetX, targetY, null)
+
+    /**
+     * spring 球到 (targetX, targetY)，**Y 动画 settle 后**调 [onSettle]。
+     * Y 不需要动（targetY == params.y）时立即 post 一帧后调 onSettle。
+     */
+    private fun springBallToThen(targetX: Int, targetY: Int, onSettle: (() -> Unit)?) {
+        val v = view ?: return
+        val params = layoutParams ?: return
+        android.util.Log.d(TAG_MENU, "springBallToThen from (${params.x},${params.y}) -> ($targetX,$targetY) hasOnSettle=${onSettle != null}")
+        snapAnimX?.cancel(); snapAnimY?.cancel()
+        if (targetX != params.x) {
+            snapAnimX = SpringAnimation(FloatValueHolder(params.x.toFloat())).apply {
+                spring = SpringForce(targetX.toFloat()).apply {
+                    dampingRatio = SpringForce.DAMPING_RATIO_LOW_BOUNCY
+                    stiffness = SpringForce.STIFFNESS_MEDIUM
+                }
+                addUpdateListener { _, value, _ ->
+                    params.x = value.toInt()
+                    runCatching { wm.updateViewLayout(v, params) }
+                }
+                start()
+            }
+        }
+        if (targetY == params.y) {
+            // Y 已经在位，X 也不需要动 / 也已经在路上：把 onSettle 推到下一帧避免栈递归
+            if (onSettle != null) v.post(onSettle)
+            return
+        }
+        snapAnimY = SpringAnimation(FloatValueHolder(params.y.toFloat())).apply {
+            spring = SpringForce(targetY.toFloat()).apply {
+                dampingRatio = SpringForce.DAMPING_RATIO_LOW_BOUNCY
+                stiffness = SpringForce.STIFFNESS_MEDIUM
+            }
+            addUpdateListener { _, value, _ ->
+                params.y = value.toInt()
+                runCatching { wm.updateViewLayout(v, params) }
+            }
+            if (onSettle != null) {
+                addEndListener { _, canceled, value, _ ->
+                    android.util.Log.d(TAG_MENU, "  spring Y end value=$value canceled=$canceled")
+                    if (!canceled) onSettle()
+                }
+            }
+            start()
+        }
     }
 
     companion object {
@@ -765,5 +951,7 @@ class FloatingButtonManager(
         private const val AUTO_DOCK_DELAY_MS: Long = 3000L
         /** 弧形菜单按钮稳定后的 alpha。略低于 1，给点透明感能透出后面的内容但又不影响图标识别。 */
         private const val MENU_ITEM_ALPHA: Float = 0.85f
+        /** 弧菜单调试 logcat tag。`adb logcat -s FBM-Menu:D` 一键过滤。 */
+        private const val TAG_MENU: String = "FBM-Menu"
     }
 }

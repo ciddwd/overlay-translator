@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- 主球「划词模式」图标：复用 Material 'translate' icon path（与 ic_menu_word_select 同 path）。
+         比 ic_overlay_button 的左右双箭头视觉差异明显，用户能瞬间分辨当前主球技能。
+         原 path 横/纵铺满 viewport，整体显得比其它球内图标大，外层套 <group> 缩到 80% 并居中。 -->
+    <group
+        android:scaleX="0.80"
+        android:scaleY="0.80"
+        android:pivotX="12"
+        android:pivotY="12">
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M12.87,15.07l-2.54,-2.51 0.03,-0.03c1.74,-1.94 2.98,-4.17 3.71,-6.53H17V4h-7V2H8v2H1v1.99h11.17C11.5,7.92 10.44,9.75 9,11.35c-0.93,-1.03 -1.7,-2.16 -2.31,-3.35h-2c0.73,1.63 1.73,3.17 2.98,4.56l-5.09,5.02L4,19l5,-5 3.11,3.11 0.76,-2.04zM18.5,10h-2L12,22h2l1.12,-3h4.75L21,22h2l-4.5,-12zm-2.62,7l1.62,-4.33L19.12,17h-3.24z" />
+        <!-- 底部「划词」横线：暗示「选中文字」的视觉隐喻，跟划词框选交互对应 -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M3,22.6 H21 V23.6 H3 Z" />
+    </group>
+</vector>

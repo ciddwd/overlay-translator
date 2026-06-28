@@ -21,7 +21,12 @@ class GameOcrApp : Application() {
     @Inject lateinit var settingsRepository: SettingsRepository
     @Inject lateinit var cleartextInterceptor: PrivateCleartextInterceptor
 
-    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    /**
+     * Application-scope 协程容器。Activity / Service 销毁不取消，可承接「Activity 提交任务后立刻 finish」
+     * 这类不依赖宿主生命周期的后台工作（如 [com.gameocr.app.translate.ProcessTextTranslateActivity]
+     * 在 ACTION_PROCESS_TEXT 回调里跑翻译 → 弹 overlay 卡片）。
+     */
+    internal val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     override fun onCreate() {
         super.onCreate()

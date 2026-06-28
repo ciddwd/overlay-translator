@@ -69,7 +69,40 @@ interface Translator {
      */
     suspend fun ocrAndTranslate(bitmap: Bitmap, settings: Settings): List<Pair<TextBlock, String>> =
         throw NotImplementedError("ocrAndTranslate not supported by this translator")
+
+    /**
+     * 划词翻译专用：把输入当**单词 / 短语**走字典化 prompt，返回 [WordResult]（音标 / 词性 / 释义
+     * / 例句）。默认返回 null 表示「本引擎不支持词典化」，调用方应回退到 [translate]。
+     *
+     * 仅 OpenAI 兼容引擎实现：通过 [Settings.dictionaryPrompt] 让 LLM 返回 JSON，解析失败也返
+     * 回 null（CaptureService 看到 null 就走纯翻译）。DeepL / 百度 / 腾讯 / Google / 火山 / 有道
+     * 都没有词典 API，全部走默认实现。
+     */
+    suspend fun translateWord(source: String, settings: Settings): WordResult? = null
 }
+
+/**
+ * 划词翻译返回结构化数据。任何字段缺失用空串 / 空数组占位，UI 卡片按非空分段渲染。
+ *
+ * - [phonetic]：单词读音 / 音标（源语言）；CJK 用罗马音或汉语拼音
+ * - [pos]：词性标签数组（目标语言），如 ["名", "动"] / ["n.", "v."]
+ * - [definitions]：目标语言释义列表，最少 1 条
+ * - [examples]：例句对，最多 2 条
+ * - [fallbackTranslation]：当 LLM 拒绝词典化（比如选中其实是短句）时给的纯翻译兜底
+ */
+data class WordResult(
+    val phonetic: String = "",
+    val pos: List<String> = emptyList(),
+    val definitions: List<String> = emptyList(),
+    val examples: List<ExamplePair> = emptyList(),
+    val fallbackTranslation: String? = null
+) {
+    /** 任何字典字段都为空 → 等价于纯翻译失败。 */
+    fun isEmpty(): Boolean = phonetic.isBlank() && pos.isEmpty() &&
+        definitions.isEmpty() && examples.isEmpty()
+}
+
+data class ExamplePair(val src: String, val dst: String)
 
 /**
  * 翻译引擎连通性测试结果。

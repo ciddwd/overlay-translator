@@ -72,6 +72,9 @@ object CrashRecorder {
         // prompt 可能含用户自定义指令；只显示前 60 字 + 总长度，便于判断"是否默认 prompt"
         val promptHead = s.promptTemplate.take(60).replace("\n", "↵")
         line("promptTemplate", "$promptHead... (${s.promptTemplate.length} chars)")
+        // 划词翻译词典 prompt（仅 OpenAI 兼容引擎用）；截断同 promptTemplate，便于看是否默认值
+        val dictPromptHead = s.dictionaryPrompt.take(60).replace("\n", "↵")
+        line("dictionaryPrompt", "$dictPromptHead... (${s.dictionaryPrompt.length} chars)")
         line("streamingTranslate", s.streamingTranslate)
 
         // 翻译：DeepL
@@ -137,6 +140,9 @@ object CrashRecorder {
         line("floatingButtonSnapToEdge", s.floatingButtonSnapToEdge)
         line("floatingButtonAutoDock", s.floatingButtonAutoDock)
         line("floatingButtonDockInsetDp", s.floatingButtonDockInsetDp)
+        // 主球单击技能 + 弧菜单按钮顺序（顺序按 enum.name 拼，便于排查脏数据 / 旧版迁移）
+        line("floatingButtonSkill", s.floatingButtonSkill)
+        line("floatingMenuItemOrder", s.floatingMenuItemOrder.joinToString(",") { it.name }.ifEmpty { "<empty>" })
 
         // 悬浮窗口（FLOATING_WINDOW 模式）
         line("floatingWindowX", s.floatingWindowX)

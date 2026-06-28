@@ -60,6 +60,23 @@
             android:excludeFromRecents="true"
             android:noHistory="true" />
 
+        <!-- 系统「文字选中」菜单入口：用户在任意 App 长按文字选词，系统菜单会列出本项。
+             无 UI，立即 finish；翻译走 application scope；结果浮卡显示在原 App 上层。 -->
+        <activity
+            android:name=".translate.ProcessTextTranslateActivity"
+            android:exported="true"
+            android:label="@string/process_text_label"
+            android:icon="@drawable/ic_menu_word_select"
+            android:theme="@style/Theme.GameOcr.Transparent"
+            android:excludeFromRecents="true"
+            android:noHistory="true">
+            <intent-filter>
+                <action android:name="android.intent.action.PROCESS_TEXT" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+
         <!-- 截屏前台服务：mediaProjection 用于默认截屏；specialUse 用于 Shizuku 路径 -->
         <!-- configChanges 必须包含 orientation+screenSize+screenLayout+smallestScreenSize：
              旋转屏幕时由 Service 自己接 onConfigurationChanged，按比例重算悬浮窗位置 +
