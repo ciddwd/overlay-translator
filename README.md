@@ -357,6 +357,11 @@ i18n: 翻译相关
 
 - [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) · PP-OCRv5 mobile 模型
 - [bukuroo/PPOCRv5-ONNX](https://huggingface.co/bukuroo/PPOCRv5-ONNX) · 已转 ONNX 的 v5 mobile 镜像
+- [l0wgear/manga-ocr-2025-onnx](https://huggingface.co/l0wgear/manga-ocr-2025-onnx) · manga-ocr ONNX 模型
+- [kha-white/manga-ocr](https://github.com/kha-white/manga-ocr) · manga-ocr 原项目
+- [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) · GGUF / 端侧 LLM 推理
+- [SakuraLLM/SakuraLLM](https://github.com/SakuraLLM/SakuraLLM) · Sakura 日译中模型
+- [Tencent-Hunyuan/HY-MT](https://github.com/Tencent-Hunyuan/HY-MT) · Hy-MT 翻译模型
 - [Shizuku](https://github.com/RikkaApps/Shizuku) · 免 ROOT 的高权限通道
 - [ML Kit](https://developers.google.com/ml-kit) · Google 端侧 OCR
 - [ONNX Runtime](https://onnxruntime.ai/) · 端侧推理引擎

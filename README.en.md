@@ -357,6 +357,11 @@ Write the subject in either English or Chinese — **don't mix in one line**. Ke
 
 - [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) · PP-OCRv5 mobile model
 - [bukuroo/PPOCRv5-ONNX](https://huggingface.co/bukuroo/PPOCRv5-ONNX) · ONNX-converted v5 mobile mirror
+- [l0wgear/manga-ocr-2025-onnx](https://huggingface.co/l0wgear/manga-ocr-2025-onnx) · manga-ocr ONNX model
+- [kha-white/manga-ocr](https://github.com/kha-white/manga-ocr) · original manga-ocr project
+- [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) · GGUF / on-device LLM inference
+- [SakuraLLM/SakuraLLM](https://github.com/SakuraLLM/SakuraLLM) · Sakura Japanese-to-Chinese translation model
+- [Tencent-Hunyuan/HY-MT](https://github.com/Tencent-Hunyuan/HY-MT) · Hy-MT translation model
 - [Shizuku](https://github.com/RikkaApps/Shizuku) · privileged channel without ROOT
 - [ML Kit](https://developers.google.com/ml-kit) · Google's on-device OCR
 - [ONNX Runtime](https://onnxruntime.ai/) · on-device inference engine
