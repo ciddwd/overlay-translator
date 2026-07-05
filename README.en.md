@@ -33,20 +33,23 @@ Game / manga / visual novel on screen → tap the floating ball → translation 
 ### 🖱️ How to trigger
 
 - **Tap the floating ball**: defaults to translating the whole screen; switchable to **Word-pick mode** — one tap lets you draw a rectangle around just the word or phrase you want translated (more precise)
-- **Long-press the floating ball**: opens an arc menu with the common actions one finger can reach: loop / re-pick region / switch between **"Translate full screen"** and **"Translate a word"** / back to main. **Order is reorderable** in settings; extra buttons paginate with a "Next page" button automatically
+- **Long-press the floating ball**: opens an arc menu with common actions one finger can reach: loop / re-pick region / switch between **"Translate full screen"** and **"Translate a word"** / quick source-target language switch / preset switch / settings / back to main. **Order and page size are configurable** in settings; extra buttons paginate with a "Next page" button automatically
 - **Loop mode**: auto-translate every 2 s; static frames are skipped automatically — read a novel without lifting your finger
 - **Volume two-key**: hold **Vol+ and Vol−** together for 0.3 s to trigger; your hands stay on the game (requires enabling the bundled accessibility service)
 - **From any other app**: long-press to select some text in any app → tap "Screen Translator" in the system menu → translation card pops up immediately, no need to switch back to this app first
 
 ### 🔍 OCR (read the text on screen)
 
-- **On-device**: ML Kit (CJK + Latin) / PaddleOCR — your screenshots never leave the phone; works offline
+- **On-device**: ML Kit (CJK + Latin) / PaddleOCR / manga OCR — your screenshots never leave the phone; works offline; PaddleOCR supports multiple v5/v6 tiers
+- **Local HTTP OCR**: connect to Umi-OCR / LunaTranslator services on your LAN or PC
 - **Cloud**: Baidu / Tencent / Youdao — fall back to these when on-device misreads
 - When you switch source language, the app checks whether the current OCR engine can read it; if not, it suggests a better one
+- Optional orientation detection can route horizontal / vertical / rotated text to a better OCR path, or you can lock the direction manually
 
 ### 🌐 Translation engines
 
-- **LLMs**: DeepSeek / ChatGPT / Zhipu / self-hosted models… streamed token by token, no waiting for the whole reply
+- **LLMs**: DeepSeek / ChatGPT / Zhipu / self-hosted compatible APIs… streamed token by token, no waiting for the whole reply
+- **On-device LLMs**: Sakura (Japanese → Simplified Chinese ACGN/VN) and Hy-MT2 (multilingual translation) run from GGUF models after download, so they can translate offline once ready
 - **DeepL**: free / Pro plan auto-detected, **supports self-hosted [deeplx](https://github.com/OwO-Network/DeepLX)** (open-source proxy, run on your own server, no key needed); pick between Official / deeplx / Auto-fallback
 - **Youdao Pic-Trans**: skips the OCR step entirely — send the screenshot, get back boxes with translations. Great for comics.
 - **Google**: no key, free (proxy required inside mainland China)
@@ -65,15 +68,18 @@ Not just full-screen translation. Draw a rectangle around a single word or phras
 
 - **Two render modes**: glued to each source box (BLOCKS), or packed into a **draggable / resizable floating window** — perfect for games with on-screen joysticks and buttons; you can lock the window to prevent accidental touches
 - **5 color themes** + font size, opacity, border style (solid / dashed / dotted / double / groove) — preview updates live
-- **Comic / subtitle optimizations**: sentences split across multiple OCR boxes get merged before translating; vertical Japanese is read right-to-left; tiny ruby-text columns (furigana) next to kanji are filtered out so you don't get duplicate translations
+- **Comic / subtitle optimizations**: sentences split across multiple OCR boxes get merged before translating; vertical Japanese is read right-to-left; tiny ruby-text columns (furigana) next to kanji are filtered out so you don't get duplicate translations; vertical scenes can use vertical translation layout
 - **Marquee for long lines**: in single-line mode, long translations scroll horizontally instead of being truncated with "…"
+- **Custom translation font**: import `.ttf` files for translated text only; the app UI keeps using the system font, and imported fonts stay available as selectable chips
 
 ### 🛠️ Small conveniences
 
 - **English / 简体中文 UI + Light / Dark / Follow-system theme**, applies instantly
 - **In-settings search**: can't find an option? Search in either language at the top of the settings page
+- **System presets**: built-in bundles such as "offline Japanese manga OCR → Simplified Chinese"; missing models are listed before a preset can be applied
 - **Translation cache**: identical lines don't burn through your API quota twice
 - **Auto-saved crash reports**: if the app crashes or freezes, the next launch lets you view and export a sanitized report in one tap
+- **Encrypted sensitive settings**: API keys, prompts, mirror URLs and presets are migrated into encrypted local storage to reduce plaintext leftovers
 - **Update prompt**: checks for new versions when you open the home screen (at most once a day); offers a direct link if GitHub is unreachable
 - **Chinese-ROM background guides**: shortcuts to auto-start / battery whitelist settings for Xiaomi / OPPO / VIVO / Huawei / Samsung devices that aggressively kill background services
 - **Privacy default**: cleartext HTTP is only allowed inside your LAN by default; public hosts must use HTTPS
@@ -88,11 +94,11 @@ Not just full-screen translation. Draw a rectangle around a single word or phras
 | Open source | ✅ Apache 2.0 | ❌ | ❌ | Partial |
 | Floating-ball overlay translation | ✅ | ✅ | ❌ | ❌ (weak on mobile) |
 | On-device OCR (no image upload) | ✅ ML Kit + PaddleOCR | ❌ (cloud-first) | ✅ | ❌ |
-| Pluggable OCR engines | ✅ 5 on-device + 3 cloud | Limited | ❌ | ❌ |
-| Pluggable translation engines | ✅ 7: LLM / DeepL / DeepLX / Youdao / Google / Volcengine / Baidu / Tencent | 1–2 fixed | ❌ | Translation only |
-| Self-hosted backend (deeplx / local LLM / custom Bearer) | ✅ | ❌ | ❌ | ❌ |
+| Pluggable OCR engines | ✅ On-device / local HTTP / cloud paths | Limited | ❌ | ❌ |
+| Pluggable translation engines | ✅ Cloud LLM / on-device LLM / DeepL / DeepLX / Youdao / Google / Volcengine / Baidu / Tencent | 1–2 fixed | ❌ | Translation only |
+| Self-hosted backend (deeplx / on-device GGUF / custom Bearer) | ✅ | ❌ | ❌ | ❌ |
 | Floating-window mode (lockable, gesture-proof) | ✅ | ❌ | ❌ | ❌ |
-| Comic vertical / furigana / subtitle paragraph merge | ✅ | ❌ | ❌ | ❌ |
+| Comic vertical / orientation detection / furigana / subtitle paragraph merge | ✅ | ❌ | ❌ | ❌ |
 | Word-lookup card (phonetics / POS / definitions / examples) | ✅ full dictionary on LLM engines | ❓ | ⚠️ inside Google Translate app only | ⚠️ weak on mobile |
 | Translate selected text from any app | ✅ via system text-selection menu | ❓ | ✅ "Tap to Translate" | ❌ |
 | Reorderable & paginated floating-ball arc menu | ✅ | ❌ | ❌ | ❌ |
@@ -119,11 +125,13 @@ Not just full-screen translation. Draw a rectangle around a single word or phras
 
 **Settings**:
 
-| App language / theme / translator | OCR engine / preprocessing |
+| Language / theme / system presets | Translation backend |
 |---|---|
-| <img src="docs/screenshots/settings-top.png" width="280" alt="Settings top" /> | <img src="docs/screenshots/settings-ocr.png" width="280" alt="OCR engine settings" /> |
-| **Overlay style preview (BLOCKS mode)** | **Floating-window mode options** |
-| <img src="docs/screenshots/settings-display.png" width="280" alt="Overlay display settings (BLOCKS mode)" /> | <img src="docs/screenshots/settings-display-floating.png" width="280" alt="Floating-window mode settings" /> |
+| <img src="docs/screenshots/settings-top.png" width="280" alt="Settings top and system presets" /> | <img src="docs/screenshots/settings-translator.png" width="280" alt="Translation backend settings" /> |
+| **OCR engines / orientation detection** | **Overlay style and font** |
+| <img src="docs/screenshots/settings-ocr.png" width="280" alt="OCR engine and orientation model settings" /> | <img src="docs/screenshots/settings-display.png" width="280" alt="Overlay display and font settings" /> |
+| **Arc-menu buttons** | **Floating-window mode options** |
+| <img src="docs/screenshots/settings-arc-menu.png" width="280" alt="Arc-menu button settings" /> | <img src="docs/screenshots/settings-display-floating.png" width="280" alt="Floating-window mode settings" /> |
 | **Box merge / floating ball** | |
 | <img src="docs/screenshots/settings-floating.png" width="280" alt="Box merge & floating ball settings" /> | |
 
@@ -154,12 +162,14 @@ Each APK ships with a `.sha256` so you can verify integrity against `Get-FileHas
 1. Open the app, tap **Start capture service**, accept the system "Start recording?" dialog
 2. Switch to any game / VN / manga app
 3. Tap the floating button → translation appears in ~2-3 s
-4. Long-press the floating button → toggle loop mode (every 2 s default; the outer progress ring sweeps once per capture; dHash skips still frames)
+4. Long-press the floating button → open the arc menu to toggle loop mode, re-pick the capture region, switch source/target language, switch presets, or toggle between full-screen and word-pick translation (loop defaults to every 2 s; dHash skips still frames)
 5. Tap the translation bar → hide
 
 Optional:
 - Enable the accessibility service so **holding Vol+ and Vol- together for 300 ms** acts as a global trigger (no screen-reading, no view-tree parsing)
 - Install [Shizuku](https://github.com/RikkaApps/Shizuku) and grant permission; in settings, switch the capture path to Shizuku to skip the per-session system dialog
+- Pick a system preset at the top of settings, such as "Offline Japanese manga OCR → Simplified Chinese". If a required model is missing, the preset card lists it and offers a download action.
+- For single-word lookup, switch the floating-ball action to **Word-pick mode** from the arc menu, then draw around the word / phrase. You can also select text in another app and invoke Screen Translator from the system selection menu.
 
 ## ⚙️ Configuration
 
@@ -170,22 +180,38 @@ Open the app and tap **Settings**. The top of the settings page lets you switch 
 | Engine | Good for | Notes |
 |---|---|---|
 | **On-device** ML Kit (auto / latin / ja / zh / ko) | Default; Japanese / Chinese / Korean / Latin | Offline, on-device |
-| **On-device** PaddleOCR PP-OCRv5 mobile | Multilingual dense text, UI buttons | First use needs ONNX model download — see below |
+| **On-device** PaddleOCR PP-OCRv5 / v6 | Multilingual dense text, UI buttons, horizontal Chinese / English | Supports v5 mobile and v6 tiny / small / medium; models must be ready — see below |
+| **On-device** manga OCR | Japanese manga, vertical bubbles, hand-drawn fonts | Uses manga-ocr ONNX and reuses DBNet detection; ~140 MB, downloadable or importable |
+| **Local HTTP** Umi-OCR | You already run [Umi-OCR](https://github.com/hiroi-sora/Umi-OCR) on a PC / LAN server | Point the app at `http://<host>:<port>/api/ocr`; screenshots stay on your LAN |
+| **Local HTTP** LunaTranslator | You already run [LunaTranslator](https://github.com/HIllya51/LunaTranslator) OCR on a PC / LAN server | Fill in the LunaTranslator OCR HTTP endpoint |
 | **Cloud** Baidu OCR | Fallback when ML Kit / Paddle miss | Needs API Key + Secret, pay-per-call; 5 endpoints (basic / with-position / accurate / accurate-with-position / web-image); image size / aspect-ratio limits |
 | **Cloud** Tencent OCR | Same | Needs SecretId + SecretKey; 3 endpoints: GeneralBasic / GeneralAccurate / **RecognizeAgent** (LLM agent, integrated with ParagNo paragraph grouping) |
 | **Cloud** Youdao OCR | Simple one-tap | Needs App ID (API Key) + App Secret; `langType` auto-derived from source language, no separate picker |
 
-**PaddleOCR model download**: Settings → "Download PaddleOCR model" pulls the following three files from HuggingFace / hf-mirror into `<filesDir>/models/paddle/`:
+**PaddleOCR models**: Settings → "Download PaddleOCR model" installs the selected model tier under `<filesDir>/models/paddle/<version>/`. PaddleOCR models do not ship inside the APK, so first use requires a download or local import; the default tier is v6 small, and you can switch between v5 mobile / v6 tiny / small / medium with HuggingFace, hf-mirror, or a custom mirror.
 
-- `det.onnx` (DBNet detector, ~4.5 MB)
-- `rec.onnx` (CRNN recognizer, ~15.7 MB)
-- `keys.txt` (v5 dictionary, ~90 KB)
+- `det.onnx` (DBNet detector, size varies from several MB to tens of MB by tier)
+- `rec.onnx` (CRNN recognizer, usually tens of MB depending on tier)
+- `keys.txt` / `keys.yml` (dictionary, ~90-150 KB)
 
-You can override the mirror URL in settings, or import the files manually from local storage.
+**Orientation models**: the ONNX orientation package classifies full-image 0/90/180/270 rotation and text-line 0/180 direction. Once installed, the app can route vertical screenshots before OCR and rerun upside-down horizontal text while mapping boxes back to the original image. The models are bundled, but can still be redownloaded or imported.
+
+**Manga OCR models**: Settings → "Download manga OCR model" installs the encoder / decoder / vocab / config files required by `l0wgear/manga-ocr-2025-onnx`. The public source is mainly Hugging Face; when that is unreachable, use a proxy, custom mirror, or local import.
+
+**Automatic orientation detection**: enabled by default. Automatic mode combines image orientation, OCR result shape, and language to pick a better OCR path; if it misclassifies a frame, lock the direction manually to horizontal, vertical right-to-left, or stacked vertical.
+
+**DBNet advanced thresholds**: the OCR page exposes detection probability, box score, unclip ratio, manga-OCR unclip, and bubble-cluster gap. Most users should leave these alone; tune them only for missed tiny manga text, split vertical columns, or noisy boxes, then reset to defaults if needed.
 
 **Baidu OCR caveats**: image limits are *longest side ≤ 4096 px, shortest side ≥ 15 px, aspect ratio 1:4–4:1, base64 < 4 MB*. The first two are handled automatically (downscale + JPEG quality fallback); aspect ratio out of range can only be fixed by shrinking the capture region.
 
 ### Translation engines
+
+**On-device LLM**:
+
+- **Sakura (Japanese → Simplified Chinese)**: tuned for ACGN / VN / galgame translation, using the `Sakura-1.5B Qwen2.5 (Q5KS)` GGUF model (~1.26 GB). If the source is not Japanese or the target is not Simplified Chinese, it falls back to the OpenAI-compatible backend instead of misusing the model.
+- **Hy-MT2**: Tencent's Hy-MT2-1.8B multilingual translation model, wired through the Q4_K_M GGUF (~1.13 GB). Source and target languages follow your settings.
+- **Model management**: supports Hugging Face, hf-mirror, custom mirrors, and local GGUF import. Downloads resume after interruption. Large downloads on cellular or unknown networks show a traffic warning first.
+- **Device requirements**: on-device LLMs are only enabled on supported 64-bit devices / OS versions. Unsupported devices or missing models are gated before runtime.
 
 **OpenAI-compatible**:
 
@@ -220,7 +246,14 @@ You can override the mirror URL in settings, or import the files manually from l
 - **Placement** (BLOCKS only): below / overlap / above + pixel-level x/y offset
 - **Floating window**: switch between "source + translation" and "translation only" content modes; **lock** the window to disable dragging and resizing during gameplay; a "Reset position / size" button restores defaults in one tap
 - **Theme**: 5 presets + custom (bg / fg / border ARGB + border style: solid / dashed / dotted / double / groove)
+- **Font**: import `.ttf` files for the translation layer and preview only; imported fonts are kept as horizontally selectable chips, and reselecting an existing font does not reorder them
 - **Avoidance & merge**: collision detection clamps translation width so it doesn't bleed into neighbouring OCR boxes; OCR-side box merging offers **Conservative / Standard / Aggressive** strengths — Conservative suits VNs / dense passages, Standard fits most scenes, Aggressive suits comic bubbles split into many columns (may occasionally merge adjacent bubbles)
+
+### Presets and Arc Menu
+
+- **System presets**: built-in bundles for "offline Japanese manga OCR → Simplified Chinese". A preset includes OCR, translator, language pair, display style, and tuning thresholds. Missing required models are shown item by item before the preset can be applied.
+- **Custom presets**: save the current settings as a preset. A preset only shows as applied when all key settings still match; changing any key field returns the card to the unsaved state.
+- **Arc-menu buttons**: drag to reorder and choose 2-6 visible buttons per page. If there are more actions, the last slot becomes "Next page". Actions can include loop, capture region, word/full-screen mode switch, language quick switch, preset quick switch, settings, and back to main app.
 
 ## ⚠️ Known limitations
 
@@ -229,22 +262,23 @@ You can override the mirror URL in settings, or import the files manually from l
 - Anti-cheat networked games may flag MediaProjection as a screen-recorder cheat — this project is for single-player / VN / manga only.
 - Screens marked `FLAG_SECURE` (some banking / video apps) capture as black; this project does not bypass it.
 - PaddleOCR on-device inference takes 1–3 s per shot on entry-level devices (Snapdragon 7-series or lower). Use region selection alongside.
+- On-device LLM models are roughly 1 GB or larger, so first download should use Wi-Fi; low-memory devices may fail to load them reliably.
+- The public manga-OCR source is mainly Hugging Face. If it is unreachable from your network, use a proxy, custom mirror, or local import.
 
 ## 🗺️ Roadmap
 
 ### ✅ Done
 
-- [x] **Make it usable** (M0): capture → read text → translate → show on screen, the whole chain working
-- [x] **Easy to live with** (M1): remember capture region / show translation as it streams / glue to source text / Chinese-ROM background guides / EN+CN UI + light/dark themes / in-settings search
-- [x] **Smarter and steadier** (M2): Korean OCR, volume two-key global trigger, smart OCR recommendation when source language changes, three paragraph-merge strengths, loop progress ring, auto-saved crash reports, update prompts
-- [x] **Engine expansion** (M3 · 0.3.x): "Test connection" on every translator, added Youdao OCR + PicTrans + Google translate, Tencent agent paragraph grouping, furigana filter on manga, marquee scrolling for long lines
-- [x] **From whole screen to single word** (M4 · 0.3.4+): word-lookup card with mini dictionary (phonetics / POS / definitions / examples), one-tap toggle between "Translate full screen" and "Translate a word" on the floating ball, reorderable arc-menu, "Translate with Screen Translator" entry in the system text-selection menu
+- [x] **Make it usable**: capture → read text → translate → show on screen, the whole chain working
+- [x] **Easy to live with**: remember capture region / show translation as it streams / glue to source text / Chinese-ROM background guides / EN+CN UI + light/dark themes / in-settings search
+- [x] **Smarter and steadier**: Korean OCR, volume two-key global trigger, smart OCR recommendation when source language changes, three paragraph-merge strengths, loop progress ring, auto-saved crash reports, update prompts
+- [x] **Engine expansion** (0.3.x): "Test connection" on every translator, added Youdao OCR + PicTrans + Google translate, Tencent agent paragraph grouping, furigana filter on manga, marquee scrolling for long lines
+- [x] **From whole screen to single word** (0.3.4+): word-lookup card with mini dictionary (phonetics / POS / definitions / examples), one-tap toggle between "Translate full screen" and "Translate a word" on the floating ball, reorderable arc-menu, "Translate with Screen Translator" entry in the system text-selection menu
+- [x] **Offline and vertical-text expansion** (0.3.5+): Sakura / Hy-MT2 on-device LLMs, manga OCR, PaddleOCR v6 and orientation models, Umi-OCR / LunaTranslator local HTTP OCR, system presets, custom translation fonts, arc-menu language / preset quick switches, DBNet advanced thresholds, encrypted sensitive settings
 
 ### 📋 Planned
 
 - [ ] **Translation blends into the artwork** — smart color picking + adaptive font size, replacing the solid-color rectangle so it looks "painted in" instead of stuck on top
-- [ ] **Manga-tuned OCR** — integrate the manga-ocr model for cleaner vertical-Japanese recognition
-- [ ] **Custom overlay font** — upload your favourite `.ttf` for translations
 - [ ] **Shizuku capture fast enough for loop mode** — the current Shizuku path already skips the per-session permission dialog but tops out at ~5 FPS (one-shot only); upgrade it to a stable channel that holds up in loop mode
 - [ ] **Translation history** — scroll back to previous screens you've translated
 - [ ] **Read-aloud (TTS)** — listen to translations while you play

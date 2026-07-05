@@ -35,6 +35,8 @@ object OcrLanguageCapability {
     private val YOUDAO_LANGS = setOf("zh", "zh-CN", "zh-TW", "en", "ja", "ko", "fr", "de", "es", "ru", "pt", "it")
 
     /** ML Kit 自动模式实际可命中的语言集合（含 latin 子集）。 */
+    private val UMI_OCR_LANGS = setOf("zh", "zh-CN", "zh-TW", "en", "ja", "ko", "ru")
+
     private val ML_KIT_AUTO_LANGS = ML_KIT_LATIN_LANGS + setOf("ja", "ko", "zh", "zh-CN", "zh-TW")
 
     /** 完整 Settings 版本：内部委托给轻量重载。 */
@@ -78,6 +80,10 @@ object OcrLanguageCapability {
             OcrEngineKind.TENCENT -> tencentSupports(tencentEndpoint, tencentLanguage, code)
             // 有道 OCR 由 sourceLang 直接映射 langType，覆盖 zh/en/ja/ko/fr/de/es/ru/pt/it/auto
             OcrEngineKind.YOUDAO -> code in YOUDAO_LANGS
+            OcrEngineKind.UMI_OCR -> code in UMI_OCR_LANGS
+            OcrEngineKind.LUNA_OCR -> true
+            // manga-ocr 仅训练日文，专门处理日漫气泡
+            OcrEngineKind.MANGA_OCR_JA -> code == "ja"
         }
     }
 
@@ -99,10 +105,13 @@ object OcrLanguageCapability {
         OcrEngineKind.PADDLE_ONNX -> true
         // 有道 OCR 支持 langType=auto，可视作通用模式
         OcrEngineKind.YOUDAO -> true
+        OcrEngineKind.UMI_OCR -> true
+        OcrEngineKind.LUNA_OCR -> true
         OcrEngineKind.ML_KIT_LATIN,
         OcrEngineKind.ML_KIT_JAPANESE,
         OcrEngineKind.ML_KIT_KOREAN,
-        OcrEngineKind.ML_KIT_CHINESE -> false
+        OcrEngineKind.ML_KIT_CHINESE,
+        OcrEngineKind.MANGA_OCR_JA -> false  // 专门固定到 ja，不是 auto
         OcrEngineKind.BAIDU -> when {
             // 含位置 / webimage 不读 language_type → 默认中英；用户切 auto 时这视为"通用"
             !baiduEndpoint.acceptsLanguageType -> true
@@ -220,6 +229,12 @@ object OcrLanguageCapability {
             currentEngine, currentBaiduEndpoint, currentTencentEndpoint, hasBaiduKey, hasTencentKey
         )
 
+        // 1.a) 当前已在 manga-ocr 且源语言 = ja → 保留（专家模式，避免被推回 ML Kit）
+        //      与百度 / 腾讯保留已配引擎逻辑对称
+        if (currentEngine == OcrEngineKind.MANGA_OCR_JA && code == "ja") {
+            return Recommendation(OcrEngineKind.MANGA_OCR_JA)
+        }
+
         // 1) 优先级最高：用户已在云端 + key 已配 → 保留引擎，只切 language（跟 auto 策略对称，
         //    避免用户花了 key 反而被推回 ML Kit）
         if (currentEngine == OcrEngineKind.BAIDU && hasBaiduKey) {
@@ -310,7 +325,12 @@ object OcrLanguageCapability {
         hasBaiduKey: Boolean,
         hasTencentKey: Boolean
     ): Recommendation? = when (currentEngine) {
-        OcrEngineKind.ML_KIT_AUTO, OcrEngineKind.PADDLE_ONNX -> null
+        OcrEngineKind.ML_KIT_AUTO,
+        OcrEngineKind.PADDLE_ONNX,
+        OcrEngineKind.UMI_OCR,
+        OcrEngineKind.LUNA_OCR -> null
+        // manga-ocr 在 sourceLang=auto 时不合适（仅训练日文），推回 ML_KIT_AUTO
+        OcrEngineKind.MANGA_OCR_JA -> Recommendation(OcrEngineKind.ML_KIT_AUTO)
         OcrEngineKind.BAIDU -> if (hasBaiduKey) {
             // 含位置 / webimage 不读 language_type，没必要硬切端点；保留用户选择
             val endpoint = if (currentBaiduEndpoint.acceptsLanguageType) currentBaiduEndpoint
@@ -423,7 +443,10 @@ object OcrLanguageCapability {
         OcrEngineKind.ML_KIT_LATIN,
         OcrEngineKind.PADDLE_ONNX,
         // 有道 OCR 由 sourceLang 反向映射 langType，没有单独的"OCR 内部语种"字段
-        OcrEngineKind.YOUDAO -> null
+        OcrEngineKind.YOUDAO,
+        OcrEngineKind.UMI_OCR,
+        OcrEngineKind.LUNA_OCR -> null
+        OcrEngineKind.MANGA_OCR_JA -> "ja"
         OcrEngineKind.BAIDU -> baiduLanguage.bcp47
         OcrEngineKind.TENCENT -> tencentLanguage.bcp47
     }

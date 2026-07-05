@@ -89,7 +89,7 @@
 
 - Kotlin：遵循 [Kotlin 官方代码风格](https://kotlinlang.org/docs/coding-conventions.html)
 - 已经有的注释规范：注释 WHY，不注释 WHAT；不要写多段 docstring，一行一句话足够
-- UI 文案 **不要硬编码中文 / 英文** 在 .kt 文件里，写到 `res/values/strings.xml` 和 `res/values-en/strings.xml` 用 `stringResource(R.string.xxx)` 引用
+- UI 文案 **不要硬编码中文 / 英文** 在 .kt 文件里，写到 `res/values/strings.xml` 和 `res/values-zh-rCN/strings.xml` 用 `stringResource(R.string.xxx)` 引用
 - 新增的 `*.kt` 文件，包名跟目录对齐：`com.gameocr.app.<module>`
 
 ## 翻译贡献

@@ -22,3 +22,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "GameOcr"
 include(":app")
+include(":llama-android")

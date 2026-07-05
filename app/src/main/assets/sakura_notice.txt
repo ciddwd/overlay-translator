@@ -1,0 +1,16 @@
+SakuraLLM Attribution
+=====================
+
+On-device Japanese-to-Chinese translation in this app is powered by
+SakuraLLM (https://github.com/SakuraLLM/SakuraLLM), specifically the
+Sakura-1.5B Qwen2.5 GGUF quantization.
+
+The Sakura model is fine-tuned from Qwen2.5-1.5B and is distributed
+under the original SakuraLLM repository license. The underlying base
+model Qwen2.5 is licensed under the Tongyi Qianwen LICENSE AGREEMENT
+(https://huggingface.co/Qwen/Qwen2.5-1.5B/blob/main/LICENSE).
+
+This product is not affiliated with or endorsed by the SakuraLLM
+project or Alibaba / Tongyi team. The model weights are downloaded
+on demand from official mirrors at runtime; they are not embedded in
+the APK.

@@ -1,6 +1,7 @@
 package com.gameocr.app.data
 
 import android.content.Context
+import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
@@ -24,7 +25,8 @@ private val Context.dataStore by preferencesDataStore("game_ocr_settings")
 
 @Singleton
 class SettingsRepository @Inject constructor(
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    secretCipher: SettingsSecretCipher
 ) {
     private object Keys {
         val BaseUrl = stringPreferencesKey("base_url")
@@ -37,6 +39,9 @@ class SettingsRepository @Inject constructor(
         val LoopInterval = longPreferencesKey("loop_interval_ms")
         val TextSize = intPreferencesKey("overlay_text_size")
         val Alpha = floatPreferencesKey("overlay_alpha")
+        val OverlayFontFileName = stringPreferencesKey("overlay_font_file_name")
+        val OverlayFontDisplayName = stringPreferencesKey("overlay_font_display_name")
+        val OverlayFonts = stringPreferencesKey("overlay_fonts_json")
         val Region = stringPreferencesKey("capture_region_json")
         val RegionSavedW = intPreferencesKey("capture_region_saved_screen_w")
         val RegionSavedH = intPreferencesKey("capture_region_saved_screen_h")
@@ -53,7 +58,10 @@ class SettingsRepository @Inject constructor(
         val TencentRegion = stringPreferencesKey("tencent_region")
         val PreferShizuku = booleanPreferencesKey("prefer_shizuku")
         val Placement = stringPreferencesKey("overlay_placement")
+        val PaddleVersion = stringPreferencesKey("paddle_model_version")
         val PaddleMirror = stringPreferencesKey("paddle_mirror_url")
+        val MangaOcrMirror = stringPreferencesKey("manga_ocr_mirror_url")
+        val OrientationModelMirror = stringPreferencesKey("orientation_model_mirror_url")
         val OffsetX = intPreferencesKey("overlay_offset_x")
         val OffsetY = intPreferencesKey("overlay_offset_y")
         val ThemeKey = stringPreferencesKey("overlay_theme")
@@ -89,11 +97,16 @@ class SettingsRepository @Inject constructor(
         val OverlayCollision = booleanPreferencesKey("overlay_avoid_collision")
         val BaiduEndpoint = stringPreferencesKey("baidu_ocr_endpoint")
         val BaiduLanguage = stringPreferencesKey("baidu_ocr_language")
+        val UmiOcrBaseUrl = stringPreferencesKey("umi_ocr_base_url")
+        val LunaOcrBaseUrl = stringPreferencesKey("luna_ocr_base_url")
         val TencentEndpoint = stringPreferencesKey("tencent_ocr_endpoint")
         val TencentLanguage = stringPreferencesKey("tencent_ocr_language")
         val ApiTimeoutSec = intPreferencesKey("api_timeout_seconds")
         val MergeAdjacent = booleanPreferencesKey("ocr_merge_adjacent")
         val MergeStrengthKey = stringPreferencesKey("ocr_merge_strength")
+        val TextOrientAutoDetect = booleanPreferencesKey("text_orient_auto_detect")
+        val TextOrientAutoDefaultOnMigrated = booleanPreferencesKey("text_orient_auto_default_on_migrated")
+        val ManualTextOrient = stringPreferencesKey("manual_text_orient")
         val YoudaoAppKey = stringPreferencesKey("youdao_app_key")
         val YoudaoAppSecret = stringPreferencesKey("youdao_app_secret")
         val VolcAccessKeyId = stringPreferencesKey("volc_access_key_id")
@@ -105,17 +118,90 @@ class SettingsRepository @Inject constructor(
         val CleartextHosts = stringPreferencesKey("cleartext_allowed_hosts")
         // 弧菜单按钮顺序：逗号分隔 MenuItemId.name 列表。MenuItemId.name 不含逗号，分隔安全。
         val FloatingMenuOrder = stringPreferencesKey("floating_menu_item_order")
+        val ArcMenuPageSize = intPreferencesKey("arc_menu_page_size")
+        val TranslationPresets = stringPreferencesKey("translation_presets_json")
+        val ActiveTranslationPresetId = stringPreferencesKey("active_translation_preset_id")
         // 主球当前技能（FULL_SCREEN / WORD_SELECT）
         val FloatingSkillKey = stringPreferencesKey("floating_button_skill")
         // 划词翻译词典 prompt
         val DictionaryPrompt = stringPreferencesKey("dictionary_prompt")
+        // 端侧 LLM 采样参数（HY-MT / Sakura 共用）
+        val LocalLlmTemperature = floatPreferencesKey("local_llm_temperature")
+        val LocalLlmTopP = floatPreferencesKey("local_llm_top_p")
+        val LocalLlmTopK = intPreferencesKey("local_llm_top_k")
+        val LocalLlmRepPenalty = floatPreferencesKey("local_llm_rep_penalty")
+        val LocalLlmCtxSize = intPreferencesKey("local_llm_ctx_size")
+        val LocalLlmMaxNewTokens = intPreferencesKey("local_llm_max_new_tokens")
+        val LocalLlmMirrorChoice = stringPreferencesKey("local_llm_mirror_choice")
+        val LocalLlmMirror = stringPreferencesKey("local_llm_mirror_url")
+        // DBNet 检测阈值：prob/score/gap 共用；unclip 按 Paddle/MangaOCR 分开。
+        val DbnetProbThresh = floatPreferencesKey("dbnet_prob_thresh")
+        val DbnetBoxScoreThresh = floatPreferencesKey("dbnet_box_score_thresh")
+        val DbnetUnclipRatio = floatPreferencesKey("dbnet_unclip_ratio")
+        val MangaOcrDbnetUnclipRatio = floatPreferencesKey("manga_ocr_dbnet_unclip_ratio")
+        val BubbleClusterGap = intPreferencesKey("bubble_cluster_gap")
     }
 
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
+    private val secretCodec = SettingsSecretCodec(secretCipher)
+    private val secureStringKeys = listOf(
+        Keys.BaseUrl,
+        Keys.ApiKey,
+        Keys.Prompt,
+        Keys.BaiduKey,
+        Keys.BaiduSecret,
+        Keys.TencentId,
+        Keys.TencentKey,
+        Keys.PaddleMirror,
+        Keys.MangaOcrMirror,
+        Keys.OrientationModelMirror,
+        Keys.DeeplKey,
+        Keys.DeeplBaseUrl,
+        Keys.DeeplCustomToken,
+        Keys.YoudaoAppKey,
+        Keys.YoudaoAppSecret,
+        Keys.VolcAccessKeyId,
+        Keys.VolcSecretAccessKey,
+        Keys.BaiduFanyiAppId,
+        Keys.BaiduFanyiSecretKey,
+        Keys.UmiOcrBaseUrl,
+        Keys.LunaOcrBaseUrl,
+        Keys.CleartextHosts,
+        Keys.DictionaryPrompt,
+        Keys.LocalLlmMirror,
+        Keys.TranslationPresets
+    )
 
     val settings: Flow<Settings> = context.dataStore.data.map { prefs -> prefs.toSettings() }
 
     suspend fun get(): Settings = settings.first()
+
+    suspend fun migratePlaintextSecretsIfNeeded(): Int {
+        var migrated = 0
+        context.dataStore.edit { prefs ->
+            secureStringKeys.forEach { key ->
+                val raw = prefs[key]
+                if (secretCodec.needsMigration(raw)) {
+                    prefs[key] = secretCodec.encryptPlainText(raw.orEmpty())
+                    migrated++
+                }
+            }
+        }
+        return migrated
+    }
+
+    suspend fun migrateTextOrientationAutoDetectDefaultOnIfNeeded(): Boolean {
+        var changed = false
+        context.dataStore.edit { prefs ->
+            if (prefs[Keys.TextOrientAutoDefaultOnMigrated] == true) return@edit
+            if (prefs[Keys.TextOrientAutoDetect] == false) {
+                prefs[Keys.TextOrientAutoDetect] = true
+                changed = true
+            }
+            prefs[Keys.TextOrientAutoDefaultOnMigrated] = true
+        }
+        return changed
+    }
 
     /**
      * 任何用到 [Settings.captureRegion] 的入口都应该先调一次：把上次保存时屏幕尺寸跟当前
@@ -158,20 +244,34 @@ class SettingsRepository @Inject constructor(
         ) }
     }
 
+    private fun MutablePreferences.putSecure(key: Preferences.Key<String>, value: String) {
+        this[key] = secretCodec.encryptPlainText(value)
+    }
+
+    private fun Preferences.secureString(
+        key: Preferences.Key<String>,
+        defaultValue: String
+    ): String = this[key]?.let { secretCodec.decodeStored(it) } ?: defaultValue
+
     suspend fun update(transform: (Settings) -> Settings) {
         context.dataStore.edit { prefs ->
             val current = prefs.toSettings()
             val next = transform(current)
-            prefs[Keys.BaseUrl] = next.baseUrl
-            prefs[Keys.ApiKey] = next.apiKey
+            prefs.putSecure(Keys.BaseUrl, next.baseUrl)
+            prefs.putSecure(Keys.ApiKey, next.apiKey)
             prefs[Keys.Model] = next.model
             prefs[Keys.SourceLang] = next.sourceLang
             prefs[Keys.TargetLang] = next.targetLang
-            prefs[Keys.Prompt] = next.promptTemplate
+            prefs.putSecure(Keys.Prompt, next.promptTemplate)
             prefs[Keys.OcrEngine] = next.ocrEngine.name
             prefs[Keys.LoopInterval] = next.captureLoopIntervalMs
             prefs[Keys.TextSize] = next.overlayTextSizeSp
             prefs[Keys.Alpha] = next.overlayAlpha
+            prefs[Keys.OverlayFontFileName] = next.overlayFontFileName
+            prefs[Keys.OverlayFontDisplayName] = next.overlayFontDisplayName
+            prefs[Keys.OverlayFonts] = json.encodeToString(
+                OverlayFontPolicy.normalizeImportedFonts(next.overlayFonts)
+            )
             prefs[Keys.Region] = next.captureRegion?.let { json.encodeToString(it) } ?: ""
             prefs[Keys.RegionSavedW] = next.captureRegionSavedScreenW
             prefs[Keys.RegionSavedH] = next.captureRegionSavedScreenH
@@ -180,15 +280,18 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.Upscale] = next.preprocess.upscale2x
             prefs[Keys.Invert] = next.preprocess.invert
             prefs[Keys.Binarize] = next.preprocess.binarize
-            prefs[Keys.BaiduKey] = next.baiduOcrApiKey
-            prefs[Keys.BaiduSecret] = next.baiduOcrSecretKey
+            prefs.putSecure(Keys.BaiduKey, next.baiduOcrApiKey)
+            prefs.putSecure(Keys.BaiduSecret, next.baiduOcrSecretKey)
             prefs[Keys.A11yVolume] = next.a11yVolumeTrigger
-            prefs[Keys.TencentId] = next.tencentSecretId
-            prefs[Keys.TencentKey] = next.tencentSecretKey
+            prefs.putSecure(Keys.TencentId, next.tencentSecretId)
+            prefs.putSecure(Keys.TencentKey, next.tencentSecretKey)
             prefs[Keys.TencentRegion] = next.tencentRegion
             prefs[Keys.PreferShizuku] = next.preferShizukuCapture
             prefs[Keys.Placement] = next.overlayPlacement.name
-            prefs[Keys.PaddleMirror] = next.paddleModelMirrorUrl
+            prefs[Keys.PaddleVersion] = next.paddleModelVersion.name
+            prefs.putSecure(Keys.PaddleMirror, next.paddleModelMirrorUrl)
+            prefs.putSecure(Keys.MangaOcrMirror, next.mangaOcrModelMirrorUrl)
+            prefs.putSecure(Keys.OrientationModelMirror, next.orientationModelMirrorUrl)
             prefs[Keys.OffsetX] = next.overlayOffsetX
             prefs[Keys.OffsetY] = next.overlayOffsetY
             prefs[Keys.ThemeKey] = next.overlayTheme.name
@@ -197,12 +300,12 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.CustomBorder] = next.customBorderColor
             prefs[Keys.CustomBorderW] = next.customBorderWidth
             prefs[Keys.TranslatorEng] = next.translatorEngine.name
-            prefs[Keys.DeeplKey] = next.deeplApiKey
+            prefs.putSecure(Keys.DeeplKey, next.deeplApiKey)
             prefs[Keys.DeeplPro] = next.deeplPro
             prefs[Keys.DeeplProtocol] = next.deeplProtocol.name
-            prefs[Keys.DeeplBaseUrl] = next.deeplBaseUrl
+            prefs.putSecure(Keys.DeeplBaseUrl, next.deeplBaseUrl)
             prefs[Keys.DeeplBearerAuth] = next.deeplBearerAuth
-            prefs[Keys.DeeplCustomToken] = next.deeplCustomToken
+            prefs.putSecure(Keys.DeeplCustomToken, next.deeplCustomToken)
             prefs[Keys.FloatingSize] = next.floatingButtonSizeDp
             prefs[Keys.FloatingX] = next.floatingButtonX
             prefs[Keys.FloatingY] = next.floatingButtonY
@@ -221,30 +324,56 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.OverlayCollision] = next.overlayAvoidCollision
             prefs[Keys.BaiduEndpoint] = next.baiduOcrEndpoint.name
             prefs[Keys.BaiduLanguage] = next.baiduOcrLanguage.name
+            prefs.putSecure(Keys.UmiOcrBaseUrl, next.umiOcrBaseUrl)
+            prefs.putSecure(Keys.LunaOcrBaseUrl, next.lunaOcrBaseUrl)
             prefs[Keys.TencentEndpoint] = next.tencentOcrEndpoint.name
             prefs[Keys.TencentLanguage] = next.tencentOcrLanguage.name
             prefs[Keys.ApiTimeoutSec] = next.apiTimeoutSeconds
             prefs[Keys.MergeAdjacent] = next.mergeAdjacentBlocks
             prefs[Keys.MergeStrengthKey] = next.mergeStrength.name
-            prefs[Keys.YoudaoAppKey] = next.youdaoAppKey
-            prefs[Keys.YoudaoAppSecret] = next.youdaoAppSecret
-            prefs[Keys.VolcAccessKeyId] = next.volcAccessKeyId
-            prefs[Keys.VolcSecretAccessKey] = next.volcSecretAccessKey
+            prefs[Keys.TextOrientAutoDetect] = next.textOrientationAutoDetect
+            // null 用 remove 而非写空串：toSettings 用 runCatching valueOf 解析，空串会 fallback 到 null
+            // 但显式 remove 让 DataStore 文件更干净，未来 grep 无歧义
+            next.manualTextOrientation?.let { prefs[Keys.ManualTextOrient] = it.name }
+                ?: prefs.remove(Keys.ManualTextOrient)
+            prefs.putSecure(Keys.YoudaoAppKey, next.youdaoAppKey)
+            prefs.putSecure(Keys.YoudaoAppSecret, next.youdaoAppSecret)
+            prefs.putSecure(Keys.VolcAccessKeyId, next.volcAccessKeyId)
+            prefs.putSecure(Keys.VolcSecretAccessKey, next.volcSecretAccessKey)
             prefs[Keys.VolcRegion] = next.volcRegion
-            prefs[Keys.BaiduFanyiAppId] = next.baiduFanyiAppId
-            prefs[Keys.BaiduFanyiSecretKey] = next.baiduFanyiSecretKey
-            prefs[Keys.CleartextHosts] = next.cleartextAllowedHosts.joinToString("\n")
+            prefs.putSecure(Keys.BaiduFanyiAppId, next.baiduFanyiAppId)
+            prefs.putSecure(Keys.BaiduFanyiSecretKey, next.baiduFanyiSecretKey)
+            prefs.putSecure(Keys.CleartextHosts, next.cleartextAllowedHosts.joinToString("\n"))
             prefs[Keys.FloatingMenuOrder] = next.floatingMenuItemOrder.joinToString(",") { it.name }
+            prefs[Keys.ArcMenuPageSize] = FloatingMenu.coercePageSize(next.arcMenuPageSize)
+            prefs.putSecure(
+                Keys.TranslationPresets,
+                json.encodeToString(next.translationPresets.filterNot { TranslationPresetCatalog.isBuiltIn(it.id) })
+            )
+            prefs[Keys.ActiveTranslationPresetId] = next.activeTranslationPresetId
             prefs[Keys.FloatingSkillKey] = next.floatingButtonSkill.name
-            prefs[Keys.DictionaryPrompt] = next.dictionaryPrompt
+            prefs.putSecure(Keys.DictionaryPrompt, next.dictionaryPrompt)
+            prefs[Keys.LocalLlmTemperature] = next.localLlmTemperature
+            prefs[Keys.LocalLlmTopP] = next.localLlmTopP
+            prefs[Keys.LocalLlmTopK] = next.localLlmTopK
+            prefs[Keys.LocalLlmRepPenalty] = next.localLlmRepetitionPenalty
+            prefs[Keys.LocalLlmCtxSize] = next.localLlmContextSize
+            prefs[Keys.LocalLlmMaxNewTokens] = next.localLlmMaxNewTokens
+            prefs[Keys.LocalLlmMirrorChoice] = next.localLlmMirror.name
+            prefs.putSecure(Keys.LocalLlmMirror, next.localLlmMirrorUrl)
+            prefs[Keys.DbnetProbThresh] = next.dbnetProbThresh
+            prefs[Keys.DbnetBoxScoreThresh] = next.dbnetBoxScoreThresh
+            prefs[Keys.DbnetUnclipRatio] = next.dbnetUnclipRatio
+            prefs[Keys.MangaOcrDbnetUnclipRatio] = next.mangaOcrDbnetUnclipRatio
+            prefs[Keys.BubbleClusterGap] = next.bubbleClusterGap
         }
     }
 
     private fun Preferences.toSettings(): Settings {
         val default = Settings()
         return Settings(
-            baseUrl = this[Keys.BaseUrl] ?: default.baseUrl,
-            apiKey = this[Keys.ApiKey] ?: default.apiKey,
+            baseUrl = secureString(Keys.BaseUrl, default.baseUrl),
+            apiKey = secureString(Keys.ApiKey, default.apiKey),
             model = this[Keys.Model] ?: default.model,
             // 兼容 0.1.x 旧用户：那时 sourceLang 用 enum.name（"AUTO"/"JA"/...）保存。
             // 新版改为 BCP-47 tag（"auto"/"ja"/...）。读出时若是旧大写值，按 mapping 转回。
@@ -258,12 +387,24 @@ class SettingsRepository @Inject constructor(
             targetLang = this[Keys.TargetLang] ?: default.targetLang,
             // 首次启动（Keys.Prompt 不存在）使用资源里的本地化默认 prompt（中文系统给中文，英文给英文）。
             // 用户保存过自己的 prompt 后这里读到自己的，不会被覆盖。
-            promptTemplate = this[Keys.Prompt] ?: context.getString(R.string.default_prompt),
+            promptTemplate = secureString(Keys.Prompt, context.getString(R.string.default_prompt)),
             ocrEngine = runCatching { OcrEngineKind.valueOf(this[Keys.OcrEngine] ?: "") }
                 .getOrDefault(default.ocrEngine),
             captureLoopIntervalMs = this[Keys.LoopInterval] ?: default.captureLoopIntervalMs,
             overlayTextSizeSp = this[Keys.TextSize] ?: default.overlayTextSizeSp,
             overlayAlpha = this[Keys.Alpha] ?: default.overlayAlpha,
+            overlayFontFileName = this[Keys.OverlayFontFileName] ?: default.overlayFontFileName,
+            overlayFontDisplayName = this[Keys.OverlayFontDisplayName] ?: default.overlayFontDisplayName,
+            overlayFonts = this[Keys.OverlayFonts]
+                ?.takeIf { it.isNotBlank() }
+                ?.let { raw ->
+                    runCatching {
+                        OverlayFontPolicy.normalizeImportedFonts(
+                            json.decodeFromString<List<OverlayFontEntry>>(raw)
+                        )
+                    }.getOrNull()
+                }
+                ?: default.overlayFonts,
             captureRegion = this[Keys.Region]?.takeIf { it.isNotBlank() }?.let {
                 runCatching { json.decodeFromString<CaptureRegion>(it) }.getOrNull()
             },
@@ -281,16 +422,23 @@ class SettingsRepository @Inject constructor(
                 invert = this[Keys.Invert] ?: default.preprocess.invert,
                 binarize = this[Keys.Binarize] ?: default.preprocess.binarize
             ),
-            baiduOcrApiKey = this[Keys.BaiduKey] ?: default.baiduOcrApiKey,
-            baiduOcrSecretKey = this[Keys.BaiduSecret] ?: default.baiduOcrSecretKey,
+            baiduOcrApiKey = secureString(Keys.BaiduKey, default.baiduOcrApiKey),
+            baiduOcrSecretKey = secureString(Keys.BaiduSecret, default.baiduOcrSecretKey),
             a11yVolumeTrigger = this[Keys.A11yVolume] ?: default.a11yVolumeTrigger,
-            tencentSecretId = this[Keys.TencentId] ?: default.tencentSecretId,
-            tencentSecretKey = this[Keys.TencentKey] ?: default.tencentSecretKey,
+            tencentSecretId = secureString(Keys.TencentId, default.tencentSecretId),
+            tencentSecretKey = secureString(Keys.TencentKey, default.tencentSecretKey),
             tencentRegion = this[Keys.TencentRegion] ?: default.tencentRegion,
             preferShizukuCapture = this[Keys.PreferShizuku] ?: default.preferShizukuCapture,
             overlayPlacement = runCatching { OverlayPlacement.valueOf(this[Keys.Placement] ?: "") }
                 .getOrDefault(default.overlayPlacement),
-            paddleModelMirrorUrl = this[Keys.PaddleMirror] ?: default.paddleModelMirrorUrl,
+            paddleModelVersion = runCatching { PaddleModelVersion.valueOf(this[Keys.PaddleVersion] ?: "") }
+                .getOrDefault(default.paddleModelVersion),
+            paddleModelMirrorUrl = secureString(Keys.PaddleMirror, default.paddleModelMirrorUrl),
+            mangaOcrModelMirrorUrl = secureString(Keys.MangaOcrMirror, default.mangaOcrModelMirrorUrl),
+            orientationModelMirrorUrl = secureString(
+                Keys.OrientationModelMirror,
+                default.orientationModelMirrorUrl
+            ),
             overlayOffsetX = this[Keys.OffsetX] ?: default.overlayOffsetX,
             overlayOffsetY = this[Keys.OffsetY] ?: default.overlayOffsetY,
             overlayTheme = runCatching { OverlayTheme.valueOf(this[Keys.ThemeKey] ?: "") }
@@ -301,13 +449,13 @@ class SettingsRepository @Inject constructor(
             customBorderWidth = this[Keys.CustomBorderW] ?: default.customBorderWidth,
             translatorEngine = runCatching { TranslatorEngine.valueOf(this[Keys.TranslatorEng] ?: "") }
                 .getOrDefault(default.translatorEngine),
-            deeplApiKey = this[Keys.DeeplKey] ?: default.deeplApiKey,
+            deeplApiKey = secureString(Keys.DeeplKey, default.deeplApiKey),
             deeplPro = this[Keys.DeeplPro] ?: default.deeplPro,
             deeplProtocol = runCatching { DeeplProtocol.valueOf(this[Keys.DeeplProtocol] ?: "") }
                 .getOrDefault(default.deeplProtocol),
-            deeplBaseUrl = this[Keys.DeeplBaseUrl] ?: default.deeplBaseUrl,
+            deeplBaseUrl = secureString(Keys.DeeplBaseUrl, default.deeplBaseUrl),
             deeplBearerAuth = this[Keys.DeeplBearerAuth] ?: default.deeplBearerAuth,
-            deeplCustomToken = this[Keys.DeeplCustomToken] ?: default.deeplCustomToken,
+            deeplCustomToken = secureString(Keys.DeeplCustomToken, default.deeplCustomToken),
             floatingButtonSizeDp = this[Keys.FloatingSize] ?: default.floatingButtonSizeDp,
             floatingButtonX = this[Keys.FloatingX] ?: default.floatingButtonX,
             floatingButtonY = this[Keys.FloatingY] ?: default.floatingButtonY,
@@ -336,6 +484,8 @@ class SettingsRepository @Inject constructor(
                 .getOrDefault(default.baiduOcrEndpoint),
             baiduOcrLanguage = runCatching { BaiduOcrLanguage.valueOf(this[Keys.BaiduLanguage] ?: "") }
                 .getOrDefault(default.baiduOcrLanguage),
+            umiOcrBaseUrl = secureString(Keys.UmiOcrBaseUrl, default.umiOcrBaseUrl),
+            lunaOcrBaseUrl = secureString(Keys.LunaOcrBaseUrl, default.lunaOcrBaseUrl),
             tencentOcrEndpoint = runCatching { TencentOcrEndpoint.valueOf(this[Keys.TencentEndpoint] ?: "") }
                 .getOrDefault(default.tencentOcrEndpoint),
             tencentOcrLanguage = runCatching { TencentOcrLanguage.valueOf(this[Keys.TencentLanguage] ?: "") }
@@ -344,18 +494,25 @@ class SettingsRepository @Inject constructor(
             mergeAdjacentBlocks = this[Keys.MergeAdjacent] ?: default.mergeAdjacentBlocks,
             mergeStrength = runCatching { MergeStrength.valueOf(this[Keys.MergeStrengthKey] ?: "") }
                 .getOrDefault(default.mergeStrength),
-            youdaoAppKey = this[Keys.YoudaoAppKey] ?: default.youdaoAppKey,
-            youdaoAppSecret = this[Keys.YoudaoAppSecret] ?: default.youdaoAppSecret,
-            volcAccessKeyId = this[Keys.VolcAccessKeyId] ?: default.volcAccessKeyId,
-            volcSecretAccessKey = this[Keys.VolcSecretAccessKey] ?: default.volcSecretAccessKey,
+            textOrientationAutoDetect = this[Keys.TextOrientAutoDetect] ?: default.textOrientationAutoDetect,
+            manualTextOrientation = this[Keys.ManualTextOrient]
+                ?.let { raw ->
+                    runCatching { com.gameocr.app.ocr.TextOrientation.valueOf(raw) }.getOrNull()
+                },
+            youdaoAppKey = secureString(Keys.YoudaoAppKey, default.youdaoAppKey),
+            youdaoAppSecret = secureString(Keys.YoudaoAppSecret, default.youdaoAppSecret),
+            volcAccessKeyId = secureString(Keys.VolcAccessKeyId, default.volcAccessKeyId),
+            volcSecretAccessKey = secureString(Keys.VolcSecretAccessKey, default.volcSecretAccessKey),
             volcRegion = this[Keys.VolcRegion] ?: default.volcRegion,
-            baiduFanyiAppId = this[Keys.BaiduFanyiAppId] ?: default.baiduFanyiAppId,
-            baiduFanyiSecretKey = this[Keys.BaiduFanyiSecretKey] ?: default.baiduFanyiSecretKey,
-            cleartextAllowedHosts = this[Keys.CleartextHosts]
-                ?.split('\n')
-                ?.map { it.trim() }
-                ?.filter { it.isNotEmpty() }
-                ?: default.cleartextAllowedHosts,
+            baiduFanyiAppId = secureString(Keys.BaiduFanyiAppId, default.baiduFanyiAppId),
+            baiduFanyiSecretKey = secureString(Keys.BaiduFanyiSecretKey, default.baiduFanyiSecretKey),
+            cleartextAllowedHosts = secureString(
+                Keys.CleartextHosts,
+                default.cleartextAllowedHosts.joinToString("\n")
+            )
+                .split('\n')
+                .map { it.trim() }
+                .filter { it.isNotEmpty() },
             // 弧菜单按钮顺序：脏数据 / 未知 id silently 丢弃；丢失的已知 id 自动补齐到末尾，
             // 保证 ALL_ORDER 里所有 id 都出现一次。这样后续新版本加新菜单项，老用户也能看到。
             floatingMenuItemOrder = run {
@@ -369,11 +526,51 @@ class SettingsRepository @Inject constructor(
                 if (parsed.isEmpty()) return@run default.floatingMenuItemOrder
                 // 补齐缺失的已知 id
                 val missing = FloatingMenu.ALL_ORDER.filter { it !in parsed }
-                parsed + missing
+                val normalized = parsed + missing
+                if (
+                    normalized == FloatingMenu.LEGACY_DEFAULT_ORDER_BEFORE_SKILL_SWAP ||
+                    normalized == FloatingMenu.LEGACY_DEFAULT_ORDER_BEFORE_PRESET_SKILL_SWAP ||
+                    normalized == FloatingMenu.LEGACY_DEFAULT_ORDER_BEFORE_PRESET_LANGUAGE_SWAP
+                ) {
+                    default.floatingMenuItemOrder
+                } else {
+                    normalized
+                }
             },
+            arcMenuPageSize = FloatingMenu.coercePageSize(
+                this[Keys.ArcMenuPageSize] ?: default.arcMenuPageSize
+            ),
+            translationPresets = secureString(Keys.TranslationPresets, "")
+                .takeIf { it.isNotBlank() }
+                ?.let { raw ->
+                    runCatching { json.decodeFromString<List<TranslationPreset>>(raw) }
+                        .getOrDefault(emptyList())
+                        .filterNot { TranslationPresetCatalog.isBuiltIn(it.id) }
+                }
+                ?: default.translationPresets,
+            activeTranslationPresetId = this[Keys.ActiveTranslationPresetId]
+                ?: default.activeTranslationPresetId,
             floatingButtonSkill = runCatching { FloatingSkill.valueOf(this[Keys.FloatingSkillKey] ?: "") }
                 .getOrDefault(default.floatingButtonSkill),
-            dictionaryPrompt = this[Keys.DictionaryPrompt] ?: context.getString(R.string.default_dictionary_prompt)
+            dictionaryPrompt = secureString(
+                Keys.DictionaryPrompt,
+                context.getString(R.string.default_dictionary_prompt)
+            ),
+            localLlmTemperature = this[Keys.LocalLlmTemperature] ?: default.localLlmTemperature,
+            localLlmTopP = this[Keys.LocalLlmTopP] ?: default.localLlmTopP,
+            localLlmTopK = this[Keys.LocalLlmTopK] ?: default.localLlmTopK,
+            localLlmRepetitionPenalty = this[Keys.LocalLlmRepPenalty] ?: default.localLlmRepetitionPenalty,
+            localLlmContextSize = this[Keys.LocalLlmCtxSize] ?: default.localLlmContextSize,
+            localLlmMaxNewTokens = this[Keys.LocalLlmMaxNewTokens] ?: default.localLlmMaxNewTokens,
+            localLlmMirror = runCatching { LlmMirrorChoice.valueOf(this[Keys.LocalLlmMirrorChoice] ?: "") }
+                .getOrDefault(default.localLlmMirror),
+            localLlmMirrorUrl = secureString(Keys.LocalLlmMirror, default.localLlmMirrorUrl),
+            dbnetProbThresh = this[Keys.DbnetProbThresh] ?: default.dbnetProbThresh,
+            dbnetBoxScoreThresh = this[Keys.DbnetBoxScoreThresh] ?: default.dbnetBoxScoreThresh,
+            dbnetUnclipRatio = this[Keys.DbnetUnclipRatio] ?: default.dbnetUnclipRatio,
+            mangaOcrDbnetUnclipRatio = this[Keys.MangaOcrDbnetUnclipRatio]
+                ?: default.mangaOcrDbnetUnclipRatio,
+            bubbleClusterGap = this[Keys.BubbleClusterGap] ?: default.bubbleClusterGap
         )
     }
 }

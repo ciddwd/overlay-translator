@@ -11,6 +11,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import rikka.shizuku.Shizuku
 import timber.log.Timber
 import kotlin.coroutines.resume
@@ -44,6 +47,7 @@ class ShizukuManager @Inject constructor() {
     val shellPrivilegeOk: StateFlow<Boolean> = _shellPrivilegeOk.asStateFlow()
 
     private val verifyScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val verifyMutex = Mutex()
 
     init {
         runCatching {
@@ -67,24 +71,38 @@ class ShizukuManager @Inject constructor() {
      * 验证 Shizuku 是否真正建立了 shell 特权 session。跑 `id` 命令读 stdout，看 uid=2000(shell)。
      * 未配对（Shizuku 进程在但没 ADB / root 启动过）时拿不到 shell uid——这是 [pingBinder] 检测不到的情形。
      */
-    suspend fun verifyShellPrivilegeAsync() {
-        val ok = runCatching {
-            if (!safePingBinder()) return@runCatching false
-            if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) return@runCatching false
-            val process = invokeNewProcessReflective(arrayOf("id")) ?: return@runCatching false
-            val inStream = process.javaClass.getMethod("getInputStream").invoke(process) as java.io.InputStream
-            val stdout = inStream.use { String(it.readBytes(), Charsets.US_ASCII) }
-            val ec = runCatching {
-                process.javaClass.getMethod("waitFor").invoke(process) as Int
-            }.getOrElse { -1 }
-            val pass = ec == 0 && ("uid=2000" in stdout || "(shell)" in stdout || "uid=0" in stdout)
-            if (!pass) Timber.w("[shizuku-verify] privilege check failed: exit=%d stdout=%s", ec, stdout.take(200))
-            pass
-        }.getOrElse { t ->
-            Timber.w(t, "[shizuku-verify] verify threw")
-            false
+    suspend fun verifyShellPrivilegeAsync() = withContext(Dispatchers.IO) {
+        verifyMutex.withLock {
+            val ok = runCatching {
+                val binderAlive = safePingBinder()
+                _binderAlive.value = binderAlive
+                if (!binderAlive) return@runCatching false
+                if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) return@runCatching false
+                val process = invokeNewProcessReflective(arrayOf("id")) ?: return@runCatching false
+                val inStream = process.javaClass.getMethod("getInputStream").invoke(process) as java.io.InputStream
+                val stdout = inStream.use { String(it.readBytes(), Charsets.US_ASCII) }
+                val ec = runCatching {
+                    process.javaClass.getMethod("waitFor").invoke(process) as Int
+                }.getOrElse { -1 }
+                val pass = ec == 0 && ("uid=2000" in stdout || "(shell)" in stdout || "uid=0" in stdout)
+                if (!pass) Timber.w("[shizuku-verify] privilege check failed: exit=%d stdout=%s", ec, stdout.take(200))
+                pass
+            }.getOrElse { t ->
+                Timber.w(t, "[shizuku-verify] verify threw")
+                false
+            }
+            _shellPrivilegeOk.value = ok
         }
-        _shellPrivilegeOk.value = ok
+    }
+
+    fun refreshShellPrivilege() {
+        verifyScope.launch { verifyShellPrivilegeAsync() }
+    }
+
+    suspend fun ensureReady(): Boolean {
+        if (!requestPermission()) return false
+        verifyShellPrivilegeAsync()
+        return shellPrivilegeOk.value
     }
 
     /** 反射调用 `Shizuku.newProcess`——同 [com.gameocr.app.capture.ShizukuScreenshotter.invokeNewProcess]。

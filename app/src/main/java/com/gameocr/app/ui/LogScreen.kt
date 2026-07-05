@@ -251,6 +251,14 @@ private fun LogCard(e: LogRepository.Entry) {
                         fontWeight = FontWeight.SemiBold
                     )
                 }
+                e.elapsedMs?.let { elapsed ->
+                    Text(
+                        formatLogElapsedMs(elapsed),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
             }
             if (e.source != null && e.translated != null) {
                 Text(
@@ -308,12 +316,23 @@ private fun formatForExport(context: Context, entries: List<LogRepository.Entry>
             }
         )
         sb.append(ts.format(Date(e.timestamp)))
-            .append(" [").append(cat).append('/').append(e.level.name).append("] ")
+            .append(" [").append(cat).append('/').append(e.level.name).append(']')
+        e.elapsedMs?.let { sb.append(" [").append(formatLogElapsedMs(it)).append(']') }
+        sb.append(' ')
             .append(e.message).append('\n')
         if (e.source != null) sb.append("  ").append(context.getString(R.string.log_export_source)).append(e.source).append('\n')
         if (e.translated != null) sb.append("  ").append(context.getString(R.string.log_export_translated)).append(e.translated).append('\n')
     }
     return sb.toString()
+}
+
+internal fun formatLogElapsedMs(elapsedMs: Long): String {
+    val safe = elapsedMs.coerceAtLeast(0L)
+    return when {
+        safe < 1_000L -> "${safe}ms"
+        safe < 10_000L -> String.format(Locale.US, "%.1fs", safe / 1_000.0)
+        else -> "${(safe + 500L) / 1_000L}s"
+    }
 }
 
 private fun copyToClipboard(context: Context, text: String) {
@@ -322,12 +341,18 @@ private fun copyToClipboard(context: Context, text: String) {
 }
 
 private fun shareText(context: Context, text: String) {
-    val send = Intent(Intent.ACTION_SEND).apply {
-        type = "text/plain"
-        putExtra(Intent.EXTRA_SUBJECT, context.getString(R.string.log_share_subject))
-        putExtra(Intent.EXTRA_TEXT, text)
+    try {
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, context.getString(R.string.log_share_subject))
+            putExtra(Intent.EXTRA_TEXT, text)
+        }
+        val chooser = Intent.createChooser(send, context.getString(R.string.log_share_chooser))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(chooser)
+    } catch (e: Exception) {
+        // TransactionTooLargeException：日志文本超出 Binder 1MB 限制
+        // 回退到剪贴板复制
+        copyToClipboard(context, text)
     }
-    val chooser = Intent.createChooser(send, context.getString(R.string.log_share_chooser))
-        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    context.startActivity(chooser)
 }

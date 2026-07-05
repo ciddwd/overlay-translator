@@ -287,7 +287,7 @@ fun MainScreen(
                                             MediaProjectionRequestActivity.newIntent(context)
                                         )
                                     StartMode.SHIZUKU -> scope.launch {
-                                        val ok = viewModel.ensureShizukuPermission()
+                                        val ok = viewModel.ensureShizukuReady()
                                         shizukuAvail = viewModel.shizukuAvailability(context)
                                         if (ok) {
                                             val svc = Intent(context, CaptureService::class.java).apply {
@@ -301,7 +301,7 @@ fun MainScreen(
                                             }
                                         } else {
                                             snackbarHostState.showSnackbar(
-                                                context.getString(R.string.main_snack_shizuku_denied)
+                                                context.getString(R.string.main_snack_shizuku_unavailable)
                                             )
                                         }
                                     }
@@ -736,7 +736,7 @@ class MainViewModel @Inject constructor(
     }
     fun shizukuAvailability(context: android.content.Context): ShizukuCapabilities.Availability =
         shizukuCapabilities.availability(context)
-    suspend fun ensureShizukuPermission(): Boolean = shizukuManager.requestPermission()
+    suspend fun ensureShizukuReady(): Boolean = shizukuManager.ensureReady()
     /** 透传 Shizuku binder 状态 flow——UI collect 后状态变化立即重算 Availability。 */
     val shizukuBinderAlive: kotlinx.coroutines.flow.StateFlow<Boolean> = shizukuManager.binderAlive
     /** Shizuku 是否拿到了 shell 特权（已配对）。binder 通但未配对时为 false。 */

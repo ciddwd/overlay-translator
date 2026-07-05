@@ -2,7 +2,6 @@ package com.gameocr.app.ocr
 
 import android.graphics.Bitmap
 import android.graphics.Rect
-import com.gameocr.app.data.LogRepository
 import com.gameocr.app.data.MergeStrength
 import com.gameocr.app.data.OcrEngineKind
 import com.gameocr.app.data.SettingsRepository
@@ -23,8 +22,10 @@ class RoutingOcrEngine @Inject constructor(
     private val tencent: TencentOcrEngine,
     private val paddle: PaddleOcrEngine,
     private val youdao: YoudaoOcrEngine,
-    private val settingsRepository: SettingsRepository,
-    private val logRepository: LogRepository
+    private val umi: UmiOcrEngine,
+    private val luna: LunaOcrEngine,
+    private val manga: MangaOcrEngine,
+    private val settingsRepository: SettingsRepository
 ) : OcrEngine {
 
     override suspend fun recognize(bitmap: Bitmap, kind: OcrEngineKind): List<TextBlock> {
@@ -32,11 +33,21 @@ class RoutingOcrEngine @Inject constructor(
             OcrEngineKind.BAIDU -> baidu.recognize(bitmap, kind)
             OcrEngineKind.TENCENT -> tencent.recognize(bitmap, kind)
             OcrEngineKind.YOUDAO -> youdao.recognize(bitmap, kind)
+            OcrEngineKind.UMI_OCR -> umi.recognize(bitmap, kind)
+            OcrEngineKind.LUNA_OCR -> luna.recognize(bitmap, kind)
             OcrEngineKind.PADDLE_ONNX -> paddle.recognize(bitmap, kind)
+            OcrEngineKind.MANGA_OCR_JA -> manga.recognize(bitmap, kind)
             else -> mlKit.recognize(bitmap, kind)
         }
         val settings = settingsRepository.get()
-        if (!settings.mergeAdjacentBlocks) return raw
+        Timber.tag("OcrMerge").i(
+            "engine=%s raw=%d merge=%s strength=%s",
+            kind, raw.size, settings.mergeAdjacentBlocks, settings.mergeStrength
+        )
+        if (!settings.mergeAdjacentBlocks) {
+            logBoxes("raw-no-merge", raw)
+            return raw
+        }
         // 详细日志：打 box 坐标，用于诊断"为什么这两段没合"。仅 Timber（logcat），不写 LogRepository
         // 避免污染用户可见日志。tag = OcrMerge，过滤用。
         logBoxes("before", raw)
@@ -56,10 +67,13 @@ class RoutingOcrEngine @Inject constructor(
                 "%s #%d (%d,%d,%d,%d) h=%d w=%d: %s",
                 label, i + 1, r.left, r.top, r.right, r.bottom,
                 r.height(), r.width(),
-                b.text.take(60).replace("\n", "⏎")
+                previewForLog(b.text)
             )
         }
     }
+
+    private fun previewForLog(text: String, limit: Int = 80): String =
+        text.replace("\r", "\\r").replace("\n", "\\n").take(limit)
 
     override fun close() {
         mlKit.close()
@@ -67,6 +81,9 @@ class RoutingOcrEngine @Inject constructor(
         tencent.close()
         paddle.close()
         youdao.close()
+        umi.close()
+        luna.close()
+        manga.close()
     }
 
     /**
@@ -85,69 +102,158 @@ class RoutingOcrEngine @Inject constructor(
      * 个相邻框"导致译文层互相重叠。
      */
     private fun mergeAdjacentBlocks(blocks: List<TextBlock>, params: MergeParams): List<TextBlock> {
-        if (blocks.size <= 1) return blocks
-        val orientation = detectOrientation(blocks)
+        if (blocks.isEmpty()) return blocks
+        val preDirectionLimits = preDirectionNoiseLimits(blocks)
+        val directionBlocks = removePreDirectionOcrNoise(blocks, preDirectionLimits)
+        if (directionBlocks.size <= 1) return directionBlocks
+        val orientation = detectOrientation(directionBlocks)
         return when (orientation) {
             Orientation.HORIZONTAL -> {
-                val lineMerged = mergeSameLine(blocks, params)
-                val msg1 = "[H] stage1 sameLine: ${blocks.size} -> ${lineMerged.size}"
+                val lineMerged = mergeSameLine(directionBlocks, params)
+                val msg1 = "[H] stage1 sameLine: ${directionBlocks.size} -> ${lineMerged.size}"
                 Timber.tag("OcrMerge").i(msg1)
-                logRepository.info(LogRepository.Category.OCR, msg1)
                 val paraMerged = mergeParagraph(lineMerged, params)
                 val msg2 = "[H] stage2 paragraph: ${lineMerged.size} -> ${paraMerged.size}"
                 Timber.tag("OcrMerge").i(msg2)
-                logRepository.info(LogRepository.Category.OCR, msg2)
-                paraMerged
+                paraMerged.withLayoutOrientation(orientation)
             }
             Orientation.VERTICAL -> {
                 // 竖排日文专属：先丢振假名（ふりがな汉字注音小列），避免译文里出现
                 // "しっぱい/失敗"读音+汉字重复，也让 overlay 不再两列叠在一起。
-                val deFurigana = removeFurigana(blocks)
-                if (deFurigana.size != blocks.size) {
-                    val msg = "[V] removeFurigana: ${blocks.size} -> ${deFurigana.size}"
+                val deFurigana = removeFurigana(directionBlocks)
+                if (deFurigana.size != directionBlocks.size) {
+                    val msg = "[V] removeFurigana: ${directionBlocks.size} -> ${deFurigana.size}"
                     Timber.tag("OcrMerge").i(msg)
-                    logRepository.info(LogRepository.Category.OCR, msg)
                 }
-                val columnMerged = mergeSameColumn(deFurigana, params)
-                val msg1 = "[V] stage1 sameColumn: ${deFurigana.size} -> ${columnMerged.size}"
+                val noiseLimits = verticalColumnMergeLimits(
+                    deFurigana.map { it.boundingBox.toMergeDebugRect() },
+                    verticalGapRatio = params.verticalGapRatio
+                )
+                val deNoised = removeVerticalOcrNoise(deFurigana, noiseLimits.baseColumnWidth)
+                if (deNoised.size != deFurigana.size) {
+                    Timber.tag("OcrMerge").i(
+                        "[V] removeNoise: %d -> %d baseColW=%d",
+                        deFurigana.size,
+                        deNoised.size,
+                        noiseLimits.baseColumnWidth
+                    )
+                }
+                val columnMerged = mergeSameColumn(deNoised, params)
+                val msg1 = "[V] stage1 sameColumn: ${deNoised.size} -> ${columnMerged.size}"
                 Timber.tag("OcrMerge").i(msg1)
-                logRepository.info(LogRepository.Category.OCR, msg1)
                 val paraMerged = mergeColumnsToParagraph(columnMerged, params)
                 val msg2 = "[V] stage2 columnsToPara (R→L): ${columnMerged.size} -> ${paraMerged.size}"
                 Timber.tag("OcrMerge").i(msg2)
-                logRepository.info(LogRepository.Category.OCR, msg2)
-                paraMerged
+                paraMerged.withLayoutOrientation(orientation)
             }
         }
+    }
+
+    private data class PreDirectionNoiseLimits(val baseShortSide: Int)
+
+    private fun preDirectionNoiseLimits(blocks: List<TextBlock>): PreDirectionNoiseLimits {
+        val shortSides = blocks.map {
+            minOf(it.boundingBox.width().coerceAtLeast(1), it.boundingBox.height().coerceAtLeast(1))
+        }
+        return PreDirectionNoiseLimits(baseShortSide = medianInt(shortSides).coerceAtLeast(1))
+    }
+
+    private fun removePreDirectionOcrNoise(
+        blocks: List<TextBlock>,
+        limits: PreDirectionNoiseLimits
+    ): List<TextBlock> {
+        val kept = blocks.filterNot { block ->
+            val drop = shouldDropPreDirectionOcrNoise(
+                text = block.text,
+                confidence = block.confidence,
+                rect = block.boundingBox.toMergeDebugRect(),
+                baseShortSide = limits.baseShortSide
+            )
+            if (drop) {
+                Timber.tag("OcrMerge").i(
+                    "[noise] drop preDirection box=%s conf=%.3f baseShort=%d text=%s",
+                    block.boundingBox.toMergeDebugRect().toLogString(),
+                    block.confidence,
+                    limits.baseShortSide,
+                    previewForLog(block.text)
+                )
+            }
+            drop
+        }
+        if (kept.size != blocks.size) {
+            Timber.tag("OcrMerge").i(
+                "[noise] preDirection: %d -> %d baseShort=%d",
+                blocks.size,
+                kept.size,
+                limits.baseShortSide
+            )
+        }
+        return kept
+    }
+
+    private fun removeVerticalOcrNoise(blocks: List<TextBlock>, baseColumnWidth: Int): List<TextBlock> {
+        if (blocks.size <= 1) return blocks
+        val kept = blocks.filterNot { block ->
+            val drop = shouldDropVerticalOcrNoise(
+                text = block.text,
+                confidence = block.confidence,
+                rect = block.boundingBox.toMergeDebugRect(),
+                baseColumnWidth = baseColumnWidth
+            )
+            if (drop) {
+                Timber.tag("OcrMerge").i(
+                    "[V] drop noise box=%s conf=%.3f baseColW=%d text=%s",
+                    block.boundingBox.toMergeDebugRect().toLogString(),
+                    block.confidence,
+                    baseColumnWidth,
+                    previewForLog(block.text)
+                )
+            }
+            drop
+        }
+        return kept.takeIf { it.isNotEmpty() } ?: blocks
+    }
+
+    private fun List<TextBlock>.withLayoutOrientation(orientation: Orientation): List<TextBlock> {
+        val textOrientation = when (orientation) {
+            Orientation.HORIZONTAL -> TextOrientation.HORIZONTAL_LTR
+            Orientation.VERTICAL -> TextOrientation.VERTICAL_RTL
+        }
+        return map { it.copy(layoutOrientation = textOrientation) }
     }
 
     /**
      * 探测当前帧排版方向。
      *
-     * 判据：把 box 按 h/w 比分成 portrait（h > w * 1.3）与其它，portrait 占比 ≥ 50% → 竖排。
-     * 阈值留 30% 缓冲（h/w∈[0.77, 1.3]）算"中性"——单字符 box / 漫画拟声词常落在这区间，
-     * 不影响判定。
+     * 判据：把 box 按 h/w 比分成 portrait（h > w * [PARAGRAPH_CLUSTER_PORTRAIT_RATIO]）
+     * 与其它，portrait 占比 ≥ 50% → 竖排。这里不复用
+     * [HeuristicOrientationClassifier.PORTRAIT_RATIO]：方向路由用 2.0，宁可 UNKNOWN 也别误切引擎；
+     * 段落聚类用 1.3，保留漫画 / 字幕场景调优过的 3-4 字短列合并行为。
      *
      * 同时打日志，让 logcat 能溯源到为什么走了某条路径——竖排日漫一旦被误判为横排，stage2
      * 就用错了"水平相交"判据，导致即使激进档也合不上。
      */
     private fun detectOrientation(blocks: List<TextBlock>): Orientation {
+        val threshold = PARAGRAPH_CLUSTER_PORTRAIT_RATIO
         val portrait = blocks.count {
             val r = it.boundingBox
-            r.height() > r.width() * 1.3f
+            r.height() > r.width() * threshold
         }
         val landscape = blocks.count {
             val r = it.boundingBox
-            r.width() > r.height() * 1.3f
+            r.width() > r.height() * threshold
         }
-        val ratio = portrait.toFloat() / blocks.size
-        val orientation = if (portrait > landscape && ratio >= 0.5f)
+        val portraitRatio = portrait.toFloat() / blocks.size
+        val orientation = if (portrait > landscape && portraitRatio >= 0.5f)
             Orientation.VERTICAL else Orientation.HORIZONTAL
         val msg = "[detect] orientation=$orientation, portrait=$portrait landscape=$landscape " +
-            "total=${blocks.size} (portraitRatio=${"%.2f".format(ratio)})"
+            "total=${blocks.size} (portraitRatio=${"%.2f".format(portraitRatio)})"
         Timber.tag("OcrMerge").i(msg)
-        logRepository.info(LogRepository.Category.OCR, msg)
         return orientation
+    }
+
+    private companion object {
+        const val PARAGRAPH_CLUSTER_PORTRAIT_RATIO: Float = 1.3f
     }
 
     private enum class Orientation { HORIZONTAL, VERTICAL }
@@ -282,6 +388,7 @@ class RoutingOcrEngine @Inject constructor(
         for (b in sorted) {
             val last = result.lastOrNull()
             if (last != null && sameColumnAdjacent(last, b, params)) {
+                logSameColumnMerge(last, b, params)
                 result[result.size - 1] = unionMerge(last, b, separator = "\n")
             } else {
                 result.add(b)
@@ -298,16 +405,31 @@ class RoutingOcrEngine @Inject constructor(
      */
     private fun mergeColumnsToParagraph(blocks: List<TextBlock>, params: MergeParams): List<TextBlock> {
         if (blocks.size <= 1) return blocks
+        val limits = verticalColumnMergeLimits(
+            blocks.map { it.boundingBox.toMergeDebugRect() },
+            verticalGapRatio = params.verticalGapRatio
+        )
+        Timber.tag("OcrMerge").i(
+            "[V] stage2 limits baseColW=%d maxHGap=%.1f minOverlapH=%d gapSamples=%s",
+            limits.baseColumnWidth,
+            limits.maxHorizontalGap,
+            limits.minOverlapHeight,
+            limits.gapSamples.joinToString(prefix = "[", postfix = "]")
+        )
         var current = blocks
         repeat(10) {
-            val (next, merged) = mergeColumnsOnce(current, params)
+            val (next, merged) = mergeColumnsOnce(current, params, limits)
             if (!merged) return current
             current = next
         }
         return current
     }
 
-    private fun mergeColumnsOnce(blocks: List<TextBlock>, params: MergeParams): Pair<List<TextBlock>, Boolean> {
+    private fun mergeColumnsOnce(
+        blocks: List<TextBlock>,
+        params: MergeParams,
+        limits: VerticalColumnMergeLimits
+    ): Pair<List<TextBlock>, Boolean> {
         val sorted = blocks.sortedWith(
             compareByDescending<TextBlock> { it.boundingBox.left }.thenBy { it.boundingBox.top }
         )
@@ -320,7 +442,8 @@ class RoutingOcrEngine @Inject constructor(
             used[i] = true
             for (j in i + 1 until sorted.size) {
                 if (used[j]) continue
-                if (columnsHorizontallyAdjacent(acc, sorted[j], params)) {
+                if (columnsHorizontallyAdjacent(acc, sorted[j], params, limits)) {
+                    logColumnsToParagraphMerge(acc, sorted[j], params, limits)
                     // acc 是右列（sort desc by left 保证），sorted[j] 是左列 → 文本顺序 acc 在前
                     acc = unionMerge(acc, sorted[j], separator = "\n")
                     used[j] = true
@@ -348,30 +471,75 @@ class RoutingOcrEngine @Inject constructor(
         return gap >= -5 && gap <= avgW * params.adjacentGapRatio
     }
 
+    private fun logSameColumnMerge(a: TextBlock, b: TextBlock, params: MergeParams) {
+        val (upper, lower) = if (a.boundingBox.top <= b.boundingBox.top) a to b else b to a
+        val upperRect = upper.boundingBox.toMergeDebugRect()
+        val lowerRect = lower.boundingBox.toMergeDebugRect()
+        val avgW = (upperRect.width + lowerRect.width) / 2f
+        val gap = lowerRect.top - upperRect.bottom
+        val leftDelta = kotlin.math.abs(upperRect.left - lowerRect.left)
+        val widthRatio = maxOf(upperRect.width, lowerRect.width).toFloat() /
+            minOf(upperRect.width, lowerRect.width).coerceAtLeast(1)
+        Timber.tag("OcrMerge").i(
+            "[V] merge sameColumn gap=%d maxGap=%.1f leftDelta=%d maxLeftDelta=%.1f " +
+                "widthRatio=%.2f maxWidthRatio=%.2f upper=%s lower=%s text=%s + %s",
+            gap,
+            avgW * params.adjacentGapRatio,
+            leftDelta,
+            avgW * params.sameLineTopTolerance,
+            widthRatio,
+            params.heightRatioLimit,
+            upperRect.toLogString(),
+            lowerRect.toLogString(),
+            previewForLog(upper.text),
+            previewForLog(lower.text)
+        )
+    }
+
     /**
      * 竖排"左右邻接 + 垂直区间相交"判据。与 [verticallyAdjacent] 严格镜像：把"高度"
      * 全部换成"宽度"，"水平相交"换成"垂直相交"。
      */
-    private fun columnsHorizontallyAdjacent(a: TextBlock, b: TextBlock, params: MergeParams): Boolean {
+    private fun columnsHorizontallyAdjacent(
+        a: TextBlock,
+        b: TextBlock,
+        params: MergeParams,
+        limits: VerticalColumnMergeLimits
+    ): Boolean {
         val ra = a.boundingBox; val rb = b.boundingBox
-        val wa = ra.width().coerceAtLeast(1)
-        val wb = rb.width().coerceAtLeast(1)
-        val colW = minOf(wa, wb)
+        val debug = verticalColumnAdjacencyDebug(ra.toMergeDebugRect(), rb.toMergeDebugRect())
         // 左右先 normalize：rR 是右列、rL 是左列
-        val (rR, rL) = if (ra.left >= rb.left) ra to rb else rb to ra
         // 镜像 verticallyAdjacent 的 "rb.top < ra.bottom - lineH * 0.3"：允许小重叠
-        if (rL.right < rR.left - colW * 0.3f) return false
-        val hGap = rR.left - rL.right
-        if (hGap > colW * params.verticalGapRatio) return false
-        val overlapTop = maxOf(ra.top, rb.top)
-        val overlapBottom = minOf(ra.bottom, rb.bottom)
-        val overlapH = overlapBottom - overlapTop
-        if (overlapH <= 0) return false
-        val minH = minOf(ra.height(), rb.height())
-        if (overlapH.toFloat() / minH < params.horizontalOverlapRatio) return false
+        return verticalColumnMergeAllowed(debug, limits, params.horizontalOverlapRatio)
         // 同 verticallyAdjacent：stage2 不再做 size ratio limit
-        return true
     }
+
+    private fun logColumnsToParagraphMerge(
+        a: TextBlock,
+        b: TextBlock,
+        params: MergeParams,
+        limits: VerticalColumnMergeLimits
+    ) {
+        val debug = verticalColumnAdjacencyDebug(a.boundingBox.toMergeDebugRect(), b.boundingBox.toMergeDebugRect())
+        Timber.tag("OcrMerge").i(
+            "[V] merge columnsToPara hGap=%d maxGap=%.1f overlapH=%d minOverlapH=%d " +
+                "overlapRatio=%.2f minOverlapRatio=%.2f backtrackLimit=%.1f right=%s left=%s text=%s + %s",
+            debug.horizontalGap,
+            limits.maxHorizontalGap,
+            debug.overlapHeight,
+            limits.minOverlapHeight,
+            debug.overlapRatio,
+            params.horizontalOverlapRatio,
+            debug.columnWidth * 0.3f,
+            debug.rightColumn.toLogString(),
+            debug.leftColumn.toLogString(),
+            previewForLog(a.text),
+            previewForLog(b.text)
+        )
+    }
+
+    private fun Rect.toMergeDebugRect(): MergeDebugRect =
+        MergeDebugRect(left = left, top = top, right = right, bottom = bottom)
 
     private fun verticallyAdjacent(a: TextBlock, b: TextBlock, params: MergeParams): Boolean {
         val ra = a.boundingBox; val rb = b.boundingBox
@@ -430,4 +598,153 @@ class RoutingOcrEngine @Inject constructor(
             }
         }
     }
+}
+
+internal data class MergeDebugRect(
+    val left: Int,
+    val top: Int,
+    val right: Int,
+    val bottom: Int
+) {
+    val width: Int
+        get() = (right - left).coerceAtLeast(1)
+
+    val height: Int
+        get() = (bottom - top).coerceAtLeast(1)
+
+    fun toLogString(): String = "($left,$top,$right,$bottom)"
+}
+
+internal fun shouldDropVerticalOcrNoise(
+    text: String,
+    confidence: Float,
+    rect: MergeDebugRect,
+    baseColumnWidth: Int
+): Boolean {
+    val compact = text.filterNot { it.isWhitespace() }
+    if (compact.isBlank()) return true
+    if (compact.length > 4) return false
+    if (compact.any { it.isCjkLikeForOcrMerge() }) return false
+    if (confidence >= 0.45f) return false
+
+    val base = baseColumnWidth.coerceAtLeast(1)
+    val tinyWidth = rect.width <= base * 0.75f
+    val tinyHeight = rect.height <= base * 1.25f
+    val tinyArea = rect.width * rect.height <= base * base * 0.8f
+    return tinyWidth && (tinyHeight || tinyArea)
+}
+
+internal fun shouldDropPreDirectionOcrNoise(
+    text: String,
+    confidence: Float,
+    rect: MergeDebugRect,
+    baseShortSide: Int
+): Boolean {
+    val compact = text.filterNot { it.isWhitespace() }
+    if (compact.isBlank()) return true
+    if (compact.length > 4) return false
+    if (compact.any { it.isCjkLikeForOcrMerge() }) return false
+    if (confidence >= 0.45f) return false
+    if (!compact.all { it.isAsciiNoiseCandidateForOcrMerge() }) return false
+
+    val base = baseShortSide.coerceAtLeast(1)
+    val shortSide = minOf(rect.width, rect.height)
+    val area = rect.width * rect.height
+    return shortSide <= base * 0.75f && area <= base * base * 1.2f
+}
+
+private fun Char.isCjkLikeForOcrMerge(): Boolean =
+    this in '\u3400'..'\u9FFF' ||
+        this in '\uF900'..'\uFAFF' ||
+        this in '\u3040'..'\u30FF' ||
+        this in '\uAC00'..'\uD7AF'
+
+private fun Char.isAsciiNoiseCandidateForOcrMerge(): Boolean = this in '!'..'~'
+
+internal data class VerticalColumnAdjacencyDebug(
+    val rightColumn: MergeDebugRect,
+    val leftColumn: MergeDebugRect,
+    val columnWidth: Int,
+    val horizontalGap: Int,
+    val overlapHeight: Int,
+    val overlapRatio: Float
+)
+
+internal data class VerticalColumnMergeLimits(
+    val baseColumnWidth: Int,
+    val maxHorizontalGap: Float,
+    val minOverlapHeight: Int,
+    val gapSamples: List<Int>
+)
+
+internal fun verticalColumnMergeLimits(
+    rects: List<MergeDebugRect>,
+    verticalGapRatio: Float
+): VerticalColumnMergeLimits {
+    val verticalRects = rects.filter { it.height >= it.width * 2 && it.height >= 48 }
+    val basis = if (verticalRects.size >= 2) verticalRects else rects
+    val baseColumnWidth = medianInt(basis.map { it.width }).coerceAtLeast(1)
+    val minOverlapHeight = maxOf(16, (baseColumnWidth * 0.75f).toInt())
+    val gapSamples = basis
+        .sortedByDescending { it.left }
+        .zipWithNext()
+        .mapNotNull { (right, left) ->
+            val debug = verticalColumnAdjacencyDebug(right, left)
+            debug.horizontalGap.takeIf { it >= 0 && debug.overlapHeight >= minOverlapHeight }
+        }
+    val widthBasedLimit = baseColumnWidth * verticalGapRatio
+    val observedLimit = if (gapSamples.size >= 3) {
+        medianInt(gapSamples) * 3f + baseColumnWidth * 0.25f
+    } else {
+        widthBasedLimit
+    }
+    return VerticalColumnMergeLimits(
+        baseColumnWidth = baseColumnWidth,
+        maxHorizontalGap = maxOf(12f, minOf(widthBasedLimit, observedLimit)),
+        minOverlapHeight = minOverlapHeight,
+        gapSamples = gapSamples
+    )
+}
+
+internal fun verticalColumnMergeAllowed(
+    debug: VerticalColumnAdjacencyDebug,
+    limits: VerticalColumnMergeLimits,
+    horizontalOverlapRatio: Float
+): Boolean {
+    if (debug.horizontalGap > limits.maxHorizontalGap) return false
+    if (debug.overlapHeight < limits.minOverlapHeight) return false
+    if (debug.overlapRatio < horizontalOverlapRatio) return false
+    return true
+}
+
+internal fun verticalColumnAdjacencyDebug(
+    first: MergeDebugRect,
+    second: MergeDebugRect
+): VerticalColumnAdjacencyDebug {
+    val (rightColumn, leftColumn) = if (first.left >= second.left) {
+        first to second
+    } else {
+        second to first
+    }
+    val columnWidth = minOf(rightColumn.width, leftColumn.width)
+    val horizontalGap = rightColumn.left - leftColumn.right
+    val overlapTop = maxOf(first.top, second.top)
+    val overlapBottom = minOf(first.bottom, second.bottom)
+    val overlapHeight = (overlapBottom - overlapTop).coerceAtLeast(0)
+    val minHeight = minOf(first.height, second.height).coerceAtLeast(1)
+    val overlapRatio = overlapHeight.toFloat() / minHeight
+    return VerticalColumnAdjacencyDebug(
+        rightColumn = rightColumn,
+        leftColumn = leftColumn,
+        columnWidth = columnWidth,
+        horizontalGap = horizontalGap,
+        overlapHeight = overlapHeight,
+        overlapRatio = overlapRatio
+    )
+}
+
+private fun medianInt(values: List<Int>): Int {
+    if (values.isEmpty()) return 1
+    val sorted = values.sorted()
+    return sorted[sorted.size / 2]
 }

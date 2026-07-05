@@ -74,27 +74,37 @@ class ProcessTextTranslateActivity : ComponentActivity() {
                 card.show(text, translatingLabel, null, settings)
             }
             // translate() 返回 String? —— 引擎返回 null 视作失败，与 onFailure 走同一兜底分支
+            val translateStartedAt = System.currentTimeMillis()
             val translated: String = runCatching {
                 withContext(Dispatchers.IO) { translator.translate(text, settings) }
             }.fold(
                 onSuccess = { result ->
+                    val translateElapsedMs = elapsedSince(translateStartedAt)
                     if (result.isNullOrBlank()) {
                         logRepository.error(
                             LogRepository.Category.TRANSLATE,
-                            String.format(engineFailedFmt, settings.translatorEngine.name)
+                            String.format(engineFailedFmt, settings.translatorEngine.name),
+                            elapsedMs = translateElapsedMs
                         )
                         failedLabel
                     } else {
-                        logRepository.pair(LogRepository.Category.TRANSLATE, text, result)
+                        logRepository.pair(
+                            LogRepository.Category.TRANSLATE,
+                            text,
+                            result,
+                            elapsedMs = translateElapsedMs
+                        )
                         result
                     }
                 },
                 onFailure = { t ->
+                    val translateElapsedMs = elapsedSince(translateStartedAt)
                     Timber.w(t, "PROCESS_TEXT translate failed")
                     logRepository.error(
                         LogRepository.Category.TRANSLATE,
                         String.format(engineFailedFmt, settings.translatorEngine.name),
-                        t
+                        t,
+                        elapsedMs = translateElapsedMs
                     )
                     failedLabel
                 }
@@ -105,4 +115,7 @@ class ProcessTextTranslateActivity : ComponentActivity() {
         }
         finish()
     }
+
+    private fun elapsedSince(startMs: Long): Long =
+        (System.currentTimeMillis() - startMs).coerceAtLeast(0L)
 }

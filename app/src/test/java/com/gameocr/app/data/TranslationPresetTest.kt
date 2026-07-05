@@ -1,0 +1,206 @@
+package com.gameocr.app.data
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class TranslationPresetTest {
+
+    @Test
+    fun mangaBuiltInPresetAppliesOfflineJapaneseMangaModeAndKeepsSecrets() {
+        val base = Settings(
+            apiKey = "openai-key",
+            baiduOcrApiKey = "baidu-key",
+            baiduOcrSecretKey = "baidu-secret",
+            tencentSecretId = "tencent-id",
+            tencentSecretKey = "tencent-secret",
+            deeplApiKey = "deepl-key",
+            deeplCustomToken = "deepl-token",
+            youdaoAppKey = "youdao-key",
+            youdaoAppSecret = "youdao-secret",
+            volcAccessKeyId = "volc-id",
+            volcSecretAccessKey = "volc-secret",
+            baiduFanyiAppId = "baidu-fanyi-id",
+            baiduFanyiSecretKey = "baidu-fanyi-secret"
+        )
+
+        val preset = TranslationPresetCatalog.find(
+            custom = emptyList(),
+            id = TranslationPresetCatalog.BUILTIN_MANGA_JA_ZH
+        )!!
+        val applied = preset.applyTo(base)
+
+        assertEquals("ja", applied.sourceLang)
+        assertEquals("zh-CN", applied.targetLang)
+        assertEquals(OcrEngineKind.MANGA_OCR_JA, applied.ocrEngine)
+        assertEquals(TranslatorEngine.LOCAL_SAKURA, applied.translatorEngine)
+        assertTrue(applied.mergeAdjacentBlocks)
+        assertEquals(MergeStrength.AGGRESSIVE, applied.mergeStrength)
+
+        assertEquals(base.apiKey, applied.apiKey)
+        assertEquals(base.baiduOcrApiKey, applied.baiduOcrApiKey)
+        assertEquals(base.baiduOcrSecretKey, applied.baiduOcrSecretKey)
+        assertEquals(base.tencentSecretId, applied.tencentSecretId)
+        assertEquals(base.tencentSecretKey, applied.tencentSecretKey)
+        assertEquals(base.deeplApiKey, applied.deeplApiKey)
+        assertEquals(base.deeplCustomToken, applied.deeplCustomToken)
+        assertEquals(base.youdaoAppKey, applied.youdaoAppKey)
+        assertEquals(base.youdaoAppSecret, applied.youdaoAppSecret)
+        assertEquals(base.volcAccessKeyId, applied.volcAccessKeyId)
+        assertEquals(base.volcSecretAccessKey, applied.volcSecretAccessKey)
+        assertEquals(base.baiduFanyiAppId, applied.baiduFanyiAppId)
+        assertEquals(base.baiduFanyiSecretKey, applied.baiduFanyiSecretKey)
+    }
+
+    @Test
+    fun builtInPresetCatalogContainsOnlyCurrentSystemPresets() {
+        data class Case(
+            val name: String,
+            val id: String,
+            val translatorEngine: TranslatorEngine
+        )
+
+        val cases = listOf(
+            Case(
+                name = "manga",
+                id = TranslationPresetCatalog.BUILTIN_MANGA_JA_ZH,
+                translatorEngine = TranslatorEngine.LOCAL_SAKURA
+            )
+        )
+
+        val builtIns = TranslationPresetCatalog.builtIns()
+
+        assertEquals(cases.map { it.id }, builtIns.map { it.id })
+        cases.forEach { case ->
+            val preset = requireNotNull(builtIns.firstOrNull { it.id == case.id }) { case.name }
+            assertEquals(case.name, case.translatorEngine, preset.translatorEngine)
+        }
+        assertFalse(builtIns.any { it.id == "builtin_hymt2_auto_zh" })
+    }
+
+    @Test
+    fun translationPresetShapeDoesNotContainSecretFields() {
+        val fieldNames = TranslationPreset::class.java.declaredFields.map { it.name }.toSet()
+        val forbidden = setOf(
+            "apiKey",
+            "baiduOcrApiKey",
+            "baiduOcrSecretKey",
+            "tencentSecretId",
+            "tencentSecretKey",
+            "deeplApiKey",
+            "deeplCustomToken",
+            "youdaoAppKey",
+            "youdaoAppSecret",
+            "volcAccessKeyId",
+            "volcSecretAccessKey",
+            "baiduFanyiAppId",
+            "baiduFanyiSecretKey"
+        )
+
+        assertTrue(fieldNames.intersect(forbidden).isEmpty())
+    }
+
+    @Test
+    fun customPresetListFiltersBuiltInIdCollisions() {
+        data class Case(
+            val name: String,
+            val id: String
+        )
+
+        val cases = listOf(
+            Case("manga collision", TranslationPresetCatalog.BUILTIN_MANGA_JA_ZH)
+        )
+
+        cases.forEach { case ->
+            val custom = TranslationPreset(
+                id = case.id,
+                name = "shadow",
+                shortName = "shadow",
+                translatorEngine = TranslatorEngine.OPENAI
+            )
+            val all = TranslationPresetCatalog.all(listOf(custom))
+
+            assertFalse(case.name, all.any { it.name == "shadow" })
+            assertEquals(case.name, 1, all.count { TranslationPresetCatalog.isBuiltIn(it.id) })
+        }
+    }
+
+    @Test
+    fun matchesSettingsIgnoresSecretsButRejectsPresetSettingChanges() {
+        val base = Settings(
+            apiKey = "openai-key",
+            deeplCustomToken = "deepl-token",
+            sourceLang = "ja",
+            targetLang = "zh-CN",
+            dictionaryPrompt = "dictionary prompt v1",
+            ocrEngine = OcrEngineKind.MANGA_OCR_JA,
+            translatorEngine = TranslatorEngine.LOCAL_SAKURA,
+            mergeAdjacentBlocks = true,
+            mergeStrength = MergeStrength.AGGRESSIVE,
+            textOrientationAutoDetect = true,
+            dbnetProbThresh = 0.30f
+        )
+        val preset = TranslationPresetCatalog.fromSettings(
+            id = "custom_1",
+            name = "Manga tuned",
+            shortName = "Manga",
+            settings = base
+        )
+        val legacyPreset = preset.copy(settingsHash = "")
+
+        assertTrue(preset.settingsHash.isNotBlank())
+        assertTrue(
+            TranslationPresetCatalog.matchesSettings(
+                preset,
+                base.copy(apiKey = "changed-key", deeplCustomToken = "changed-token")
+            )
+        )
+        assertTrue(
+            TranslationPresetCatalog.matchesSettings(
+                legacyPreset,
+                base.copy(apiKey = "changed-key", deeplCustomToken = "changed-token")
+            )
+        )
+
+        data class Case(
+            val name: String,
+            val changed: Settings
+        )
+        val cases = listOf(
+            Case("target language", base.copy(targetLang = "en")),
+            Case("dictionary prompt", base.copy(dictionaryPrompt = "dictionary prompt v2")),
+            Case("OCR engine", base.copy(ocrEngine = OcrEngineKind.PADDLE_ONNX)),
+            Case("translator engine", base.copy(translatorEngine = TranslatorEngine.LOCAL_HY_MT2)),
+            Case("merge strength", base.copy(mergeStrength = MergeStrength.STANDARD)),
+            Case("orientation auto detect", base.copy(textOrientationAutoDetect = false)),
+            Case("DBNet threshold", base.copy(dbnetProbThresh = 0.25f))
+        )
+
+        cases.forEach { case ->
+            assertFalse(case.name, TranslationPresetCatalog.matchesSettings(preset, case.changed))
+        }
+    }
+
+    @Test
+    fun translationPresetRoundTripsDictionaryPrompt() {
+        val base = Settings(dictionaryPrompt = "custom dictionary prompt")
+        val preset = TranslationPresetCatalog.fromSettings(
+            id = "custom_dictionary",
+            name = "Dictionary",
+            shortName = "Dict",
+            settings = base
+        )
+        val applied = preset.applyTo(Settings(dictionaryPrompt = "old prompt"))
+
+        assertEquals("custom dictionary prompt", preset.dictionaryPrompt)
+        assertEquals("custom dictionary prompt", applied.dictionaryPrompt)
+        assertTrue(TranslationPresetCatalog.matchesSettings(preset, base))
+        assertFalse(
+            TranslationPresetCatalog.matchesSettings(
+                preset,
+                base.copy(dictionaryPrompt = "changed dictionary prompt")
+            )
+        )
+    }
+}

@@ -10,5 +10,6 @@ data class TextBlock(
     val text: String,
     val boundingBox: Rect,
     val confidence: Float = 1f,
-    val recognizedLanguage: String? = null
+    val recognizedLanguage: String? = null,
+    val layoutOrientation: TextOrientation? = null
 )

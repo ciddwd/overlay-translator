@@ -24,6 +24,17 @@ import kotlin.math.abs
 
 private typealias DockSide = LiquidFloatingContainer.DockSide
 
+internal object ArcMenuGeometry {
+    fun spreadFor(itemCount: Int): Double = when {
+        itemCount <= 1 -> 0.0
+        itemCount == 2 -> Math.PI / 6
+        itemCount == 3 -> Math.PI / 4
+        itemCount == 4 -> Math.toRadians(54.0)
+        itemCount == 5 -> Math.toRadians(72.0)
+        else -> Math.PI / 2
+    }
+}
+
 /**
  * 悬浮触发按钮。
  * - 单击 → [onSingleTap] 触发一次截屏 → OCR → 翻译。
@@ -48,8 +59,11 @@ class FloatingButtonManager(
     @Volatile var initialY: Int = -1
     /** 菜单第二项「截图区域调整」回调，由 CaptureService 赋值。 */
     @Volatile var onMenuPickRegion: () -> Unit = {}
+    @Volatile var onMenuLanguagePair: () -> Unit = {}
     /** 菜单第三项「返回主应用」回调，由 CaptureService 赋值。 */
     @Volatile var onMenuOpenMainActivity: () -> Unit = {}
+    @Volatile var onMenuOpenSettings: () -> Unit = {}
+    @Volatile var onMenuPresetSwitch: () -> Unit = {}
     /** 吸附边缘开关（用户在 Settings 里可关）。关时松手保持原位 + 不藏半边。 */
     @Volatile var snapToEdgeEnabled: Boolean = true
     /** 3s 无操作自动吸附。需 [snapToEdgeEnabled] 同时为 true 才生效（由 [scheduleAutoDock] 守门）。 */
@@ -82,6 +96,7 @@ class FloatingButtonManager(
 
     /** 弧菜单按钮顺序（来自 Settings.floatingMenuItemOrder）。CaptureService 在 settings collect 时同步。 */
     @Volatile var menuItemOrder: List<MenuItemId> = FloatingMenu.DEFAULT_ORDER
+    @Volatile var arcMenuPageSize: Int = FloatingMenu.DEFAULT_PAGE_SIZE
 
     /**
      * 主球技能切换回调：菜单里点了「划词翻译 / 全屏翻译」时调用。
@@ -567,14 +582,16 @@ class FloatingButtonManager(
         FloatingSkill.WORD_SELECT -> R.drawable.ic_overlay_button_word
     }
 
+    private fun arcSpreadFor(itemCount: Int): Double = ArcMenuGeometry.spreadFor(itemCount)
+
     /**
      * 「球中心 cy 到屏幕可见区上 / 下边的最小安全距离」（px，**不含**系统栏 inset）。
      *
      * 按按钮**外缘**距 cy 的距离算（`radius * sin(spread) + itemRadius`），保证最远那颗按钮
      * 完全在可见区内。系统栏 / 导航栏 inset 由调用方再叠加（[menuYRange]）。
      *
-     * 永远按 PAGE_SIZE 最大扇形（±54°）算最坏情况，避免 snapToEdge 和 openArcMenuPage 因
-     * 实际页按钮数不同导致 verticalSafe 不一致触发死循环 spring。
+     * 永远按可配置最大页大小 [FloatingMenu.MAX_PAGE_SIZE] 对应的扇形（当前 ±90°）算最坏情况，
+     * 避免 snapToEdge 和 openArcMenuPage 因实际页按钮数不同导致 verticalSafe 不一致触发死循环 spring。
      */
     fun menuVerticalSafePx(): Int {
         val density = context.resources.displayMetrics.density
@@ -583,7 +600,7 @@ class FloatingButtonManager(
         val itemRadiusPx = itemSize / 2
         val gapPx = (28 * density).toInt()
         val radius = ballRadiusPx + itemRadiusPx + gapPx
-        val maxSpread = Math.toRadians(54.0)
+        val maxSpread = arcSpreadFor(FloatingMenu.MAX_PAGE_SIZE)
         return (radius * Math.sin(maxSpread) + itemRadiusPx).toInt()
     }
 
@@ -690,8 +707,8 @@ class FloatingButtonManager(
 
     /**
      * 长按弹弧形菜单入口。流程：
-     *  1) 按 [menuItemOrder] 构造 spec → paginate 切页（每页最多 [FloatingMenu.PAGE_SIZE] 项，
-     *     超出末位变「下一组」按钮）；
+     *  1) 按 [menuItemOrder] 构造 spec → paginate 切页（每页 [arcMenuPageSize] 项，数量包含
+     *     「下一组」按钮；最后一页的「下一组」回到第一页）；
      *  2) 估算首页扇形空间，若球当前位置塞不下扇形，先 spring 到「最近的安全位」，再展开。
      *     这样按钮**不需要缩小、不需要折叠**，避免越界；菜单关闭时 spring 回原位（仿 MIUI 悬浮球）；
      *  3) 翻页时不回滚球位置（保留腾位状态，下一页用同一位置展开）。
@@ -718,12 +735,15 @@ class FloatingButtonManager(
             callbacks = MenuItemRegistry.Callbacks(
                 onLoop = { dismissArcMenu(); onLongPress() },
                 onRegion = { dismissArcMenu(); onMenuPickRegion() },
+                onLanguagePair = { dismissArcMenu(); onMenuLanguagePair() },
                 onOpenMain = { dismissArcMenu(); onMenuOpenMainActivity() },
+                onOpenSettings = { dismissArcMenu(); onMenuOpenSettings() },
+                onPresetSwitch = { dismissArcMenu(); onMenuPresetSwitch() },
                 onSwitchToFullScreen = { dismissArcMenu(); onSwitchSkill(FloatingSkill.FULL_SCREEN) },
                 onSwitchToWordSelect = { dismissArcMenu(); onSwitchSkill(FloatingSkill.WORD_SELECT) }
             )
         )
-        val pages = MenuItemRegistry.paginate(allItems) { nextIdx ->
+        val pages = MenuItemRegistry.paginate(allItems, pageSize = arcMenuPageSize) { nextIdx ->
             // 翻页：关菜单但**不**回滚球位（保留腾位状态，下一页用同一位置开），再开下一页
             dismissArcMenu(restorePosition = false)
             view?.post { openArcMenuPage(nextIdx) }
@@ -739,14 +759,9 @@ class FloatingButtonManager(
         val gapPx = (28 * density).toInt()
         val radius = ballRadiusPx + itemRadiusPx + gapPx
         val itemCount = pageItems.size
-        // 3 项保留原 ±45°；4 项 ±54°（间距 36° > 35.4° 不重叠，108° 扇形）。每页 ≤ PAGE_SIZE。
-        val spread = when {
-            itemCount <= 1 -> 0.0
-            itemCount == 2 -> Math.PI / 6
-            itemCount == 3 -> Math.PI / 4
-            else -> Math.toRadians(54.0)
-        }
-        // 用 snapToEdge 同源 verticalSafe（按 PAGE_SIZE 最坏情况），避免「snapToEdge 把球贴边
+        // 按当前页实际按钮数动态展开：2/3/4/5/6 项分别为 ±30°/±45°/±54°/±72°/±90°。
+        val spread = arcSpreadFor(itemCount)
+        // 用 snapToEdge 同源 verticalSafe（按 MAX_PAGE_SIZE 最坏情况），避免「snapToEdge 把球贴边
         // 后 openArcMenuPage 又判定 needsMove」死循环。
         val verticalSafe = menuVerticalSafePx()
 

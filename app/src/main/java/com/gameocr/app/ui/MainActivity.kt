@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -28,6 +30,13 @@ import dagger.hilt.android.AndroidEntryPoint
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+    private val routeRequest = mutableStateOf<String?>(null)
+
+    companion object {
+        const val EXTRA_START_ROUTE: String = "com.gameocr.app.extra.START_ROUTE"
+        const val ROUTE_SETTINGS: String = "Settings"
+    }
+
     /**
      * 在 Activity 的 baseContext 被设置之前，用持久化的 locale 包装它。
      * 重写在 [onCreate] 之前就被调用，确保整个 Activity 生命周期内 Resources 用对的 locale。
@@ -38,6 +47,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        routeRequest.value = intent?.getStringExtra(EXTRA_START_ROUTE)
         enableEdgeToEdge()
         setContent {
             val context = LocalContext.current
@@ -53,19 +63,31 @@ class MainActivity : ComponentActivity() {
             )
             CompositionLocalProvider(LocalThemeMode provides controller) {
                 GameOcrTheme(themeMode = themeMode) {
-                    AppRoot()
+                    AppRoot(routeRequest)
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        routeRequest.value = intent.getStringExtra(EXTRA_START_ROUTE)
     }
 }
 
 private enum class Route { Main, Settings, Logs }
 
 @Composable
-private fun AppRoot() {
+private fun AppRoot(routeRequest: State<String?>) {
     // 用 rememberSaveable：语言切换会触发系统 recreate Activity，route 须跨重建保留。
-    var routeName by rememberSaveable { mutableStateOf(Route.Main.name) }
+    var routeName by rememberSaveable { mutableStateOf(routeRequest.value ?: Route.Main.name) }
+    LaunchedEffect(routeRequest.value) {
+        val requested = routeRequest.value ?: return@LaunchedEffect
+        if (Route.entries.any { it.name == requested }) {
+            routeName = requested
+        }
+    }
     val route = Route.valueOf(routeName)
     Box(
         modifier = Modifier

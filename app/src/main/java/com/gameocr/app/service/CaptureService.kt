@@ -4,6 +4,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.Matrix
 import android.graphics.Point
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
@@ -17,22 +18,44 @@ import com.gameocr.app.capture.Screenshotter
 import com.gameocr.app.capture.ShizukuScreenshotter
 import com.gameocr.app.shizuku.ShizukuCapabilities
 import com.gameocr.app.data.LogRepository
+import com.gameocr.app.data.OcrEngineKind
+import com.gameocr.app.data.OverlayFontManager
 import com.gameocr.app.data.RenderMode
 import com.gameocr.app.data.Settings
 import com.gameocr.app.data.SettingsRepository
+import com.gameocr.app.data.TranslationPreset
+import com.gameocr.app.data.TranslationPresetCatalog
+import com.gameocr.app.data.needsRawBitmap
+import com.gameocr.app.data.Languages
 import com.gameocr.app.ocr.BitmapPreprocessor
+import com.gameocr.app.ocr.MangaOcrModelInstaller
 import com.gameocr.app.ocr.OcrEngine
+import com.gameocr.app.ocr.OrientationCoordinator
+import com.gameocr.app.ocr.OrientationResult
+import com.gameocr.app.ocr.OrientationRouting
+import com.gameocr.app.ocr.PaddleTextLineOrientationClassifier
 import com.gameocr.app.ocr.TextBlock
+import com.gameocr.app.ocr.TextOrientation
+import com.gameocr.app.ocr.findOcrResultQualityIssue
+import com.gameocr.app.ocr.mapBlocksFromRotated180
+import com.gameocr.app.ocr.orientationHintFromLayout
+import com.gameocr.app.ocr.resolveRenderOrientation
+import com.gameocr.app.ocr.shouldRerunLowQualityChinesePaddleOcr
+import com.gameocr.app.ocr.sortTextBlocksForReading
 import com.gameocr.app.data.FloatingSkill
 import com.gameocr.app.overlay.FloatingButtonManager
+import com.gameocr.app.overlay.LanguageQuickSwitchOverlay
 import com.gameocr.app.overlay.OverlayManager
+import com.gameocr.app.overlay.PresetQuickSwitchOverlay
 import com.gameocr.app.overlay.RegionPickerOverlay
 import com.gameocr.app.overlay.TranslationCardOverlay
 import com.gameocr.app.overlay.WordSelectOverlay
+import com.gameocr.app.ui.MainActivity
 import com.gameocr.app.translate.TranslationException
 import com.gameocr.app.translate.Translator
 import com.gameocr.app.translate.WordHeuristic
 import com.gameocr.app.translate.WordResult
+import com.gameocr.app.util.VerticalDiagnosticLog
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
@@ -52,6 +75,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import timber.log.Timber
+import java.util.Locale
 
 /**
  * 截屏前台服务：所有截屏 + OCR + 翻译 + 悬浮窗显示都在这里串。
@@ -63,10 +87,17 @@ import timber.log.Timber
 class CaptureService : Service() {
 
     @Inject lateinit var settingsRepository: SettingsRepository
+    @Inject lateinit var overlayFontManager: OverlayFontManager
     @Inject lateinit var ocrEngine: OcrEngine
     @Inject lateinit var translator: Translator
     @Inject lateinit var shizukuCapabilities: ShizukuCapabilities
     @Inject lateinit var logRepository: LogRepository
+    // 端侧 LLM 翻译共享层。设置里切走 LOCAL_* 引擎或 Service 销毁时主动 unload 释放 ~500 MB 内存。
+    @Inject lateinit var llamaEngineHolder: com.gameocr.app.llm.LlamaEngineHolder
+    // 文本方向自动判别 + 路由。仅在 settings.textOrientationAutoDetect = true 时启用。
+    @Inject lateinit var orientationCoordinator: OrientationCoordinator
+    // 用于路由层判断"manga-ocr 模型是否已下载"——未下载时 (VERTICAL_RTL, ja) 不会被路由到 manga
+    @Inject lateinit var mangaOcrModelInstaller: MangaOcrModelInstaller
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -77,6 +108,8 @@ class CaptureService : Service() {
     private var floatingButton: FloatingButtonManager? = null
     private var overlay: OverlayManager? = null
     private var regionPicker: RegionPickerOverlay? = null
+    private var languageQuickSwitch: LanguageQuickSwitchOverlay? = null
+    private var presetQuickSwitch: PresetQuickSwitchOverlay? = null
     private var wordSelect: WordSelectOverlay? = null
     private var translationCard: TranslationCardOverlay? = null
 
@@ -86,6 +119,7 @@ class CaptureService : Service() {
     // 时读 settings，导致用户必须停止/重启服务或触发一次截屏才能看到改动。
     private var settingsCollectJob: Job? = null
     @Volatile private var loopMode: Boolean = false
+    private var captureSequence: Long = 0L
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -188,8 +222,17 @@ class CaptureService : Service() {
             // 截图区域调整：用悬浮窗版替代旧的 Activity 跳转——不再切走游戏 / 漫画，且重复
             // 点菜单也只弹一次（show 内部去重）。
             it.onMenuPickRegion = { showRegionPickerOverlay() }
+            it.onMenuLanguagePair = { showLanguageQuickSwitchOverlay() }
+            it.onMenuPresetSwitch = { showPresetQuickSwitchOverlay() }
+            it.onMenuOpenSettings = {
+                startActivity(
+                    Intent(this, MainActivity::class.java)
+                        .putExtra(MainActivity.EXTRA_START_ROUTE, MainActivity.ROUTE_SETTINGS)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                )
+            }
             it.onMenuOpenMainActivity = { startActivity(
-                Intent(this, com.gameocr.app.ui.MainActivity::class.java)
+                Intent(this, MainActivity::class.java)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
             ) }
             // 主球技能切换：菜单点了「划词翻译 / 全屏翻译」时由 FloatingButtonManager 触发，
@@ -207,6 +250,7 @@ class CaptureService : Service() {
             floatingButton?.autoDockEnabled = s.floatingButtonAutoDock
             floatingButton?.dockEdgeInsetPx = (s.floatingButtonDockInsetDp * resources.displayMetrics.density).toInt()
             floatingButton?.menuItemOrder = s.floatingMenuItemOrder
+            floatingButton?.arcMenuPageSize = s.arcMenuPageSize
             floatingButton?.skill = s.floatingButtonSkill
             mainScope.launch { floatingButton?.show() }
         }
@@ -216,9 +260,21 @@ class CaptureService : Service() {
         settingsCollectJob?.cancel()
         settingsCollectJob = scope.launch {
             var first = true
+            var lastEngine: com.gameocr.app.data.TranslatorEngine? = null
             settingsRepository.settings.collect { s ->
-                if (first) { first = false; return@collect }
+                if (first) {
+                    first = false
+                    lastEngine = s.translatorEngine
+                    return@collect
+                }
                 applyOverlayConfig(s)
+                // 端侧 LLM 引擎切走时主动释放权重：避免 500MB+ 模型常驻内存抢 Bitmap / OCR 模型空间。
+                val wasLocal = lastEngine?.name?.startsWith("LOCAL_") == true
+                val isLocal = s.translatorEngine.name.startsWith("LOCAL_")
+                if (wasLocal && !isLocal) {
+                    scope.launch { runCatching { llamaEngineHolder.unload() } }
+                }
+                lastEngine = s.translatorEngine
             }
         }
 
@@ -331,15 +387,21 @@ class CaptureService : Service() {
     /** 框选后真正跑流水线。screenshot → crop → OCR → translate → 弹卡片。 */
     private suspend fun runWordSelectPipeline(rect: android.graphics.Rect) {
         if (!captureLock.tryLock()) return
+        val diagId = ++captureSequence
         try {
+            logVerticalDiag(diagId, "wordSelect start rect=${rect.toDiagString()}")
             mainScope.launch { overlay?.showLoadingHint() }
-            val shotter = screenshotter ?: return
+            val shotter = screenshotter ?: run {
+                logVerticalDiag(diagId, "skip: screenshotter is null")
+                return
+            }
             val full = shotter.capture()
             if (full == null) {
                 val msg = getString(R.string.toast_capture_failed)
                 mainScope.launch { overlay?.showErrorHint(msg) }
                 return
             }
+            logVerticalDiag(diagId, "screenshot full=${full.width}x${full.height}")
             val settings = settingsRepository.get()
             // 用 word-select rect 裁剪，**不**走 settings.captureRegion——划词是一次性独立选区
             val cropped = try {
@@ -354,6 +416,7 @@ class CaptureService : Service() {
                 mainScope.launch { overlay?.showErrorHint(msg) }
                 return
             }
+            val ocrStartedAt = System.currentTimeMillis()
             val ocrBlocks = try {
                 ocrEngine.recognize(cropped, settings.ocrEngine)
             } catch (ce: kotlinx.coroutines.CancellationException) {
@@ -364,7 +427,8 @@ class CaptureService : Service() {
                 logRepository.error(
                     LogRepository.Category.OCR,
                     getString(R.string.log_msg_ocr_failed_format, settings.ocrEngine.name),
-                    t
+                    t,
+                    elapsedMs = elapsedSince(ocrStartedAt)
                 )
                 val msg = getString(
                     R.string.toast_word_select_ocr_failed_format,
@@ -376,7 +440,11 @@ class CaptureService : Service() {
                 return
             }
             cropped.recycle()
-            val text = ocrBlocks.joinToString(" ") { it.text.trim() }.trim()
+            logVerticalBlocks(diagId, "wordSelect rawBlocks engine=${settings.ocrEngine.name}", ocrBlocks)
+            val orderedOcrBlocks = sortTextBlocksForReading(ocrBlocks)
+            logVerticalBlocks(diagId, "wordSelect orderedBlocks", orderedOcrBlocks)
+            val text = orderedOcrBlocks.joinToString(" ") { it.text.trim() }.trim()
+            logVerticalDiag(diagId, "wordSelect joined ${text.toDiagText()}")
             if (text.isEmpty()) {
                 val msg = getString(R.string.word_card_no_text)
                 mainScope.launch { overlay?.showErrorHint(msg) }
@@ -384,7 +452,8 @@ class CaptureService : Service() {
             }
             logRepository.info(
                 LogRepository.Category.OCR,
-                getString(R.string.log_msg_ocr_results_format, ocrBlocks.size, settings.ocrEngine.name, text)
+                getString(R.string.log_msg_ocr_results_format, ocrBlocks.size, settings.ocrEngine.name, text),
+                elapsedMs = elapsedSince(ocrStartedAt)
             )
 
             val isWord = WordHeuristic.isWord(text, settings.sourceLang)
@@ -401,16 +470,19 @@ class CaptureService : Service() {
             } else null
 
             // 纯翻译：词典化成功时也跑一次（用作主显示），失败时回退
+            val translateStartedAt = System.currentTimeMillis()
             val translation: String? = runCatching {
                 withContext(Dispatchers.IO) {
                     translator.translate(text, settings)
                 }
             }.getOrElse { t ->
+                val translateElapsedMs = elapsedSince(translateStartedAt)
                 Timber.w(t, "Word-select translate failed")
                 logRepository.error(
                     LogRepository.Category.TRANSLATE,
                     getString(R.string.log_msg_translate_failed_format, settings.translatorEngine.name),
-                    t
+                    t,
+                    elapsedMs = translateElapsedMs
                 )
                 // 翻译失败但 wordResult 有 definitions 时仍可展示卡片
                 if (wordResult == null) {
@@ -425,7 +497,12 @@ class CaptureService : Service() {
                 null
             }
             if (translation != null) {
-                logRepository.pair(LogRepository.Category.TRANSLATE, text, translation)
+                logRepository.pair(
+                    LogRepository.Category.TRANSLATE,
+                    text,
+                    translation,
+                    elapsedMs = elapsedSince(translateStartedAt)
+                )
             }
             val displayedTranslation = translation
                 ?: wordResult?.definitions?.firstOrNull()
@@ -437,6 +514,7 @@ class CaptureService : Service() {
                 card.show(text, displayedTranslation.ifBlank { null }, wordResult, settings)
             }
         } finally {
+            logVerticalDiag(diagId, "finish")
             mainScope.launch { overlay?.dismissLoading() }
             captureLock.unlock()
         }
@@ -450,6 +528,31 @@ class CaptureService : Service() {
         val b = rect.bottom.coerceIn(0, src.height)
         if (r - l <= 8 || b - t <= 8) return null
         return Bitmap.createBitmap(src, l, t, r - l, b - t)
+    }
+
+    private fun shouldRerunForTextLine180(result: OrientationResult): Boolean =
+        result.source == PaddleTextLineOrientationClassifier.SOURCE && result.rawAngle == 180
+
+    private suspend fun rerunOcrRotated180(
+        bitmap: Bitmap,
+        engine: OcrEngineKind,
+        diagId: Long,
+    ): List<TextBlock> {
+        val rotated = rotateBitmap180(bitmap)
+        return try {
+            logVerticalDiag(diagId, "rerun OCR rotated180 engine=${engine.name} bitmap=${bitmap.width}x${bitmap.height}")
+            val blocks = ocrEngine.recognize(rotated, engine)
+            val mapped = mapBlocksFromRotated180(blocks, bitmap.width, bitmap.height)
+            logVerticalBlocks(diagId, "rerunBlocks rotated180 engine=${engine.name}", mapped)
+            mapped
+        } finally {
+            rotated.recycle()
+        }
+    }
+
+    private fun rotateBitmap180(bitmap: Bitmap): Bitmap {
+        val matrix = Matrix().apply { postRotate(180f) }
+        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
     }
 
     /**
@@ -468,6 +571,63 @@ class CaptureService : Service() {
             FloatingSkill.WORD_SELECT -> R.string.toast_skill_switched_word_select
         }
         mainScope.launch { overlay?.showInfoHint(getString(msgRes)) }
+    }
+
+    private fun showLanguageQuickSwitchOverlay() {
+        val panel = languageQuickSwitch ?: LanguageQuickSwitchOverlay(this).also {
+            languageQuickSwitch = it
+        }
+        if (panel.isShown()) return
+        scope.launch {
+            val settings = settingsRepository.get()
+            mainScope.launch {
+                panel.show(settings) { source, target ->
+                    scope.launch {
+                        settingsRepository.update {
+                            it.copy(sourceLang = source, targetLang = target)
+                        }
+                    }
+                    overlay?.showInfoHint(
+                        getString(
+                            R.string.language_quick_updated_format,
+                            Languages.nameOf(this@CaptureService, source),
+                            Languages.nameOf(this@CaptureService, target)
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    private fun showPresetQuickSwitchOverlay() {
+        val panel = presetQuickSwitch ?: PresetQuickSwitchOverlay(this).also {
+            presetQuickSwitch = it
+        }
+        if (panel.isShown()) return
+        scope.launch {
+            val settings = settingsRepository.get()
+            mainScope.launch {
+                panel.show(settings) { preset ->
+                    scope.launch {
+                        settingsRepository.update { current ->
+                            preset.applyTo(current).copy(activeTranslationPresetId = preset.id)
+                        }
+                    }
+                    overlay?.showInfoHint(
+                        getString(
+                            R.string.preset_quick_applied_format,
+                            presetDisplayName(preset)
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    private fun presetDisplayName(preset: TranslationPreset): String = when (preset.id) {
+        TranslationPresetCatalog.BUILTIN_MANGA_JA_ZH ->
+            getString(R.string.settings_translation_preset_builtin_manga)
+        else -> preset.name
     }
 
     private fun toggleLoopMode() {
@@ -581,13 +741,19 @@ class CaptureService : Service() {
         return if (raw.length > 140) raw.take(140) + "…" else raw
     }
 
+    private fun elapsedSince(startMs: Long): Long =
+        (System.currentTimeMillis() - startMs).coerceAtLeast(0L)
+
     private suspend fun captureOnce() {
         if (!captureLock.tryLock()) return
+        val diagId = ++captureSequence
         try {
+            logVerticalDiag(diagId, "start loopMode=$loopMode")
             // 循环模式优化：上一帧译文 box 还挂在屏幕上（用户没点掉/未手动 clear），
             // 先别打扰；本轮不截屏、不 OCR、不翻译，等用户消化完上一帧再走下一帧。
             // 这对漫画 / 视频字幕场景特别重要——避免每 N 秒重新画一遍同样的译文。
             if (loopMode && overlay?.hasActiveBlocks() == true) {
+                logVerticalDiag(diagId, "skip active overlay in loop mode")
                 return
             }
             val shotter = screenshotter ?: return
@@ -606,18 +772,29 @@ class CaptureService : Service() {
             settingsRepository.rescaleCaptureRegionIfNeeded(dmNow.widthPixels, dmNow.heightPixels)
             val settings = settingsRepository.get()
             applyOverlayConfig(settings)
+            logVerticalSettings(diagId, settings, dmNow.widthPixels, dmNow.heightPixels)
 
             val region = settings.captureRegion
             val workBitmap = cropIfNeeded(full, region) ?: run {
+                logVerticalDiag(diagId, "crop skipped: invalid bitmap from region=${region.toDiagString()}")
                 full.recycle()
                 return
             }
+            logVerticalDiag(
+                diagId,
+                "workBitmap=${workBitmap.width}x${workBitmap.height} region=${region.toDiagString()}"
+            )
             if (workBitmap !== full) full.recycle()
 
             // 端到端引擎（有道图片翻译）：跳过 OCR 阶段，直接拿带译文的 box；不走 mergeAdjacentBlocks
             // 也不走后续 translateOne，因为译文已经在 region 粒度上对齐好了。
             val routingT = translator as? com.gameocr.app.translate.RoutingTranslator
             val isEndToEnd = routingT?.isEndToEndFor(settings) ?: translator.isEndToEnd
+            logVerticalDiag(
+                diagId,
+                "translator=${settings.translatorEngine.name} isEndToEnd=$isEndToEnd renderMode=${settings.renderMode.name}"
+            )
+            val ocrStartedAt = System.currentTimeMillis()
             if (isEndToEnd) {
                 val translatedBlocks = try {
                     translator.ocrAndTranslate(workBitmap, settings)
@@ -629,7 +806,8 @@ class CaptureService : Service() {
                     logRepository.error(
                         LogRepository.Category.OCR,
                         getString(R.string.log_msg_ocr_failed_format, settings.translatorEngine.name),
-                        t
+                        t,
+                        elapsedMs = elapsedSince(ocrStartedAt)
                     )
                     val msg = getString(R.string.toast_ocr_failed_format, settings.translatorEngine.name, shortError(t))
                     mainScope.launch { overlay?.showErrorHint(msg) }
@@ -637,22 +815,99 @@ class CaptureService : Service() {
                     return
                 }
                 workBitmap.recycle()
+                logVerticalTranslatedBlocks(diagId, "endToEnd", translatedBlocks)
                 if (translatedBlocks.isNotEmpty()) {
                     val joined = translatedBlocks.mapIndexed { i, (b, dst) ->
                         "#${i + 1} ${b.text} → $dst"
                     }.joinToString(" | ")
-                    logRepository.info(LogRepository.Category.OCR, "[${settings.translatorEngine.name}] ${translatedBlocks.size} 段: $joined")
+                    logRepository.info(
+                        LogRepository.Category.OCR,
+                        "[${settings.translatorEngine.name}] ${translatedBlocks.size} 段: $joined",
+                        elapsedMs = elapsedSince(ocrStartedAt)
+                    )
                 } else {
-                    logRepository.info(LogRepository.Category.OCR, "[${settings.translatorEngine.name}] 无识别结果")
+                    logRepository.info(
+                        LogRepository.Category.OCR,
+                        "[${settings.translatorEngine.name}] 无识别结果",
+                        elapsedMs = elapsedSince(ocrStartedAt)
+                    )
                     return
                 }
-                renderTranslatedBlocks(translatedBlocks, settings)
+                renderTranslatedBlocks(
+                    translatedBlocks,
+                    settings,
+                    diagId,
+                    translationElapsedMs = elapsedSince(ocrStartedAt)
+                )
                 return
             }
 
-            val preprocessed = BitmapPreprocessor.apply(workBitmap, settings.preprocess)
-            val rawBlocks = try {
-                ocrEngine.recognize(preprocessed, settings.ocrEngine)
+            // manga-ocr 训练时见的是漫画原图（含网点 / 灰阶），invert / binarize 后效果显著下降，
+            // 所以 [OcrEngineKind.needsRawBitmap] = true 时跳过这两步。upscale2x 保留——它对
+            // DBNet 检测小字仍有帮助，对 manga-ocr 224×224 squash resize 后也无副作用。
+            // 第一次 OCR：用用户在 settings 选的引擎跑
+            var effectiveEngine = settings.ocrEngine
+            var orientationHint: OrientationResult? = null
+            val hasMangaOcr = mangaOcrModelInstaller.checkInstalled() != null
+            val baiduConfigured = settings.baiduOcrApiKey.isNotBlank() &&
+                settings.baiduOcrSecretKey.isNotBlank()
+            logVerticalDiag(
+                diagId,
+                "ocr route initial=${effectiveEngine.name} hasMangaOcr=$hasMangaOcr " +
+                    "paddleVersion=${settings.paddleModelVersion.name} baiduEndpoint=${settings.baiduOcrEndpoint.name} " +
+                    "baiduConfigured=$baiduConfigured autoDetect=${settings.textOrientationAutoDetect} " +
+                    "manual=${settings.manualTextOrientation?.name ?: "null"}"
+            )
+
+            if (settings.textOrientationAutoDetect) {
+                val preHint = settings.manualTextOrientation
+                    ?.let { OrientationResult(it, 1f, 0, "manual") }
+                    ?: orientationCoordinator.classifyPreOcr(workBitmap)
+                logVerticalOrientation(diagId, "pre", preHint)
+                if (preHint.orientation != TextOrientation.UNKNOWN ||
+                    preHint.source != "heuristic-bitmap-na"
+                ) {
+                    orientationHint = preHint
+                }
+                val preEngine = OrientationRouting.resolveEngine(
+                    orientation = preHint.orientation,
+                    sourceLangBcp47 = settings.sourceLang,
+                    userEngine = effectiveEngine,
+                    hasMangaOcr = hasMangaOcr,
+                    baiduConfigured = baiduConfigured
+                )
+                if (preEngine != null && preEngine != effectiveEngine) {
+                    logOcrInfo(
+                        "[orient-pre] %s conf=%.2f raw=%d src=%s -> first pass %s (was %s)".format(
+                            preHint.orientation.name, preHint.confidence, preHint.rawAngle,
+                            preHint.source, preEngine.name, effectiveEngine.name
+                        )
+                    )
+                    effectiveEngine = preEngine
+                } else if (preHint.source != "heuristic-bitmap-na") {
+                    logOcrInfo(
+                        "[orient-pre] %s conf=%.2f raw=%d src=%s -> keep %s".format(
+                            preHint.orientation.name, preHint.confidence, preHint.rawAngle,
+                            preHint.source, effectiveEngine.name
+                        )
+                    )
+                }
+            }
+            val firstPreprocess = if (effectiveEngine.needsRawBitmap) {
+                settings.preprocess.copy(invert = false, binarize = false)
+            } else {
+                settings.preprocess
+            }
+            logVerticalDiag(
+                diagId,
+                "first OCR engine=${effectiveEngine.name} preprocess=${firstPreprocess.toDiagString()} " +
+                    "paddleVersion=${settings.paddleModelVersion.name} " +
+                    "needsRaw=${effectiveEngine.needsRawBitmap}"
+            )
+            var preprocessed: Bitmap = BitmapPreprocessor.apply(workBitmap, firstPreprocess)
+            logVerticalDiag(diagId, "preprocessed=${preprocessed.width}x${preprocessed.height}")
+            val firstBlocks = try {
+                ocrEngine.recognize(preprocessed, effectiveEngine)
             } catch (ce: kotlinx.coroutines.CancellationException) {
                 // 协程取消（用户长按关循环 / Service 销毁）不是真错误，让它传播出去，
                 // 不要记为 OCR 失败也不要弹错误条。Bitmap 在 finally 里没法回收，这里手动清。
@@ -661,50 +916,293 @@ class CaptureService : Service() {
                 throw ce
             } catch (t: Throwable) {
                 Timber.w(t, "OCR failed")
+                logVerticalDiag(t, diagId, "first OCR failed engine=${effectiveEngine.name}")
                 logRepository.error(
                     LogRepository.Category.OCR,
-                    getString(R.string.log_msg_ocr_failed_format, settings.ocrEngine.name),
-                    t
+                    getString(R.string.log_msg_ocr_failed_format, effectiveEngine.name),
+                    t,
+                    elapsedMs = elapsedSince(ocrStartedAt)
                 )
                 // 提示给用户：不然只看到 loading 圈转一下就消失，必须翻日志才知道是 OCR 失败。
                 // 用悬浮错误条显示（走 loading 圈同链路），跨 ROM 一致——不走 Toast，因为后台
                 // Service Toast 在 HyperOS / MIUI 等国产 ROM 上会被静默丢弃。
-                val msg = getString(R.string.toast_ocr_failed_format, settings.ocrEngine.name, shortError(t))
+                val msg = getString(R.string.toast_ocr_failed_format, effectiveEngine.name, shortError(t))
                 mainScope.launch { overlay?.showErrorHint(msg) }
                 if (preprocessed !== workBitmap) preprocessed.recycle()
                 workBitmap.recycle()
                 return
             }
-            if (preprocessed !== workBitmap) preprocessed.recycle()
-            workBitmap.recycle()
-            // 把所有 box 拼成"#1 原文 / #2 原文 / ..."一条日志，避免一次 OCR 写多条
-            if (rawBlocks.isNotEmpty()) {
-                val joined = rawBlocks.mapIndexed { i, b -> "#${i + 1} ${b.text}" }.joinToString(" | ")
-                logRepository.info(
-                    LogRepository.Category.OCR,
-                    getString(R.string.log_msg_ocr_results_format, rawBlocks.size, settings.ocrEngine.name, joined)
-                )
-            } else {
-                logRepository.info(
-                    LogRepository.Category.OCR,
-                    getString(R.string.log_msg_ocr_no_result_format, settings.ocrEngine.name)
+            logVerticalBlocks(diagId, "firstBlocks engine=${effectiveEngine.name}", firstBlocks)
+            val firstPassNonWhitespaceChars = firstBlocks.sumOf { block ->
+                block.text.count { ch -> !ch.isWhitespace() }
+            }
+            val firstPassPortraitBlocks = firstBlocks.count { block ->
+                val box = block.boundingBox
+                box.height() > 0 && box.height().toFloat() / box.width().coerceAtLeast(1) >= 1.25f
+            }
+            val lowQualityChinesePaddleFallback = shouldRerunLowQualityChinesePaddleOcr(
+                sourceLangBcp47 = settings.sourceLang,
+                engine = effectiveEngine,
+                autoDetect = settings.textOrientationAutoDetect,
+                manualOrientationLocked = settings.manualTextOrientation != null,
+                imageWidth = preprocessed.width,
+                imageHeight = preprocessed.height,
+                blockCount = firstBlocks.size,
+                portraitBlockCount = firstPassPortraitBlocks,
+                nonWhitespaceChars = firstPassNonWhitespaceChars
+            )
+            if (lowQualityChinesePaddleFallback) {
+                logVerticalDiag(
+                    diagId,
+                    "low-quality zh Paddle candidate blocks=${firstBlocks.size} " +
+                        "portraitBlocks=$firstPassPortraitBlocks chars=$firstPassNonWhitespaceChars " +
+                        "image=${preprocessed.width}x${preprocessed.height}"
                 )
             }
+
+            // 文本方向自动分流：OCR 后看 bbox 几何判方向。如果路由层判定当前引擎对此方向不合适
+            // （如发现是日文竖排但用了 ML Kit Latin），用更合适的引擎重跑一次。横排场景路由返回
+            // null，零开销；竖排误用其它引擎时 OCR 跑 2 次但用户被自动救。详见 OrientationCoordinator。
+            // hint 提升到外层：渲染层 renderBlocks 也要用（按方向选 TextView vs VerticalTextView）
+            val rawBlocks: List<TextBlock> = if (
+                settings.textOrientationAutoDetect &&
+                (firstBlocks.isNotEmpty() || lowQualityChinesePaddleFallback)
+            ) {
+                val hint = if (settings.manualTextOrientation != null) {
+                    orientationHint ?: OrientationResult(settings.manualTextOrientation, 1f, 0, "manual")
+                } else {
+                    val layoutHint = orientationHintFromLayout(firstBlocks)
+                    val refined = if (firstBlocks.isEmpty()) {
+                        OrientationResult(TextOrientation.UNKNOWN, 0f, 0, "post-ocr-empty")
+                    } else {
+                        orientationCoordinator.classifyPostOcr(
+                            preprocessed,
+                            firstBlocks,
+                            orientationHint ?: OrientationResult(TextOrientation.UNKNOWN, 0f, 0, "post-ocr")
+                        )
+                    }
+                    when {
+                        refined.orientation == TextOrientation.UNKNOWN && layoutHint != null -> layoutHint
+                        refined.orientation == TextOrientation.UNKNOWN &&
+                            orientationHint != null &&
+                            orientationHint!!.orientation != TextOrientation.UNKNOWN -> orientationHint!!
+                        else -> refined
+                    }
+                }
+                orientationHint = hint
+                logVerticalOrientation(diagId, "post", hint)
+                val upsideDownRerun = if (shouldRerunForTextLine180(hint)) {
+                    try {
+                        val rerun = rerunOcrRotated180(preprocessed, effectiveEngine, diagId)
+                        logOcrInfo(
+                            "[orient-textline] 180deg conf=%.2f src=%s -> rerun %s and map boxes back".format(
+                                hint.confidence, hint.source, effectiveEngine.name
+                            )
+                        )
+                        rerun
+                    } catch (ce: kotlinx.coroutines.CancellationException) {
+                        if (preprocessed !== workBitmap) preprocessed.recycle()
+                        workBitmap.recycle()
+                        throw ce
+                    } catch (t: Throwable) {
+                        Timber.w(t, "OCR rerun after text-line 180 failed; keep original $effectiveEngine result")
+                        logVerticalDiag(t, diagId, "text-line 180 rerun failed engine=${effectiveEngine.name}")
+                        logOcrInfo(
+                            "[orient-textline] 180deg rerun failed (${shortError(t)}), keep ${effectiveEngine.name}"
+                        )
+                        null
+                    }
+                } else {
+                    null
+                }
+                if (upsideDownRerun != null) {
+                    upsideDownRerun
+                } else {
+                    val newEngine = OrientationRouting.resolveEngine(
+                        orientation = hint.orientation,
+                        sourceLangBcp47 = settings.sourceLang,
+                        userEngine = effectiveEngine,
+                        hasMangaOcr = hasMangaOcr,
+                        baiduConfigured = baiduConfigured
+                    )
+                    val lowQualityVerticalHint = if (newEngine == null && lowQualityChinesePaddleFallback) {
+                        OrientationResult(TextOrientation.VERTICAL_RTL, 0.51f, 0, "low-quality-zh-paddle")
+                    } else {
+                        null
+                    }
+                    val rerunEngine = newEngine ?: lowQualityVerticalHint?.let { fallbackHint ->
+                        OrientationRouting.resolveEngine(
+                            orientation = fallbackHint.orientation,
+                            sourceLangBcp47 = settings.sourceLang,
+                            userEngine = effectiveEngine,
+                            hasMangaOcr = hasMangaOcr,
+                            baiduConfigured = baiduConfigured
+                        )
+                    }
+                    if (rerunEngine != null && rerunEngine != effectiveEngine) {
+                        val rerunReason = if (lowQualityVerticalHint != null) {
+                            "low-quality zh Paddle OCR"
+                        } else {
+                            "orientation"
+                        }
+                        logVerticalDiag(
+                            diagId,
+                            "rerun requested by $rerunReason: ${effectiveEngine.name} -> ${rerunEngine.name}"
+                        )
+                        // 切引擎重跑：新引擎可能 needsRawBitmap 不同（如 manga-ocr 要原图），重做预处理
+                        if (preprocessed !== workBitmap) preprocessed.recycle()
+                        val rerunPreprocess = if (rerunEngine.needsRawBitmap) {
+                            settings.preprocess.copy(invert = false, binarize = false)
+                        } else {
+                            settings.preprocess
+                        }
+                        logVerticalDiag(
+                            diagId,
+                            "rerun OCR engine=${rerunEngine.name} preprocess=${rerunPreprocess.toDiagString()} " +
+                                "needsRaw=${rerunEngine.needsRawBitmap}"
+                        )
+                        preprocessed = BitmapPreprocessor.apply(workBitmap, rerunPreprocess)
+                        val rerunBlocks = try {
+                            ocrEngine.recognize(preprocessed, rerunEngine)
+                        } catch (ce: kotlinx.coroutines.CancellationException) {
+                            if (preprocessed !== workBitmap) preprocessed.recycle()
+                            workBitmap.recycle()
+                            throw ce
+                        } catch (t: Throwable) {
+                            // 重跑失败不抛——沿用第一次 OCR 结果是更安全的兜底（用户至少有东西看）
+                            Timber.w(t, "OCR rerun with $rerunEngine failed; keep original $effectiveEngine result")
+                            logVerticalDiag(
+                                t,
+                                diagId,
+                                "rerun OCR failed engine=${rerunEngine.name}; keep ${effectiveEngine.name}"
+                            )
+                            logOcrInfo(
+                                "[orient] 重跑 ${rerunEngine.name} 失败 (${shortError(t)})，沿用 ${effectiveEngine.name} 原结果"
+                            )
+                            null
+                        }
+                        if (rerunBlocks != null) {
+                            logVerticalBlocks(diagId, "rerunBlocks engine=${rerunEngine.name}", rerunBlocks)
+                            if (lowQualityVerticalHint != null) {
+                                val rerunHint = orientationHintFromLayout(rerunBlocks) ?: lowQualityVerticalHint
+                                orientationHint = rerunHint
+                                logVerticalOrientation(diagId, "post-rerun", rerunHint)
+                            }
+                            val message = if (lowQualityVerticalHint != null) {
+                                "[orient-low-quality] 中文 Paddle 首轮过少 blocks=%d portraitBlocks=%d chars=%d image=%dx%d → 按竖排重跑 %s (原 %s)".format(
+                                    firstBlocks.size,
+                                    firstPassPortraitBlocks,
+                                    firstPassNonWhitespaceChars,
+                                    preprocessed.width,
+                                    preprocessed.height,
+                                    rerunEngine.name,
+                                    effectiveEngine.name
+                                )
+                            } else {
+                                "[orient] %s conf=%.2f src=%s → 切换 %s (原 %s)".format(
+                                    hint.orientation.name,
+                                    hint.confidence,
+                                    hint.source,
+                                    rerunEngine.name,
+                                    effectiveEngine.name
+                                )
+                            }
+                            logOcrInfo(message)
+                            effectiveEngine = rerunEngine
+                            rerunBlocks
+                        } else {
+                            firstBlocks
+                        }
+                    } else {
+                        if (lowQualityVerticalHint != null) {
+                            logOcrInfo(
+                                "[orient-low-quality] 中文 Paddle 首轮过少 blocks=${firstBlocks.size} " +
+                                    "portraitBlocks=$firstPassPortraitBlocks chars=$firstPassNonWhitespaceChars，" +
+                                    "但没有可切换的中文竖排 OCR 引擎"
+                            )
+                        }
+                        val message = verticalChineseNoBaiduMessage(hint, settings, effectiveEngine, baiduConfigured)
+                            ?: "[orient] %s conf=%.2f src=%s → 沿用 %s (无需切换)".format(
+                                hint.orientation.name, hint.confidence, hint.source, effectiveEngine.name
+                            )
+                        logOcrInfo(message)
+                        firstBlocks
+                    }
+                }
+            } else {
+                firstBlocks
+            }
+
+            if (preprocessed !== workBitmap) preprocessed.recycle()
+            workBitmap.recycle()
+            logVerticalDiag(
+                diagId,
+                "ocr final engine=${effectiveEngine.name} paddleVersion=${settings.paddleModelVersion.name} " +
+                    "orientationHint=${orientationHint?.orientation?.name ?: "null"}"
+            )
+            logVerticalBlocks(diagId, "rawBlocks final", rawBlocks)
+            val orderedRawBlocks = sortTextBlocksForReading(rawBlocks, orientationHint?.orientation)
+            logVerticalBlocks(diagId, "orderedRawBlocks final", orderedRawBlocks)
+            // 把所有 box 拼成"#1 原文 / #2 原文 / ..."一条日志，避免一次 OCR 写多条。
+            // 用 effectiveEngine 而非 settings.ocrEngine——方向自动分流时实际跑的可能是另一个引擎
+            val ocrElapsedMs = elapsedSince(ocrStartedAt)
 
             // 预处理 upscale 会让 boundingBox 坐标变成 2 倍，渲染前缩回
             val blocks = if (settings.preprocess.upscale2x) {
-                rawBlocks.map { tb ->
+                orderedRawBlocks.map { tb ->
                     val r = tb.boundingBox
                     tb.copy(boundingBox = android.graphics.Rect(r.left / 2, r.top / 2, r.right / 2, r.bottom / 2))
                 }
-            } else rawBlocks
-            if (blocks.isEmpty()) return
+            } else orderedRawBlocks
+            if (settings.preprocess.upscale2x) {
+                logVerticalBlocks(diagId, "scaledBlocks for overlay", blocks)
+            }
+            if (blocks.isEmpty()) {
+                logVerticalDiag(diagId, "stop: no OCR blocks")
+                logRepository.info(
+                    LogRepository.Category.OCR,
+                    getString(R.string.log_msg_ocr_no_result_format, effectiveEngine.name),
+                    elapsedMs = ocrElapsedMs
+                )
+                return
+            }
+            val qualityIssue = findOcrResultQualityIssue(blocks)
+            if (qualityIssue != null) {
+                val message = getString(R.string.toast_ocr_unreliable_result)
+                logVerticalDiag(
+                    diagId,
+                    "stop: unreliable OCR engine=${effectiveEngine.name} ${qualityIssue.toLogString()}"
+                )
+                Timber.tag("OcrQuality").i(
+                    "unreliable result engine=%s %s",
+                    effectiveEngine.name,
+                    qualityIssue.toLogString()
+                )
+                logRepository.warn(LogRepository.Category.OCR, message, elapsedMs = ocrElapsedMs)
+                mainScope.launch { overlay?.showErrorHint(message) }
+                return
+            }
+            val joined = orderedRawBlocks.mapIndexed { i, b -> "#${i + 1} ${b.text}" }.joinToString(" | ")
+            logRepository.info(
+                LogRepository.Category.OCR,
+                getString(R.string.log_msg_ocr_results_format, orderedRawBlocks.size, effectiveEngine.name, joined),
+                elapsedMs = ocrElapsedMs
+            )
 
+            val renderOrientation = resolveRenderOrientation(
+                hint = orientationHint?.orientation,
+                blockOrientations = blocks.map { it.layoutOrientation }
+            )
+            logVerticalDiag(
+                diagId,
+                "render mode=${settings.renderMode.name} renderOrientation=$renderOrientation blocks=${blocks.size}"
+            )
             when (settings.renderMode) {
-                RenderMode.BLOCKS -> renderBlocks(blocks, settings)
-                RenderMode.FLOATING_WINDOW -> renderFloatingWindow(blocks, settings)
+                RenderMode.BLOCKS -> renderBlocks(blocks, settings, renderOrientation, diagId)
+                RenderMode.FLOATING_WINDOW -> renderFloatingWindow(blocks, settings, diagId)
             }
         } finally {
+            logVerticalDiag(diagId, "finish")
             // 兜底：所有提前 return / 异常路径下都要把 loading 圈关掉，避免"一直转圈"。
             // 正常完成时 showBlocks/showFullScreen 内部已经 dismiss 过；幂等调用没害。
             mainScope.launch { overlay?.dismissLoading() }
@@ -728,10 +1226,18 @@ class CaptureService : Service() {
      */
     private suspend fun renderTranslatedBlocks(
         items: List<Pair<TextBlock, String>>,
-        settings: Settings
+        settings: Settings,
+        diagId: Long? = null,
+        translationElapsedMs: Long? = null
     ) {
+        diagId?.let { logVerticalTranslatedBlocks(it, "renderTranslatedBlocks", items) }
         items.forEach { (b, dst) ->
-            logRepository.pair(LogRepository.Category.TRANSLATE, b.text, dst)
+            logRepository.pair(
+                LogRepository.Category.TRANSLATE,
+                b.text,
+                dst,
+                elapsedMs = translationElapsedMs
+            )
         }
         when (settings.renderMode) {
             RenderMode.BLOCKS -> withContext(Dispatchers.Main) {
@@ -743,22 +1249,40 @@ class CaptureService : Service() {
         }
     }
 
-    private suspend fun renderBlocks(blocks: List<TextBlock>, settings: Settings) {
-        // 先把所有原文块以占位"…"显示在原文下方
+    private suspend fun renderBlocks(
+        blocks: List<TextBlock>,
+        settings: Settings,
+        orientation: TextOrientation = TextOrientation.HORIZONTAL_LTR,
+        diagId: Long? = null
+    ) {
+        diagId?.let {
+            logVerticalDiag(
+                it,
+                "renderBlocks show placeholders orientation=$orientation count=${blocks.size}"
+            )
+        }
+        // 先把所有原文块以占位"…"显示在原文下方。orientation 决定用 TextView 还是 VerticalTextView
         withContext(Dispatchers.Main) {
-            overlay?.showBlocks(blocks.map { it to "…" })
+            overlay?.showBlocks(blocks.map { it to "…" }, orientation)
         }
         // 引擎支持批处理（如 DeepL）→ 一次 HTTP 译多段，避免限频。否则保留逐段流式
         // 调用 translateOne（OpenAI 兼容 LLM 用户依赖逐 token 流式更新体验）。
         val routing = translator as? com.gameocr.app.translate.RoutingTranslator
         val useBatch = routing?.prefersBatchFor(settings) ?: translator.prefersBatch
+        diagId?.let {
+            logVerticalDiag(
+                it,
+                "renderBlocks translate useBatch=$useBatch engine=${settings.translatorEngine.name} " +
+                    "streaming=${settings.streamingTranslate}"
+            )
+        }
         if (useBatch) {
-            scope.launch { batchTranslateBlocks(blocks, settings) }
+            scope.launch { batchTranslateBlocks(blocks, settings, diagId) }
         } else {
             scope.launch {
                 blocks.mapIndexed { idx, block ->
                     async {
-                        translateOne(block.text, settings) { partial ->
+                        translateOne(block.text, settings, diagId, idx) { partial ->
                             mainScope.launch { overlay?.updateBlockText(idx, partial) }
                         }
                     }
@@ -767,16 +1291,34 @@ class CaptureService : Service() {
         }
     }
 
-    private suspend fun batchTranslateBlocks(blocks: List<TextBlock>, settings: Settings) {
+    private suspend fun batchTranslateBlocks(
+        blocks: List<TextBlock>,
+        settings: Settings,
+        diagId: Long? = null
+    ) {
         val sources = blocks.map { it.text }
+        diagId?.let {
+            logVerticalDiag(
+                it,
+                "batchTranslate begin engine=${settings.translatorEngine.name} count=${sources.size} " +
+                    "${settings.sourceLang}->${settings.targetLang}"
+            )
+            sources.forEachIndexed { idx, source ->
+                logVerticalDiag(it, "batchTranslate src#${idx + 1} ${source.toDiagText()}")
+            }
+        }
+        val translateStartedAt = System.currentTimeMillis()
         val translated = try {
             withContext(Dispatchers.IO) { translator.translateBatch(sources, settings) }
         } catch (t: Throwable) {
+            val translateElapsedMs = elapsedSince(translateStartedAt)
             Timber.w(t, "Batch translate failed")
+            diagId?.let { logVerticalDiag(t, it, "batchTranslate failed engine=${settings.translatorEngine.name}") }
             logRepository.error(
                 LogRepository.Category.TRANSLATE,
                 getString(R.string.log_msg_batch_translate_failed_format, settings.translatorEngine.name),
-                t
+                t,
+                elapsedMs = translateElapsedMs
             )
             // 整批失败：在所有 box 上显示失败标记
             withContext(Dispatchers.Main) {
@@ -786,12 +1328,24 @@ class CaptureService : Service() {
             }
             return
         }
+        val translateElapsedMs = elapsedSince(translateStartedAt)
         translated.forEachIndexed { idx, dst ->
             val src = sources[idx]
             val finalText = dst ?: src // null 走回退（DeepL 没翻出来）
+            diagId?.let {
+                logVerticalDiag(
+                    it,
+                    "batchTranslate dst#${idx + 1} nullResult=${dst == null} ${finalText.toDiagText()}"
+                )
+            }
             mainScope.launch { overlay?.updateBlockText(idx, finalText) }
             if (dst != null) {
-                logRepository.pair(LogRepository.Category.TRANSLATE, src, finalText)
+                logRepository.pair(
+                    LogRepository.Category.TRANSLATE,
+                    src,
+                    finalText,
+                    elapsedMs = translateElapsedMs
+                )
             }
         }
     }
@@ -803,24 +1357,62 @@ class CaptureService : Service() {
      *   每段 `translateOne` 流式回调到 `updateFloatingWindowText`，与 BLOCKS 模式同等体验
      * - 流引擎但关了 streaming：逐段同步 `translate()`，最后整批显示
      */
-    private suspend fun renderFloatingWindow(blocks: List<TextBlock>, settings: Settings) {
+    private suspend fun renderFloatingWindow(
+        blocks: List<TextBlock>,
+        settings: Settings,
+        diagId: Long? = null
+    ) {
         val routing = translator as? com.gameocr.app.translate.RoutingTranslator
         val useBatch = routing?.prefersBatchFor(settings) ?: translator.prefersBatch
+        diagId?.let {
+            logVerticalDiag(
+                it,
+                "renderFloatingWindow useBatch=$useBatch engine=${settings.translatorEngine.name} " +
+                    "streaming=${settings.streamingTranslate} count=${blocks.size}"
+            )
+        }
         if (useBatch) {
             val pairs = withContext(Dispatchers.IO) {
                 val sources = blocks.map { it.text }
+                diagId?.let {
+                    sources.forEachIndexed { idx, source ->
+                        logVerticalDiag(it, "floatingBatch src#${idx + 1} ${source.toDiagText()}")
+                    }
+                }
+                val translateStartedAt = System.currentTimeMillis()
                 val translated = runCatching { translator.translateBatch(sources, settings) }
                     .getOrElse { t ->
+                        val translateElapsedMs = elapsedSince(translateStartedAt)
+                        diagId?.let {
+                            logVerticalDiag(
+                                t,
+                                it,
+                                "floatingBatch failed engine=${settings.translatorEngine.name}"
+                            )
+                        }
                         logRepository.error(
                             LogRepository.Category.TRANSLATE,
                             getString(R.string.log_msg_batch_translate_failed_format, settings.translatorEngine.name),
-                            t
+                            t,
+                            elapsedMs = translateElapsedMs
                         )
                         List(sources.size) { "[!] " + (t.message ?: "") }
                     }
+                val translateElapsedMs = elapsedSince(translateStartedAt)
                 blocks.mapIndexed { i, b ->
                     val dst = (translated.getOrNull(i) as? String) ?: b.text
-                    logRepository.pair(LogRepository.Category.TRANSLATE, b.text, dst)
+                    diagId?.let {
+                        logVerticalDiag(
+                            it,
+                            "floatingBatch dst#${i + 1} ${dst.toDiagText()}"
+                        )
+                    }
+                    logRepository.pair(
+                        LogRepository.Category.TRANSLATE,
+                        b.text,
+                        dst,
+                        elapsedMs = translateElapsedMs
+                    )
                     b.text to dst
                 }
             }
@@ -835,7 +1427,7 @@ class CaptureService : Service() {
         scope.launch {
             blocks.mapIndexed { idx, block ->
                 async {
-                    translateOne(block.text, settings) { partial ->
+                    translateOne(block.text, settings, diagId, idx) { partial ->
                         mainScope.launch { overlay?.updateFloatingWindowText(idx, partial) }
                     }
                 }
@@ -846,19 +1438,34 @@ class CaptureService : Service() {
     private suspend fun translateOne(
         text: String,
         settings: Settings,
+        diagId: Long? = null,
+        blockIndex: Int? = null,
         onPartial: (String) -> Unit
     ) {
+        diagId?.let {
+            logVerticalDiag(
+                it,
+                "translateOne begin ${blockIndex.toDiagBlockLabel()} engine=${settings.translatorEngine.name} " +
+                    "streaming=${settings.streamingTranslate} ${settings.sourceLang}->${settings.targetLang} " +
+                    "src=${text.toDiagText()}"
+            )
+        }
+        val translateStartedAt = System.currentTimeMillis()
         try {
             if (settings.streamingTranslate) {
                 // 流式：累计 partial 用于落日志（流末尾的 partial 才是完整译文）
                 var lastPartial = ""
                 translator.translateStream(text, settings)
                     .catch { e ->
+                        diagId?.let {
+                            logVerticalDiag(e, it, "translateStream failed ${blockIndex.toDiagBlockLabel()}")
+                        }
                         onPartial("[!] " + (e.message ?: ""))
                         logRepository.error(
                             LogRepository.Category.TRANSLATE,
                             getString(R.string.log_msg_stream_translate_failed_format, settings.translatorEngine.name),
-                            e
+                            e,
+                            elapsedMs = elapsedSince(translateStartedAt)
                         )
                     }
                     .onEach {
@@ -867,29 +1474,193 @@ class CaptureService : Service() {
                     }
                     .collect()
                 if (lastPartial.isNotBlank()) {
-                    logRepository.pair(LogRepository.Category.TRANSLATE, text, lastPartial)
+                    diagId?.let {
+                        logVerticalDiag(
+                            it,
+                            "translateOne final ${blockIndex.toDiagBlockLabel()} ${lastPartial.toDiagText()}"
+                        )
+                    }
+                    logRepository.pair(
+                        LogRepository.Category.TRANSLATE,
+                        text,
+                        lastPartial,
+                        elapsedMs = elapsedSince(translateStartedAt)
+                    )
+                } else {
+                    diagId?.let {
+                        logVerticalDiag(it, "translateOne final ${blockIndex.toDiagBlockLabel()} blank")
+                    }
                 }
             } else {
                 val dst = translator.translate(text, settings) ?: text
+                diagId?.let {
+                    logVerticalDiag(
+                        it,
+                        "translateOne final ${blockIndex.toDiagBlockLabel()} ${dst.toDiagText()}"
+                    )
+                }
                 onPartial(dst)
-                logRepository.pair(LogRepository.Category.TRANSLATE, text, dst)
+                logRepository.pair(
+                    LogRepository.Category.TRANSLATE,
+                    text,
+                    dst,
+                    elapsedMs = elapsedSince(translateStartedAt)
+                )
             }
         } catch (e: TranslationException) {
+            diagId?.let {
+                logVerticalDiag(e, it, "translateOne translation error ${blockIndex.toDiagBlockLabel()}")
+            }
             onPartial("[!] " + (e.message ?: ""))
             logRepository.error(
                 LogRepository.Category.TRANSLATE,
                 getString(R.string.log_msg_translate_failed_format, settings.translatorEngine.name),
-                e
+                e,
+                elapsedMs = elapsedSince(translateStartedAt)
             )
         } catch (t: Throwable) {
             Timber.w(t, "Translate unexpected error")
+            diagId?.let {
+                logVerticalDiag(t, it, "translateOne unexpected error ${blockIndex.toDiagBlockLabel()}")
+            }
             onPartial("[!]")
             logRepository.error(
                 LogRepository.Category.TRANSLATE,
                 getString(R.string.log_msg_translate_exception_format, settings.translatorEngine.name),
-                t
+                t,
+                elapsedMs = elapsedSince(translateStartedAt)
             )
         }
+    }
+
+    private fun logVerticalDiag(diagId: Long, message: String) {
+        VerticalDiagnosticLog.i("capture#$diagId $message")
+    }
+
+    private fun logVerticalDiag(t: Throwable, diagId: Long, message: String) {
+        VerticalDiagnosticLog.w(t, "capture#$diagId $message")
+    }
+
+    private fun logVerticalSettings(
+        diagId: Long,
+        settings: Settings,
+        screenW: Int,
+        screenH: Int
+    ) {
+        logVerticalDiag(
+            diagId,
+            "settings screen=${screenW}x${screenH} region=${settings.captureRegion.toDiagString()} " +
+                "source=${settings.sourceLang} target=${settings.targetLang} " +
+                "ocr=${settings.ocrEngine.name} translator=${settings.translatorEngine.name} " +
+                "paddleVersion=${settings.paddleModelVersion.name} " +
+                "baiduEndpoint=${settings.baiduOcrEndpoint.name} baiduLanguage=${settings.baiduOcrLanguage.name} " +
+                "dbnet=prob:${settings.dbnetProbThresh.toDiagFloat()},box:${settings.dbnetBoxScoreThresh.toDiagFloat()},unclip:${settings.dbnetUnclipRatio.toDiagFloat()} " +
+                "render=${settings.renderMode.name} streaming=${settings.streamingTranslate} " +
+                "autoOrient=${settings.textOrientationAutoDetect} manualOrient=${settings.manualTextOrientation?.name ?: "null"} " +
+                "preprocess=${settings.preprocess.toDiagString()} merge=${settings.mergeAdjacentBlocks}/${settings.mergeStrength.name} " +
+                "overlayPlacement=${settings.overlayPlacement.name} overlayTextSizeSp=${settings.overlayTextSizeSp} " +
+                "allowWrap=${settings.overlayAllowWrap} avoidCollision=${settings.overlayAvoidCollision}"
+        )
+    }
+
+    private fun logVerticalOrientation(
+        diagId: Long,
+        stage: String,
+        result: OrientationResult
+    ) {
+        logVerticalDiag(
+            diagId,
+            "orientation-$stage orientation=${result.orientation.name} conf=${result.confidence.toDiagFloat()} " +
+                "raw=${result.rawAngle} source=${result.source}"
+        )
+    }
+
+    private fun logVerticalBlocks(
+        diagId: Long,
+        label: String,
+        blocks: List<TextBlock>
+    ) {
+        logVerticalDiag(diagId, "$label count=${blocks.size}")
+        blocks.forEachIndexed { index, block ->
+            val r = block.boundingBox
+            logVerticalDiag(
+                diagId,
+                "$label #${index + 1} box=${r.toDiagString()} size=${r.width()}x${r.height()} " +
+                    "conf=${block.confidence.toDiagFloat()} lang=${block.recognizedLanguage ?: "null"} " +
+                    "layout=${block.layoutOrientation?.name ?: "null"} ${block.text.toDiagText()}"
+            )
+        }
+    }
+
+    private fun logVerticalTranslatedBlocks(
+        diagId: Long,
+        label: String,
+        items: List<Pair<TextBlock, String>>
+    ) {
+        logVerticalDiag(diagId, "$label translated count=${items.size}")
+        items.forEachIndexed { index, (block, dst) ->
+            logVerticalDiag(
+                diagId,
+                "$label #${index + 1} src=${block.text.toDiagText()} dst=${dst.toDiagText()} " +
+                    "box=${block.boundingBox.toDiagString()} layout=${block.layoutOrientation?.name ?: "null"}"
+            )
+        }
+    }
+
+    private fun String.toDiagText(): String =
+        "len=$length text=\"${VerticalDiagnosticLog.text(this)}\""
+
+    private fun Int?.toDiagBlockLabel(): String =
+        this?.let { "block#${it + 1}" } ?: "block#?"
+
+    private fun Float.toDiagFloat(): String =
+        String.format(Locale.US, "%.3f", this)
+
+    private fun com.gameocr.app.data.PreprocessOptions.toDiagString(): String =
+        "upscale2x=$upscale2x,invert=$invert,binarize=$binarize"
+
+    private fun CaptureRegion?.toDiagString(): String =
+        this?.let { "(${it.left},${it.top},${it.right},${it.bottom})" } ?: "full"
+
+    private fun android.graphics.Rect.toDiagString(): String =
+        "($left,$top,$right,$bottom)"
+
+    private fun logOcrInfo(message: String) {
+        Timber.i(message)
+    }
+
+    private fun verticalChineseNoBaiduMessage(
+        hint: OrientationResult,
+        settings: Settings,
+        effectiveEngine: OcrEngineKind,
+        baiduConfigured: Boolean
+    ): String? {
+        val lang = settings.sourceLang.trim().lowercase()
+        val isChinese = lang == "zh" || lang.startsWith("zh-")
+        if (hint.orientation != TextOrientation.VERTICAL_RTL || !isChinese) {
+            return null
+        }
+        val reason = when {
+            effectiveEngine == OcrEngineKind.PADDLE_ONNX && baiduConfigured ->
+                "Baidu configured but cloud fallback disabled; explicit PaddleOCR stays on-device"
+            effectiveEngine == OcrEngineKind.PADDLE_ONNX ->
+                "explicit PaddleOCR stays on-device"
+            effectiveEngine == OcrEngineKind.ML_KIT_CHINESE && baiduConfigured ->
+                "Baidu configured but cloud fallback disabled; offline ML_KIT_CHINESE fallback is active"
+            effectiveEngine == OcrEngineKind.ML_KIT_CHINESE ->
+                "zh vertical no-key fallback is already ML_KIT_CHINESE"
+            baiduConfigured ->
+                "Baidu configured but cloud fallback disabled"
+            else ->
+                "zh vertical route will use ML_KIT_CHINESE no-key fallback"
+        }
+        return "[orient] %s conf=%.2f src=%s -> keep %s; reason=%s".format(
+            hint.orientation.name,
+            hint.confidence,
+            hint.source,
+            effectiveEngine.name,
+            reason
+        )
     }
 
     private fun applyOverlayConfig(settings: Settings) {
@@ -909,6 +1680,7 @@ class CaptureService : Service() {
             avoidCollision = settings.overlayAvoidCollision
             floatingWindowContentMode = settings.floatingWindowContentMode
             customBorderStyle = settings.customBorderStyle
+            overlayTypeface = overlayFontManager.typefaceFor(settings)
         }
         // syncFloatingWindowFromSettings 内部会重设 rootView.background / setContent，必须主线程。
         // applyOverlayConfig 自身被 settings flow collect 在 Dispatchers.Default 上调用，
@@ -928,6 +1700,7 @@ class CaptureService : Service() {
             it.autoDockEnabled = settings.floatingButtonAutoDock
             it.dockEdgeInsetPx = (settings.floatingButtonDockInsetDp * resources.displayMetrics.density).toInt()
             it.menuItemOrder = settings.floatingMenuItemOrder
+            it.arcMenuPageSize = settings.arcMenuPageSize
             // 技能字段同步 + 即时图标切换（settings 改 skill 也会到这里）
             if (it.skill != settings.floatingButtonSkill) {
                 it.skill = settings.floatingButtonSkill
@@ -949,6 +1722,10 @@ class CaptureService : Service() {
         floatingButton = null
         regionPicker?.dismiss()
         regionPicker = null
+        languageQuickSwitch?.dismiss()
+        languageQuickSwitch = null
+        presetQuickSwitch?.dismiss()
+        presetQuickSwitch = null
         wordSelect?.dismiss()
         wordSelect = null
         translationCard?.dismiss()
@@ -961,6 +1738,11 @@ class CaptureService : Service() {
 
     override fun onDestroy() {
         cleanupCapture()
+        // 释放端侧 LLM 权重。runBlocking 在 onDestroy 是可接受的——cleanUp 内部是同步 JNI 调用，
+        // 几十毫秒级；不阻塞主线程没意义，等 Mutex 拿到锁就立刻返回。
+        runCatching {
+            kotlinx.coroutines.runBlocking { llamaEngineHolder.unload() }
+        }.onFailure { Timber.w(it, "llamaEngineHolder.unload on destroy") }
         scope.cancel()
         mainScope.cancel()
         CaptureServiceState.setRunning(false)

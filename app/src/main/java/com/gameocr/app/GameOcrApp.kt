@@ -45,6 +45,20 @@ class GameOcrApp : Application() {
         // 持续把脱敏后的 settings 快照塞给 CrashRecorder，crash 时同步读这个内存值即可，
         // 避免 crash handler 走 DataStore IO 二次 crash。
         appScope.launch {
+            runCatching { settingsRepository.migratePlaintextSecretsIfNeeded() }
+                .onSuccess { migrated ->
+                    if (migrated > 0) {
+                        Timber.i("Encrypted $migrated legacy settings values")
+                    }
+                }
+                .onFailure { Timber.w(it, "Failed to migrate legacy settings secrets") }
+            runCatching { settingsRepository.migrateTextOrientationAutoDetectDefaultOnIfNeeded() }
+                .onSuccess { changed ->
+                    if (changed) {
+                        Timber.i("Enabled text orientation auto-detect for bundled orientation model default")
+                    }
+                }
+                .onFailure { Timber.w(it, "Failed to migrate text orientation auto-detect default") }
             settingsRepository.settings.collect { settings ->
                 CrashRecorder.updateSettingsSummary(CrashRecorder.formatSettings(settings))
                 cleartextInterceptor.allowedHosts = settings.cleartextAllowedHosts.toSet()

@@ -6,6 +6,7 @@ import android.graphics.Rect
 import android.util.Base64
 import com.gameocr.app.R
 import com.gameocr.app.data.BaiduOcrEndpoint
+import com.gameocr.app.data.BaiduOcrLanguage
 import com.gameocr.app.data.OcrEngineKind
 import com.gameocr.app.data.SettingsRepository
 import com.gameocr.app.data.withApiTimeout
@@ -25,6 +26,15 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import timber.log.Timber
 import java.io.ByteArrayOutputStream
+
+internal fun baiduLanguageTypeFor(
+    endpoint: BaiduOcrEndpoint,
+    configuredLanguage: BaiduOcrLanguage,
+): String? = when {
+    endpoint == BaiduOcrEndpoint.WEBIMAGE -> null
+    configuredLanguage.supportedOn(endpoint) -> configuredLanguage.code
+    else -> BaiduOcrLanguage.CHN_ENG.code
+}
 
 /**
  * 百度通用文字识别（云端兜底）。
@@ -56,7 +66,23 @@ class BaiduOcrEngine @Inject constructor(
         val endpoint = settings.baiduOcrEndpoint
         val timedClient = client.withApiTimeout(settings.apiTimeoutSeconds)
         val token = obtainToken(settings.baiduOcrApiKey, settings.baiduOcrSecretKey, timedClient)
-        val imageBase64 = withContext(Dispatchers.Default) { encodeJpeg(bitmap) }
+        val encoded = withContext(Dispatchers.Default) { encodeJpeg(bitmap) }
+        val languageType = baiduLanguageTypeFor(endpoint, settings.baiduOcrLanguage)
+        Timber.i(
+            "BaiduOCR request endpoint=%s hasLocation=%s configuredLang=%s languageType=%s image=%dx%d encoded=%dx%d jpegBytes=%d base64Chars=%d quality=%d timeout=%ds",
+            endpoint.name,
+            endpoint.hasLocation,
+            settings.baiduOcrLanguage.name,
+            languageType ?: "none",
+            bitmap.width,
+            bitmap.height,
+            encoded.width,
+            encoded.height,
+            encoded.jpegBytes,
+            encoded.base64.length,
+            encoded.quality,
+            settings.apiTimeoutSeconds,
+        )
 
         val url = "https://aip.baidubce.com/rest/2.0/ocr/v1/${endpoint.path}".toHttpUrl()
             .newBuilder().addQueryParameter("access_token", token).build()
@@ -66,7 +92,7 @@ class BaiduOcrEngine @Inject constructor(
         //  - webimage：不读 language_type
         // 兜底：用户选的语种若在当前 endpoint 不支持，降级到 CHN_ENG 避免 216200 error。
         val form = FormBody.Builder()
-            .add("image", imageBase64)
+            .add("image", encoded.base64)
             .apply {
                 if (settings.baiduOcrLanguage.supportedOn(endpoint)) {
                     add("language_type", settings.baiduOcrLanguage.code)
@@ -78,6 +104,7 @@ class BaiduOcrEngine @Inject constructor(
             .build()
         val req = Request.Builder().url(url).post(form).build()
 
+        val requestStart = System.currentTimeMillis()
         val resp = withContext(Dispatchers.IO) {
             timedClient.newCall(req).execute().use { r ->
                 val raw = r.body?.string().orEmpty()
@@ -85,10 +112,28 @@ class BaiduOcrEngine @Inject constructor(
                 json.decodeFromString<BaiduOcrResponse>(raw)
             }
         }
+        val elapsedMs = System.currentTimeMillis() - requestStart
         if (resp.errorCode != null && resp.errorCode != 0) {
+            Timber.w(
+                "BaiduOCR error endpoint=%s logId=%s elapsed=%dms code=%s message=%s",
+                endpoint.name,
+                resp.logId?.toString() ?: "null",
+                elapsedMs,
+                resp.errorCode,
+                resp.errorMsg.orEmpty().forPaddleOcrLog(),
+            )
             throw RuntimeException("Baidu OCR err ${resp.errorCode} (${endpoint.name}): ${resp.errorMsg.orEmpty()}")
         }
-        return resp.wordsResult.orEmpty().mapIndexed { i, w ->
+        val words = resp.wordsResult.orEmpty()
+        Timber.i(
+            "BaiduOCR response endpoint=%s logId=%s declaredNum=%s actual=%d elapsed=%dms",
+            endpoint.name,
+            resp.logId?.toString() ?: "null",
+            resp.wordsResultNum?.toString() ?: "null",
+            words.size,
+            elapsedMs,
+        )
+        return words.mapIndexed { i, w ->
             // 含位置版用真实 boundingBox；无位置版退化为垂直排列的伪 Rect 让叠加层能逐条显示
             val box = w.location?.let { loc ->
                 val left = loc.left ?: 0
@@ -97,8 +142,22 @@ class BaiduOcrEngine @Inject constructor(
                 val height = loc.height ?: 0
                 Rect(left, top, left + width, top + height)
             } ?: Rect(0, 80 + i * 60, bitmap.width, 80 + (i + 1) * 60)
+            val text = w.words.orEmpty()
+            Timber.i(
+                "BaiduOCR result[%d] box=(%d,%d,%d,%d %dx%d) hasLocation=%s textStats=%s text='%s'",
+                i,
+                box.left,
+                box.top,
+                box.right,
+                box.bottom,
+                box.width(),
+                box.height(),
+                w.location != null,
+                paddleLogTextStats(text).toLogString(),
+                text.forPaddleOcrLog(),
+            )
             TextBlock(
-                text = w.words.orEmpty(),
+                text = text,
                 boundingBox = box,
                 confidence = 1f,
                 recognizedLanguage = "auto"
@@ -130,7 +189,7 @@ class BaiduOcrEngine @Inject constructor(
         token
     }
 
-    private fun encodeJpeg(bitmap: Bitmap): String {
+    private fun encodeJpeg(bitmap: Bitmap): EncodedJpeg {
         // 百度限制（错误码 216202 image size error）：
         // - 最长边 ≤ 4096px / 最短边 ≥ 15px
         // - base64 后 < 4MB
@@ -157,8 +216,17 @@ class BaiduOcrEngine @Inject constructor(
             while (true) {
                 val out = ByteArrayOutputStream()
                 bmp.compress(Bitmap.CompressFormat.JPEG, quality, out)
-                val b64 = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
-                if (b64.length <= maxBase64Bytes || quality <= 30) return b64
+                val jpeg = out.toByteArray()
+                val b64 = Base64.encodeToString(jpeg, Base64.NO_WRAP)
+                if (b64.length <= maxBase64Bytes || quality <= 30) {
+                    return EncodedJpeg(
+                        base64 = b64,
+                        width = bmp.width,
+                        height = bmp.height,
+                        quality = quality,
+                        jpegBytes = jpeg.size,
+                    )
+                }
                 quality -= 15
             }
         } finally {
@@ -167,6 +235,14 @@ class BaiduOcrEngine @Inject constructor(
     }
 
     override fun close() { /* OkHttp 共享，不在这里关 */ }
+
+    private data class EncodedJpeg(
+        val base64: String,
+        val width: Int,
+        val height: Int,
+        val quality: Int,
+        val jpegBytes: Int,
+    )
 
     @Serializable
     private data class BaiduTokenResponse(

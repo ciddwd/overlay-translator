@@ -1,0 +1,82 @@
+package com.gameocr.app.translate
+
+import com.gameocr.app.data.Settings
+import com.gameocr.app.llm.LlamaEngineHolder
+import com.gameocr.app.llm.LlmModelKind
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.sync.withLock
+
+/**
+ * 端侧 llama.cpp Translator 通用基类。把 [LlamaEngineHolder] 的 token-by-token Flow 拼成
+ * 累积译文（符合 [Translator.translateStream] 的"每次发射全量当前译文"约定）。
+ *
+ * 具体引擎（[HyMt2Translator] / [SakuraGalTranslator]）只负责：
+ * - 声明绑定哪个 [LlmModelKind]；
+ * - 给出 system prompt（HY-MT 无 / Sakura 有翻译角色约束）；
+ * - 给出 user prompt（HY-MT 用 "Please translate to {target}: {src}" 极简模板；Sakura 用 ACGN 化模板）。
+ *
+ * 注意：当前 [com.arm.aichat.InferenceEngine.sendUserPrompt] 不接受采样温度等参数——
+ * binding 把 temperature / top_p / top_k 写死在 JNI 层。Settings 里的 localLlm* 字段当前不
+ * 实际生效，是给未来 binding 升级预留。灰度期若发现 HY-MT 输出过于发散，需要去
+ * `third_party/llama.cpp/examples/llama.android/lib/src/main/cpp/ai_chat.cpp` 把
+ * common_sampler_params 暴露上来。
+ */
+abstract class LocalLlamaTranslator(
+    protected val holder: LlamaEngineHolder,
+) : Translator {
+
+    protected abstract val modelKind: LlmModelKind
+
+    /**
+     * 该引擎要不要 system prompt。返回 null 表示不设（Hy-MT2 走纯 user prompt）。
+     *
+     * **必须返回静态字符串**——binding 的 [com.arm.aichat.InferenceEngine.setSystemPrompt] 是
+     * 一次性 API：loadModel 后只能调用唯一一次（_readyForSystemPrompt 标志位用过即弃）。
+     * 所以我们让 system prompt 跟 [modelKind] 绑定，loadModel 时由 [LlamaEngineHolder]
+     * 立即调一次后续就不再调；不能依赖运行时 settings 改变 system prompt（变了也无法重设）。
+     */
+    protected abstract val systemPrompt: String?
+
+    protected abstract fun buildUserPrompt(source: String, settings: Settings): String
+
+    override val prefersBatch: Boolean get() = false
+
+    override suspend fun translate(source: String, settings: Settings): String? {
+        if (source.isBlank()) return null
+        val engine = holder.ensureLoaded(modelKind, systemPrompt)
+        // 推理串行：translateBatch 默认并发触发多个 translate，端侧 LLM engine 一次只能跑一段，
+        // 用 holder 的全局 inferenceMutex 排队，避免后段被 binding 丢弃。
+        return holder.inferenceMutex.withLock {
+            val sb = StringBuilder()
+            engine.sendUserPrompt(buildUserPrompt(source, settings), settings.localLlmMaxNewTokens)
+                .collect { token -> sb.append(token) }
+            holder.touch()
+            sb.toString().trim().ifBlank { null }
+        }
+    }
+
+    override fun translateStream(source: String, settings: Settings): Flow<String> = flow {
+        if (source.isBlank()) return@flow
+        val engine = holder.ensureLoaded(modelKind, systemPrompt)
+        holder.inferenceMutex.withLock {
+            val sb = StringBuilder()
+            engine.sendUserPrompt(buildUserPrompt(source, settings), settings.localLlmMaxNewTokens)
+                .collect { token ->
+                    sb.append(token)
+                    emit(sb.toString())
+                }
+            holder.touch()
+        }
+    }
+
+    override suspend fun testConnection(settings: Settings): TestResult = runCatching {
+        if (!holder.isDeviceCapable()) {
+            return@runCatching TestResult(success = false, message = "Android 13+ required")
+        }
+        holder.ensureLoaded(modelKind, systemPrompt)
+        TestResult(success = true, message = "Model loaded: ${modelKind.displayName}")
+    }.getOrElse { t ->
+        TestResult(success = false, message = "${t.javaClass.simpleName}: ${t.message}")
+    }
+}

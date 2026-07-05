@@ -3,6 +3,7 @@ package com.gameocr.app.overlay
 import android.content.Context
 import android.graphics.PixelFormat
 import android.graphics.Rect
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.util.TypedValue
@@ -20,7 +21,11 @@ import com.gameocr.app.data.OverlayTheme
 import com.gameocr.app.data.Settings
 import com.gameocr.app.data.SettingsRepository
 import com.gameocr.app.ocr.TextBlock
+import com.gameocr.app.ocr.TextOrientation
+import com.gameocr.app.util.VerticalDiagnosticLog
+import kotlin.math.ceil
 import kotlinx.coroutines.CoroutineScope
+import timber.log.Timber
 
 /**
  * 译文叠加渲染。
@@ -52,7 +57,8 @@ class OverlayManager(
     @Volatile var floatingWindowContentMode: FloatingWindowContentMode =
         FloatingWindowContentMode.SRC_AND_DST,
     /** CUSTOM 主题的边框样式（仅 CUSTOM 主题生效）。CaptureService 同步。 */
-    @Volatile var customBorderStyle: BorderStyle = BorderStyle.SOLID
+    @Volatile var customBorderStyle: BorderStyle = BorderStyle.SOLID,
+    @Volatile var overlayTypeface: Typeface? = null
 ) {
 
     private val wm by lazy { context.getSystemService(Context.WINDOW_SERVICE) as WindowManager }
@@ -60,7 +66,8 @@ class OverlayManager(
     private var loadingView: View? = null
     private var errorView: View? = null
     private var countdownView: View? = null
-    private val blockViews = mutableMapOf<Int, TextView>()
+    // 译文 View 缓存：横排走 TextView，竖排走 VerticalTextView。updateBlockText 会按实际类型分支 setText
+    private val blockViews = mutableMapOf<Int, View>()
 
     /** 悬浮窗口（[com.gameocr.app.data.RenderMode.FLOATING_WINDOW]）外壳。lazy 创建。 */
     private val floatingWindow: DraggableOverlayWindow by lazy {
@@ -334,6 +341,12 @@ class OverlayManager(
         clearLoading()
         clear()
         if (pairs.isEmpty()) return
+        VerticalDiagnosticLog.i("overlay showFullScreen pairs=${pairs.size} textSizeSp=$textSizeSp mode=$floatingWindowContentMode")
+        pairs.forEachIndexed { index, (src, dst) ->
+            VerticalDiagnosticLog.i(
+                "overlay showFullScreen #${index + 1} src=${src.toDiagText()} dst=${dst.toDiagText()}"
+            )
+        }
         lastFloatingPairs = pairs.toMutableList()
         lastFloatingStreaming = false
         floatingWindow.applySettings()
@@ -353,6 +366,10 @@ class OverlayManager(
         clearLoading()
         clear()
         if (sources.isEmpty()) return
+        VerticalDiagnosticLog.i("overlay prepareFloatingWindow sources=${sources.size} textSizeSp=$textSizeSp mode=$floatingWindowContentMode")
+        sources.forEachIndexed { index, source ->
+            VerticalDiagnosticLog.i("overlay prepareFloatingWindow #${index + 1} src=${source.toDiagText()}")
+        }
         val placeholder = sources.map { it to "…" }
         lastFloatingPairs = placeholder.toMutableList()
         lastFloatingStreaming = true
@@ -367,6 +384,9 @@ class OverlayManager(
 
     /** 流式：更新第 [index] 段译文。需先调过 [prepareFloatingWindow]。 */
     fun updateFloatingWindowText(index: Int, text: String) {
+        VerticalDiagnosticLog.i(
+            "overlay updateFloatingWindowText block#${index + 1} " + text.toDiagText()
+        )
         floatingDstViews?.get(index)?.text = text
         // 同步缓存的 pairs，让 syncFloatingWindowFromSettings 重建 content 时拿到最新译文
         lastFloatingPairs?.let { list ->
@@ -439,6 +459,7 @@ class OverlayManager(
                 text = dst
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, textSizeSp.toFloat())
                 setTextColor(themeFgColor())
+                typeface = overlayTypeface
                 if (isSrcAndDst) {
                     val mt = (2 * context.resources.displayMetrics.density).toInt()
                     val mb = (8 * context.resources.displayMetrics.density).toInt()
@@ -477,7 +498,10 @@ class OverlayManager(
         customBorderWidthDp = this@OverlayManager.customBorderWidthDp
     }
 
-    fun showBlocks(blocks: List<Pair<TextBlock, String>>) {
+    fun showBlocks(
+        blocks: List<Pair<TextBlock, String>>,
+        orientation: TextOrientation = TextOrientation.HORIZONTAL_LTR
+    ) {
         clearLoading()
         clear()
         if (blocks.isEmpty()) return
@@ -486,17 +510,51 @@ class OverlayManager(
         val dm = context.resources.displayMetrics
         val screenW = dm.widthPixels
         val screenH = dm.heightPixels
+        val isVertical = orientation == TextOrientation.VERTICAL_RTL ||
+            orientation == TextOrientation.VERTICAL_LTR
+        val leftToRight = orientation == TextOrientation.VERTICAL_LTR
+        VerticalDiagnosticLog.i(
+            "overlay showBlocks count=${blocks.size} orientation=$orientation vertical=$isVertical " +
+                "leftToRight=$leftToRight screen=${screenW}x${screenH} textSizeSp=$textSizeSp " +
+                "alpha=$alpha placement=$placement offset=(${offsetX},${offsetY}) " +
+                "regionOffset=(${regionOffset.x},${regionOffset.y}) allowWrap=$allowWrap " +
+                "avoidCollision=$avoidCollision theme=$theme"
+        )
         // 估算每行像素高度（行间距系数 1.3，跟 setLineSpacing 一致）
         val lineHeightPx = (textSizeSp * dm.density * 1.3f).toInt().coerceAtLeast(16)
+        val verticalTextPaddingHorizontalPx = 8
+        val verticalMinReadableSlotWidthPx = (
+            ceil(
+                TypedValue.applyDimension(
+                    TypedValue.COMPLEX_UNIT_SP,
+                    textSizeSp.toFloat(),
+                    dm
+                ) * 1.15f
+            ).toInt() + verticalTextPaddingHorizontalPx * 2
+        ).coerceAtLeast(1)
 
         // 所有 bounding box 一份用于碰撞检测（不影响 blocks 原始顺序，流式 updateBlockText 仍按 idx 找）
         val allBoxes = blocks.map { it.first.boundingBox }
+        val allOverlayRects = allBoxes.map {
+            OverlayIntRect(
+                left = it.left + regionOffset.x + offsetX,
+                top = it.top + regionOffset.y + offsetY,
+                right = it.right + regionOffset.x + offsetX,
+                bottom = it.bottom + regionOffset.y + offsetY
+            )
+        }
 
         blocks.forEachIndexed { idx, (block, dst) ->
             val b: Rect = block.boundingBox
             val baseLeft = (b.left + regionOffset.x + offsetX).coerceAtLeast(0)
+            val overlayRect = allOverlayRects[idx]
             val origW = (b.right - b.left).coerceAtLeast(0)
             val origH = (b.bottom - b.top).coerceAtLeast(0)
+            VerticalDiagnosticLog.i(
+                "overlay block#${idx + 1} orientation=$orientation box=${b.toDiagString()} " +
+                    "screenBox=${overlayRect.toDiagString()} orig=${origW}x${origH} " +
+                    "src=${block.text.toDiagText()} dst=${dst.toDiagText()}"
+            )
 
             // 四方向碰撞检测：用矩形相交判断"水平重叠"，比"中心距离 < origW"准得多
             // （短原文 + 长译文的场景，中心距离误判会漏掉下方实际相撞的 box）。
@@ -536,53 +594,134 @@ class OverlayManager(
                     ?: screenH
             } else screenH
 
-            val tv = TextView(context).apply {
-                text = dst
-                background = themeBg()
-                setTextColor(themeFgColor())
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, textSizeSp.toFloat())
-                if (allowWrap) {
-                    setSingleLine(false)
-                    // maxLines 固定 10 行：showBlocks 时 dst 是占位"…"无法算最终行数；
-                    // updateBlockText 又只更新 text 不动 maxLines；用大值保证段落聚类
-                    // 多行译文不被截断。代价是可能盖到下方相邻原文 box，但比"看到 …"好。
-                    maxLines = 10
-                    setLineSpacing(2f, 1.05f)
-                    // 不显示省略号——即使超过 10 行也直接截，省略号在 OCR 场景看着像 bug
-                    ellipsize = null
-                } else {
-                    // 强制单行模式：长译文不再显示"…"截断，改用 MARQUEE 跑马灯——文本超
-                    // 出可视区域时自动横向滚动，能看到完整内容；短文本则像普通 TextView。
-                    // marquee 需要 view 拿到 focus 或 isSelected=true 才会启动；overlay 窗
-                    // 口拿不到 focus（我们设的 FLAG_NOT_FOCUSABLE），所以靠 isSelected。
-                    setSingleLine(true)
-                    maxLines = 1
-                    ellipsize = android.text.TextUtils.TruncateAt.MARQUEE
-                    marqueeRepeatLimit = -1
-                    isSelected = true
-                    isFocusable = true
-                    isFocusableInTouchMode = true
+            var verticalSlotForLayout: VerticalOverlaySlot? = null
+            var verticalHeightForLayout = FrameLayout.LayoutParams.WRAP_CONTENT
+            val view: View = if (isVertical) {
+                val slot = verticalOverlaySlot(
+                    rect = overlayRect,
+                    allRects = allOverlayRects,
+                    screenWidth = screenW,
+                    rightToLeft = !leftToRight,
+                    minGapPx = (8 * dm.density).toInt().coerceAtLeast(8),
+                    minReadableWidthPx = verticalMinReadableSlotWidthPx
+                )
+                val verticalHeightPx = origH
+                    .coerceAtLeast(lineHeightPx * 2 + 8)
+                    .coerceAtLeast(1)
+                verticalSlotForLayout = slot
+                verticalHeightForLayout = verticalHeightPx
+                Timber.tag("Overlay").i(
+                    "vertical block #%d box=(%d,%d,%d,%d) slot=(%d,%d) slotW=%d minW=%d h=%d",
+                    idx + 1,
+                    overlayRect.left,
+                    overlayRect.top,
+                    overlayRect.right,
+                    overlayRect.bottom,
+                    slot.left,
+                    slot.right,
+                    slot.width,
+                    verticalMinReadableSlotWidthPx,
+                    verticalHeightPx
+                )
+                VerticalDiagnosticLog.i(
+                    "overlay vertical block#${idx + 1} slot=${slot.toDiagString()} " +
+                        "slotW=${slot.width} minW=$verticalMinReadableSlotWidthPx " +
+                        "height=$verticalHeightPx leftToRight=$leftToRight " +
+                        "normalizedDst=${normalizeVerticalOverlayText(dst).toDiagText()}"
+                )
+                // 竖排（tategaki）走 VerticalTextView：逐字纵向画，列从右往左换。
+                // 强制 OVERLAP 语义——竖排里 BELOW/ABOVE 没意义（日漫气泡是固定的，译文
+                // 覆盖原文位置）；用户即使选了 BELOW/ABOVE，竖排也按 OVERLAP 处理。
+                VerticalTextView(context).apply {
+                    this.text = dst
+                    this.leftToRight = leftToRight
+                    this.typeface = overlayTypeface
+                    this.background = themeBg()
+                    setTextColor(themeFgColor())
+                    setTextSizeSp(textSizeSp.toFloat())
+                    // 竖排高度由 LayoutParams 固定到原文 box；Drawer 会按 boundsH 自动换列。
+                    minimumHeight = verticalHeightPx
+                    setPadding(verticalTextPaddingHorizontalPx, 4, verticalTextPaddingHorizontalPx, 4)
                 }
-                isHorizontalFadingEdgeEnabled = false
-                // 智能 maxWidth：受 (相邻块左边界, 屏幕右边) 双重约束
-                maxWidth = minOf(collisionMaxW, screenW - baseLeft - 8)
-                    .coerceAtLeast(120)
-                if (placement == OverlayPlacement.OVERLAP) {
-                    minWidth = origW
-                    minHeight = origH
-                    setPadding(8, 4, 8, 4)
+            } else {
+                TextView(context).apply {
+                    text = dst
+                    background = themeBg()
+                    setTextColor(themeFgColor())
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, textSizeSp.toFloat())
+                    typeface = overlayTypeface
+                    if (allowWrap) {
+                        setSingleLine(false)
+                        // maxLines 固定 10 行：showBlocks 时 dst 是占位"…"无法算最终行数；
+                        // updateBlockText 又只更新 text 不动 maxLines；用大值保证段落聚类
+                        // 多行译文不被截断。代价是可能盖到下方相邻原文 box，但比"看到 …"好。
+                        maxLines = 10
+                        setLineSpacing(2f, 1.05f)
+                        // 不显示省略号——即使超过 10 行也直接截，省略号在 OCR 场景看着像 bug
+                        ellipsize = null
+                    } else {
+                        // 强制单行模式：长译文不再显示"…"截断，改用 MARQUEE 跑马灯——文本超
+                        // 出可视区域时自动横向滚动，能看到完整内容；短文本则像普通 TextView。
+                        // marquee 需要 view 拿到 focus 或 isSelected=true 才会启动；overlay 窗
+                        // 口拿不到 focus（我们设的 FLAG_NOT_FOCUSABLE），所以靠 isSelected。
+                        setSingleLine(true)
+                        maxLines = 1
+                        ellipsize = android.text.TextUtils.TruncateAt.MARQUEE
+                        marqueeRepeatLimit = -1
+                        isSelected = true
+                        isFocusable = true
+                        isFocusableInTouchMode = true
+                    }
+                    isHorizontalFadingEdgeEnabled = false
+                    // 智能 maxWidth：受 (相邻块左边界, 屏幕右边) 双重约束
+                    maxWidth = minOf(collisionMaxW, screenW - baseLeft - 8)
+                        .coerceAtLeast(120)
+                    if (placement == OverlayPlacement.OVERLAP) {
+                        minWidth = origW
+                        minHeight = origH
+                        setPadding(8, 4, 8, 4)
+                    }
                 }
             }
 
-            val lp = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                leftMargin = baseLeft
-                topMargin = baseTop.coerceAtLeast(0)
+            // 竖排位置：强制 OVERLAP。RTL 时把 View 右边缘锚到原文 box 右边缘，让新增列向左展开；
+            // LTR 时把左边缘锚到原文 box 左边缘。横排走原 placement 逻辑。
+            val finalLeft: Int
+            val finalTop: Int
+            val finalRight: Int
+            if (isVertical) {
+                finalLeft = (b.left + regionOffset.x + offsetX).coerceAtLeast(0)
+                finalRight = (b.right + regionOffset.x + offsetX).coerceIn(0, screenW)
+                finalTop = (b.top + regionOffset.y + offsetY).coerceAtLeast(0)
+            } else {
+                finalLeft = baseLeft
+                finalRight = 0
+                finalTop = baseTop.coerceAtLeast(0)
             }
-            root.addView(tv, lp)
-            blockViews[idx] = tv
+            val lp = FrameLayout.LayoutParams(
+                if (isVertical) {
+                    verticalSlotForLayout?.width ?: FrameLayout.LayoutParams.WRAP_CONTENT
+                } else {
+                    FrameLayout.LayoutParams.WRAP_CONTENT
+                },
+                if (isVertical) {
+                    verticalHeightForLayout.coerceAtLeast(1)
+                } else {
+                    FrameLayout.LayoutParams.WRAP_CONTENT
+                }
+            ).apply {
+                topMargin = finalTop
+                if (isVertical && !leftToRight) {
+                    gravity = Gravity.TOP or Gravity.RIGHT
+                    rightMargin = (screenW - (verticalSlotForLayout?.right ?: finalRight)).coerceAtLeast(0)
+                } else if (isVertical) {
+                    leftMargin = verticalSlotForLayout?.left ?: finalLeft
+                } else {
+                    leftMargin = finalLeft
+                }
+            }
+            root.addView(view, lp)
+            blockViews[idx] = view
         }
         root.setOnClickListener { clear() }
 
@@ -595,7 +734,16 @@ class OverlayManager(
     }
 
     fun updateBlockText(index: Int, text: String) {
-        blockViews[index]?.text = text
+        val target = blockViews[index]
+        VerticalDiagnosticLog.i(
+            "overlay updateBlockText block#${index + 1} view=${target?.javaClass?.simpleName ?: "missing"} " +
+                text.toDiagText()
+        )
+        when (val v = blockViews[index]) {
+            is TextView -> v.text = text
+            is VerticalTextView -> v.text = text
+            else -> { /* 找不到 view 静默忽略，避免清屏 race condition 抛 NPE */ }
+        }
     }
 
     /**
@@ -647,6 +795,18 @@ class OverlayManager(
                 fitInsetsSides = 0
             }
         }
+
+    private fun String.toDiagText(): String =
+        "len=$length text=\"${VerticalDiagnosticLog.text(this)}\""
+
+    private fun Rect.toDiagString(): String =
+        "($left,$top,$right,$bottom)"
+
+    private fun OverlayIntRect.toDiagString(): String =
+        "($left,$top,$right,$bottom)"
+
+    private fun VerticalOverlaySlot.toDiagString(): String =
+        "($left,$right)"
 
     private fun themeFgColor(): Int = when (theme) {
         OverlayTheme.CLASSIC_DARK -> 0xFFFFFFFF.toInt()

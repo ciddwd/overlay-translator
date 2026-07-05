@@ -48,119 +48,140 @@ object CrashRecorder {
     fun formatSettings(s: Settings): String = buildString {
         fun line(k: String, v: Any?) { append("  ").append(k).append(": ").append(v).append('\n') }
         fun mask(v: String) = if (v.isBlank()) "<unset>" else "<set>"
+        fun customUrl(v: String) = if (v.isBlank()) "<default>" else "<custom>"
+        fun brief(v: String, limit: Int = 60): String {
+            if (v.isBlank()) return "<empty> (0 chars)"
+            val normalized = v.replace('\n', ' ').replace('\r', ' ')
+            val head = normalized.take(limit)
+            val suffix = if (normalized.length > limit) "..." else ""
+            return "$head$suffix (${v.length} chars)"
+        }
+        fun fontListSummary(fonts: List<OverlayFontEntry>): String =
+            if (fonts.isEmpty()) {
+                "<empty>"
+            } else {
+                val preview = fonts.take(3).joinToString(",") { font ->
+                    font.displayName.ifBlank { font.fileName }.take(32)
+                }
+                val suffix = if (fonts.size > 3) ",..." else ""
+                "${fonts.size} item(s): $preview$suffix"
+            }
+        fun presetListSummary(presets: List<TranslationPreset>): String =
+            if (presets.isEmpty()) {
+                "<empty>"
+            } else {
+                val preview = presets.take(3).joinToString(",") { preset ->
+                    "${preset.id}:${preset.name}".take(48)
+                }
+                val suffix = if (presets.size > 3) ",..." else ""
+                "${presets.size} item(s): $preview$suffix"
+            }
 
-        // OCR
-        line("ocrEngine", s.ocrEngine)
-        line("baiduOcrEndpoint", s.baiduOcrEndpoint)
-        line("baiduOcrLanguage", s.baiduOcrLanguage)
-        line("baiduOcrApiKey", mask(s.baiduOcrApiKey))
-        line("baiduOcrSecretKey", mask(s.baiduOcrSecretKey))
-        line("tencentOcrEndpoint", s.tencentOcrEndpoint)
-        line("tencentOcrLanguage", s.tencentOcrLanguage)
-        line("tencentSecretId", mask(s.tencentSecretId))
-        line("tencentSecretKey", mask(s.tencentSecretKey))
-        line("tencentRegion", s.tencentRegion)
-        line("paddleModelMirrorUrl", if (s.paddleModelMirrorUrl.isBlank()) "<default>" else "<custom>")
-
-        // 翻译：通用 + LLM
-        line("translatorEngine", s.translatorEngine)
-        line("baseUrl", mask(s.baseUrl))           // 可能含自架地址，脱敏
+        line("baseUrl", mask(s.baseUrl))
         line("apiKey", mask(s.apiKey))
-        line("model", s.model)                      // 模型名不敏感，照实
+        line("model", s.model)
         line("sourceLang", s.sourceLang)
         line("targetLang", s.targetLang)
-        // prompt 可能含用户自定义指令；只显示前 60 字 + 总长度，便于判断"是否默认 prompt"
-        val promptHead = s.promptTemplate.take(60).replace("\n", "↵")
-        line("promptTemplate", "$promptHead... (${s.promptTemplate.length} chars)")
-        // 划词翻译词典 prompt（仅 OpenAI 兼容引擎用）；截断同 promptTemplate，便于看是否默认值
-        val dictPromptHead = s.dictionaryPrompt.take(60).replace("\n", "↵")
-        line("dictionaryPrompt", "$dictPromptHead... (${s.dictionaryPrompt.length} chars)")
-        line("streamingTranslate", s.streamingTranslate)
-
-        // 翻译：DeepL
-        line("deeplApiKey", mask(s.deeplApiKey))
-        line("deeplPro", s.deeplPro)
-        line("deeplProtocol", s.deeplProtocol)
-        line("deeplBaseUrl", if (s.deeplBaseUrl.isBlank()) "<unset>" else "<custom>")
-        line("deeplBearerAuth", s.deeplBearerAuth)
-        line("deeplCustomToken", mask(s.deeplCustomToken))
-
-        // 翻译：有道智云（OCR + 图片翻译共用）
-        line("youdaoAppKey", mask(s.youdaoAppKey))
-        line("youdaoAppSecret", mask(s.youdaoAppSecret))
-
-        // 翻译：火山引擎
-        line("volcAccessKeyId", mask(s.volcAccessKeyId))
-        line("volcSecretAccessKey", mask(s.volcSecretAccessKey))
-        line("volcRegion", s.volcRegion)
-
-        // 翻译：百度翻译开放平台（fanyi-api，与百度 OCR 不同账号）
-        line("baiduFanyiAppId", mask(s.baiduFanyiAppId))
-        line("baiduFanyiSecretKey", mask(s.baiduFanyiSecretKey))
-
-        // 截图 + 触发
+        line("promptTemplate", brief(s.promptTemplate))
+        line("ocrEngine", s.ocrEngine)
+        line("captureLoopIntervalMs", s.captureLoopIntervalMs)
         line("captureRegion", s.captureRegion?.let {
             "${it.right - it.left}x${it.bottom - it.top}@(${it.left},${it.top})"
         } ?: "<full screen>")
-        // region 保存时的屏幕物理尺寸——排查"竖→横屏后框选错位"必备
-        line("captureRegionSavedScreen",
-            if (s.captureRegionSavedScreenW == 0 && s.captureRegionSavedScreenH == 0) "<legacy>"
-            else "${s.captureRegionSavedScreenW}x${s.captureRegionSavedScreenH}"
-        )
-        line("captureLoopIntervalMs", s.captureLoopIntervalMs)
-        line("preferShizukuCapture", s.preferShizukuCapture)
-        line("a11yVolumeTrigger", s.a11yVolumeTrigger)
-
-        // 预处理
-        line("preprocess.upscale2x", s.preprocess.upscale2x)
-        line("preprocess.invert", s.preprocess.invert)
-        line("preprocess.binarize", s.preprocess.binarize)
-
-        // 显示 / 渲染
+        line("captureRegionSavedScreenW", s.captureRegionSavedScreenW)
+        line("captureRegionSavedScreenH", s.captureRegionSavedScreenH)
+        line("overlayTextSizeSp", s.overlayTextSizeSp)
+        line("overlayAlpha", s.overlayAlpha)
+        line("overlayFontFileName", s.overlayFontFileName.ifBlank { "<unset>" })
+        line("overlayFontDisplayName", s.overlayFontDisplayName.ifBlank { "<unset>" })
+        line("overlayFonts", fontListSummary(s.overlayFonts))
+        line("streamingTranslate", s.streamingTranslate)
         line("renderMode", s.renderMode)
         line("overlayPlacement", s.overlayPlacement)
         line("overlayTheme", s.overlayTheme)
-        line("overlayTextSizeSp", s.overlayTextSizeSp)
-        line("overlayAlpha", s.overlayAlpha)
-        line("overlayAllowWrap", s.overlayAllowWrap)
-        line("overlayAvoidCollision", s.overlayAvoidCollision)
-        line("overlayOffsetX", s.overlayOffsetX)
-        line("overlayOffsetY", s.overlayOffsetY)
-        // CUSTOM 主题颜色（int ARGB → hex 字符串便于人肉对比；非敏感不脱敏）
         line("customBgColor", "0x${"%08X".format(s.customBgColor)}")
         line("customFgColor", "0x${"%08X".format(s.customFgColor)}")
         line("customBorderColor", "0x${"%08X".format(s.customBorderColor)}")
         line("customBorderWidth", s.customBorderWidth)
-        line("customBorderStyle", s.customBorderStyle)
-
-        // 悬浮球
+        line("overlayOffsetX", s.overlayOffsetX)
+        line("overlayOffsetY", s.overlayOffsetY)
+        line(
+            "preprocess",
+            "upscale2x=${s.preprocess.upscale2x},invert=${s.preprocess.invert},binarize=${s.preprocess.binarize}"
+        )
+        line("textOrientationAutoDetect", s.textOrientationAutoDetect)
+        line("manualTextOrientation", s.manualTextOrientation?.name ?: "<auto>")
+        line("baiduOcrApiKey", mask(s.baiduOcrApiKey))
+        line("baiduOcrSecretKey", mask(s.baiduOcrSecretKey))
+        line("baiduOcrEndpoint", s.baiduOcrEndpoint)
+        line("baiduOcrLanguage", s.baiduOcrLanguage)
+        line("umiOcrBaseUrl", customUrl(s.umiOcrBaseUrl))
+        line("lunaOcrBaseUrl", customUrl(s.lunaOcrBaseUrl))
+        line("tencentSecretId", mask(s.tencentSecretId))
+        line("tencentSecretKey", mask(s.tencentSecretKey))
+        line("tencentRegion", s.tencentRegion)
+        line("tencentOcrEndpoint", s.tencentOcrEndpoint)
+        line("tencentOcrLanguage", s.tencentOcrLanguage)
+        line("paddleModelVersion", s.paddleModelVersion)
+        line("paddleModelMirrorUrl", customUrl(s.paddleModelMirrorUrl))
+        line("mangaOcrModelMirrorUrl", customUrl(s.mangaOcrModelMirrorUrl))
+        line("orientationModelMirrorUrl", customUrl(s.orientationModelMirrorUrl))
+        line("preferShizukuCapture", s.preferShizukuCapture)
+        line("a11yVolumeTrigger", s.a11yVolumeTrigger)
+        line("translatorEngine", s.translatorEngine)
+        line("deeplApiKey", mask(s.deeplApiKey))
+        line("deeplPro", s.deeplPro)
+        line("deeplProtocol", s.deeplProtocol)
+        line("deeplBaseUrl", customUrl(s.deeplBaseUrl))
+        line("deeplBearerAuth", s.deeplBearerAuth)
+        line("deeplCustomToken", mask(s.deeplCustomToken))
+        line("youdaoAppKey", mask(s.youdaoAppKey))
+        line("youdaoAppSecret", mask(s.youdaoAppSecret))
+        line("volcAccessKeyId", mask(s.volcAccessKeyId))
+        line("volcSecretAccessKey", mask(s.volcSecretAccessKey))
+        line("volcRegion", s.volcRegion)
+        line("baiduFanyiAppId", mask(s.baiduFanyiAppId))
+        line("baiduFanyiSecretKey", mask(s.baiduFanyiSecretKey))
         line("floatingButtonSizeDp", s.floatingButtonSizeDp)
         line("floatingButtonX", s.floatingButtonX)
         line("floatingButtonY", s.floatingButtonY)
         line("floatingButtonSnapToEdge", s.floatingButtonSnapToEdge)
         line("floatingButtonAutoDock", s.floatingButtonAutoDock)
         line("floatingButtonDockInsetDp", s.floatingButtonDockInsetDp)
-        // 主球单击技能 + 弧菜单按钮顺序（顺序按 enum.name 拼，便于排查脏数据 / 旧版迁移）
-        line("floatingButtonSkill", s.floatingButtonSkill)
-        line("floatingMenuItemOrder", s.floatingMenuItemOrder.joinToString(",") { it.name }.ifEmpty { "<empty>" })
-
-        // 悬浮窗口（FLOATING_WINDOW 模式）
         line("floatingWindowX", s.floatingWindowX)
         line("floatingWindowY", s.floatingWindowY)
         line("floatingWindowWidthDp", s.floatingWindowWidthDp)
         line("floatingWindowHeightDp", s.floatingWindowHeightDp)
         line("floatingWindowContentMode", s.floatingWindowContentMode)
         line("floatingWindowLocked", s.floatingWindowLocked)
-
-        // 高级
+        line("customBorderStyle", s.customBorderStyle)
+        line("overlayAllowWrap", s.overlayAllowWrap)
+        line("overlayAvoidCollision", s.overlayAvoidCollision)
         line("apiTimeoutSeconds", s.apiTimeoutSeconds)
         line("mergeAdjacentBlocks", s.mergeAdjacentBlocks)
         line("mergeStrength", s.mergeStrength)
         line("pinnedLanguages", s.pinnedLanguages.joinToString(",").ifEmpty { "<empty>" })
-        // 明文 HTTP 白名单（hostname 不算敏感，可看是否用户开了哪些自架站点）
         line("cleartextAllowedHosts", s.cleartextAllowedHosts.joinToString(",").ifEmpty { "<empty>" })
+        line("floatingMenuItemOrder", s.floatingMenuItemOrder.joinToString(",") { it.name }.ifEmpty { "<empty>" })
+        line("arcMenuPageSize", s.arcMenuPageSize)
+        line("floatingButtonSkill", s.floatingButtonSkill)
+        line("dictionaryPrompt", brief(s.dictionaryPrompt))
+        line("localLlmTemperature", s.localLlmTemperature)
+        line("localLlmTopP", s.localLlmTopP)
+        line("localLlmTopK", s.localLlmTopK)
+        line("localLlmRepetitionPenalty", s.localLlmRepetitionPenalty)
+        line("localLlmContextSize", s.localLlmContextSize)
+        line("localLlmMaxNewTokens", s.localLlmMaxNewTokens)
+        line("dbnetProbThresh", s.dbnetProbThresh)
+        line("dbnetBoxScoreThresh", s.dbnetBoxScoreThresh)
+        line("dbnetUnclipRatio", s.dbnetUnclipRatio)
+        line("mangaOcrDbnetUnclipRatio", s.mangaOcrDbnetUnclipRatio)
+        line("bubbleClusterGap", s.bubbleClusterGap)
+        line("localLlmMirror", s.localLlmMirror)
+        line("localLlmMirrorUrl", customUrl(s.localLlmMirrorUrl))
+        line("translationPresets", presetListSummary(s.translationPresets))
+        line("activeTranslationPresetId", s.activeTranslationPresetId.ifBlank { "<none>" })
     }
-
     /** 设备 + 屏幕信息（不会变，理论上 install 时算一次就够，简化成每次写文件时取）。 */
     private fun formatEnvironment(context: Context): String = buildString {
         val dm = context.resources.displayMetrics

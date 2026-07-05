@@ -15,8 +15,8 @@ android {
         applicationId = "com.gameocr.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 8
-        versionName = "0.3.5"
+        versionCode = 9
+        versionName = "0.3.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -85,6 +85,15 @@ android {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
+        // 必须开启：:llama-android 引入的 llama.cpp 用 GGML_BACKEND_DL=ON 模式，启动时
+        // ggml_backend_load_all_from_path() 用 readdir 扫 nativeLibraryDir 找
+        // libggml-cpu-android_*.so 系列 dlopen。AGP 5.0+ 默认 useLegacyPackaging=false 不把
+        // native libs 解压到 /data/app/.../lib/arm64/（留在 APK 内），导致 readdir 拿到空目录
+        // → "no backends are loaded" → loadModel 必败。
+        // 腾讯官方 Hy-MT demo APK manifest 里 extractNativeLibs=true 同此目的。
+        jniLibs {
+            useLegacyPackaging = true
+        }
     }
 }
 
@@ -147,6 +156,10 @@ dependencies {
 
     // ONNX Runtime (PaddleOCR PP-OCRv4)
     implementation(libs.onnxruntime.android)
+
+    // 端侧 LLM 翻译（llama.cpp + GGUF）。运行时仅在 Build.VERSION.SDK_INT >= 33 启用，
+    // 详见 :llama-android 模块说明与 LlamaEngineHolder。
+    implementation(project(":llama-android"))
 
     // Test
     testImplementation(libs.junit)

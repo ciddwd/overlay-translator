@@ -2,6 +2,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- :llama-android 的 minSdk=33（来自 ggml-org/llama.cpp 上游硬要求）。
+         屏译 :app 的 minSdk=26 不动；端侧 LLM 翻译运行时按 Build.VERSION.SDK_INT >= 33
+         判断可用性，低版本系统下 LOCAL_HUNYUAN_MT / LOCAL_SAKURA 入口在设置里隐藏并禁用。 -->
+    <uses-sdk tools:overrideLibrary="com.arm.aichat" />
+
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />

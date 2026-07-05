@@ -4,6 +4,7 @@ import androidx.annotation.StringRes
 import com.gameocr.app.R
 import com.gameocr.app.capture.CaptureRegion
 import kotlinx.serialization.Serializable
+import java.security.MessageDigest
 
 /** 用户配置：OCR / 翻译后端相关。 */
 @Serializable
@@ -26,6 +27,9 @@ data class Settings(
     val captureRegionSavedScreenH: Int = 0,
     val overlayTextSizeSp: Int = 14,
     val overlayAlpha: Float = 0.85f,
+    val overlayFontFileName: String = "",
+    val overlayFontDisplayName: String = "",
+    val overlayFonts: List<OverlayFontEntry> = emptyList(),
     val streamingTranslate: Boolean = true,
     val renderMode: RenderMode = RenderMode.BLOCKS,
     val overlayPlacement: OverlayPlacement = OverlayPlacement.OVERLAP,
@@ -41,6 +45,20 @@ data class Settings(
     /** 译文相对原文 boundingBox 的垂直额外偏移（px，叠加到 placement 计算结果之上）。 */
     val overlayOffsetY: Int = 0,
     val preprocess: PreprocessOptions = PreprocessOptions(),
+    /**
+     * OCR 调用前 / 后自动判别文本方向（横排 / 竖排 / 一字母一行的 logo），按判别结果在路由层
+     * 动态切换 OCR 引擎（比如发现是日漫竖排自动切到 manga-ocr，发现是繁中竖排自动切到百度
+     * 含位置版）。方向模型已随 APK 打包，默认开启以覆盖竖排 / 旋转屏译场景。
+     *
+     * Phase 1 实现为"OCR 后判别 → 不匹配则用更合适的引擎重跑"——横排场景零额外开销，竖排
+     * 误用其它引擎时 OCR 跑 2 次。详见 [com.gameocr.app.ocr.OrientationCoordinator]。
+     */
+    val textOrientationAutoDetect: Boolean = true,
+    /**
+     * 用户手动锁定文本方向，覆盖自动判别。null = 走自动 / 关闭时无意义。
+     * 通常仅在自动判别频繁误判某帧时由用户临时锁定。
+     */
+    val manualTextOrientation: com.gameocr.app.ocr.TextOrientation? = null,
     val baiduOcrApiKey: String = "",
     val baiduOcrSecretKey: String = "",
     /** 百度 OCR 接口类型。默认含位置标准版，能让译文紧贴原文 boundingBox 渲染。 */
@@ -49,8 +67,12 @@ data class Settings(
      * 百度 OCR 识别语种。默认 CHN_ENG（中英）等于不指定时的行为。
      * 注意：含位置版（general / accurate / webimage）实际不读取 language_type；
      * 想识别韩文 / 日文等小语种应当切到「标准版」或「高精度版」（无位置）。
-     */
+    */
     val baiduOcrLanguage: BaiduOcrLanguage = BaiduOcrLanguage.CHN_ENG,
+    /** Umi-OCR HTTP image OCR endpoint, e.g. http://192.168.0.2:1224/api/ocr. */
+    val umiOcrBaseUrl: String = "",
+    /** LunaTranslator HTTP image OCR endpoint, e.g. http://192.168.0.2:2333/api/ocr. */
+    val lunaOcrBaseUrl: String = "",
     val tencentSecretId: String = "",
     val tencentSecretKey: String = "",
     val tencentRegion: String = "ap-guangzhou",
@@ -61,7 +83,15 @@ data class Settings(
      * GeneralAccurateOCR 只支持 auto / zh，RecognizeAgent 不读这个字段（引擎层会跳过）。
      */
     val tencentOcrLanguage: TencentOcrLanguage = TencentOcrLanguage.AUTO,
+    val paddleModelVersion: PaddleModelVersion = PaddleModelVersion.V6_SMALL,
     val paddleModelMirrorUrl: String = "",
+    /**
+     * manga-ocr 模型下载镜像 URL（可选）。l0wgear/manga-ocr-2025-onnx 没有公开 hf-mirror 代理
+     * （实测 308 redirect 回 huggingface.co），用户可填自架镜像（如内网 NAS）。空 = 仅走 huggingface.co 原站。
+     */
+    val mangaOcrModelMirrorUrl: String = "",
+    /** PaddleOCR doc-orientation ONNX model mirror. Empty = official HuggingFace source. */
+    val orientationModelMirrorUrl: String = "",
     val preferShizukuCapture: Boolean = false,
     val a11yVolumeTrigger: Boolean = false,
     val translatorEngine: TranslatorEngine = TranslatorEngine.OPENAI,
@@ -170,15 +200,17 @@ data class Settings(
      */
     val cleartextAllowedHosts: List<String> = emptyList(),
     /**
-     * 悬浮球长按弧菜单按钮顺序。每页最多 [FloatingMenu.PAGE_SIZE] 项，超出由 FloatingButtonManager
-     * 自动在末位插入「下一组」翻页项。新装用户 / 老用户升级时默认为
-     * [FloatingMenu.DEFAULT_ORDER]（沿用原 3 项 + 主球技能槽）。
+     * 悬浮球长按弧菜单按钮顺序。每页按钮数由 [arcMenuPageSize] 决定，范围为
+     * [FloatingMenu.MIN_PAGE_SIZE]..[FloatingMenu.MAX_PAGE_SIZE]；超出时由 FloatingButtonManager
+     * 自动在每页末位插入「下一组」翻页项，最后一页循环回第一页。新装用户 / 未自定义的旧默认顺序迁移到
+     * [FloatingMenu.DEFAULT_ORDER]。
      *
      * `FULL_SCREEN_SKILL` / `WORD_SELECT` 在 registry 里互斥——展开菜单时只显示「与当前
      * [floatingButtonSkill] 相反」的那一个，点击切 skill。所以 order 里只用一个 slot 表示
      * 「技能切换槽」，约定写 `FULL_SCREEN_SKILL`。
      */
     val floatingMenuItemOrder: List<MenuItemId> = FloatingMenu.DEFAULT_ORDER,
+    val arcMenuPageSize: Int = FloatingMenu.DEFAULT_PAGE_SIZE,
     /**
      * 主球单击触发的「技能」。FULL_SCREEN 走全屏 OCR+翻译；WORD_SELECT 进入划词框选 overlay。
      * 长按菜单里的「技能槽」按钮显示当前对立项，点了切换 + 球图标互换。
@@ -189,7 +221,62 @@ data class Settings(
      * 用占位符 `{source}` / `{target}` 同 [promptTemplate]。返回 JSON 让卡片显示音标 / 词性 /
      * 释义 / 例句；解析失败回退到 [promptTemplate]。读取时若 key 缺省，按 UI locale 给出本地化默认。
      */
-    val dictionaryPrompt: String = DEFAULT_DICTIONARY_PROMPT
+    val dictionaryPrompt: String = DEFAULT_DICTIONARY_PROMPT,
+    /**
+     * 端侧 LLM 采样温度。Hy-MT / Sakura 可共用；当前 binding 尚未把采样参数暴露到 JNI。
+     */
+    val localLlmTemperature: Float = 0.7f,
+    /** 端侧 LLM nucleus 采样 top-p。 */
+    val localLlmTopP: Float = 0.6f,
+    /** 端侧 LLM top-k。 */
+    val localLlmTopK: Int = 20,
+    /** 端侧 LLM 重复惩罚。 */
+    val localLlmRepetitionPenalty: Float = 1.05f,
+    /** 端侧 LLM 上下文窗口大小（token）。屏译 OCR 段落短，2048 足够；越大越占内存。 */
+    val localLlmContextSize: Int = 2048,
+    /** 端侧 LLM 单次最长生成 token 数。屏译场景译文很少超过 256 token。 */
+    val localLlmMaxNewTokens: Int = 256,
+    /**
+     * PaddleOCR / MangaOCR 共用 DBNet 检测的二值化阈值。prob map > 此值视为前景。
+     * 主线 PaddleOCR 默认 0.3；屏译降到 0.25 让漫画小气泡、淡色字、长竖排能稳定捕获。
+     * 用户可在设置→OCR→"检测高级阈值"调到 0.15–0.4，过低引入噪声 box / 过高漏小字。
+     */
+    val dbnetProbThresh: Float = 0.25f,
+    /**
+     * DBNet 连通域平均概率阈值。连通域内像素的 prob 均值低于此值视为噪声丢弃。
+     * 主线默认 0.6；屏译降到 0.5 配合 [dbnetProbThresh] 一起放宽，捕获概率响应在边界的小字。
+     */
+    val dbnetBoxScoreThresh: Float = 0.5f,
+    /**
+     * PaddleOCR DBNet 旋转矩形外扩比例。从二值连通域到最终 box 的 unclip 操作，
+     * 越大 box 包得越宽。普通 PaddleOCR 保持 1.55，避免为了日漫 crop 需求改变通用 OCR 行为。
+     */
+    val dbnetUnclipRatio: Float = 1.55f,
+    /**
+     * manga-ocr 专用 DBNet 外扩比例。manga-ocr 识别整气泡 crop，竖排/手绘字体更怕首尾字被裁；
+     * 1.65 比 PaddleOCR 常见 1.5 默认值多一点裁剪余量，同时仍避免过度吞邻泡。
+     */
+    val mangaOcrDbnetUnclipRatio: Float = 1.65f,
+    /**
+     * BubbleClusterer 聚类时把每个 DBNet quad 外扩多少像素后做并查集合并。
+     * 18 px 是 PaddleOCR DBNet 论文常见列距下限；屏译漫画竖排两列字间距经常 20–40 px，
+     * 升到 32 px 让「キャプテン / お疲れ様でした!!」这类两列气泡能聚为单个 bubble 整体送入
+     * manga-ocr。过大可能误合相邻独立气泡，用户可在设置滑条调 8–60。
+     */
+    val bubbleClusterGap: Int = 32,
+    /**
+     * 端侧 LLM 下载源选择。默认 [LlmMirrorChoice.HF_MIRROR]——国内用户绝大多数直连可达：
+     * - Hy-MT2 / Sakura 在此模式下走 hf-mirror.com。
+     * 选 [LlmMirrorChoice.CUSTOM] 时使用 [localLlmMirrorUrl] 作 base URL。
+     */
+    val localLlmMirror: LlmMirrorChoice = LlmMirrorChoice.HF_MIRROR,
+    /**
+     * [LlmMirrorChoice.CUSTOM] 模式下的自定义 base URL（含末尾 `/`，例如
+     * `https://my-cdn.example/llm/`）。拼接规则为 `<base>/<kind.fileName>`。其它模式不读此字段。
+     */
+    val localLlmMirrorUrl: String = "",
+    val translationPresets: List<TranslationPreset> = emptyList(),
+    val activeTranslationPresetId: String = ""
 ) {
     companion object {
         /**
@@ -230,6 +317,333 @@ data class Settings(
     }
 }
 
+@Serializable
+data class OverlayFontEntry(
+    val fileName: String,
+    val displayName: String
+)
+
+@Serializable
+data class TranslationPreset(
+    val id: String,
+    val name: String,
+    val shortName: String = name.take(8),
+    val baseUrl: String = "https://api.deepseek.com/v1/",
+    val model: String = "deepseek-v4-flash",
+    val sourceLang: String = Languages.AUTO.code,
+    val targetLang: String = "zh-CN",
+    val promptTemplate: String = Settings.DEFAULT_PROMPT,
+    val dictionaryPrompt: String = Settings.DEFAULT_DICTIONARY_PROMPT,
+    val ocrEngine: OcrEngineKind = OcrEngineKind.ML_KIT_AUTO,
+    val preprocess: PreprocessOptions = PreprocessOptions(),
+    val renderMode: RenderMode = RenderMode.BLOCKS,
+    val overlayPlacement: OverlayPlacement = OverlayPlacement.OVERLAP,
+    val overlayTheme: OverlayTheme = OverlayTheme.CLASSIC_DARK,
+    val customBgColor: Int = 0xE6000000.toInt(),
+    val customFgColor: Int = 0xFFFFFFFF.toInt(),
+    val customBorderColor: Int = 0x00000000,
+    val customBorderWidth: Int = 0,
+    val customBorderStyle: BorderStyle = BorderStyle.SOLID,
+    val overlayTextSizeSp: Int = 14,
+    val overlayAlpha: Float = 0.85f,
+    val overlayFontFileName: String = "",
+    val overlayFontDisplayName: String = "",
+    val overlayOffsetX: Int = 0,
+    val overlayOffsetY: Int = 0,
+    val overlayAllowWrap: Boolean = true,
+    val overlayAvoidCollision: Boolean = true,
+    val streamingTranslate: Boolean = true,
+    val translatorEngine: TranslatorEngine = TranslatorEngine.OPENAI,
+    val deeplPro: Boolean = false,
+    val deeplProtocol: DeeplProtocol = DeeplProtocol.OFFICIAL,
+    val deeplBaseUrl: String = "",
+    val deeplBearerAuth: Boolean = false,
+    val baiduOcrEndpoint: BaiduOcrEndpoint = BaiduOcrEndpoint.GENERAL,
+    val baiduOcrLanguage: BaiduOcrLanguage = BaiduOcrLanguage.CHN_ENG,
+    val umiOcrBaseUrl: String = "",
+    val lunaOcrBaseUrl: String = "",
+    val tencentRegion: String = "ap-guangzhou",
+    val tencentOcrEndpoint: TencentOcrEndpoint = TencentOcrEndpoint.GENERAL_BASIC,
+    val tencentOcrLanguage: TencentOcrLanguage = TencentOcrLanguage.AUTO,
+    val paddleModelVersion: PaddleModelVersion = PaddleModelVersion.V6_SMALL,
+    val apiTimeoutSeconds: Int = 30,
+    val mergeAdjacentBlocks: Boolean = false,
+    val mergeStrength: MergeStrength = MergeStrength.STANDARD,
+    val textOrientationAutoDetect: Boolean = true,
+    val manualTextOrientation: com.gameocr.app.ocr.TextOrientation? = null,
+    val localLlmTemperature: Float = 0.7f,
+    val localLlmTopP: Float = 0.6f,
+    val localLlmTopK: Int = 20,
+    val localLlmRepetitionPenalty: Float = 1.05f,
+    val localLlmContextSize: Int = 2048,
+    val localLlmMaxNewTokens: Int = 256,
+    val dbnetProbThresh: Float = 0.25f,
+    val dbnetBoxScoreThresh: Float = 0.5f,
+    val dbnetUnclipRatio: Float = 1.55f,
+    val mangaOcrDbnetUnclipRatio: Float = 1.65f,
+    val bubbleClusterGap: Int = 32,
+    val settingsHash: String = ""
+) {
+    fun applyTo(settings: Settings): Settings = settings.copy(
+        baseUrl = baseUrl,
+        model = model,
+        sourceLang = sourceLang,
+        targetLang = targetLang,
+        promptTemplate = promptTemplate,
+        dictionaryPrompt = dictionaryPrompt,
+        ocrEngine = ocrEngine,
+        preprocess = preprocess,
+        renderMode = renderMode,
+        overlayPlacement = overlayPlacement,
+        overlayTheme = overlayTheme,
+        customBgColor = customBgColor,
+        customFgColor = customFgColor,
+        customBorderColor = customBorderColor,
+        customBorderWidth = customBorderWidth,
+        customBorderStyle = customBorderStyle,
+        overlayTextSizeSp = overlayTextSizeSp,
+        overlayAlpha = overlayAlpha,
+        overlayFontFileName = overlayFontFileName,
+        overlayFontDisplayName = overlayFontDisplayName,
+        overlayOffsetX = overlayOffsetX,
+        overlayOffsetY = overlayOffsetY,
+        overlayAllowWrap = overlayAllowWrap,
+        overlayAvoidCollision = overlayAvoidCollision,
+        streamingTranslate = streamingTranslate,
+        translatorEngine = translatorEngine,
+        deeplPro = deeplPro,
+        deeplProtocol = deeplProtocol,
+        deeplBaseUrl = deeplBaseUrl,
+        deeplBearerAuth = deeplBearerAuth,
+        baiduOcrEndpoint = baiduOcrEndpoint,
+        baiduOcrLanguage = baiduOcrLanguage,
+        umiOcrBaseUrl = umiOcrBaseUrl,
+        lunaOcrBaseUrl = lunaOcrBaseUrl,
+        tencentRegion = tencentRegion,
+        tencentOcrEndpoint = tencentOcrEndpoint,
+        tencentOcrLanguage = tencentOcrLanguage,
+        paddleModelVersion = paddleModelVersion,
+        apiTimeoutSeconds = apiTimeoutSeconds,
+        mergeAdjacentBlocks = mergeAdjacentBlocks,
+        mergeStrength = mergeStrength,
+        textOrientationAutoDetect = textOrientationAutoDetect,
+        manualTextOrientation = manualTextOrientation,
+        localLlmTemperature = localLlmTemperature,
+        localLlmTopP = localLlmTopP,
+        localLlmTopK = localLlmTopK,
+        localLlmRepetitionPenalty = localLlmRepetitionPenalty,
+        localLlmContextSize = localLlmContextSize,
+        localLlmMaxNewTokens = localLlmMaxNewTokens,
+        dbnetProbThresh = dbnetProbThresh,
+        dbnetBoxScoreThresh = dbnetBoxScoreThresh,
+        dbnetUnclipRatio = dbnetUnclipRatio,
+        mangaOcrDbnetUnclipRatio = mangaOcrDbnetUnclipRatio,
+        bubbleClusterGap = bubbleClusterGap
+    )
+}
+
+object TranslationPresetCatalog {
+    const val BUILTIN_MANGA_JA_ZH: String = "builtin_manga_ja_zh"
+    const val UNSAVED_DRAFT_ID: String = "custom_unsaved_translation_preset"
+
+    fun builtIns(): List<TranslationPreset> = listOf(
+        fromSettings(
+            id = BUILTIN_MANGA_JA_ZH,
+            name = "Offline Manga OCR to Chinese",
+            shortName = "Manga",
+            settings = Settings().copy(
+                sourceLang = "ja",
+                targetLang = "zh-CN",
+                ocrEngine = OcrEngineKind.MANGA_OCR_JA,
+                translatorEngine = TranslatorEngine.LOCAL_SAKURA,
+                overlayTheme = OverlayTheme.PAPER_LIGHT,
+                mergeAdjacentBlocks = true,
+                mergeStrength = MergeStrength.AGGRESSIVE
+            )
+        )
+    )
+
+    fun all(custom: List<TranslationPreset>): List<TranslationPreset> =
+        builtIns() + custom.filterNot { it.id in builtInIds }
+
+    fun find(custom: List<TranslationPreset>, id: String): TranslationPreset? =
+        all(custom).firstOrNull { it.id == id }
+
+    fun fromSettings(
+        id: String,
+        name: String,
+        shortName: String,
+        settings: Settings
+    ): TranslationPreset {
+        val preset = TranslationPreset(
+            id = id,
+            name = name,
+            shortName = shortName,
+            baseUrl = settings.baseUrl,
+            model = settings.model,
+            sourceLang = settings.sourceLang,
+            targetLang = settings.targetLang,
+            promptTemplate = settings.promptTemplate,
+            dictionaryPrompt = settings.dictionaryPrompt,
+            ocrEngine = settings.ocrEngine,
+            preprocess = settings.preprocess,
+            renderMode = settings.renderMode,
+            overlayPlacement = settings.overlayPlacement,
+            overlayTheme = settings.overlayTheme,
+            customBgColor = settings.customBgColor,
+            customFgColor = settings.customFgColor,
+            customBorderColor = settings.customBorderColor,
+            customBorderWidth = settings.customBorderWidth,
+            customBorderStyle = settings.customBorderStyle,
+            overlayTextSizeSp = settings.overlayTextSizeSp,
+            overlayAlpha = settings.overlayAlpha,
+            overlayFontFileName = settings.overlayFontFileName,
+            overlayFontDisplayName = settings.overlayFontDisplayName,
+            overlayOffsetX = settings.overlayOffsetX,
+            overlayOffsetY = settings.overlayOffsetY,
+            overlayAllowWrap = settings.overlayAllowWrap,
+            overlayAvoidCollision = settings.overlayAvoidCollision,
+            streamingTranslate = settings.streamingTranslate,
+            translatorEngine = settings.translatorEngine,
+            deeplPro = settings.deeplPro,
+            deeplProtocol = settings.deeplProtocol,
+            deeplBaseUrl = settings.deeplBaseUrl,
+            deeplBearerAuth = settings.deeplBearerAuth,
+            baiduOcrEndpoint = settings.baiduOcrEndpoint,
+            baiduOcrLanguage = settings.baiduOcrLanguage,
+            umiOcrBaseUrl = settings.umiOcrBaseUrl,
+            lunaOcrBaseUrl = settings.lunaOcrBaseUrl,
+            tencentRegion = settings.tencentRegion,
+            tencentOcrEndpoint = settings.tencentOcrEndpoint,
+            tencentOcrLanguage = settings.tencentOcrLanguage,
+            paddleModelVersion = settings.paddleModelVersion,
+            apiTimeoutSeconds = settings.apiTimeoutSeconds,
+            mergeAdjacentBlocks = settings.mergeAdjacentBlocks,
+            mergeStrength = settings.mergeStrength,
+            textOrientationAutoDetect = settings.textOrientationAutoDetect,
+            manualTextOrientation = settings.manualTextOrientation,
+            localLlmTemperature = settings.localLlmTemperature,
+            localLlmTopP = settings.localLlmTopP,
+            localLlmTopK = settings.localLlmTopK,
+            localLlmRepetitionPenalty = settings.localLlmRepetitionPenalty,
+            localLlmContextSize = settings.localLlmContextSize,
+            localLlmMaxNewTokens = settings.localLlmMaxNewTokens,
+            dbnetProbThresh = settings.dbnetProbThresh,
+            dbnetBoxScoreThresh = settings.dbnetBoxScoreThresh,
+            dbnetUnclipRatio = settings.dbnetUnclipRatio,
+            mangaOcrDbnetUnclipRatio = settings.mangaOcrDbnetUnclipRatio,
+            bubbleClusterGap = settings.bubbleClusterGap
+        )
+        return preset.copy(settingsHash = settingsHash(preset))
+    }
+
+    fun matchesSettings(preset: TranslationPreset, settings: Settings): Boolean {
+        return matchesHash(preset, hashForSettings(settings))
+    }
+
+    fun hashForSettings(settings: Settings): String = fromSettings(
+        id = UNSAVED_DRAFT_ID,
+        name = "",
+        shortName = "",
+        settings = settings
+    ).settingsHash
+
+    fun matchesHash(preset: TranslationPreset, settingsHash: String): Boolean =
+        preset.settingsHash.ifBlank { settingsHash(preset) } == settingsHash
+
+    private fun settingsHash(preset: TranslationPreset): String = sha256(
+        preset.baseUrl,
+        preset.model,
+        preset.sourceLang,
+        preset.targetLang,
+        preset.promptTemplate,
+        preset.dictionaryPrompt,
+        preset.ocrEngine.name,
+        preset.preprocess.upscale2x,
+        preset.preprocess.invert,
+        preset.preprocess.binarize,
+        preset.renderMode.name,
+        preset.overlayPlacement.name,
+        preset.overlayTheme.name,
+        preset.customBgColor,
+        preset.customFgColor,
+        preset.customBorderColor,
+        preset.customBorderWidth,
+        preset.customBorderStyle.name,
+        preset.overlayTextSizeSp,
+        preset.overlayAlpha.toBits(),
+        preset.overlayFontFileName,
+        preset.overlayFontDisplayName,
+        preset.overlayOffsetX,
+        preset.overlayOffsetY,
+        preset.overlayAllowWrap,
+        preset.overlayAvoidCollision,
+        preset.streamingTranslate,
+        preset.translatorEngine.name,
+        preset.deeplPro,
+        preset.deeplProtocol.name,
+        preset.deeplBaseUrl,
+        preset.deeplBearerAuth,
+        preset.baiduOcrEndpoint.name,
+        preset.baiduOcrLanguage.name,
+        preset.umiOcrBaseUrl,
+        preset.lunaOcrBaseUrl,
+        preset.tencentRegion,
+        preset.tencentOcrEndpoint.name,
+        preset.tencentOcrLanguage.name,
+        preset.paddleModelVersion.name,
+        preset.apiTimeoutSeconds,
+        preset.mergeAdjacentBlocks,
+        preset.mergeStrength.name,
+        preset.textOrientationAutoDetect,
+        preset.manualTextOrientation?.name.orEmpty(),
+        preset.localLlmTemperature.toBits(),
+        preset.localLlmTopP.toBits(),
+        preset.localLlmTopK,
+        preset.localLlmRepetitionPenalty.toBits(),
+        preset.localLlmContextSize,
+        preset.localLlmMaxNewTokens,
+        preset.dbnetProbThresh.toBits(),
+        preset.dbnetBoxScoreThresh.toBits(),
+        preset.dbnetUnclipRatio.toBits(),
+        preset.mangaOcrDbnetUnclipRatio.toBits(),
+        preset.bubbleClusterGap
+    )
+
+    private fun sha256(vararg parts: Any?): String {
+        val source = buildString {
+            parts.forEach { part ->
+                val value = part?.toString().orEmpty()
+                append(value.length)
+                append(':')
+                append(value)
+                append('|')
+            }
+        }
+        val bytes = MessageDigest.getInstance("SHA-256")
+            .digest(source.toByteArray(Charsets.UTF_8))
+        return buildString(bytes.size * 2) {
+            bytes.forEach { byte ->
+                val value = byte.toInt() and 0xff
+                append("0123456789abcdef"[value ushr 4])
+                append("0123456789abcdef"[value and 0x0f])
+            }
+        }
+    }
+
+    fun upsertCustom(
+        custom: List<TranslationPreset>,
+        preset: TranslationPreset
+    ): List<TranslationPreset> {
+        val cleaned = custom.filterNot { it.id == preset.id || it.id in builtInIds }
+        return if (preset.id in builtInIds) cleaned else cleaned + preset
+    }
+
+    fun isBuiltIn(id: String): Boolean = id in builtInIds
+
+    private val builtInIds: Set<String> = setOf(BUILTIN_MANGA_JA_ZH)
+}
+
 /**
  * 主球单击技能。FULL_SCREEN 走 CaptureService.triggerOnce()（全屏 OCR+翻译）；
  * WORD_SELECT 走 CaptureService.triggerWordSelect()（拖矩形 → 单段翻译卡片）。
@@ -251,14 +665,23 @@ enum class FloatingSkill {
 enum class MenuItemId {
     LOOP,
     REGION,
+    LANGUAGE_PAIR,
+    PRESET_SWITCH,
+    SETTINGS,
     HOME,
     FULL_SCREEN_SKILL
 }
 
 /** 弧菜单分页 / 默认顺序常量。 */
 object FloatingMenu {
-    /** 每页最多按钮数。第 4 位若有更多项就放「下一组」翻页键。 */
-    const val PAGE_SIZE: Int = 4
+    /** 每页按钮数范围；该数量包含「下一组」翻页键。 */
+    const val MIN_PAGE_SIZE: Int = 2
+    const val MAX_PAGE_SIZE: Int = 6
+    const val DEFAULT_PAGE_SIZE: Int = 5
+    /** 旧调用点兼容别名，等同 [DEFAULT_PAGE_SIZE]。 */
+    const val PAGE_SIZE: Int = DEFAULT_PAGE_SIZE
+
+    fun coercePageSize(value: Int): Int = value.coerceIn(MIN_PAGE_SIZE, MAX_PAGE_SIZE)
 
     /**
      * 全部已知 MenuItemId 的稳定顺序（用于读 Settings 时补齐遗漏 + 默认值）。
@@ -267,6 +690,9 @@ object FloatingMenu {
     val ALL_ORDER: List<MenuItemId> = listOf(
         MenuItemId.LOOP,
         MenuItemId.REGION,
+        MenuItemId.LANGUAGE_PAIR,
+        MenuItemId.PRESET_SWITCH,
+        MenuItemId.SETTINGS,
         MenuItemId.HOME,
         MenuItemId.FULL_SCREEN_SKILL
     )
@@ -279,6 +705,39 @@ object FloatingMenu {
     val DEFAULT_ORDER: List<MenuItemId> = listOf(
         MenuItemId.LOOP,
         MenuItemId.REGION,
+        MenuItemId.FULL_SCREEN_SKILL,
+        MenuItemId.LANGUAGE_PAIR,
+        MenuItemId.PRESET_SWITCH,
+        MenuItemId.SETTINGS,
+        MenuItemId.HOME
+    )
+
+    val LEGACY_DEFAULT_ORDER_BEFORE_PRESET_LANGUAGE_SWAP: List<MenuItemId> = listOf(
+        MenuItemId.LOOP,
+        MenuItemId.REGION,
+        MenuItemId.FULL_SCREEN_SKILL,
+        MenuItemId.PRESET_SWITCH,
+        MenuItemId.LANGUAGE_PAIR,
+        MenuItemId.SETTINGS,
+        MenuItemId.HOME
+    )
+
+    val LEGACY_DEFAULT_ORDER_BEFORE_PRESET_SKILL_SWAP: List<MenuItemId> = listOf(
+        MenuItemId.LOOP,
+        MenuItemId.REGION,
+        MenuItemId.PRESET_SWITCH,
+        MenuItemId.FULL_SCREEN_SKILL,
+        MenuItemId.LANGUAGE_PAIR,
+        MenuItemId.SETTINGS,
+        MenuItemId.HOME
+    )
+
+    val LEGACY_DEFAULT_ORDER_BEFORE_SKILL_SWAP: List<MenuItemId> = listOf(
+        MenuItemId.LOOP,
+        MenuItemId.REGION,
+        MenuItemId.PRESET_SWITCH,
+        MenuItemId.SETTINGS,
+        MenuItemId.LANGUAGE_PAIR,
         MenuItemId.FULL_SCREEN_SKILL,
         MenuItemId.HOME
     )
@@ -317,6 +776,46 @@ enum class DeeplProtocol {
     AUTO
 }
 
+/**
+ * PaddleOCR 模型版本。支持多版本切换：v5 mobile（当前默认）和 v6 tiny（更轻量、更快）。
+ * 每个版本的模型文件存在独立子目录（[PaddleModelInstaller.modelsDir] / [dirName]），
+ * 切版本时不需要删另一个版本的模型。
+ *
+ * 枚举值的 name 会被 DataStore 序列化，改名需做 silent migration。
+ */
+@Serializable
+enum class PaddleModelVersion(
+    val displayNameRes: Int,
+    val descRes: Int,
+    /** modelsDir 下的子目录名 */
+    val dirName: String
+) {
+    /** PP-OCRv5 mobile（det 4.5MB + rec 15.7MB + dict 90KB，~20MB 总计） */
+    V5_MOBILE(
+        R.string.paddle_version_v5_mobile,
+        R.string.paddle_version_v5_mobile_desc,
+        "v5"
+    ),
+    /** PP-OCRv6 tiny（det ~1.5M params + rec ~1.5M params，极轻量极快） */
+    V6_TINY(
+        R.string.paddle_version_v6_tiny,
+        R.string.paddle_version_v6_tiny_desc,
+        "v6tiny"
+    ),
+    /** PP-OCRv6 small: mobile tier with higher accuracy than tiny at a higher runtime cost. */
+    V6_SMALL(
+        R.string.paddle_version_v6_small,
+        R.string.paddle_version_v6_small_desc,
+        "v6small"
+    ),
+    /** PP-OCRv6 medium: higher accuracy tier with a larger download/runtime cost. */
+    V6_MEDIUM(
+        R.string.paddle_version_v6_medium,
+        R.string.paddle_version_v6_medium_desc,
+        "v6medium"
+    );
+}
+
 @Serializable
 enum class TranslatorEngine {
     /** OpenAI 兼容 LLM（DeepSeek / SiliconFlow / GPT / 自架 Ollama 等）。 */
@@ -347,7 +846,39 @@ enum class TranslatorEngine {
      * [Settings.tencentSecretKey] / [Settings.tencentRegion]** 同一套腾讯云子账号——
      * 因为属于同一个腾讯云账号体系，让用户填两遍只会困惑。
      */
-    TENCENT
+    TENCENT,
+    /**
+     * 端侧 LLM 翻译 —— SakuraLLM Qwen2.5-1.5B Q5KS（约 1.26 GB），日译中 ACGN 专用。
+     * 走 [com.gameocr.app.llm.LlamaEngineHolder] + llama.cpp（com.arm.aichat binding）。
+     * 仅 Android 13+ 可用（binding minSdk=33）。模型按需下载，5 分钟空闲自动 unload。
+     * 选中后强制目标语种为简体中文；源语种非日文时 RoutingTranslator 回退到 OpenAI 兼容引擎。
+     *
+     * 历史：曾同时支持 LOCAL_HUNYUAN_MT（HY-MT1.5 1.25bit/2bit GGUF），但腾讯 AngelSlim 的
+     * STQ1_0 / Q2_0c 量化都依赖未合入主线的 llama.cpp PR（#22836 / #19357），主线 master
+     * 无法加载，已从枚举里移除避免误导用户。旧 settings 里残留的 "LOCAL_HUNYUAN_MT" 字符串
+     * 由 SettingsRepository.toSettings() 的 runCatching{...}.getOrDefault(OPENAI) 兜底。
+     */
+    LOCAL_SAKURA,
+    /**
+     * 端侧 LLM 翻译 —— Tencent Hy-MT2-1.8B Q4_K_M（约 1.13 GB），多语种翻译专用。
+     * 走 [com.gameocr.app.llm.LlamaEngineHolder] + llama.cpp（com.arm.aichat binding）。
+     * 仅 Android 13+ 可用；语言方向跟随 [sourceLang] / [targetLang]。
+     */
+    LOCAL_HY_MT2
+}
+
+/** 端侧 LLM 下载源选择。see [Settings.localLlmMirror]。 */
+@Serializable
+enum class LlmMirrorChoice {
+    /** huggingface.co 官方原站，海外或带代理时首选。 */
+    HF_OFFICIAL,
+    /**
+     * 国内可直连镜像源：
+     * - Hy-MT2 / Sakura → hf-mirror.com。
+     */
+    HF_MIRROR,
+    /** 用户自定义 base URL，配 [Settings.localLlmMirrorUrl] 用。 */
+    CUSTOM,
 }
 
 /** 常用目标语言预设（也允许 settings.targetLang 自由填）。 */
@@ -522,6 +1053,8 @@ enum class TencentOcrLanguage(
 
 @Serializable
 enum class OcrEngineKind {
+    UMI_OCR,          // Umi-OCR HTTP service running on LAN/PC.
+    LUNA_OCR,         // LunaTranslator HTTP service running on LAN/PC.
     ML_KIT_AUTO,      // 自动选 latin / 日 / 韩 / 中（按文字类型探测）
     ML_KIT_LATIN,
     ML_KIT_JAPANESE,
@@ -530,8 +1063,23 @@ enum class OcrEngineKind {
     BAIDU,            // 百度通用文字识别（云端，需要 API Key + Secret）
     TENCENT,          // 腾讯云 GeneralBasicOCR（云端，需要 SecretId + SecretKey）
     YOUDAO,           // 有道智云通用文字识别 ocrapi（云端，需要 AppKey + AppSecret）
-    PADDLE_ONNX       // PaddleOCR PP-OCRv5 mobile (ONNX Runtime 端侧，按需下载模型)
+    PADDLE_ONNX,      // PaddleOCR PP-OCRv5 mobile (ONNX Runtime 端侧，按需下载模型)
+    MANGA_OCR_JA      // l0wgear/manga-ocr-2025-onnx 日漫专用（端侧；复用 PaddleOCR DBNet 检测；~140MB 按需下载，需开代理）
 }
+
+/**
+ * 此引擎是否要求 [CaptureService] 跳过 [PreprocessOptions.invert] / [PreprocessOptions.binarize]
+ * 预处理，传入接近原图的 bitmap。MANGA_OCR_JA 训练时见的是漫画原图（含网点、灰阶），
+ * 二值化后效果显著下降，因此走 raw 路径。其它引擎默认走完整预处理链。
+ *
+ * 注：[PreprocessOptions.upscale2x] 仍会应用——DBNet 对小字检测有帮助，对 manga-ocr 224×224
+ * squash resize 后无副作用。
+ */
+val OcrEngineKind.needsRawBitmap: Boolean
+    get() = this == OcrEngineKind.MANGA_OCR_JA
+
+fun Settings.dbnetUnclipRatioFor(engine: OcrEngineKind): Float =
+    if (engine == OcrEngineKind.MANGA_OCR_JA) mangaOcrDbnetUnclipRatio else dbnetUnclipRatio
 
 @Serializable
 data class PreprocessOptions(

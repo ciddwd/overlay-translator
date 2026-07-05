@@ -31,6 +31,7 @@ class LogRepository @Inject constructor() {
         val level: Level,
         val category: Category,
         val message: String,
+        val elapsedMs: Long? = null,
         /** 可选：OCR / 翻译这种场景的源文本。 */
         val source: String? = null,
         /** 可选：翻译完成后的译文。 */
@@ -41,20 +42,25 @@ class LogRepository @Inject constructor() {
     private val _entries = MutableStateFlow<List<Entry>>(emptyList())
     val entries: StateFlow<List<Entry>> = _entries.asStateFlow()
 
-    fun info(category: Category, message: String) = add(Level.INFO, category, message)
-    fun warn(category: Category, message: String) = add(Level.WARN, category, message)
-    fun error(category: Category, message: String, t: Throwable? = null) {
+    fun info(category: Category, message: String, elapsedMs: Long? = null) =
+        add(Level.INFO, category, message, elapsedMs)
+
+    fun warn(category: Category, message: String, elapsedMs: Long? = null) =
+        add(Level.WARN, category, message, elapsedMs)
+
+    fun error(category: Category, message: String, t: Throwable? = null, elapsedMs: Long? = null) {
         val full = if (t != null) "$message: ${t.javaClass.simpleName}: ${t.message}" else message
-        add(Level.ERROR, category, full)
+        add(Level.ERROR, category, full, elapsedMs)
     }
 
     /** 记录一对"原文 → 译文"（翻译场景）。 */
-    fun pair(category: Category, source: String, translated: String) {
+    fun pair(category: Category, source: String, translated: String, elapsedMs: Long? = null) {
         val e = Entry(
             id = idGen.incrementAndGet(),
             timestamp = System.currentTimeMillis(),
             level = Level.INFO,
             category = category,
+            elapsedMs = elapsedMs,
             message = "原文 → 译文",
             source = source,
             translated = translated
@@ -66,14 +72,15 @@ class LogRepository @Inject constructor() {
         _entries.value = emptyList()
     }
 
-    private fun add(level: Level, category: Category, message: String) {
+    private fun add(level: Level, category: Category, message: String, elapsedMs: Long?) {
         push(
             Entry(
                 id = idGen.incrementAndGet(),
                 timestamp = System.currentTimeMillis(),
                 level = level,
                 category = category,
-                message = message
+                message = message,
+                elapsedMs = elapsedMs
             )
         )
     }

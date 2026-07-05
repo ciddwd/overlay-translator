@@ -54,7 +54,10 @@ class MlKitOcrEngine @Inject constructor() : OcrEngine {
             OcrEngineKind.BAIDU,
             OcrEngineKind.TENCENT,
             OcrEngineKind.YOUDAO,
-            OcrEngineKind.PADDLE_ONNX -> autoRecognize(input) // 路由层应当已转走，这里兜底
+            OcrEngineKind.UMI_OCR,
+            OcrEngineKind.LUNA_OCR,
+            OcrEngineKind.PADDLE_ONNX,
+            OcrEngineKind.MANGA_OCR_JA -> autoRecognize(input) // 路由层应当已转走，这里兜底
         }
     }
 

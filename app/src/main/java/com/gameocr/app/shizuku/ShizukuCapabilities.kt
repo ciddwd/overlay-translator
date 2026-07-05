@@ -6,6 +6,30 @@ import android.os.Build
 import javax.inject.Inject
 import javax.inject.Singleton
 
+internal data class ShizukuAvailabilitySnapshot(
+    val installed: Boolean,
+    val serviceRunning: Boolean,
+    val permissionGranted: Boolean,
+    val shellPrivilegeOk: Boolean,
+)
+
+internal fun resolveShizukuAvailability(
+    snapshot: ShizukuAvailabilitySnapshot
+): ShizukuCapabilities.Availability = when {
+    !snapshot.installed -> ShizukuCapabilities.Availability.NOT_INSTALLED
+    !snapshot.serviceRunning -> ShizukuCapabilities.Availability.NOT_RUNNING
+    !snapshot.permissionGranted -> ShizukuCapabilities.Availability.INSTALLED_NOT_GRANTED
+    !snapshot.shellPrivilegeOk -> ShizukuCapabilities.Availability.INSTALLED_NOT_PAIRED
+    else -> ShizukuCapabilities.Availability.READY
+}
+
+internal fun shouldRefreshShizukuShellPrivilege(snapshot: ShizukuAvailabilitySnapshot): Boolean {
+    return snapshot.installed &&
+        snapshot.serviceRunning &&
+        snapshot.permissionGranted &&
+        !snapshot.shellPrivilegeOk
+}
+
 /**
  * Shizuku 能力探测。把"包是否装、服务是否运行、是否已授权"三个状态合并成 [Availability]。
  */
@@ -48,10 +72,18 @@ class ShizukuCapabilities @Inject constructor(
     enum class Availability { READY, INSTALLED_NOT_GRANTED, INSTALLED_NOT_PAIRED, NOT_INSTALLED, NOT_RUNNING }
 
     fun availability(context: Context): Availability {
-        if (!isShizukuInstalled(context)) return Availability.NOT_INSTALLED
-        if (!manager.isServiceRunning()) return Availability.NOT_RUNNING
-        if (!manager.hasPermission()) return Availability.INSTALLED_NOT_GRANTED
-        if (!manager.shellPrivilegeOk.value) return Availability.INSTALLED_NOT_PAIRED
-        return Availability.READY
+        val installed = isShizukuInstalled(context)
+        val serviceRunning = installed && manager.isServiceRunning()
+        val permissionGranted = serviceRunning && manager.hasPermission()
+        val snapshot = ShizukuAvailabilitySnapshot(
+            installed = installed,
+            serviceRunning = serviceRunning,
+            permissionGranted = permissionGranted,
+            shellPrivilegeOk = permissionGranted && manager.shellPrivilegeOk.value,
+        )
+        if (shouldRefreshShizukuShellPrivilege(snapshot)) {
+            manager.refreshShellPrivilege()
+        }
+        return resolveShizukuAvailability(snapshot)
     }
 }

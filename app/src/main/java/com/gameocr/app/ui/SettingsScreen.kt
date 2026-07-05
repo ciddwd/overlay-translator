@@ -1,7 +1,10 @@
 package com.gameocr.app.ui
 
 import android.content.Intent
+import android.content.Context
 import android.provider.Settings as AndroidSettings
+import android.util.TypedValue
+import timber.log.Timber
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -36,10 +39,12 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.outlined.HelpOutline
 import kotlin.math.roundToInt
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
@@ -51,16 +56,20 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
@@ -70,14 +79,18 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
@@ -90,28 +103,43 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.runtime.DisposableEffect
 import com.gameocr.app.overlay.EdgeInsetPreviewOverlay
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.gameocr.app.R
+import com.gameocr.app.data.FloatingMenu
+import com.gameocr.app.data.Languages
 import com.gameocr.app.data.MenuItemId
 import com.gameocr.app.data.OcrEngineKind
+import com.gameocr.app.data.OverlayFontImportError
+import com.gameocr.app.data.OverlayFontImportResult
+import com.gameocr.app.data.OverlayFontPolicy
+import com.gameocr.app.data.OverlayFontEntry
 import com.gameocr.app.data.OverlayPlacement
 import com.gameocr.app.data.OverlayTheme
+import com.gameocr.app.data.PaddleModelVersion
 import com.gameocr.app.data.PreprocessOptions
 import com.gameocr.app.data.RenderMode
 import com.gameocr.app.data.Settings
+import com.gameocr.app.data.TranslationPreset
+import com.gameocr.app.data.TranslationPresetCatalog
 import com.gameocr.app.data.TranslatorEngine
+import com.gameocr.app.llm.LlmModelKind
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.zIndex
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.layout.height
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -132,6 +160,13 @@ fun SettingsScreen(
     var targetLang by remember { mutableStateOf("zh-CN") }
     var sourceLang by remember { mutableStateOf("auto") }
     var translatorEngine by remember { mutableStateOf(TranslatorEngine.OPENAI) }
+    // 端侧 LLM 翻译：状态文本（"已就绪 · XX MB" / "未下载" / "下载中 …"）。仅在 LOCAL_* 引擎时显示。
+    var llmModelStatus by remember { mutableStateOf("") }
+    var llmDownloading by remember { mutableStateOf(false) }
+    var llmModelReady by remember { mutableStateOf(false) }
+    // 镜像选择：radio（HF / hf-mirror / 自定义）；仅 CUSTOM 时 llmMirror 才作为 base URL。
+    var llmMirrorChoice by remember { mutableStateOf(com.gameocr.app.data.LlmMirrorChoice.HF_MIRROR) }
+    var llmMirror by remember { mutableStateOf("") }
     var deeplKey by remember { mutableStateOf("") }
     var deeplPro by remember { mutableStateOf(false) }
     var deeplBaseUrl by remember { mutableStateOf("") }
@@ -158,6 +193,15 @@ fun SettingsScreen(
     var modelPickerExpanded by remember { mutableStateOf(false) }
     var textSize by remember { mutableStateOf(14f) }
     var alpha by remember { mutableStateOf(0.85f) }
+    var overlayFontFileName by remember { mutableStateOf("") }
+    var overlayFontDisplayName by remember { mutableStateOf("") }
+    var overlayFontEntries by remember { mutableStateOf<List<OverlayFontEntry>>(emptyList()) }
+    var overlayFontTypeface by remember { mutableStateOf<android.graphics.Typeface?>(null) }
+    var overlayFontMessage by remember { mutableStateOf<String?>(null) }
+    var overlayFontMessageIsError by remember { mutableStateOf(false) }
+    var pendingOverlayFontDelete by remember { mutableStateOf<OverlayFontEntry?>(null) }
+    var showOverlayFontDeleteTip by remember { mutableStateOf(false) }
+    var overlayFontDeleteTipCountdown by remember { mutableStateOf(0) }
     var loopInterval by remember { mutableStateOf("1000") }
     var streaming by remember { mutableStateOf(true) }
     var renderMode by remember { mutableStateOf(RenderMode.BLOCKS) }
@@ -181,6 +225,8 @@ fun SettingsScreen(
     var baiduSecret by remember { mutableStateOf("") }
     var baiduEndpoint by remember { mutableStateOf(com.gameocr.app.data.BaiduOcrEndpoint.GENERAL) }
     var baiduLanguage by remember { mutableStateOf(com.gameocr.app.data.BaiduOcrLanguage.CHN_ENG) }
+    var umiOcrBaseUrl by remember { mutableStateOf("") }
+    var lunaOcrBaseUrl by remember { mutableStateOf("") }
     var tencentId by remember { mutableStateOf("") }
     var tencentKey by remember { mutableStateOf("") }
     // Region 同时被 OCR (ocr.tencentcloudapi.com) 和 TMT (tmt.tencentcloudapi.com) 使用；
@@ -188,9 +234,16 @@ fun SettingsScreen(
     var tencentRegion by remember { mutableStateOf("ap-guangzhou") }
     var tencentEndpoint by remember { mutableStateOf(com.gameocr.app.data.TencentOcrEndpoint.GENERAL_BASIC) }
     var tencentLanguage by remember { mutableStateOf(com.gameocr.app.data.TencentOcrLanguage.AUTO) }
-    var paddleMirror by remember { mutableStateOf("") }
+    var paddleModelVersion by remember { mutableStateOf(com.gameocr.app.data.PaddleModelVersion.V6_SMALL) }
     var paddleStatus by remember { mutableStateOf("") }
     var paddleDownloading by remember { mutableStateOf(false) }
+    var paddleModelReady by remember { mutableStateOf(false) }
+    var mangaOcrStatus by remember { mutableStateOf("") }
+    var mangaOcrDownloading by remember { mutableStateOf(false) }
+    var mangaOcrModelReady by remember { mutableStateOf(false) }
+    var orientationModelStatus by remember { mutableStateOf("") }
+    var orientationModelDownloading by remember { mutableStateOf(false) }
+    var orientationModelReady by remember { mutableStateOf(false) }
     var preUpscale by remember { mutableStateOf(false) }
     var preInvert by remember { mutableStateOf(false) }
     var preBinarize by remember { mutableStateOf(false) }
@@ -202,6 +255,7 @@ fun SettingsScreen(
     // 弧菜单按钮顺序 + 划词词典 prompt：拖动 / 编辑后即时通过 vm 的 saveArcMenuOrder / saveDictionaryPrompt
     // 单字段落盘，**不**走主 save 的 dirty 流程（用户期望立刻生效，无需点保存）。
     var menuOrder by remember { mutableStateOf<List<MenuItemId>>(emptyList()) }
+    var arcMenuPageSize by remember { mutableStateOf(FloatingMenu.DEFAULT_PAGE_SIZE.toFloat()) }
     // 当前主球技能。技能槽（FULL_SCREEN_SKILL）那一行的文案要跟着它动态显示「切到对方」：
     // 当前 FULL_SCREEN → 显示「— 划词翻译」；当前 WORD_SELECT → 显示「— 全屏翻译」
     var currentSkill by remember { mutableStateOf(com.gameocr.app.data.FloatingSkill.FULL_SCREEN) }
@@ -227,6 +281,25 @@ fun SettingsScreen(
     var apiTimeoutSec by remember { mutableStateOf(30f) }
     var mergeAdjacent by remember { mutableStateOf(true) }
     var mergeStrength by remember { mutableStateOf(com.gameocr.app.data.MergeStrength.STANDARD) }
+    // 文本方向自动判别：默认关；改动后即时落盘（走 viewModel.saveTextOrientationAutoDetect），不进 buildSnapshot
+    var textOrientAutoDetect by remember { mutableStateOf(false) }
+    // DBNet / 气泡聚类阈值。Slider 切换即时落盘（saveDbnetThresholds），下次截屏立即生效。
+    var dbnetProb by remember { mutableStateOf(0.25f) }
+    var dbnetScore by remember { mutableStateOf(0.5f) }
+    var dbnetUnclip by remember { mutableStateOf(1.55f) }
+    var mangaOcrDbnetUnclip by remember { mutableStateOf(1.65f) }
+    var dbnetGap by remember { mutableStateOf(32) }
+    var dbnetAdvancedExpanded by remember { mutableStateOf(false) }
+    var showDbnetResetConfirm by remember { mutableStateOf(false) }
+    var manualTextOrient by remember { mutableStateOf<com.gameocr.app.ocr.TextOrientation?>(null) }
+    var translationPresets by remember { mutableStateOf<List<TranslationPreset>>(emptyList()) }
+    var activeTranslationPresetId by remember { mutableStateOf("") }
+    var presetMessage by remember { mutableStateOf<String?>(null) }
+    var presetLlmModelReady by remember { mutableStateOf<Map<LlmModelKind, Boolean>>(emptyMap()) }
+    var presetPaddleModelReady by remember { mutableStateOf<Map<PaddleModelVersion, Boolean>>(emptyMap()) }
+    var presetMangaOcrModelReady by remember { mutableStateOf(false) }
+    var presetOrientationModelReady by remember { mutableStateOf(false) }
+    var downloadingPresetId by remember { mutableStateOf<String?>(null) }
     // 明文 HTTP 白名单：用户每行一个 host，UI 上用 String，保存时 split("\n")
     var cleartextHostsText by remember { mutableStateOf("") }
     // 星标语言：本地镜像。togglePinLanguage 立即落盘，下次 ON_RESUME / load() 拉回最新；
@@ -238,9 +311,198 @@ fun SettingsScreen(
     // 现在用 data class equals 自动覆盖所有字段——加字段只改 buildSnapshot() 一处。
     var initialSettings by remember { mutableStateOf<Settings?>(null) }
     var showUnsavedDialog by remember { mutableStateOf(false) }
+    var showSakuraFallbackDialog by remember { mutableStateOf(false) }
+    var pendingModelDownload by remember { mutableStateOf<PendingModelDownload?>(null) }
+
+    fun requestModelDownload(modelLabel: String, onConfirmed: () -> Unit) {
+        val warning = modelDownloadNetworkWarningFor(currentModelDownloadNetworkKind(context))
+        if (warning == null) {
+            onConfirmed()
+        } else {
+            pendingModelDownload = PendingModelDownload(modelLabel, warning, onConfirmed)
+        }
+    }
+
+    val localLlmDeviceCapable = remember { viewModel.llmDeviceCapable() }
+    suspend fun refreshLlmModelState(kind: LlmModelKind) {
+        val state = withContext(Dispatchers.IO) { viewModel.llmModelUiState(kind) }
+        llmModelStatus = state.status
+        llmModelReady = state.ready
+        presetLlmModelReady = presetLlmModelReady + (kind to state.ready)
+    }
+    suspend fun refreshPaddleModelState(version: com.gameocr.app.data.PaddleModelVersion) {
+        val state = withContext(Dispatchers.IO) { viewModel.paddleModelUiState(version) }
+        paddleStatus = state.status
+        paddleModelReady = state.ready
+        presetPaddleModelReady = presetPaddleModelReady + (version to state.ready)
+    }
+    suspend fun refreshMangaOcrModelState() {
+        val state = withContext(Dispatchers.IO) { viewModel.mangaOcrModelUiState() }
+        mangaOcrStatus = state.status
+        mangaOcrModelReady = state.ready
+        presetMangaOcrModelReady = state.ready
+    }
+    suspend fun refreshOrientationModelState() {
+        val state = withContext(Dispatchers.IO) { viewModel.orientationModelUiState() }
+        orientationModelStatus = state.status
+        orientationModelReady = state.ready
+        presetOrientationModelReady = state.ready
+    }
+    suspend fun refreshPresetModelReadiness(customPresets: List<TranslationPreset> = translationPresets) {
+        val presets = TranslationPresetCatalog.all(customPresets)
+        val llmKinds = presets.mapNotNull { localLlmModelKindFor(it.translatorEngine) }.toSet()
+        val paddleVersions = presets
+            .filter { it.ocrEngine == OcrEngineKind.PADDLE_ONNX || it.ocrEngine == OcrEngineKind.MANGA_OCR_JA }
+            .map { it.paddleModelVersion }
+            .toSet()
+        val needsMangaOcr = presets.any { it.ocrEngine == OcrEngineKind.MANGA_OCR_JA }
+        val needsOrientation = presets.any { it.textOrientationAutoDetect }
+        val nextLlmReady = withContext(Dispatchers.IO) {
+            llmKinds.associateWith { kind -> viewModel.llmModelReady(kind) }
+        }
+        val nextPaddleReady = withContext(Dispatchers.IO) {
+            paddleVersions.associateWith { version -> viewModel.isPaddleInstalled(version) }
+        }
+        val nextMangaReady = if (needsMangaOcr) {
+            withContext(Dispatchers.IO) { viewModel.mangaOcrModelReady() }
+        } else {
+            false
+        }
+        val nextOrientationReady = if (needsOrientation) {
+            withContext(Dispatchers.IO) { viewModel.orientationModelReady() }
+        } else {
+            false
+        }
+        presetLlmModelReady = nextLlmReady
+        presetPaddleModelReady = nextPaddleReady
+        presetMangaOcrModelReady = nextMangaReady
+        presetOrientationModelReady = nextOrientationReady
+    }
+    fun effectiveTranslatorEngine(): TranslatorEngine =
+        if (isLocalLlmEngine(translatorEngine) && !localLlmDeviceCapable) {
+            TranslatorEngine.OPENAI
+        } else {
+            translatorEngine
+    }
+    fun selectTranslatorEngine(engine: TranslatorEngine) {
+        translatorEngine = engine
+        if (engine == TranslatorEngine.LOCAL_SAKURA && !supportsSakuraLanguagePair(sourceLang, targetLang)) {
+            showSakuraFallbackDialog = true
+        }
+    }
+
+    fun applyPresetSettingsToUi(s: Settings) {
+        baseUrl = s.baseUrl
+        model = s.model
+        prompt = s.promptTemplate
+        sourceLang = s.sourceLang
+        targetLang = s.targetLang
+        dictionaryPrompt = s.dictionaryPrompt
+        translatorEngine = s.translatorEngine
+        ocrEngine = s.ocrEngine
+        preUpscale = s.preprocess.upscale2x
+        preInvert = s.preprocess.invert
+        preBinarize = s.preprocess.binarize
+        textSize = s.overlayTextSizeSp.toFloat()
+        alpha = s.overlayAlpha
+        overlayFontFileName = s.overlayFontFileName
+        overlayFontDisplayName = s.overlayFontDisplayName
+        streaming = s.streamingTranslate
+        renderMode = s.renderMode
+        placement = s.overlayPlacement
+        overlayTheme = s.overlayTheme
+        customBg = s.customBgColor
+        customFg = s.customFgColor
+        customBorder = s.customBorderColor
+        customBorderW = s.customBorderWidth.toFloat()
+        customBorderStyle = s.customBorderStyle
+        offsetX = s.overlayOffsetX.toFloat()
+        offsetY = s.overlayOffsetY.toFloat()
+        allowWrap = s.overlayAllowWrap
+        avoidCollision = s.overlayAvoidCollision
+        deeplPro = s.deeplPro
+        deeplProtocol = s.deeplProtocol
+        deeplBaseUrl = s.deeplBaseUrl
+        deeplBearerAuth = s.deeplBearerAuth
+        baiduEndpoint = s.baiduOcrEndpoint
+        baiduLanguage = s.baiduOcrLanguage
+        umiOcrBaseUrl = s.umiOcrBaseUrl
+        lunaOcrBaseUrl = s.lunaOcrBaseUrl
+        tencentRegion = s.tencentRegion
+        tencentEndpoint = s.tencentOcrEndpoint
+        tencentLanguage = s.tencentOcrLanguage
+        paddleModelVersion = s.paddleModelVersion
+        apiTimeoutSec = s.apiTimeoutSeconds.toFloat()
+        mergeAdjacent = s.mergeAdjacentBlocks
+        mergeStrength = s.mergeStrength
+        textOrientAutoDetect = s.textOrientationAutoDetect
+        manualTextOrient = s.manualTextOrientation
+        dbnetProb = s.dbnetProbThresh
+        dbnetScore = s.dbnetBoxScoreThresh
+        dbnetUnclip = s.dbnetUnclipRatio
+        mangaOcrDbnetUnclip = s.mangaOcrDbnetUnclipRatio
+        dbnetGap = s.bubbleClusterGap
+        activeTranslationPresetId = s.activeTranslationPresetId
+    }
+    fun presetDisplayNameForMessage(preset: TranslationPreset): String = when (preset.id) {
+        TranslationPresetCatalog.BUILTIN_MANGA_JA_ZH ->
+            context.getString(R.string.settings_translation_preset_builtin_manga)
+        else -> preset.name
+    }
 
     // —— 搜索：顶部输入 → 下拉匹配项 → 点击 animateScrollTo 到对应 section 顶部 ——
     val scrollState = rememberScrollState()
+    val overlayFontImportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        scope.launch {
+            val wasSystemDefaultOnly = shouldShowOverlayFontDeleteTipBeforeImport(
+                currentFileName = overlayFontFileName,
+                fonts = overlayFontEntries
+            )
+            when (val result = withContext(Dispatchers.IO) { viewModel.importOverlayFont(uri) }) {
+                is OverlayFontImportResult.Success -> {
+                    overlayFontFileName = result.fileName
+                    overlayFontDisplayName = result.displayName
+                    overlayFontEntries = OverlayFontPolicy.upsertImportedFont(
+                        overlayFontEntries,
+                        result.fileName,
+                        result.displayName
+                    )
+                    overlayFontTypeface = withContext(Dispatchers.IO) {
+                        viewModel.overlayTypefaceFor(result.fileName)
+                    }
+                    overlayFontMessage = context.getString(R.string.settings_overlay_font_import_success)
+                    overlayFontMessageIsError = false
+                    if (wasSystemDefaultOnly) {
+                        showOverlayFontDeleteTip = true
+                    }
+                }
+                is OverlayFontImportResult.Failure -> {
+                    overlayFontMessage = overlayFontImportErrorMessage(context, result.error)
+                    overlayFontMessageIsError = true
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(showOverlayFontDeleteTip) {
+        if (showOverlayFontDeleteTip) {
+            for (remaining in 3 downTo 1) {
+                overlayFontDeleteTipCountdown = remaining
+                delay(1000L)
+            }
+            overlayFontDeleteTipCountdown = 0
+        }
+    }
+
+    LaunchedEffect(overlayFontFileName) {
+        overlayFontTypeface = withContext(Dispatchers.IO) {
+            viewModel.overlayTypefaceFor(overlayFontFileName)
+        }
+    }
+
     val anchors = remember { mutableStateMapOf<String, Int>() }
     val onAnchor: (String, Int) -> Unit = { key, y -> anchors[key] = y }
     var searchActive by remember { mutableStateOf(false) }
@@ -264,6 +526,7 @@ fun SettingsScreen(
         captureLoopIntervalMs = loopInterval.toLongOrNull() ?: 2000L,
         overlayTextSizeSp = textSize.toInt(),
         overlayAlpha = alpha,
+        overlayFonts = overlayFontEntries,
         streamingTranslate = streaming,
         renderMode = renderMode,
         overlayPlacement = placement,
@@ -279,14 +542,15 @@ fun SettingsScreen(
         baiduOcrSecretKey = baiduSecret,
         baiduOcrEndpoint = baiduEndpoint,
         baiduOcrLanguage = baiduLanguage,
+        umiOcrBaseUrl = umiOcrBaseUrl,
+        lunaOcrBaseUrl = lunaOcrBaseUrl,
         tencentSecretId = tencentId,
         tencentSecretKey = tencentKey,
         tencentRegion = tencentRegion,
         tencentOcrEndpoint = tencentEndpoint,
         tencentOcrLanguage = tencentLanguage,
-        paddleModelMirrorUrl = paddleMirror,
         a11yVolumeTrigger = a11yVolume,
-        translatorEngine = translatorEngine,
+        translatorEngine = effectiveTranslatorEngine(),
         deeplApiKey = deeplKey,
         deeplPro = deeplPro,
         deeplProtocol = deeplProtocol,
@@ -309,8 +573,129 @@ fun SettingsScreen(
         apiTimeoutSeconds = apiTimeoutSec.toInt(),
         mergeAdjacentBlocks = mergeAdjacent,
         mergeStrength = mergeStrength,
-        cleartextAllowedHosts = parseCleartextHosts(cleartextHostsText)
+        cleartextAllowedHosts = cleartextHostsWithLocalOcrUrls(
+            parseCleartextHosts(cleartextHostsText),
+            umiOcrBaseUrl,
+            lunaOcrBaseUrl
+        )
     )
+
+    fun buildTranslationPresetSnapshot(): Settings = buildSnapshot().copy(
+        customBorderStyle = customBorderStyle,
+        overlayFontFileName = overlayFontFileName,
+        overlayFontDisplayName = overlayFontDisplayName,
+        dictionaryPrompt = dictionaryPrompt,
+        paddleModelVersion = paddleModelVersion,
+        textOrientationAutoDetect = textOrientAutoDetect,
+        manualTextOrientation = manualTextOrient,
+        dbnetProbThresh = dbnetProb,
+        dbnetBoxScoreThresh = dbnetScore,
+        dbnetUnclipRatio = dbnetUnclip,
+        mangaOcrDbnetUnclipRatio = mangaOcrDbnetUnclip,
+        bubbleClusterGap = dbnetGap
+    )
+
+    fun currentTranslationPresetHash(): String =
+        TranslationPresetCatalog.hashForSettings(buildTranslationPresetSnapshot())
+
+    fun currentMatchingTranslationPresetId(settingsHash: String = currentTranslationPresetHash()): String {
+        val presets = TranslationPresetCatalog.all(translationPresets)
+        val activeMatch = presets.firstOrNull {
+            it.id == activeTranslationPresetId && TranslationPresetCatalog.matchesHash(it, settingsHash)
+        }
+        return activeMatch?.id
+            ?: presets.firstOrNull { TranslationPresetCatalog.matchesHash(it, settingsHash) }?.id
+            ?: ""
+    }
+
+    suspend fun downloadModelsForPreset(
+        preset: TranslationPreset,
+        issues: List<TranslationPresetModelIssue>
+    ) {
+        val llmKinds = issues.mapNotNull { it.llmModelKind }.distinct()
+        val paddleVersions = issues.mapNotNull { it.paddleModelVersion }.distinct()
+
+        for (kind in llmKinds) {
+            presetMessage = context.getString(
+                R.string.settings_translation_preset_downloading_model_format,
+                kind.displayName
+            )
+            llmDownloading = true
+            try {
+                viewModel.saveLlmMirror(llmMirrorChoice, llmMirror)
+                viewModel.downloadLlmModel(kind) { msg ->
+                    if (localLlmModelKindFor(translatorEngine) == kind) {
+                        llmModelStatus = msg
+                    }
+                    presetMessage = msg
+                }
+                refreshLlmModelState(kind)
+            } finally {
+                llmDownloading = false
+            }
+        }
+
+        for (version in paddleVersions) {
+            val versionLabel = context.getString(version.displayNameRes)
+            presetMessage = context.getString(
+                R.string.settings_translation_preset_downloading_model_format,
+                versionLabel
+            )
+            paddleDownloading = true
+            try {
+                viewModel.downloadPaddleModels(version) { msg ->
+                    if (paddleModelVersion == version) {
+                        paddleStatus = msg
+                    }
+                    presetMessage = msg
+                }
+                refreshPaddleModelState(version)
+            } finally {
+                paddleDownloading = false
+            }
+        }
+
+        if (issues.any { it.kind == TranslationPresetModelIssueKind.MANGA_OCR_MISSING }) {
+            presetMessage = context.getString(
+                R.string.settings_translation_preset_downloading_model_format,
+                context.getString(R.string.settings_manga_ocr_model_name)
+            )
+            mangaOcrDownloading = true
+            try {
+                viewModel.downloadMangaOcrModels { msg ->
+                    mangaOcrStatus = msg
+                    presetMessage = msg
+                }
+                refreshMangaOcrModelState()
+            } finally {
+                mangaOcrDownloading = false
+            }
+        }
+
+        if (issues.any { it.kind == TranslationPresetModelIssueKind.ORIENTATION_MISSING }) {
+            presetMessage = context.getString(
+                R.string.settings_translation_preset_downloading_model_format,
+                context.getString(R.string.settings_orientation_model_name)
+            )
+            orientationModelDownloading = true
+            try {
+                viewModel.downloadOrientationModel { msg ->
+                    orientationModelStatus = msg
+                    presetMessage = msg
+                }
+                refreshOrientationModelState()
+            } finally {
+                orientationModelDownloading = false
+            }
+        }
+
+        refreshPresetModelReadiness()
+        presetMessage = context.getString(
+            R.string.settings_translation_preset_download_models_done_format,
+            presetDisplayNameForMessage(preset)
+        )
+    }
+
     // derivedStateOf 让 lambda 在依赖 state 变化时才重新计算 equals
     val dirty by remember {
         derivedStateOf {
@@ -333,6 +718,8 @@ fun SettingsScreen(
             ocrEngine = ocrEngine,
             baiduKey = baiduKey, baiduSecret = baiduSecret, baiduEndpoint = baiduEndpoint,
             baiduLanguage = baiduLanguage,
+            umiOcrBaseUrl = umiOcrBaseUrl,
+            lunaOcrBaseUrl = lunaOcrBaseUrl,
             tencentId = tencentId, tencentKey = tencentKey, tencentRegion = tencentRegion,
             tencentEndpoint = tencentEndpoint,
             tencentLanguage = tencentLanguage,
@@ -348,22 +735,240 @@ fun SettingsScreen(
             mergeAdjacentBlocks = mergeAdjacent,
             mergeStrength = mergeStrength,
             cleartextAllowedHosts = parseCleartextHosts(cleartextHostsText),
-            translatorEngine = translatorEngine,
+            translatorEngine = effectiveTranslatorEngine(),
             deeplKey = deeplKey,
             deeplPro = deeplPro,
             deeplProtocol = deeplProtocol,
             deeplBaseUrl = deeplBaseUrl,
             deeplBearerAuth = deeplBearerAuth,
             deeplCustomToken = deeplCustomToken,
-            paddleMirror = paddleMirror,
             youdaoAppKey = youdaoAppKey,
             youdaoAppSecret = youdaoAppSecret,
             volcAccessKeyId = volcAk,
             volcSecretAccessKey = volcSk,
             volcRegion = volcRegion,
             baiduFanyiAppId = baiduFanyiAppId,
-            baiduFanyiSecretKey = baiduFanyiSecret
+            baiduFanyiSecretKey = baiduFanyiSecret,
+            overlayFonts = overlayFontEntries,
+            activeTranslationPresetId = currentMatchingTranslationPresetId()
         )
+    }
+
+    val translationPresetSection: @Composable () -> Unit = {
+        SectionCard(
+            title = stringResource(R.string.settings_section_translation_presets),
+            anchorKey = SectionKeys.PRESETS,
+            onAnchor = onAnchor,
+            helpText = stringResource(R.string.settings_translation_preset_desc)
+        ) {
+            val presetSnapshot = buildTranslationPresetSnapshot()
+            val presetHash = TranslationPresetCatalog.hashForSettings(presetSnapshot)
+            val matchingPresetId = currentMatchingTranslationPresetId(presetHash)
+            val unsavedPresetName = stringResource(R.string.settings_translation_preset_unsaved_name)
+            val unsavedPreset = if (initialSettings != null && matchingPresetId.isBlank()) {
+                TranslationPresetCatalog.fromSettings(
+                    id = TranslationPresetCatalog.UNSAVED_DRAFT_ID,
+                    name = unsavedPresetName,
+                    shortName = unsavedPresetName.take(8),
+                    settings = presetSnapshot
+                )
+            } else {
+                null
+            }
+            val modelDownloadBusy = downloadingPresetId != null ||
+                llmDownloading || paddleDownloading || mangaOcrDownloading || orientationModelDownloading
+            TranslationPresetSection(
+                customPresets = translationPresets,
+                activeId = matchingPresetId,
+                unsavedPreset = unsavedPreset,
+                message = presetMessage,
+                localLlmDeviceCapable = localLlmDeviceCapable,
+                llmModelReady = { kind -> presetLlmModelReady[kind] == true },
+                paddleModelReady = { version -> presetPaddleModelReady[version] == true },
+                mangaOcrModelReady = presetMangaOcrModelReady,
+                orientationModelReady = presetOrientationModelReady,
+                modelDownloading = modelDownloadBusy,
+                downloadingPresetId = downloadingPresetId,
+                onSaveUnsaved = { preset ->
+                    scope.launch {
+                        val saved = viewModel.saveTranslationPreset(preset)
+                        translationPresets = TranslationPresetCatalog.upsertCustom(translationPresets, saved)
+                        activeTranslationPresetId = saved.id
+                        presetMessage = context.getString(
+                            R.string.settings_translation_preset_saved_format,
+                            saved.name
+                        )
+                    }
+                },
+                onApply = { preset ->
+                    scope.launch {
+                        val applied = viewModel.applyTranslationPreset(preset.id) ?: return@launch
+                        applyPresetSettingsToUi(applied)
+                        activeTranslationPresetId = preset.id
+                        initialSettings = buildSnapshot()
+                        presetMessage = context.getString(
+                            R.string.settings_translation_preset_applied_format,
+                            presetDisplayNameForMessage(preset)
+                        )
+                    }
+                },
+                onCopy = { preset ->
+                    scope.launch {
+                        val copiedName = "${presetDisplayNameForMessage(preset)} Copy"
+                        val copied = viewModel.duplicateTranslationPreset(
+                            preset.id,
+                            copiedName,
+                            copiedName.take(8)
+                        ) ?: return@launch
+                        translationPresets = TranslationPresetCatalog.upsertCustom(translationPresets, copied)
+                        presetMessage = context.getString(
+                            R.string.settings_translation_preset_copied_format,
+                            copied.name
+                        )
+                    }
+                },
+                onDownloadModels = { preset, issues ->
+                    if (modelDownloadBusy) {
+                        presetMessage = context.getString(R.string.settings_translation_preset_other_download_busy)
+                    } else {
+                        val downloadModelLabel = translationPresetDownloadModelLabel(context, issues)
+                        requestModelDownload(downloadModelLabel) {
+                            scope.launch {
+                                if (downloadingPresetId != null ||
+                                    llmDownloading || paddleDownloading ||
+                                    mangaOcrDownloading || orientationModelDownloading
+                                ) {
+                                    presetMessage = context.getString(
+                                        R.string.settings_translation_preset_other_download_busy
+                                    )
+                                    return@launch
+                                }
+                                downloadingPresetId = preset.id
+                                try {
+                                    downloadModelsForPreset(preset, issues)
+                                } catch (t: Throwable) {
+                                    presetMessage = context.getString(
+                                        R.string.settings_translation_preset_download_models_failed_format,
+                                        t.message ?: t.javaClass.simpleName
+                                    )
+                                    refreshPresetModelReadiness()
+                                } finally {
+                                    downloadingPresetId = null
+                                }
+                            }
+                        }
+                    }
+                },
+                onDelete = { preset ->
+                    scope.launch {
+                        viewModel.deleteTranslationPreset(preset.id)
+                        translationPresets = translationPresets.filterNot { it.id == preset.id }
+                        if (activeTranslationPresetId == preset.id) activeTranslationPresetId = ""
+                    }
+                }
+            )
+        }
+    }
+
+    val textOrientationSection: @Composable () -> Unit = {
+        SectionCard(
+            title = stringResource(R.string.settings_text_orientation_section_title),
+            anchorKey = SectionKeys.TEXT_ORIENTATION,
+            onAnchor = onAnchor
+        ) {
+            SwitchRow(
+                stringResource(R.string.settings_orient_auto_detect_title),
+                textOrientAutoDetect,
+                helpText = stringResource(R.string.settings_orient_auto_detect_summary)
+            ) { enabled ->
+                textOrientAutoDetect = enabled
+                scope.launch { viewModel.saveTextOrientationAutoDetect(enabled) }
+            }
+            if (textOrientAutoDetect) {
+                Text(
+                    stringResource(R.string.settings_orient_manual_label),
+                    style = MaterialTheme.typography.labelLarge
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                    EngineChip(manualTextOrient, null,
+                        stringResource(R.string.settings_orient_manual_auto)) {
+                        manualTextOrient = it
+                        scope.launch { viewModel.saveManualTextOrientation(it) }
+                    }
+                    EngineChip(manualTextOrient, com.gameocr.app.ocr.TextOrientation.HORIZONTAL_LTR,
+                        stringResource(R.string.settings_orient_horizontal_ltr)) {
+                        manualTextOrient = it
+                        scope.launch { viewModel.saveManualTextOrientation(it) }
+                    }
+                    EngineChip(manualTextOrient, com.gameocr.app.ocr.TextOrientation.VERTICAL_RTL,
+                        stringResource(R.string.settings_orient_vertical_rtl)) {
+                        manualTextOrient = it
+                        scope.launch { viewModel.saveManualTextOrientation(it) }
+                    }
+                    EngineChip(manualTextOrient, com.gameocr.app.ocr.TextOrientation.STACKED,
+                        stringResource(R.string.settings_orient_stacked)) {
+                        manualTextOrient = it
+                        scope.launch { viewModel.saveManualTextOrientation(it) }
+                    }
+                }
+                if (manualTextOrient != null) {
+                    Text(
+                        stringResource(R.string.settings_orient_manual_active_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                HorizontalDivider()
+                OrientationModelSection(
+                    status = orientationModelStatus,
+                    downloading = orientationModelDownloading,
+                    modelReady = orientationModelReady,
+                    onDownload = {
+                        requestModelDownload(context.getString(R.string.settings_orientation_model_name)) {
+                            scope.launch {
+                                orientationModelDownloading = true
+                                try {
+                                    viewModel.downloadOrientationModel { msg -> orientationModelStatus = msg }
+                                    refreshOrientationModelState()
+                                } catch (t: Throwable) {
+                                    orientationModelStatus = context.getString(
+                                        R.string.settings_orientation_model_download_failed_format,
+                                        t.message ?: t.javaClass.simpleName
+                                    )
+                                    orientationModelReady = withContext(Dispatchers.IO) {
+                                        viewModel.orientationModelReady()
+                                    }
+                                } finally {
+                                    orientationModelDownloading = false
+                                }
+                            }
+                        }
+                    },
+                    onImport = { uris ->
+                        scope.launch {
+                            orientationModelDownloading = true
+                            try {
+                                val n = viewModel.importOrientationModelFromLocal(uris)
+                                val state = withContext(Dispatchers.IO) { viewModel.orientationModelUiState() }
+                                orientationModelStatus = context.getString(
+                                    R.string.settings_orientation_model_imported_format,
+                                    n, state.status
+                                )
+                                orientationModelReady = state.ready
+                            } finally {
+                                orientationModelDownloading = false
+                            }
+                        }
+                    },
+                    onDelete = {
+                        scope.launch {
+                            viewModel.deleteOrientationModel()
+                            refreshOrientationModelState()
+                        }
+                    }
+                )
+            }
+        }
     }
 
     val tryBack: () -> Unit = {
@@ -371,6 +976,21 @@ fun SettingsScreen(
     }
 
     BackHandler { tryBack() }
+
+    val currentTranslationPresetHash = currentTranslationPresetHash()
+    val matchingTranslationPresetId = currentMatchingTranslationPresetId(currentTranslationPresetHash)
+    LaunchedEffect(
+        initialSettings,
+        activeTranslationPresetId,
+        translationPresets,
+        currentTranslationPresetHash
+    ) {
+        if (initialSettings == null) return@LaunchedEffect
+        if (activeTranslationPresetId != matchingTranslationPresetId) {
+            activeTranslationPresetId = matchingTranslationPresetId
+            viewModel.setActiveTranslationPreset(matchingTranslationPresetId)
+        }
+    }
 
     if (showUnsavedDialog) {
         AlertDialog(
@@ -398,6 +1018,213 @@ fun SettingsScreen(
     }
 
     // 源语言↔OCR 联动：检查能否识别当前源语言；不能则按"用户刚动的是哪一边"决定推荐方向。
+    pendingModelDownload?.let { pending ->
+        AlertDialog(
+            onDismissRequest = { pendingModelDownload = null },
+            title = { Text(stringResource(R.string.settings_model_download_network_warning_title)) },
+            text = {
+                Text(
+                    stringResource(
+                        modelDownloadNetworkWarningMessageRes(pending.warning),
+                        pending.modelLabel
+                    )
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val confirmed = pending.onConfirmed
+                    pendingModelDownload = null
+                    confirmed()
+                }) {
+                    Text(stringResource(R.string.settings_model_download_network_warning_continue))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingModelDownload = null }) {
+                    Text(stringResource(R.string.settings_model_download_network_warning_cancel))
+                }
+            }
+        )
+    }
+
+    if (showOverlayFontDeleteTip) {
+        AlertDialog(
+            onDismissRequest = {
+                if (overlayFontDeleteTipCountdown == 0) showOverlayFontDeleteTip = false
+            },
+            title = { Text(stringResource(R.string.settings_overlay_font_delete_tip_title)) },
+            text = { Text(stringResource(R.string.settings_overlay_font_delete_tip_message)) },
+            confirmButton = {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    TextButton(
+                        enabled = overlayFontDeleteTipCountdown == 0,
+                        onClick = { showOverlayFontDeleteTip = false }
+                    ) {
+                        Text(
+                            overlayFontDeleteTipAckLabel(
+                                baseLabel = stringResource(R.string.settings_overlay_font_delete_tip_ack),
+                                countdown = overlayFontDeleteTipCountdown
+                            )
+                        )
+                    }
+                }
+            }
+        )
+    }
+
+    pendingOverlayFontDelete?.let { font ->
+        AlertDialog(
+            onDismissRequest = { pendingOverlayFontDelete = null },
+            title = { Text(stringResource(R.string.settings_overlay_font_delete_confirm_title)) },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.settings_overlay_font_delete_confirm_message,
+                        font.displayName
+                    )
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingOverlayFontDelete = null
+                    scope.launch {
+                        val deleted = withContext(Dispatchers.IO) {
+                            viewModel.deleteOverlayFont(font.fileName)
+                        }
+                        if (deleted) {
+                            overlayFontEntries = OverlayFontPolicy.removeImportedFont(
+                                overlayFontEntries,
+                                font.fileName
+                            )
+                            if (overlayFontFileName == font.fileName) {
+                                overlayFontFileName = ""
+                                overlayFontDisplayName = ""
+                                overlayFontTypeface = null
+                            }
+                            overlayFontMessage = context.getString(
+                                R.string.settings_overlay_font_delete_success_format,
+                                font.displayName
+                            )
+                            overlayFontMessageIsError = false
+                        } else {
+                            overlayFontMessage = context.getString(R.string.settings_overlay_font_error_invalid)
+                            overlayFontMessageIsError = true
+                        }
+                    }
+                }) {
+                    Text(stringResource(R.string.settings_model_delete_confirm_yes))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingOverlayFontDelete = null }) {
+                    Text(stringResource(R.string.settings_model_delete_confirm_no))
+                }
+            }
+        )
+    }
+
+    if (showSakuraFallbackDialog) {
+        val sourceName = com.gameocr.app.data.Languages.nameOf(context, sourceLang)
+        val targetName = com.gameocr.app.data.Languages.nameOf(context, targetLang)
+        val sakuraLanguageIssue = sakuraLanguageIssue(sourceLang, targetLang)
+        val sakuraIssueMessage = when {
+            sakuraLanguageIssue.sourceUnsupported && sakuraLanguageIssue.targetUnsupported -> stringResource(
+                R.string.sakura_fallback_dialog_issue_pair,
+                sourceName,
+                targetName
+            )
+            sakuraLanguageIssue.sourceUnsupported -> stringResource(
+                R.string.sakura_fallback_dialog_issue_source,
+                sourceName
+            )
+            sakuraLanguageIssue.targetUnsupported -> stringResource(
+                R.string.sakura_fallback_dialog_issue_target,
+                targetName
+            )
+            else -> stringResource(
+                R.string.sakura_fallback_dialog_issue_pair,
+                sourceName,
+                targetName
+            )
+        }
+        val supportedLanguageActionLabel = when {
+            sakuraLanguageIssue.sourceUnsupported && sakuraLanguageIssue.targetUnsupported ->
+                R.string.sakura_fallback_dialog_set_supported_pair
+            sakuraLanguageIssue.targetUnsupported -> R.string.sakura_fallback_dialog_set_target_zh_cn
+            else -> R.string.sakura_fallback_dialog_set_japanese
+        }
+        val missingFallbackFields = missingOpenAiFallbackFields(baseUrl, apiKey, model)
+        val fallbackBaseUrlLabel = stringResource(R.string.settings_base_url)
+        val fallbackApiKeyLabel = stringResource(R.string.settings_api_key)
+        val fallbackModelLabel = stringResource(R.string.settings_model)
+        val missingFallbackLabels = missingFallbackFields.joinToString(", ") { field ->
+            when (field) {
+                OpenAiFallbackField.BASE_URL -> fallbackBaseUrlLabel
+                OpenAiFallbackField.API_KEY -> fallbackApiKeyLabel
+                OpenAiFallbackField.MODEL -> fallbackModelLabel
+            }
+        }
+        AlertDialog(
+            onDismissRequest = {
+                showSakuraFallbackDialog = false
+                if (missingFallbackFields.isNotEmpty()) {
+                    translatorEngine = TranslatorEngine.OPENAI
+                }
+            },
+            title = { Text(stringResource(R.string.sakura_fallback_dialog_title)) },
+            text = {
+                Text(
+                    if (missingFallbackFields.isEmpty()) {
+                        stringResource(R.string.sakura_fallback_dialog_message_configured, sakuraIssueMessage)
+                    } else {
+                        stringResource(
+                            R.string.sakura_fallback_dialog_message_missing,
+                            sakuraIssueMessage,
+                            missingFallbackLabels
+                        )
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showSakuraFallbackDialog = false
+                    if (missingFallbackFields.isEmpty()) {
+                        translatorEngine = TranslatorEngine.LOCAL_SAKURA
+                    } else {
+                        translatorEngine = TranslatorEngine.OPENAI
+                    }
+                }) {
+                    Text(
+                        stringResource(
+                            if (missingFallbackFields.isEmpty()) {
+                                R.string.sakura_fallback_dialog_use_fallback
+                            } else {
+                                R.string.sakura_fallback_dialog_configure_fallback
+                            }
+                        )
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showSakuraFallbackDialog = false
+                    if (sakuraLanguageIssue.sourceUnsupported) {
+                        sourceLang = "ja"
+                    }
+                    if (sakuraLanguageIssue.targetUnsupported) {
+                        targetLang = SAKURA_TARGET_LANG_ZH_CN
+                    }
+                    translatorEngine = TranslatorEngine.LOCAL_SAKURA
+                }) {
+                    Text(stringResource(supportedLanguageActionLabel))
+                }
+            }
+        )
+    }
+
     var ocrLangIssue by remember { mutableStateOf<OcrLangIssue?>(null) }
     var langCheckPrimed by remember { mutableStateOf(false) }
     var lastCheckedLang by remember { mutableStateOf<String?>(null) }
@@ -669,6 +1496,8 @@ fun SettingsScreen(
         // suspend 操作必须在 Snapshot 块外做完
         val migratedPrompt = viewModel.migrateDefaultPromptIfStale(context)
         val paddleStatusPlaceholder = context.getString(R.string.settings_paddle_status_checking)
+        val mangaOcrStatusPlaceholder = context.getString(R.string.settings_manga_ocr_status_checking)
+        val orientationModelStatusPlaceholder = context.getString(R.string.settings_orientation_model_status_checking)
         timber.log.Timber.tag("OcrLangLink").i(
             "[load] sourceLang=%s ocrEngine=%s baiduEp=%s baiduLang=%s tencentEp=%s tencentLang=%s",
             s.sourceLang, s.ocrEngine, s.baiduOcrEndpoint, s.baiduOcrLanguage,
@@ -684,7 +1513,11 @@ fun SettingsScreen(
             prompt = migratedPrompt
             targetLang = s.targetLang
             sourceLang = s.sourceLang
-            translatorEngine = s.translatorEngine
+            translatorEngine = if (isLocalLlmEngine(s.translatorEngine) && !localLlmDeviceCapable) {
+                TranslatorEngine.OPENAI
+            } else {
+                s.translatorEngine
+            }
             deeplKey = s.deeplApiKey
             youdaoAppKey = s.youdaoAppKey
             volcAk = s.volcAccessKeyId
@@ -700,6 +1533,13 @@ fun SettingsScreen(
             deeplCustomToken = s.deeplCustomToken
             textSize = s.overlayTextSizeSp.toFloat()
             alpha = s.overlayAlpha
+            overlayFontFileName = s.overlayFontFileName
+            overlayFontDisplayName = s.overlayFontDisplayName
+            overlayFontEntries = OverlayFontPolicy.upsertImportedFont(
+                s.overlayFonts,
+                s.overlayFontFileName,
+                s.overlayFontDisplayName
+            )
             loopInterval = s.captureLoopIntervalMs.toString()
             streaming = s.streamingTranslate
             renderMode = s.renderMode
@@ -719,15 +1559,22 @@ fun SettingsScreen(
             baiduSecret = s.baiduOcrSecretKey
             baiduEndpoint = s.baiduOcrEndpoint
             baiduLanguage = s.baiduOcrLanguage
+            umiOcrBaseUrl = s.umiOcrBaseUrl
+            lunaOcrBaseUrl = s.lunaOcrBaseUrl
             tencentId = s.tencentSecretId
             tencentKey = s.tencentSecretKey
             tencentRegion = s.tencentRegion
             tencentEndpoint = s.tencentOcrEndpoint
             tencentLanguage = s.tencentOcrLanguage
-            paddleMirror = s.paddleModelMirrorUrl
+            paddleModelVersion = s.paddleModelVersion
+            llmMirrorChoice = s.localLlmMirror
+            llmMirror = s.localLlmMirrorUrl
             // 不阻塞主线程：file.exists() + file.length() 走 IO Dispatcher。先给占位
             // 文字，IO 完成后再覆盖；进设置的瞬间不卡顿。
-            paddleStatus = paddleStatusPlaceholder
+            paddleStatus = checkingPlaceholderIfUnresolved(paddleStatus, paddleStatusPlaceholder)
+            mangaOcrStatus = checkingPlaceholderIfUnresolved(mangaOcrStatus, mangaOcrStatusPlaceholder)
+            orientationModelStatus =
+                checkingPlaceholderIfUnresolved(orientationModelStatus, orientationModelStatusPlaceholder)
             preUpscale = s.preprocess.upscale2x
             preInvert = s.preprocess.invert
             preBinarize = s.preprocess.binarize
@@ -737,14 +1584,24 @@ fun SettingsScreen(
             floatingAutoDock = s.floatingButtonAutoDock
             floatingDockInset = s.floatingButtonDockInsetDp.toFloat()
             menuOrder = s.floatingMenuItemOrder
+            arcMenuPageSize = s.arcMenuPageSize.toFloat()
             currentSkill = s.floatingButtonSkill
             dictionaryPrompt = s.dictionaryPrompt
+            translationPresets = s.translationPresets
+            activeTranslationPresetId = s.activeTranslationPresetId
             pinnedLanguages = s.pinnedLanguages
             allowWrap = s.overlayAllowWrap
             avoidCollision = s.overlayAvoidCollision
             apiTimeoutSec = s.apiTimeoutSeconds.toFloat()
             mergeAdjacent = s.mergeAdjacentBlocks
             mergeStrength = s.mergeStrength
+            textOrientAutoDetect = s.textOrientationAutoDetect
+            dbnetProb = s.dbnetProbThresh
+            dbnetScore = s.dbnetBoxScoreThresh
+            dbnetUnclip = s.dbnetUnclipRatio
+            mangaOcrDbnetUnclip = s.mangaOcrDbnetUnclipRatio
+            dbnetGap = s.bubbleClusterGap
+            manualTextOrient = s.manualTextOrientation
             cleartextHostsText = s.cleartextAllowedHosts.joinToString("\n")
             // 同一个 snapshot 内 capture 初始 Settings——既走 buildSnapshot() 单源路径，
             // 又跟所有 state 在同一原子 apply 里，不会被中间帧看到。
@@ -753,9 +1610,23 @@ fun SettingsScreen(
     }
 
     // paddleStatus 独立异步加载：file.exists() / file.length() 走 IO 线程，避免阻塞首帧。
-    LaunchedEffect(Unit) {
-        val status = withContext(Dispatchers.IO) { viewModel.paddleModelStatus() }
-        paddleStatus = status
+    val settingsLoaded = initialSettings != null
+    LaunchedEffect(settingsLoaded, paddleModelVersion) {
+        if (!settingsLoaded) return@LaunchedEffect
+        refreshPaddleModelState(paddleModelVersion)
+    }
+    // 同理 mangaOcrStatus；manga-ocr 7 个文件 stat 也走 IO。
+    LaunchedEffect(settingsLoaded) {
+        if (!settingsLoaded) return@LaunchedEffect
+        refreshMangaOcrModelState()
+    }
+    LaunchedEffect(settingsLoaded) {
+        if (!settingsLoaded) return@LaunchedEffect
+        refreshOrientationModelState()
+    }
+    LaunchedEffect(settingsLoaded, translationPresets) {
+        if (!settingsLoaded) return@LaunchedEffect
+        refreshPresetModelReadiness()
     }
 
     val closeSearch: () -> Unit = {
@@ -853,21 +1724,65 @@ fun SettingsScreen(
                 ThemeModeSelector()
             }
 
+            translationPresetSection()
+
             // —— 翻译后端 ——
             SectionCard(title = stringResource(R.string.settings_section_translator), anchorKey = SectionKeys.TRANSLATE, onAnchor = onAnchor) {
                 Text(stringResource(R.string.settings_label_translator_engine), style = MaterialTheme.typography.labelLarge)
+
+                // 与 OCR 一样分组：端侧 LLM / 云端 LLM / 云端翻译。chip 多了平铺 FlowRow 也能换行，
+                // 但用户难以一眼区分 LLM 类（重质量、配 prompt）与传统翻译 API 类（重稳定性、限频）。
+                Text(
+                    stringResource(R.string.settings_translator_group_local_llm),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    EngineChip(
+                        translatorEngine,
+                        TranslatorEngine.LOCAL_SAKURA,
+                        stringResource(R.string.settings_engine_local_sakura),
+                        enabled = localLlmDeviceCapable
+                    ) { selectTranslatorEngine(it) }
+                    EngineChip(
+                        translatorEngine,
+                        TranslatorEngine.LOCAL_HY_MT2,
+                        stringResource(R.string.settings_engine_local_hymt2),
+                        enabled = localLlmDeviceCapable
+                    ) { selectTranslatorEngine(it) }
+                }
+                Text(
+                    stringResource(R.string.settings_translator_group_cloud_llm),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     EngineChip(translatorEngine, TranslatorEngine.OPENAI, stringResource(R.string.settings_engine_openai_llm)) { translatorEngine = it }
+                }
+                Text(
+                    stringResource(R.string.settings_translator_group_cloud),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
                     EngineChip(translatorEngine, TranslatorEngine.DEEPL, stringResource(R.string.settings_engine_deepl)) { translatorEngine = it }
-                    EngineChip(translatorEngine, TranslatorEngine.YOUDAO_PICTRANS, stringResource(R.string.settings_engine_youdao_pictrans)) { translatorEngine = it }
                     EngineChip(translatorEngine, TranslatorEngine.GOOGLE, stringResource(R.string.settings_engine_google)) { translatorEngine = it }
                     EngineChip(translatorEngine, TranslatorEngine.VOLC, stringResource(R.string.settings_engine_volc)) { translatorEngine = it }
                     EngineChip(translatorEngine, TranslatorEngine.BAIDU_FANYI, stringResource(R.string.settings_engine_baidu_fanyi)) { translatorEngine = it }
                     EngineChip(translatorEngine, TranslatorEngine.TENCENT, stringResource(R.string.settings_engine_tencent)) { translatorEngine = it }
+                    EngineChip(translatorEngine, TranslatorEngine.YOUDAO_PICTRANS, stringResource(R.string.settings_engine_youdao_pictrans)) { translatorEngine = it }
                 }
                 // 切换引擎时清掉上一引擎的测试结果——继续显示会让用户以为新引擎"已经测过"。
                 LaunchedEffect(translatorEngine) {
@@ -875,6 +1790,61 @@ fun SettingsScreen(
                     testSuccess = false
                     fetchedModels = emptyList()
                     modelPickerExpanded = false
+                    // 切到 LOCAL_* 时刷新模型状态文案；切走时不动（保留上次结果，少做无谓 IO）。
+                    localLlmModelKindFor(translatorEngine)?.let { kind ->
+                        refreshLlmModelState(kind)
+                    } ?: run {
+                        llmModelReady = false
+                    }
+                }
+
+                // 端侧 LLM 翻译区块。当前支持 Sakura（日译中）和 Hy-MT2（多语种）。
+                val currentKind = localLlmModelKindFor(translatorEngine)
+                if (currentKind != null) {
+                    LocalLlmSection(
+                        currentKindLabel = currentKind.displayName,
+                        deviceCapable = localLlmDeviceCapable,
+                        modelReady = llmModelReady,
+                        status = llmModelStatus.ifBlank { stringResource(R.string.llm_status_missing) },
+                        downloading = llmDownloading,
+                        onDownload = {
+                            requestModelDownload(currentKind.displayName) {
+                                scope.launch {
+                                    llmDownloading = true
+                                    try {
+                                        viewModel.saveLlmMirror(llmMirrorChoice, llmMirror)
+                                        viewModel.downloadLlmModel(currentKind) { msg -> llmModelStatus = msg }
+                                        refreshLlmModelState(currentKind)
+                                    } catch (t: Throwable) {
+                                        llmModelStatus = "${t.javaClass.simpleName}: ${t.message}"
+                                        llmModelReady = withContext(Dispatchers.IO) {
+                                            viewModel.llmModelReady(currentKind)
+                                        }
+                                    } finally {
+                                        llmDownloading = false
+                                    }
+                                }
+                            }
+                        },
+                        onImport = { uris ->
+                            scope.launch {
+                                llmDownloading = true
+                                try {
+                                    val n = viewModel.importLlmFromLocal(uris, currentKind)
+                                    refreshLlmModelState(currentKind)
+                                    Timber.i("imported $n LLM model file(s) from local")
+                                } finally {
+                                    llmDownloading = false
+                                }
+                            }
+                        },
+                        onDelete = {
+                            scope.launch {
+                                viewModel.deleteLlmModel(currentKind)
+                                refreshLlmModelState(currentKind)
+                            }
+                        }
+                    )
                 }
 
                 if (translatorEngine == TranslatorEngine.OPENAI) {
@@ -1115,8 +2085,9 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                } else {
-                    // GOOGLE：无 key，仅提示风险
+                } else if (translatorEngine == TranslatorEngine.GOOGLE) {
+                    // GOOGLE：无 key，仅提示风险。改 else if 明确匹配——避免后续新增枚举（如 LOCAL_*）
+                    // 落入 else 兜底，错误显示 Google 文案。
                     Text(
                         stringResource(R.string.settings_google_tip),
                         style = MaterialTheme.typography.bodySmall,
@@ -1203,6 +2174,9 @@ fun SettingsScreen(
                             "[user-select-source] %s -> %s", sourceLang, it
                         )
                         sourceLang = it
+                        if (translatorEngine == TranslatorEngine.LOCAL_SAKURA && !supportsSakuraLanguagePair(it, targetLang)) {
+                            showSakuraFallbackDialog = true
+                        }
                     },
                     pinned = pinnedLanguages,
                     onTogglePin = onTogglePin
@@ -1210,7 +2184,12 @@ fun SettingsScreen(
                 LanguagePicker(
                     label = stringResource(R.string.settings_target_lang),
                     currentCode = targetLang,
-                    onSelect = { targetLang = it },
+                    onSelect = {
+                        targetLang = it
+                        if (translatorEngine == TranslatorEngine.LOCAL_SAKURA && !supportsSakuraLanguagePair(sourceLang, it)) {
+                            showSakuraFallbackDialog = true
+                        }
+                    },
                     pinned = pinnedLanguages,
                     onTogglePin = onTogglePin
                 )
@@ -1354,7 +2333,12 @@ fun SettingsScreen(
             // 端到端翻译引擎（有道图翻）会跳过 OCR 阶段，整个 OCR 设置区当前会被无视——
             // 灰显 + 禁用 chip 让用户一眼明白 + 不能误操作。
             val ocrSectionDisabled = translatorEngine == TranslatorEngine.YOUDAO_PICTRANS
-            SectionCard(title = stringResource(R.string.settings_section_ocr), anchorKey = SectionKeys.OCR, onAnchor = onAnchor) {
+            SectionCard(
+                title = stringResource(R.string.settings_section_ocr),
+                anchorKey = SectionKeys.OCR,
+                onAnchor = onAnchor,
+                helpText = stringResource(R.string.settings_ocr_intro)
+            ) {
                 if (ocrSectionDisabled) {
                     Text(
                         stringResource(R.string.settings_ocr_disabled_by_pictrans),
@@ -1384,6 +2368,20 @@ fun SettingsScreen(
                     EngineChip(ocrEngine, OcrEngineKind.ML_KIT_CHINESE, stringResource(R.string.settings_ocr_chip_chinese), enabled = !ocrSectionDisabled) { ocrEngine = it }
                     EngineChip(ocrEngine, OcrEngineKind.ML_KIT_LATIN, stringResource(R.string.settings_ocr_chip_latin), enabled = !ocrSectionDisabled) { ocrEngine = it }
                     EngineChip(ocrEngine, OcrEngineKind.PADDLE_ONNX, stringResource(R.string.settings_ocr_chip_paddle), enabled = !ocrSectionDisabled) { ocrEngine = it }
+                    EngineChip(ocrEngine, OcrEngineKind.MANGA_OCR_JA, stringResource(R.string.settings_ocr_chip_manga_ocr_ja), enabled = !ocrSectionDisabled) { ocrEngine = it }
+                }
+                Text(
+                    stringResource(R.string.settings_ocr_group_local_http),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    EngineChip(ocrEngine, OcrEngineKind.UMI_OCR, stringResource(R.string.settings_ocr_chip_umi), enabled = !ocrSectionDisabled) { ocrEngine = it }
+                    EngineChip(ocrEngine, OcrEngineKind.LUNA_OCR, stringResource(R.string.settings_ocr_chip_luna), enabled = !ocrSectionDisabled) { ocrEngine = it }
                 }
                 Text(
                     stringResource(R.string.settings_ocr_group_cloud),
@@ -1399,14 +2397,6 @@ fun SettingsScreen(
                     EngineChip(ocrEngine, OcrEngineKind.TENCENT, stringResource(R.string.settings_ocr_chip_tencent), enabled = !ocrSectionDisabled) { ocrEngine = it }
                     EngineChip(ocrEngine, OcrEngineKind.YOUDAO, stringResource(R.string.settings_ocr_chip_youdao), enabled = !ocrSectionDisabled) { ocrEngine = it }
                 }
-
-                // 各引擎用途说明：用户经常问"自动/日文/中文/拉丁"的差别
-                Text(
-                    stringResource(R.string.settings_ocr_intro),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
                 if (ocrEngine == OcrEngineKind.BAIDU) {
                     SecretTextField(
                         value = baiduKey, onValueChange = { baiduKey = it },
@@ -1468,6 +2458,40 @@ fun SettingsScreen(
                         stringResource(R.string.settings_baidu_image_limit_hint),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error
+                    )
+                }
+
+                if (ocrEngine == OcrEngineKind.UMI_OCR) {
+                    OutlinedTextField(
+                        value = umiOcrBaseUrl,
+                        onValueChange = { umiOcrBaseUrl = it },
+                        label = { Text(stringResource(R.string.settings_umi_ocr_url_label)) },
+                        placeholder = { Text(stringResource(R.string.settings_umi_ocr_url_placeholder)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri)
+                    )
+                    Text(
+                        stringResource(R.string.settings_umi_ocr_url_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                if (ocrEngine == OcrEngineKind.LUNA_OCR) {
+                    OutlinedTextField(
+                        value = lunaOcrBaseUrl,
+                        onValueChange = { lunaOcrBaseUrl = it },
+                        label = { Text(stringResource(R.string.settings_luna_ocr_url_label)) },
+                        placeholder = { Text(stringResource(R.string.settings_luna_ocr_url_placeholder)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri)
+                    )
+                    Text(
+                        stringResource(R.string.settings_luna_ocr_url_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
 
@@ -1551,22 +2575,31 @@ fun SettingsScreen(
                     PaddleSection(
                         status = paddleStatus,
                         downloading = paddleDownloading,
-                        mirror = paddleMirror,
-                        onMirrorChange = { paddleMirror = it },
+                        modelReady = paddleModelReady,
+                        modelVersion = paddleModelVersion,
+                        onModelVersionChange = { newVer ->
+                            paddleModelVersion = newVer
+                            paddleModelReady = false
+                            scope.launch { viewModel.savePaddleModelVersion(newVer) }
+                        },
                         onDownload = {
-                            scope.launch {
-                                paddleDownloading = true
-                                try {
-                                    viewModel.savePaddleMirror(paddleMirror)
-                                    viewModel.downloadPaddleModels { msg -> paddleStatus = msg }
-                                    paddleStatus = viewModel.paddleModelStatus()
-                                } catch (t: Throwable) {
-                                    paddleStatus = context.getString(
-                                        R.string.settings_paddle_download_failed_format,
-                                        t.message ?: ""
-                                    )
-                                } finally {
-                                    paddleDownloading = false
+                            requestModelDownload(context.getString(paddleModelVersion.displayNameRes)) {
+                                scope.launch {
+                                    paddleDownloading = true
+                                    try {
+                                        viewModel.downloadPaddleModels(paddleModelVersion) { msg -> paddleStatus = msg }
+                                        refreshPaddleModelState(paddleModelVersion)
+                                    } catch (t: Throwable) {
+                                        paddleStatus = context.getString(
+                                            R.string.settings_paddle_download_failed_format,
+                                            t.message ?: ""
+                                        )
+                                        paddleModelReady = withContext(Dispatchers.IO) {
+                                            viewModel.isPaddleInstalled(paddleModelVersion)
+                                        }
+                                    } finally {
+                                        paddleDownloading = false
+                                    }
                                 }
                             }
                         },
@@ -1574,11 +2607,15 @@ fun SettingsScreen(
                             scope.launch {
                                 paddleDownloading = true
                                 try {
-                                    val n = viewModel.importPaddleFromLocal(uris)
+                                    val n = viewModel.importPaddleFromLocal(paddleModelVersion, uris)
+                                    val state = withContext(Dispatchers.IO) {
+                                        viewModel.paddleModelUiState(paddleModelVersion)
+                                    }
                                     paddleStatus = context.getString(
                                         R.string.settings_paddle_imported_format,
-                                        n, viewModel.paddleModelStatus()
+                                        n, state.status
                                     )
+                                    paddleModelReady = state.ready
                                 } finally {
                                     paddleDownloading = false
                                 }
@@ -1587,17 +2624,239 @@ fun SettingsScreen(
                         onDelete = {
                             scope.launch {
                                 viewModel.deletePaddleModels()
-                                paddleStatus = viewModel.paddleModelStatus()
+                                refreshPaddleModelState(paddleModelVersion)
                             }
                         }
                     )
                 }
+
+                if (ocrEngine == OcrEngineKind.MANGA_OCR_JA) {
+                    MangaOcrSection(
+                        status = mangaOcrStatus,
+                        downloading = mangaOcrDownloading,
+                        modelReady = mangaOcrModelReady,
+                        onDownload = {
+                            requestModelDownload(context.getString(R.string.settings_manga_ocr_model_name)) {
+                                scope.launch {
+                                mangaOcrDownloading = true
+                                try {
+                                    viewModel.downloadMangaOcrModels { msg -> mangaOcrStatus = msg }
+                                    refreshMangaOcrModelState()
+                                    // manga-ocr 复用 PaddleOCR DBNet 做检测；如果 Paddle 还没下，级联拉一遍，
+                                    // 用户少点一次"下载 PaddleOCR"按钮。失败不影响 manga-ocr 状态显示。
+                                    if (!viewModel.isPaddleInstalled(paddleModelVersion)) {
+                                        try {
+                                            viewModel.downloadPaddleModels(paddleModelVersion) { msg -> paddleStatus = msg }
+                                            refreshPaddleModelState(paddleModelVersion)
+                                        } catch (t: Throwable) {
+                                            Timber.w(t, "cascade Paddle download after manga-ocr failed")
+                                            paddleModelReady = withContext(Dispatchers.IO) {
+                                                viewModel.isPaddleInstalled(paddleModelVersion)
+                                            }
+                                        }
+                                    }
+                                } catch (t: Throwable) {
+                                    mangaOcrStatus = context.getString(
+                                        R.string.settings_manga_ocr_download_failed_format,
+                                        t.message ?: t.javaClass.simpleName
+                                    )
+                                    mangaOcrModelReady = withContext(Dispatchers.IO) {
+                                        viewModel.mangaOcrModelReady()
+                                    }
+                                } finally {
+                                    mangaOcrDownloading = false
+                                }
+                            }
+                            }
+                        },
+                        onImport = { uris ->
+                            scope.launch {
+                                mangaOcrDownloading = true
+                                try {
+                                    val n = viewModel.importMangaOcrFromLocal(uris)
+                                    val state = withContext(Dispatchers.IO) { viewModel.mangaOcrModelUiState() }
+                                    mangaOcrStatus = context.getString(
+                                        R.string.settings_manga_ocr_imported_format,
+                                        n, state.status
+                                    )
+                                    mangaOcrModelReady = state.ready
+                                } finally {
+                                    mangaOcrDownloading = false
+                                }
+                            }
+                        },
+                        onDelete = {
+                            scope.launch {
+                                viewModel.deleteMangaOcrModels()
+                                refreshMangaOcrModelState()
+                            }
+                        }
+                    )
+                }
+
+                // DBNet post-process tuning is only relevant for PaddleOCR / MangaOCR.
+                if (ocrEngine == OcrEngineKind.PADDLE_ONNX || ocrEngine == OcrEngineKind.MANGA_OCR_JA) {
+                    val isMangaOcrDbnet = ocrEngine == OcrEngineKind.MANGA_OCR_JA
+                    val currentDbnetUnclip = if (isMangaOcrDbnet) mangaOcrDbnetUnclip else dbnetUnclip
+                    val defaultSettings = Settings()
+                    val defaultDbnetUnclip = if (isMangaOcrDbnet) {
+                        defaultSettings.mangaOcrDbnetUnclipRatio
+                    } else {
+                        defaultSettings.dbnetUnclipRatio
+                    }
+                    val saveDbnetNow: () -> Unit = {
+                        scope.launch {
+                            val unclipToSave = if (ocrEngine == OcrEngineKind.MANGA_OCR_JA) {
+                                mangaOcrDbnetUnclip
+                            } else {
+                                dbnetUnclip
+                            }
+                            viewModel.saveDbnetThresholds(
+                                ocrEngine,
+                                dbnetProb,
+                                dbnetScore,
+                                unclipToSave,
+                                dbnetGap
+                            )
+                        }
+                    }
+                    val resetDbnetDefaults: () -> Unit = {
+                        dbnetProb = defaultSettings.dbnetProbThresh
+                        dbnetScore = defaultSettings.dbnetBoxScoreThresh
+                        if (isMangaOcrDbnet) {
+                            mangaOcrDbnetUnclip = defaultSettings.mangaOcrDbnetUnclipRatio
+                        } else {
+                            dbnetUnclip = defaultSettings.dbnetUnclipRatio
+                        }
+                        dbnetGap = defaultSettings.bubbleClusterGap
+                        scope.launch {
+                            viewModel.saveDbnetThresholds(
+                                ocrEngine,
+                                defaultSettings.dbnetProbThresh,
+                                defaultSettings.dbnetBoxScoreThresh,
+                                defaultDbnetUnclip,
+                                defaultSettings.bubbleClusterGap
+                            )
+                        }
+                    }
+                    HorizontalDivider()
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { dbnetAdvancedExpanded = !dbnetAdvancedExpanded }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            (if (dbnetAdvancedExpanded) "▼ " else "▶ ") +
+                                stringResource(R.string.settings_dbnet_advanced_header),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    if (dbnetAdvancedExpanded) {
+                        Text(
+                            stringResource(R.string.settings_dbnet_section_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            OutlinedButton(onClick = { showDbnetResetConfirm = true }) {
+                                Text(stringResource(R.string.settings_dbnet_restore_defaults))
+                            }
+                        }
+                        DbnetAdvancedSliderSection(
+                            title = stringResource(R.string.settings_dbnet_prob_label, dbnetProb),
+                            description = stringResource(R.string.settings_dbnet_prob_desc),
+                            value = dbnetProb,
+                            onValueChange = { dbnetProb = it },
+                            onValueChangeFinished = saveDbnetNow,
+                            valueRange = 0.10f..0.40f,
+                            steps = 29
+                        )
+                        DbnetAdvancedSliderSection(
+                            title = stringResource(R.string.settings_dbnet_score_label, dbnetScore),
+                            description = stringResource(R.string.settings_dbnet_score_desc),
+                            value = dbnetScore,
+                            onValueChange = { dbnetScore = it },
+                            onValueChangeFinished = saveDbnetNow,
+                            valueRange = 0.20f..0.70f,
+                            steps = 49
+                        )
+                        DbnetAdvancedSliderSection(
+                            title = stringResource(R.string.settings_dbnet_unclip_label, currentDbnetUnclip),
+                            description = stringResource(R.string.settings_dbnet_unclip_desc),
+                            value = currentDbnetUnclip,
+                            onValueChange = {
+                                if (isMangaOcrDbnet) {
+                                    mangaOcrDbnetUnclip = it
+                                } else {
+                                    dbnetUnclip = it
+                                }
+                            },
+                            onValueChangeFinished = saveDbnetNow,
+                            valueRange = 1.2f..2.5f,
+                            steps = 25
+                        )
+                        DbnetAdvancedSliderSection(
+                            title = stringResource(R.string.settings_dbnet_gap_label, dbnetGap),
+                            description = stringResource(R.string.settings_dbnet_gap_desc),
+                            value = dbnetGap.toFloat(),
+                            onValueChange = { dbnetGap = it.toInt() },
+                            onValueChangeFinished = saveDbnetNow,
+                            valueRange = 8f..60f,
+                            steps = 51
+                        )
+                    }
+                    if (showDbnetResetConfirm) {
+                        AlertDialog(
+                            onDismissRequest = { showDbnetResetConfirm = false },
+                            title = {
+                                Text(stringResource(R.string.settings_dbnet_restore_defaults_confirm_title))
+                            },
+                            text = {
+                                Text(stringResource(R.string.settings_dbnet_restore_defaults_confirm_message))
+                            },
+                            confirmButton = {
+                                TextButton(
+                                    onClick = {
+                                        showDbnetResetConfirm = false
+                                        resetDbnetDefaults()
+                                    }
+                                ) {
+                                    Text(stringResource(R.string.settings_dbnet_restore_defaults))
+                                }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { showDbnetResetConfirm = false }) {
+                                    Text(stringResource(R.string.settings_model_delete_confirm_no))
+                                }
+                            }
+                        )
+                    }
+                }
                 } // 关闭 OCR section 内的"灰显 Column"（ocrSectionDisabled 控制 alpha）
             }
 
+            textOrientationSection()
+
             // —— 图像预处理 ——
             SectionCard(title = stringResource(R.string.settings_section_preprocess), anchorKey = SectionKeys.PREPROCESS, onAnchor = onAnchor) {
-                SwitchRow(stringResource(R.string.settings_preprocess_upscale), preUpscale) { preUpscale = it }
+                SwitchRow(
+                    stringResource(R.string.settings_preprocess_upscale),
+                    preUpscale,
+                    helpText = stringResource(R.string.settings_preprocess_upscale_help)
+                ) { preUpscale = it }
+                if (cloudOcrUpscaleWarningVisible(ocrEngine, preUpscale)) {
+                    Text(
+                        stringResource(R.string.settings_preprocess_upscale_cloud_warning),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
                 SwitchRow(stringResource(R.string.settings_preprocess_invert), preInvert) { preInvert = it }
                 SwitchRow(stringResource(R.string.settings_preprocess_binarize), preBinarize) { preBinarize = it }
             }
@@ -1657,6 +2916,93 @@ fun SettingsScreen(
                 Text(stringResource(R.string.settings_textsize_label_format, textSize.toInt()), style = MaterialTheme.typography.labelLarge)
                 Slider(value = textSize, onValueChange = { textSize = it }, valueRange = 10f..28f, steps = 17)
 
+                Text(stringResource(R.string.settings_overlay_font_label), style = MaterialTheme.typography.labelLarge)
+                val defaultOverlayFontName = stringResource(R.string.settings_overlay_font_default)
+                val overlayFontChipEntries = OverlayFontPolicy.upsertImportedFont(
+                    overlayFontEntries,
+                    overlayFontFileName,
+                    overlayFontDisplayName
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                ) {
+                    OverlayFontChip(
+                        selected = overlayFontFileName.isBlank(),
+                        onClick = {
+                            scope.launch {
+                                withContext(Dispatchers.IO) { viewModel.resetOverlayFont() }
+                                overlayFontFileName = ""
+                                overlayFontDisplayName = ""
+                                overlayFontTypeface = null
+                                overlayFontMessage = context.getString(R.string.settings_overlay_font_reset_success)
+                                overlayFontMessageIsError = false
+                            }
+                        },
+                        label = defaultOverlayFontName,
+                        onLongClick = {}
+                    )
+                    overlayFontChipEntries.forEach { font ->
+                        OverlayFontChip(
+                            selected = overlayFontFileName == font.fileName,
+                            label = font.displayName,
+                            onClick = {
+                                scope.launch {
+                                    val selected = withContext(Dispatchers.IO) {
+                                        viewModel.selectOverlayFont(font.fileName, font.displayName)
+                                    }
+                                    if (selected) {
+                                        overlayFontFileName = font.fileName
+                                        overlayFontDisplayName = font.displayName
+                                        overlayFontEntries = OverlayFontPolicy.upsertImportedFont(
+                                            overlayFontEntries,
+                                            font.fileName,
+                                            font.displayName
+                                        )
+                                        overlayFontTypeface = withContext(Dispatchers.IO) {
+                                            viewModel.overlayTypefaceFor(font.fileName)
+                                        }
+                                        overlayFontMessage = null
+                                        overlayFontMessageIsError = false
+                                    } else {
+                                        overlayFontMessage = context.getString(R.string.settings_overlay_font_error_invalid)
+                                        overlayFontMessageIsError = true
+                                    }
+                                }
+                            },
+                            onLongClick = { pendingOverlayFontDelete = font }
+                        )
+                    }
+                }
+                OutlinedButton(
+                    onClick = {
+                        overlayFontMessage = null
+                        overlayFontImportLauncher.launch(OverlayFontPolicy.OPEN_DOCUMENT_MIME_TYPES)
+                    }
+                ) {
+                    Text(stringResource(R.string.settings_overlay_font_import))
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 20.dp)
+                ) {
+                    overlayFontMessage?.let { message ->
+                        Text(
+                            message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (overlayFontMessageIsError) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.primary
+                            }
+                        )
+                    }
+                }
+
                 Text(stringResource(R.string.settings_alpha_label_format, (alpha * 100).toInt()), style = MaterialTheme.typography.labelLarge)
                 Slider(value = alpha, onValueChange = { alpha = it }, valueRange = 0.3f..1f)
 
@@ -1671,7 +3017,8 @@ fun SettingsScreen(
                     customBorderW = customBorderW,
                     customBorderStyle = customBorderStyle,
                     textSize = textSize,
-                    alpha = alpha
+                    alpha = alpha,
+                    overlayTypeface = overlayFontTypeface
                 )
 
                 // —— 几何项（预览看不到，只能实际触发翻译时看到效果）——
@@ -1839,9 +3186,30 @@ fun SettingsScreen(
                 onAnchor = onAnchor
             ) {
                 Text(
+                    stringResource(R.string.settings_arc_menu_page_size, arcMenuPageSize.toInt()),
+                    style = MaterialTheme.typography.labelMedium
+                )
+                Slider(
+                    value = arcMenuPageSize,
+                    onValueChange = { arcMenuPageSize = it.roundToInt().coerceIn(
+                        FloatingMenu.MIN_PAGE_SIZE,
+                        FloatingMenu.MAX_PAGE_SIZE
+                    ).toFloat() },
+                    onValueChangeFinished = {
+                        scope.launch { viewModel.saveArcMenuPageSize(arcMenuPageSize.toInt()) }
+                    },
+                    valueRange = FloatingMenu.MIN_PAGE_SIZE.toFloat()..FloatingMenu.MAX_PAGE_SIZE.toFloat(),
+                    steps = FloatingMenu.MAX_PAGE_SIZE - FloatingMenu.MIN_PAGE_SIZE - 1
+                )
+                Text(
+                    stringResource(R.string.settings_arc_menu_page_size_desc),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
                     stringResource(
                         R.string.settings_arc_menu_order_desc,
-                        com.gameocr.app.data.FloatingMenu.PAGE_SIZE
+                        arcMenuPageSize.toInt()
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1911,6 +3279,45 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error
                 )
+
+                // —— 端侧 LLM 下载源 ——
+                // 放在网络 section（而非端侧 LLM section）：
+                //   1) 选源是网络行为，跟"明文白名单 / 超时"是同一层抽象；
+                //   2) 用户切 chip 时不必每次重看 radio 列表，UI 更紧凑。
+                // Radio 切换立即落盘，避免用户切完忘点下载导致丢失；自定义 URL 字段编辑频繁，
+                // 仅在切回别的 radio 或点下载时落盘。
+                Text(
+                    stringResource(R.string.llm_mirror_section_label),
+                    style = MaterialTheme.typography.labelLarge
+                )
+                val saveLlmMirrorNow: (com.gameocr.app.data.LlmMirrorChoice) -> Unit = { c ->
+                    llmMirrorChoice = c
+                    scope.launch { viewModel.saveLlmMirror(c, llmMirror) }
+                }
+                LlmMirrorRadioRow(
+                    label = stringResource(R.string.llm_mirror_hf_official),
+                    selected = llmMirrorChoice == com.gameocr.app.data.LlmMirrorChoice.HF_OFFICIAL,
+                    enabled = true
+                ) { saveLlmMirrorNow(com.gameocr.app.data.LlmMirrorChoice.HF_OFFICIAL) }
+                LlmMirrorRadioRow(
+                    label = stringResource(R.string.llm_mirror_hf_mirror),
+                    selected = llmMirrorChoice == com.gameocr.app.data.LlmMirrorChoice.HF_MIRROR,
+                    enabled = true
+                ) { saveLlmMirrorNow(com.gameocr.app.data.LlmMirrorChoice.HF_MIRROR) }
+                LlmMirrorRadioRow(
+                    label = stringResource(R.string.llm_mirror_custom),
+                    selected = llmMirrorChoice == com.gameocr.app.data.LlmMirrorChoice.CUSTOM,
+                    enabled = true
+                ) { saveLlmMirrorNow(com.gameocr.app.data.LlmMirrorChoice.CUSTOM) }
+                if (llmMirrorChoice == com.gameocr.app.data.LlmMirrorChoice.CUSTOM) {
+                    OutlinedTextField(
+                        value = llmMirror,
+                        onValueChange = { llmMirror = it },
+                        label = { Text(stringResource(R.string.llm_mirror_label)) },
+                        placeholder = { Text(stringResource(R.string.llm_mirror_placeholder)) },
+                        modifier = Modifier.fillMaxWidth(), singleLine = true
+                    )
+                }
             }
 
             // 给 FAB 留出底部空间，避免最后一项被遮挡
@@ -1970,6 +3377,20 @@ fun SettingsScreen(
  * - 边框样式：仅 CUSTOM 主题下读 [customBorderStyle]，预设主题恒为 SOLID（与 DraggableOverlayWindow 一致）；
  *   DASH/DOT 间距、DOUBLE 间隙、GROOVE 明暗各 ±40% 全部复制 OverlayManager / DraggableOverlayWindow 的硬编码
  */
+private fun overlayFontImportErrorMessage(
+    context: android.content.Context,
+    error: OverlayFontImportError
+): String = context.getString(
+    when (error) {
+        OverlayFontImportError.UNSUPPORTED_EXTENSION -> R.string.settings_overlay_font_error_extension
+        OverlayFontImportError.EMPTY_FILE -> R.string.settings_overlay_font_error_empty
+        OverlayFontImportError.TOO_LARGE -> R.string.settings_overlay_font_error_too_large
+        OverlayFontImportError.UNREADABLE -> R.string.settings_overlay_font_error_unreadable
+        OverlayFontImportError.INVALID_FONT -> R.string.settings_overlay_font_error_invalid
+        OverlayFontImportError.COPY_FAILED -> R.string.settings_overlay_font_error_copy_failed
+    }
+)
+
 @Composable
 private fun OverlayPreviewCard(
     theme: OverlayTheme,
@@ -1979,7 +3400,8 @@ private fun OverlayPreviewCard(
     customBorderW: Float,
     customBorderStyle: com.gameocr.app.data.BorderStyle,
     textSize: Float,
-    alpha: Float
+    alpha: Float,
+    overlayTypeface: android.graphics.Typeface?
 ) {
     val colors = overlayThemeColors(theme, customBg, customFg, customBorder, customBorderW.toInt())
     // 仅 CUSTOM 主题 + borderDp > 0 时让用户选的 borderStyle 生效；与 DraggableOverlayWindow 一致
@@ -2019,10 +3441,23 @@ private fun OverlayPreviewCard(
                     )
                     .padding(horizontal = 12.dp, vertical = 10.dp)
             ) {
-                Text(
-                    stringResource(R.string.settings_overlay_preview_sample),
-                    color = Color(colors.fg),
-                    fontSize = textSize.sp
+                val previewText = stringResource(R.string.settings_overlay_preview_sample)
+                AndroidView(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp),
+                    factory = { ctx ->
+                        android.widget.TextView(ctx).apply {
+                            setIncludeFontPadding(true)
+                            gravity = android.view.Gravity.CENTER_VERTICAL
+                        }
+                    },
+                    update = { view ->
+                        view.text = previewText
+                        view.setTextColor(colors.fg)
+                        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, textSize)
+                        view.typeface = overlayTypeface
+                    }
                 )
             }
         }
@@ -2191,7 +3626,9 @@ private fun overlayThemeColors(
 /** 搜索可用的 section key 常量。和 [SETTING_ITEMS] 的 sectionKey 对齐。 */
 private object SectionKeys {
     const val TRANSLATE = "translate"
+    const val PRESETS = "presets"
     const val OCR = "ocr"
+    const val TEXT_ORIENTATION = "text_orientation"
     const val PREPROCESS = "preprocess"
     const val OVERLAY = "overlay"
     const val FLOATING = "floating"
@@ -2230,6 +3667,8 @@ private data class SearchEntry(
  * keywords 混合中英文：英文系统下用户用英文输入仍能搜到中文 section / 反之亦然。
  */
 private val SETTING_ITEMS: List<SearchEntry> = listOf(
+    SearchEntry(SectionKeys.PRESETS, R.string.settings_section_translation_presets, R.string.settings_section_translation_presets, listOf("preset", "presets", "profile", "mode", "系统预设方案", "翻译预设", "预设", "模式")),
+
     // —— 翻译后端 ——
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_translator_engine, listOf("OpenAI", "DeepL", "LLM", "翻译引擎")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_base_url, listOf("base url")),
@@ -2252,6 +3691,9 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
     // —— OCR 引擎 ——
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_ocr_switch, listOf("ML Kit", "百度", "腾讯", "Paddle", "OCR engine")),
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_paddle_download, listOf("ONNX", "v5", "镜像", "mirror", "本地导入", "local import", "import", "导入", "delete", "删除")),
+    SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_manga_ocr_download, listOf("manga", "manga-ocr", "日漫", "漫画", "竖排", "vertical", "ONNX", "模型", "model", "download", "下载", "本地导入", "local import", "import", "导入", "delete", "删除")),
+    SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_umi_ocr, listOf("umi", "Umi-OCR", "local http", "局域网", "本机", "PC", "1224", "api/ocr")),
+    SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_luna_ocr, listOf("luna", "LunaTranslator", "露娜", "local http", "局域网", "本机", "PC", "api/ocr")),
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_baidu_api_key, listOf("baidu", "百度", "secret key", "secret", "密钥")),
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_baidu_endpoint, listOf("百度", "baidu", "general", "accurate", "webimage", "含位置", "标准版", "高精度")),
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_baidu_lang, listOf("百度", "baidu", "language", "语种", "CHN_ENG", "JAP", "KOR", "auto_detect")),
@@ -2260,6 +3702,10 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_tencent_lang, listOf("tencent", "腾讯", "language", "语种", "mix", "zh_rare", "auto")),
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_tencent_region, listOf("tencent", "腾讯", "region", "区域", "ap-guangzhou", "广州")),
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_youdao_ocr, listOf("youdao", "有道", "ocrapi", "app key", "app secret")),
+    SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_dbnet_advanced, listOf("dbnet", "threshold", "prob", "box score", "unclip", "bubble", "cluster", "gap", "advanced", "阈值", "二值化", "连通域", "外扩", "气泡", "聚类", "高级")),
+    SearchEntry(SectionKeys.TEXT_ORIENTATION, R.string.settings_text_orientation_section_title, R.string.settings_orient_auto_detect_title, listOf("orientation", "text orientation", "direction", "vertical", "horizontal", "自动判别", "方向", "文本方向", "竖排", "横排")),
+    SearchEntry(SectionKeys.TEXT_ORIENTATION, R.string.settings_text_orientation_section_title, R.string.settings_search_item_manual_orientation, listOf("manual", "lock", "orientation", "vertical", "horizontal", "stacked", "手动", "锁定", "方向", "竖排", "横排", "逐字")),
+    SearchEntry(SectionKeys.TEXT_ORIENTATION, R.string.settings_text_orientation_section_title, R.string.settings_search_item_orientation_model, listOf("orientation model", "doc orientation", "direction model", "ONNX", "方向模型", "文本方向模型", "模型", "download", "下载", "本地导入", "local import", "导入", "delete", "删除")),
 
     // —— 图像预处理 ——
     SearchEntry(SectionKeys.PREPROCESS, R.string.settings_section_preprocess, R.string.settings_search_item_upscale, listOf("upscale", "放大", "上采样")),
@@ -2274,6 +3720,7 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_custom_theme, listOf("custom", "border", "自定义", "边框")),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_border_style, listOf("solid", "dashed", "dotted", "double", "groove", "实线", "虚线", "点线", "双线", "凹槽", "边框样式")),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_text_size, listOf("font size", "字号", "字体大小")),
+    SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_overlay_font, listOf("font", "ttf", "字体", "自定义字体", "译文字体")),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_alpha, listOf("alpha", "opacity", "透明度")),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_floating_window_content, listOf("floating window", "悬浮窗", "原文+译文", "仅译文", "src dst", "content mode")),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_floating_window_locked, listOf("lock", "锁定", "悬浮窗")),
@@ -2291,7 +3738,7 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
     SearchEntry(SectionKeys.FLOATING, R.string.settings_section_floating, R.string.settings_search_item_floating_dock_inset, listOf("inset", "贴边距离", "手势", "全面屏", "gesture")),
 
     // —— 弧菜单按钮顺序 ——
-    SearchEntry(SectionKeys.ARC_MENU, R.string.settings_section_arc_menu, R.string.settings_search_item_arc_menu_order, listOf("arc menu", "弧菜单", "弧形", "顺序", "order", "reorder", "排序", "拖动", "menu", "按钮", "page", "翻页", "loop", "region", "home", "skill", "技能", "划词")),
+    SearchEntry(SectionKeys.ARC_MENU, R.string.settings_section_arc_menu, R.string.settings_search_item_arc_menu_order, listOf("arc menu", "弧菜单", "弧形", "顺序", "order", "reorder", "排序", "拖动", "menu", "按钮", "page", "page size", "分页", "每页", "翻页", "loop", "region", "home", "skill", "技能", "划词", "language", "语言", "源语言", "目标语言")),
 
     // —— 触发器 ——
     SearchEntry(SectionKeys.TRIGGER, R.string.settings_section_trigger, R.string.settings_search_item_loop_interval, listOf("loop", "循环")),
@@ -2299,6 +3746,7 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
 
     // —— 网络 ——
     SearchEntry(SectionKeys.NETWORK, R.string.settings_section_network, R.string.settings_search_item_api_timeout, listOf("timeout", "超时", "网络", "network")),
+    SearchEntry(SectionKeys.NETWORK, R.string.settings_section_network, R.string.settings_search_item_llm_mirror, listOf("mirror", "hf-mirror", "huggingface", "download source", "模型下载源", "下载源", "镜像", "自定义 URL", "local llm", "llm model")),
     SearchEntry(SectionKeys.NETWORK, R.string.settings_section_network, R.string.settings_search_item_cleartext_hosts, listOf("cleartext", "http", "明文", "白名单", "host", "自架", "私有")),
 
     SearchEntry(SectionKeys.APP_LANG, R.string.settings_section_app_lang, R.string.settings_section_app_lang, listOf("language", "locale", "语言", "中文", "english", "i18n")),
@@ -2307,10 +3755,515 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
 )
 
 @Composable
+private fun TranslationPresetSection(
+    customPresets: List<TranslationPreset>,
+    activeId: String,
+    unsavedPreset: TranslationPreset?,
+    message: String?,
+    localLlmDeviceCapable: Boolean,
+    llmModelReady: (LlmModelKind) -> Boolean,
+    paddleModelReady: (PaddleModelVersion) -> Boolean,
+    mangaOcrModelReady: Boolean,
+    orientationModelReady: Boolean,
+    modelDownloading: Boolean,
+    downloadingPresetId: String?,
+    onSaveUnsaved: (TranslationPreset) -> Unit,
+    onApply: (TranslationPreset) -> Unit,
+    onCopy: (TranslationPreset) -> Unit,
+    onDownloadModels: (TranslationPreset, List<TranslationPresetModelIssue>) -> Unit,
+    onDelete: (TranslationPreset) -> Unit
+) {
+    var pendingDeletePreset by remember { mutableStateOf<TranslationPreset?>(null) }
+    var pendingSavePreset by remember { mutableStateOf<TranslationPreset?>(null) }
+    var pendingSavePresetName by remember { mutableStateOf("") }
+    var presetsExpanded by remember { mutableStateOf(false) }
+
+    message?.let {
+        Text(
+            it,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.primary
+        )
+    }
+    HorizontalDivider()
+    TranslationPresetUnsavedSlot(
+        preset = unsavedPreset,
+        onSave = { preset ->
+            pendingSavePreset = preset
+            pendingSavePresetName = ""
+        }
+    )
+    HorizontalDivider()
+    val allPresets = TranslationPresetCatalog.all(customPresets)
+        .filterNot { unsavedPreset != null && it.id == TranslationPresetCatalog.UNSAVED_DRAFT_ID }
+    val existingPresetNames = allPresets.map { translationPresetDisplayName(it) }
+    translationPresetVisibleItems(allPresets, presetsExpanded).forEach { preset ->
+        val modelIssues = translationPresetModelIssues(
+            preset = preset,
+            localLlmDeviceCapable = localLlmDeviceCapable,
+            llmModelReady = llmModelReady,
+            paddleModelReady = paddleModelReady,
+            mangaOcrModelReady = mangaOcrModelReady,
+            orientationModelReady = orientationModelReady
+        )
+        TranslationPresetRow(
+            preset = preset,
+            selected = preset.id == activeId,
+            modelIssues = modelIssues,
+            downloadState = translationPresetModelDownloadState(
+                presetId = preset.id,
+                activePresetDownloadId = downloadingPresetId,
+                modelDownloading = modelDownloading,
+            ),
+            onApply = { onApply(preset) },
+            onCopy = { onCopy(preset) },
+            onDownloadModels = { onDownloadModels(preset, modelIssues) },
+            onDelete = { pendingDeletePreset = preset }
+        )
+    }
+    if (translationPresetCollapseToggleVisible(allPresets.size)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Center
+        ) {
+            TextButton(onClick = { presetsExpanded = !presetsExpanded }) {
+                Text(
+                    if (presetsExpanded) {
+                        stringResource(R.string.settings_translation_preset_collapse)
+                    } else {
+                        stringResource(R.string.settings_translation_preset_expand_format, allPresets.size)
+                    }
+                )
+                Icon(
+                    imageVector = Icons.Default.ExpandMore,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(18.dp)
+                        .graphicsLayer {
+                            rotationZ = if (presetsExpanded) 180f else 0f
+                        }
+                )
+            }
+        }
+    }
+    pendingDeletePreset?.let { preset ->
+        AlertDialog(
+            onDismissRequest = { pendingDeletePreset = null },
+            title = { Text(stringResource(R.string.settings_translation_preset_delete_confirm_title)) },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.settings_translation_preset_delete_confirm_message,
+                        translationPresetDisplayName(preset)
+                    )
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingDeletePreset = null
+                    onDelete(preset)
+                }) {
+                    Text(stringResource(R.string.settings_translation_preset_delete))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeletePreset = null }) {
+                    Text(stringResource(R.string.settings_model_delete_confirm_no))
+                }
+            }
+        )
+    }
+    pendingSavePreset?.let { preset ->
+        val duplicateName = translationPresetNameExists(pendingSavePresetName, existingPresetNames)
+        val saveNameValid = normalizedTranslationPresetName(pendingSavePresetName) != null && !duplicateName
+        AlertDialog(
+            onDismissRequest = {
+                pendingSavePreset = null
+                pendingSavePresetName = ""
+            },
+            title = { Text(stringResource(R.string.settings_translation_preset_save_dialog_title)) },
+            text = {
+                OutlinedTextField(
+                    value = pendingSavePresetName,
+                    onValueChange = { pendingSavePresetName = it },
+                    label = { Text(stringResource(R.string.settings_translation_preset_name)) },
+                    placeholder = { Text(stringResource(R.string.settings_translation_preset_name_placeholder)) },
+                    isError = duplicateName,
+                    supportingText = if (duplicateName) {
+                        { Text(stringResource(R.string.settings_translation_preset_name_duplicate)) }
+                    } else {
+                        null
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = saveNameValid,
+                    onClick = {
+                        val presetToSave = namedTranslationPresetOrNull(
+                            preset = preset,
+                            nameInput = pendingSavePresetName,
+                            id = newCustomPresetId(),
+                        ) ?: return@TextButton
+                        pendingSavePreset = null
+                        pendingSavePresetName = ""
+                        onSaveUnsaved(presetToSave)
+                    }
+                ) {
+                    Text(stringResource(R.string.settings_translation_preset_save))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    pendingSavePreset = null
+                    pendingSavePresetName = ""
+                }) {
+                    Text(stringResource(R.string.settings_model_delete_confirm_no))
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun TranslationPresetUnsavedSlot(
+    preset: TranslationPreset?,
+    onSave: (TranslationPreset) -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(160.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        if (preset != null) {
+            UnsavedTranslationPresetRow(
+                preset = preset,
+                onSave = { onSave(preset) },
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            Text(
+                text = stringResource(R.string.settings_translation_preset_matched_placeholder),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
+        }
+    }
+}
+
+@Composable
+private fun UnsavedTranslationPresetRow(
+    preset: TranslationPreset,
+    onSave: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .border(1.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(8.dp))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            translationPresetDisplayName(preset),
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Text(
+            translationPresetSummary(preset),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Button(onClick = onSave) {
+            Text(stringResource(R.string.settings_translation_preset_save))
+        }
+    }
+}
+
+@Composable
+@OptIn(ExperimentalLayoutApi::class)
+private fun TranslationPresetRow(
+    preset: TranslationPreset,
+    selected: Boolean,
+    modelIssues: List<TranslationPresetModelIssue>,
+    downloadState: TranslationPresetModelDownloadState,
+    onApply: () -> Unit,
+    onCopy: () -> Unit,
+    onDownloadModels: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val borderColor = if (selected) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.colorScheme.outlineVariant
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, borderColor, RoundedCornerShape(8.dp))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    translationPresetDisplayName(preset),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    translationPresetSummary(preset),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            OutlinedButton(
+                onClick = onApply,
+                enabled = !selected && translationPresetCanApply(modelIssues)
+            ) {
+                Text(
+                    stringResource(
+                        if (selected) {
+                            R.string.settings_translation_preset_applied_button
+                        } else {
+                            R.string.settings_translation_preset_apply
+                        }
+                    )
+                )
+            }
+            if (modelIssues.any { it.downloadable }) {
+                OutlinedButton(
+                    onClick = onDownloadModels,
+                    enabled = translationPresetModelDownloadEnabled(
+                        issues = modelIssues,
+                        downloadState = downloadState
+                    )
+                ) {
+                    Text(
+                        stringResource(
+                            if (downloadState == TranslationPresetModelDownloadState.CURRENT_PRESET) {
+                                R.string.settings_translation_preset_downloading_models
+                            } else {
+                                R.string.settings_translation_preset_download_models
+                            }
+                        )
+                    )
+                }
+            }
+            OutlinedButton(onClick = onCopy) {
+                Text(stringResource(R.string.settings_translation_preset_copy))
+            }
+            if (!TranslationPresetCatalog.isBuiltIn(preset.id)) {
+                TextButton(onClick = onDelete) {
+                    Text(stringResource(R.string.settings_translation_preset_delete))
+                }
+            }
+        }
+        if (translationPresetOtherDownloadHintVisible(modelIssues, downloadState)) {
+            Text(
+                stringResource(R.string.settings_translation_preset_other_download_busy),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        if (modelIssues.isNotEmpty()) {
+            val context = LocalContext.current
+            val missingText = modelIssues.joinToString("、") { issue ->
+                translationPresetModelIssueLabel(context, issue)
+            }
+            Text(
+                stringResource(R.string.settings_translation_preset_missing_models_format, missingText),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
+    }
+}
+
+@Composable
+private fun translationPresetDisplayName(preset: TranslationPreset): String = when (preset.id) {
+    TranslationPresetCatalog.BUILTIN_MANGA_JA_ZH ->
+        stringResource(R.string.settings_translation_preset_builtin_manga)
+    else -> preset.name
+}
+
+private fun translationPresetModelIssueLabel(
+    context: Context,
+    issue: TranslationPresetModelIssue
+): String = when (issue.kind) {
+    TranslationPresetModelIssueKind.LOCAL_LLM_UNSUPPORTED ->
+        context.getString(R.string.settings_translation_preset_local_llm_unsupported)
+    TranslationPresetModelIssueKind.LOCAL_LLM_MISSING ->
+        context.getString(
+            R.string.settings_translation_preset_missing_llm_format,
+            issue.llmModelKind?.displayName.orEmpty()
+        )
+    TranslationPresetModelIssueKind.PADDLE_MISSING ->
+        context.getString(
+            R.string.settings_translation_preset_missing_paddle_format,
+            issue.paddleModelVersion?.let { context.getString(it.displayNameRes) }.orEmpty()
+        )
+    TranslationPresetModelIssueKind.MANGA_OCR_MISSING ->
+        context.getString(R.string.settings_translation_preset_missing_manga_ocr)
+    TranslationPresetModelIssueKind.ORIENTATION_MISSING ->
+        context.getString(R.string.settings_translation_preset_missing_orientation)
+}
+
+private fun translationPresetDownloadModelLabel(
+    context: Context,
+    issues: List<TranslationPresetModelIssue>
+): String {
+    val labels = translationPresetDownloadModelLabels(
+        issues = issues,
+        paddleModelLabel = { version -> context.getString(version.displayNameRes) },
+        mangaOcrModelLabel = context.getString(R.string.settings_manga_ocr_model_name),
+        orientationModelLabel = context.getString(R.string.settings_orientation_model_name)
+    )
+    return labels.joinToString(
+        separator = context.getString(R.string.settings_translation_preset_download_model_separator)
+    ).ifBlank {
+        context.getString(R.string.settings_translation_preset_download_models)
+    }
+}
+
+@Composable
+private fun translationPresetSummary(preset: TranslationPreset): String {
+    val context = LocalContext.current
+    return stringResource(
+        R.string.preset_quick_summary_format,
+        ocrEngineLabel(preset.ocrEngine),
+        presetLlmLabel(preset),
+        Languages.nameOf(context, preset.sourceLang),
+        Languages.nameOf(context, preset.targetLang)
+    )
+}
+
+@Composable
+private fun presetLlmLabel(preset: TranslationPreset): String = when (preset.translatorEngine) {
+    TranslatorEngine.OPENAI -> preset.model.ifBlank { stringResource(R.string.settings_engine_openai_llm) }
+    TranslatorEngine.LOCAL_SAKURA -> stringResource(R.string.settings_engine_local_sakura)
+    TranslatorEngine.LOCAL_HY_MT2 -> stringResource(R.string.settings_engine_local_hymt2)
+    else -> translatorEngineLabel(preset.translatorEngine)
+}
+
+@Composable
+private fun ocrEngineLabel(engine: OcrEngineKind): String = stringResource(
+    when (engine) {
+        OcrEngineKind.ML_KIT_AUTO -> R.string.settings_ocr_chip_auto
+        OcrEngineKind.ML_KIT_LATIN -> R.string.settings_ocr_chip_latin
+        OcrEngineKind.ML_KIT_JAPANESE -> R.string.settings_ocr_chip_japanese
+        OcrEngineKind.ML_KIT_KOREAN -> R.string.settings_ocr_chip_korean
+        OcrEngineKind.ML_KIT_CHINESE -> R.string.settings_ocr_chip_chinese
+        OcrEngineKind.BAIDU -> R.string.settings_ocr_chip_baidu
+        OcrEngineKind.TENCENT -> R.string.settings_ocr_chip_tencent
+        OcrEngineKind.YOUDAO -> R.string.settings_ocr_chip_youdao
+        OcrEngineKind.UMI_OCR -> R.string.settings_ocr_chip_umi
+        OcrEngineKind.LUNA_OCR -> R.string.settings_ocr_chip_luna
+        OcrEngineKind.PADDLE_ONNX -> R.string.settings_ocr_chip_paddle
+        OcrEngineKind.MANGA_OCR_JA -> R.string.settings_ocr_chip_manga_ocr_ja
+    }
+)
+
+@Composable
+private fun translatorEngineLabel(engine: TranslatorEngine): String = stringResource(
+    when (engine) {
+        TranslatorEngine.OPENAI -> R.string.settings_engine_openai_llm
+        TranslatorEngine.DEEPL -> R.string.settings_engine_deepl
+        TranslatorEngine.YOUDAO_PICTRANS -> R.string.settings_engine_youdao_pictrans
+        TranslatorEngine.GOOGLE -> R.string.settings_engine_google
+        TranslatorEngine.VOLC -> R.string.settings_engine_volc
+        TranslatorEngine.BAIDU_FANYI -> R.string.settings_engine_baidu_fanyi
+        TranslatorEngine.TENCENT -> R.string.settings_engine_tencent
+        TranslatorEngine.LOCAL_SAKURA -> R.string.settings_engine_local_sakura
+        TranslatorEngine.LOCAL_HY_MT2 -> R.string.settings_engine_local_hymt2
+    }
+)
+
+@Composable
+private fun DbnetAdvancedSliderSection(
+    title: String,
+    description: String,
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    onValueChangeFinished: () -> Unit,
+    valueRange: ClosedFloatingPointRange<Float>,
+    steps: Int
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Text(
+            title,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Text(
+            description,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Slider(
+            value = value,
+            onValueChange = onValueChange,
+            onValueChangeFinished = onValueChangeFinished,
+            valueRange = valueRange,
+            steps = steps
+        )
+    }
+}
+
+private fun newCustomPresetId(): String = "custom_${System.currentTimeMillis()}"
+
+internal const val TRANSLATION_PRESET_COLLAPSED_LIMIT: Int = 3
+
+internal fun translationPresetCollapseToggleVisible(totalCount: Int): Boolean =
+    totalCount > TRANSLATION_PRESET_COLLAPSED_LIMIT
+
+internal fun <T> translationPresetVisibleItems(
+    items: List<T>,
+    expanded: Boolean
+): List<T> = if (expanded || !translationPresetCollapseToggleVisible(items.size)) {
+    items
+} else {
+    items.take(TRANSLATION_PRESET_COLLAPSED_LIMIT)
+}
+
+internal fun shouldShowOverlayFontDeleteTipBeforeImport(
+    currentFileName: String,
+    fonts: List<OverlayFontEntry>
+): Boolean = currentFileName.isBlank() && OverlayFontPolicy.normalizeImportedFonts(fonts).isEmpty()
+
+internal fun overlayFontDeleteTipAckLabel(
+    baseLabel: String,
+    countdown: Int
+): String = if (countdown > 0) "($countdown) $baseLabel" else baseLabel
+
+@Composable
 private fun SectionCard(
     title: String,
     anchorKey: String? = null,
     onAnchor: ((String, Int) -> Unit)? = null,
+    helpText: String? = null,
     content: @Composable () -> Unit
 ) {
     val baseModifier = Modifier.fillMaxWidth()
@@ -2335,13 +4288,61 @@ private fun SectionCard(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f)
+                )
+                helpText?.let { SettingHelpTooltip(text = it) }
+            }
             content()
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SettingHelpTooltip(
+    text: String,
+    modifier: Modifier = Modifier
+) {
+    val state = rememberTooltipState(isPersistent = true)
+    val scope = rememberCoroutineScope()
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+        tooltip = {
+            PlainTooltip {
+                Text(
+                    text = text,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.widthIn(max = 280.dp)
+                )
+            }
+        },
+        state = state,
+        modifier = modifier
+    ) {
+        IconButton(
+            onClick = {
+                if (state.isVisible) {
+                    state.dismiss()
+                } else {
+                    scope.launch { state.show() }
+                }
+            },
+            modifier = Modifier.size(32.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.HelpOutline,
+                contentDescription = stringResource(R.string.settings_help_content_description),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
@@ -2489,7 +4490,13 @@ private fun ThemeModeSelector() {
 }
 
 @Composable
-private fun SwitchRow(label: String, checked: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) {
+private fun SwitchRow(
+    label: String,
+    checked: Boolean,
+    enabled: Boolean = true,
+    helpText: String? = null,
+    onChange: (Boolean) -> Unit
+) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.fillMaxWidth()
@@ -2509,8 +4516,12 @@ private fun SwitchRow(label: String, checked: Boolean, enabled: Boolean = true, 
         )
         Text(
             text = label,
-            modifier = Modifier.padding(start = 12.dp).alpha(if (enabled) 1f else 0.4f)
+            modifier = Modifier
+                .padding(start = 12.dp)
+                .weight(1f)
+                .alpha(if (enabled) 1f else 0.4f)
         )
+        helpText?.let { SettingHelpTooltip(text = it) }
     }
 }
 
@@ -2531,6 +4542,53 @@ private fun <T> EngineChip(
 }
 
 /** OCR 引擎 → 用户可读 chip 标签资源 id（联动提示 dialog 复用）。 */
+@Composable
+private fun OverlayFontChip(
+    selected: Boolean,
+    label: String,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit
+) {
+    val bg = if (selected) {
+        MaterialTheme.colorScheme.secondaryContainer
+    } else {
+        MaterialTheme.colorScheme.surface
+    }
+    val fg = if (selected) {
+        MaterialTheme.colorScheme.onSecondaryContainer
+    } else {
+        MaterialTheme.colorScheme.onSurface
+    }
+    val border = if (selected) {
+        MaterialTheme.colorScheme.secondary
+    } else {
+        MaterialTheme.colorScheme.outline
+    }
+    Box(
+        modifier = Modifier
+            .height(36.dp)
+            .widthIn(max = 180.dp)
+            .background(bg, RoundedCornerShape(8.dp))
+            .border(1.dp, border, RoundedCornerShape(8.dp))
+            .pointerInput(label, selected) {
+                detectTapGestures(
+                    onTap = { onClick() },
+                    onLongPress = { onLongClick() }
+                )
+            }
+            .padding(horizontal = 12.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            label,
+            color = fg,
+            style = MaterialTheme.typography.labelLarge,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
 @androidx.annotation.StringRes
 private fun ocrEngineLabelRes(engine: com.gameocr.app.data.OcrEngineKind): Int = when (engine) {
     com.gameocr.app.data.OcrEngineKind.ML_KIT_AUTO -> R.string.settings_ocr_chip_auto
@@ -2541,7 +4599,10 @@ private fun ocrEngineLabelRes(engine: com.gameocr.app.data.OcrEngineKind): Int =
     com.gameocr.app.data.OcrEngineKind.BAIDU -> R.string.settings_ocr_chip_baidu
     com.gameocr.app.data.OcrEngineKind.TENCENT -> R.string.settings_ocr_chip_tencent
     com.gameocr.app.data.OcrEngineKind.YOUDAO -> R.string.settings_ocr_chip_youdao
+    com.gameocr.app.data.OcrEngineKind.UMI_OCR -> R.string.settings_ocr_chip_umi
+    com.gameocr.app.data.OcrEngineKind.LUNA_OCR -> R.string.settings_ocr_chip_luna
     com.gameocr.app.data.OcrEngineKind.PADDLE_ONNX -> R.string.settings_ocr_chip_paddle
+    com.gameocr.app.data.OcrEngineKind.MANGA_OCR_JA -> R.string.settings_ocr_chip_manga_ocr_ja
 }
 
 /**
@@ -2563,6 +4624,240 @@ private sealed class OcrLangIssue {
         /** 建议把 sourceLang 改成这个 BCP-47 值，跟 OCR 端当前设置匹配。 */
         val recommendedSourceCode: String
     ) : OcrLangIssue()
+}
+
+internal enum class OpenAiFallbackField {
+    BASE_URL,
+    API_KEY,
+    MODEL,
+}
+
+internal const val SAKURA_TARGET_LANG_ZH_CN = "zh-CN"
+
+internal data class SakuraLanguageIssue(
+    val sourceUnsupported: Boolean,
+    val targetUnsupported: Boolean,
+)
+
+internal fun sakuraLanguageIssue(sourceLang: String, targetLang: String): SakuraLanguageIssue {
+    return SakuraLanguageIssue(
+        sourceUnsupported = !supportsSakuraSource(sourceLang),
+        targetUnsupported = !supportsSakuraTarget(targetLang),
+    )
+}
+
+internal fun supportsSakuraSource(sourceLang: String): Boolean {
+    return com.gameocr.app.translate.RoutingTranslator.supportsSakuraSource(sourceLang)
+}
+
+internal fun supportsSakuraTarget(targetLang: String): Boolean {
+    return com.gameocr.app.translate.RoutingTranslator.supportsSakuraTarget(targetLang)
+}
+
+internal fun supportsSakuraLanguagePair(sourceLang: String, targetLang: String): Boolean {
+    return supportsSakuraSource(sourceLang) && supportsSakuraTarget(targetLang)
+}
+
+internal fun isLocalLlmEngine(engine: TranslatorEngine): Boolean = when (engine) {
+    TranslatorEngine.LOCAL_SAKURA,
+    TranslatorEngine.LOCAL_HY_MT2 -> true
+    else -> false
+}
+
+internal fun localLlmModelKindFor(engine: TranslatorEngine): LlmModelKind? = when (engine) {
+    TranslatorEngine.LOCAL_SAKURA -> LlmModelKind.SAKURA_1_5B_Q4
+    TranslatorEngine.LOCAL_HY_MT2 -> LlmModelKind.HY_MT2_1_8B_Q4_K_M
+    else -> null
+}
+
+internal enum class TranslationPresetModelIssueKind {
+    LOCAL_LLM_UNSUPPORTED,
+    LOCAL_LLM_MISSING,
+    PADDLE_MISSING,
+    MANGA_OCR_MISSING,
+    ORIENTATION_MISSING,
+}
+
+internal data class TranslationPresetModelIssue(
+    val kind: TranslationPresetModelIssueKind,
+    val llmModelKind: LlmModelKind? = null,
+    val paddleModelVersion: PaddleModelVersion? = null,
+) {
+    val downloadable: Boolean
+        get() = kind != TranslationPresetModelIssueKind.LOCAL_LLM_UNSUPPORTED
+}
+
+internal fun translationPresetModelIssues(
+    preset: TranslationPreset,
+    localLlmDeviceCapable: Boolean,
+    llmModelReady: (LlmModelKind) -> Boolean,
+    paddleModelReady: (PaddleModelVersion) -> Boolean,
+    mangaOcrModelReady: Boolean,
+    orientationModelReady: Boolean,
+): List<TranslationPresetModelIssue> = buildList {
+    localLlmModelKindFor(preset.translatorEngine)?.let { kind ->
+        if (!localLlmDeviceCapable) {
+            add(TranslationPresetModelIssue(TranslationPresetModelIssueKind.LOCAL_LLM_UNSUPPORTED))
+        } else if (!llmModelReady(kind)) {
+            add(
+                TranslationPresetModelIssue(
+                    kind = TranslationPresetModelIssueKind.LOCAL_LLM_MISSING,
+                    llmModelKind = kind
+                )
+            )
+        }
+    }
+    when (preset.ocrEngine) {
+        OcrEngineKind.PADDLE_ONNX -> {
+            if (!paddleModelReady(preset.paddleModelVersion)) {
+                add(
+                    TranslationPresetModelIssue(
+                        kind = TranslationPresetModelIssueKind.PADDLE_MISSING,
+                        paddleModelVersion = preset.paddleModelVersion
+                    )
+                )
+            }
+        }
+        OcrEngineKind.MANGA_OCR_JA -> {
+            if (!mangaOcrModelReady) {
+                add(TranslationPresetModelIssue(TranslationPresetModelIssueKind.MANGA_OCR_MISSING))
+            }
+            if (!paddleModelReady(preset.paddleModelVersion)) {
+                add(
+                    TranslationPresetModelIssue(
+                        kind = TranslationPresetModelIssueKind.PADDLE_MISSING,
+                        paddleModelVersion = preset.paddleModelVersion
+                    )
+                )
+            }
+        }
+        OcrEngineKind.ML_KIT_AUTO,
+        OcrEngineKind.ML_KIT_LATIN,
+        OcrEngineKind.ML_KIT_JAPANESE,
+        OcrEngineKind.ML_KIT_KOREAN,
+        OcrEngineKind.ML_KIT_CHINESE,
+        OcrEngineKind.BAIDU,
+        OcrEngineKind.TENCENT,
+        OcrEngineKind.YOUDAO,
+        OcrEngineKind.UMI_OCR,
+        OcrEngineKind.LUNA_OCR -> Unit
+    }
+    if (preset.textOrientationAutoDetect && !orientationModelReady) {
+        add(TranslationPresetModelIssue(TranslationPresetModelIssueKind.ORIENTATION_MISSING))
+    }
+}
+
+internal fun translationPresetCanApply(issues: List<TranslationPresetModelIssue>): Boolean =
+    issues.isEmpty()
+
+internal fun normalizedTranslationPresetName(input: String): String? =
+    input.trim().takeIf { it.isNotEmpty() }
+
+internal fun translationPresetNameExists(
+    nameInput: String,
+    existingNames: Iterable<String>,
+): Boolean {
+    val name = normalizedTranslationPresetName(nameInput) ?: return false
+    return existingNames.any { existingName ->
+        normalizedTranslationPresetName(existingName)?.equals(name, ignoreCase = true) == true
+    }
+}
+
+internal fun translationPresetShortNameFor(name: String): String =
+    name.take(8)
+
+internal fun namedTranslationPresetOrNull(
+    preset: TranslationPreset,
+    nameInput: String,
+    id: String = preset.id,
+): TranslationPreset? {
+    val name = normalizedTranslationPresetName(nameInput) ?: return null
+    return preset.copy(
+        id = id,
+        name = name,
+        shortName = translationPresetShortNameFor(name),
+    )
+}
+
+internal enum class TranslationPresetModelDownloadState {
+    IDLE,
+    CURRENT_PRESET,
+    BLOCKED_BY_OTHER_DOWNLOAD,
+}
+
+internal fun translationPresetModelDownloadState(
+    presetId: String,
+    activePresetDownloadId: String?,
+    modelDownloading: Boolean,
+): TranslationPresetModelDownloadState = when {
+    activePresetDownloadId == presetId -> TranslationPresetModelDownloadState.CURRENT_PRESET
+    modelDownloading -> TranslationPresetModelDownloadState.BLOCKED_BY_OTHER_DOWNLOAD
+    else -> TranslationPresetModelDownloadState.IDLE
+}
+
+internal fun translationPresetModelDownloadEnabled(
+    issues: List<TranslationPresetModelIssue>,
+    downloadState: TranslationPresetModelDownloadState,
+): Boolean = downloadState == TranslationPresetModelDownloadState.IDLE && issues.any { it.downloadable }
+
+internal fun translationPresetDownloadModelLabels(
+    issues: List<TranslationPresetModelIssue>,
+    paddleModelLabel: (PaddleModelVersion) -> String,
+    mangaOcrModelLabel: String,
+    orientationModelLabel: String,
+): List<String> = issues.asSequence()
+    .filter { it.downloadable }
+    .mapNotNull { issue ->
+        when (issue.kind) {
+            TranslationPresetModelIssueKind.LOCAL_LLM_MISSING ->
+                issue.llmModelKind?.displayName
+            TranslationPresetModelIssueKind.PADDLE_MISSING ->
+                issue.paddleModelVersion?.let(paddleModelLabel)
+            TranslationPresetModelIssueKind.MANGA_OCR_MISSING ->
+                mangaOcrModelLabel
+            TranslationPresetModelIssueKind.ORIENTATION_MISSING ->
+                orientationModelLabel
+            TranslationPresetModelIssueKind.LOCAL_LLM_UNSUPPORTED ->
+                null
+        }
+    }
+    .distinct()
+    .toList()
+
+internal fun translationPresetOtherDownloadHintVisible(
+    issues: List<TranslationPresetModelIssue>,
+    downloadState: TranslationPresetModelDownloadState,
+): Boolean = downloadState == TranslationPresetModelDownloadState.BLOCKED_BY_OTHER_DOWNLOAD &&
+    issues.any { it.downloadable }
+
+internal fun isCloudOcrEngineForUpscaleWarning(engine: OcrEngineKind): Boolean = when (engine) {
+    OcrEngineKind.BAIDU,
+    OcrEngineKind.TENCENT,
+    OcrEngineKind.YOUDAO -> true
+    OcrEngineKind.ML_KIT_AUTO,
+    OcrEngineKind.ML_KIT_LATIN,
+    OcrEngineKind.ML_KIT_JAPANESE,
+    OcrEngineKind.ML_KIT_KOREAN,
+    OcrEngineKind.ML_KIT_CHINESE,
+    OcrEngineKind.UMI_OCR,
+    OcrEngineKind.LUNA_OCR,
+    OcrEngineKind.PADDLE_ONNX,
+    OcrEngineKind.MANGA_OCR_JA -> false
+}
+
+internal fun cloudOcrUpscaleWarningVisible(
+    engine: OcrEngineKind,
+    upscale2x: Boolean,
+): Boolean = upscale2x && isCloudOcrEngineForUpscaleWarning(engine)
+
+internal fun missingOpenAiFallbackFields(
+    baseUrl: String,
+    apiKey: String,
+    model: String,
+): List<OpenAiFallbackField> = buildList {
+    if (baseUrl.isBlank()) add(OpenAiFallbackField.BASE_URL)
+    if (apiKey.isBlank()) add(OpenAiFallbackField.API_KEY)
+    if (model.isBlank()) add(OpenAiFallbackField.MODEL)
 }
 
 @Composable
@@ -2635,12 +4930,14 @@ private fun SmallSlider(label: String, value: Int, onChange: (Int) -> Unit) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PaddleSection(
     status: String,
     downloading: Boolean,
-    mirror: String,
-    onMirrorChange: (String) -> Unit,
+    modelReady: Boolean,
+    modelVersion: com.gameocr.app.data.PaddleModelVersion,
+    onModelVersionChange: (com.gameocr.app.data.PaddleModelVersion) -> Unit,
     onDownload: () -> Unit,
     onImport: (List<android.net.Uri>) -> Unit,
     onDelete: () -> Unit
@@ -2650,7 +4947,8 @@ private fun PaddleSection(
     ) { uris -> if (uris.isNotEmpty()) onImport(uris) }
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        // 当前模型版本占位行：未来支持多版本切换时换成 DropdownMenu，这里先展示当前唯一版本
+        // 模型版本下拉选择
+        var versionExpanded by remember { mutableStateOf(false) }
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth()
@@ -2660,12 +4958,49 @@ private fun PaddleSection(
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Text(
-                stringResource(R.string.settings_paddle_model_name),
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.padding(start = 6.dp)
-            )
+            Box(modifier = Modifier.padding(start = 6.dp)) {
+                OutlinedCard(
+                    onClick = { versionExpanded = true },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                    ) {
+                        Text(
+                            stringResource(modelVersion.displayNameRes),
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.weight(1f)
+                        )
+                        ExposedDropdownMenuDefaults.TrailingIcon(expanded = versionExpanded)
+                    }
+                }
+                DropdownMenu(
+                    expanded = versionExpanded,
+                    onDismissRequest = { versionExpanded = false }
+                ) {
+                    com.gameocr.app.data.PaddleModelVersion.entries.forEach { ver ->
+                        DropdownMenuItem(
+                            text = {
+                                Column {
+                                    Text(stringResource(ver.displayNameRes), fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        stringResource(ver.descRes),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            },
+                            onClick = {
+                                onModelVersionChange(ver)
+                                versionExpanded = false
+                            },
+                            contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
+                        )
+                    }
+                }
+            }
         }
         Text(
             stringResource(R.string.settings_paddle_desc),
@@ -2690,7 +5025,10 @@ private fun PaddleSection(
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             Button(
-                enabled = !downloading,
+                enabled = downloadableModelDownloadEnabled(
+                    downloading = downloading,
+                    modelReady = modelReady,
+                ),
                 onClick = onDownload,
                 modifier = Modifier.weight(1f)
             ) {
@@ -2705,17 +5043,122 @@ private fun PaddleSection(
             ) { Text(stringResource(R.string.settings_paddle_btn_local_import)) }
         }
 
-        OutlinedTextField(
-            value = mirror, onValueChange = onMirrorChange,
-            label = { Text(stringResource(R.string.settings_paddle_mirror_label)) },
-            placeholder = { Text(stringResource(R.string.settings_paddle_mirror_placeholder)) },
-            modifier = Modifier.fillMaxWidth(), singleLine = true
-        )
-
+        var showDeleteConfirm by remember { mutableStateOf(false) }
         OutlinedButton(
-            onClick = onDelete,
+            onClick = { showDeleteConfirm = true },
             modifier = Modifier.fillMaxWidth()
         ) { Text(stringResource(R.string.settings_paddle_btn_delete)) }
+        if (showDeleteConfirm) {
+            AlertDialog(
+                onDismissRequest = { showDeleteConfirm = false },
+                title = { Text(stringResource(R.string.settings_model_delete_confirm_title)) },
+                text = { Text(stringResource(R.string.settings_model_delete_confirm_message)) },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showDeleteConfirm = false
+                        onDelete()
+                    }) { Text(stringResource(R.string.settings_model_delete_confirm_yes)) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showDeleteConfirm = false }) {
+                        Text(stringResource(R.string.settings_model_delete_confirm_no))
+                    }
+                }
+            )
+        }
+    }
+}
+
+/** manga-ocr 端侧 OCR Section。与 [PaddleSection] 一一对应；唯一差异在文案与状态格式（MB vs KB）。 */
+@Composable
+private fun MangaOcrSection(
+    status: String,
+    downloading: Boolean,
+    modelReady: Boolean,
+    onDownload: () -> Unit,
+    onImport: (List<android.net.Uri>) -> Unit,
+    onDelete: () -> Unit
+) {
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetMultipleContents()
+    ) { uris -> if (uris.isNotEmpty()) onImport(uris) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                stringResource(R.string.settings_paddle_model_version_label),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                stringResource(R.string.settings_manga_ocr_model_name),
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(start = 6.dp)
+            )
+        }
+        // 模型描述已合并到 OCR 引擎选择那段 settings_ocr_intro 的 bullet 列表里；此处不再重复显示。
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            if (downloading) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    strokeWidth = 2.dp
+                )
+                Box(modifier = Modifier.size(8.dp))
+            }
+            Text(status, style = MaterialTheme.typography.bodyMedium)
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            Button(
+                enabled = downloadableModelDownloadEnabled(
+                    downloading = downloading,
+                    modelReady = modelReady,
+                ),
+                onClick = onDownload,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(stringResource(
+                    if (downloading) R.string.settings_manga_ocr_btn_processing else R.string.settings_manga_ocr_btn_auto_download
+                ))
+            }
+            OutlinedButton(
+                enabled = !downloading,
+                onClick = { importLauncher.launch("*/*") },
+                modifier = Modifier.weight(1f)
+            ) { Text(stringResource(R.string.settings_manga_ocr_btn_local_import)) }
+        }
+
+        var showDeleteConfirm by remember { mutableStateOf(false) }
+        OutlinedButton(
+            onClick = { showDeleteConfirm = true },
+            modifier = Modifier.fillMaxWidth()
+        ) { Text(stringResource(R.string.settings_manga_ocr_btn_delete)) }
+        if (showDeleteConfirm) {
+            AlertDialog(
+                onDismissRequest = { showDeleteConfirm = false },
+                title = { Text(stringResource(R.string.settings_model_delete_confirm_title)) },
+                text = { Text(stringResource(R.string.settings_model_delete_confirm_message)) },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showDeleteConfirm = false
+                        onDelete()
+                    }) { Text(stringResource(R.string.settings_model_delete_confirm_yes)) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showDeleteConfirm = false }) {
+                        Text(stringResource(R.string.settings_model_delete_confirm_no))
+                    }
+                }
+            )
+        }
     }
 }
 
@@ -2726,6 +5169,94 @@ private fun PaddleSection(
  *   targetIdx = draggedIdx + round(dragOffsetY / slotHeightPx)；
  * - 落位用相同 round 公式，保证落点与视觉一致。
  */
+@Composable
+private fun OrientationModelSection(
+    status: String,
+    downloading: Boolean,
+    modelReady: Boolean,
+    onDownload: () -> Unit,
+    onImport: (List<android.net.Uri>) -> Unit,
+    onDelete: () -> Unit
+) {
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetMultipleContents()
+    ) { uris -> if (uris.isNotEmpty()) onImport(uris) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            stringResource(R.string.settings_orientation_model_name),
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold
+        )
+        Text(
+            stringResource(R.string.settings_orientation_model_desc),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            if (downloading) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    strokeWidth = 2.dp
+                )
+                Box(modifier = Modifier.size(8.dp))
+            }
+            Text(status, style = MaterialTheme.typography.bodyMedium)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            Button(
+                enabled = downloadableModelDownloadEnabled(
+                    downloading = downloading,
+                    modelReady = modelReady,
+                ),
+                onClick = onDownload,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(
+                    stringResource(
+                        if (downloading) {
+                            R.string.settings_orientation_model_btn_processing
+                        } else {
+                            R.string.settings_orientation_model_btn_auto_download
+                        }
+                    )
+                )
+            }
+            OutlinedButton(
+                enabled = !downloading,
+                onClick = { importLauncher.launch("*/*") },
+                modifier = Modifier.weight(1f)
+            ) { Text(stringResource(R.string.settings_orientation_model_btn_local_import)) }
+        }
+        var showDeleteConfirm by remember { mutableStateOf(false) }
+        OutlinedButton(
+            onClick = { showDeleteConfirm = true },
+            modifier = Modifier.fillMaxWidth()
+        ) { Text(stringResource(R.string.settings_orientation_model_btn_delete)) }
+        if (showDeleteConfirm) {
+            AlertDialog(
+                onDismissRequest = { showDeleteConfirm = false },
+                title = { Text(stringResource(R.string.settings_model_delete_confirm_title)) },
+                text = { Text(stringResource(R.string.settings_model_delete_confirm_message)) },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showDeleteConfirm = false
+                        onDelete()
+                    }) { Text(stringResource(R.string.settings_model_delete_confirm_yes)) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showDeleteConfirm = false }) {
+                        Text(stringResource(R.string.settings_model_delete_confirm_no))
+                    }
+                }
+            )
+        }
+    }
+}
+
 @Composable
 private fun ArcMenuOrderEditor(
     order: List<MenuItemId>,
@@ -2811,7 +5342,7 @@ private fun ArcMenuOrderEditor(
                 Box(modifier = Modifier.width(12.dp))
                 // 中间：菜单项真实图标
                 Icon(
-                    painter = androidx.compose.ui.res.painterResource(menuItemIconRes(id)),
+                    painter = androidx.compose.ui.res.painterResource(menuItemIconRes(id, currentSkill)),
                     contentDescription = null,
                     modifier = Modifier.size(24.dp),
                     tint = MaterialTheme.colorScheme.onSurface
@@ -2828,11 +5359,29 @@ private fun ArcMenuOrderEditor(
     }
 }
 
+private class PendingModelDownload(
+    val modelLabel: String,
+    val warning: ModelDownloadNetworkWarning,
+    val onConfirmed: () -> Unit,
+)
+
+internal fun modelDownloadNetworkWarningMessageRes(
+    warning: ModelDownloadNetworkWarning,
+): Int = when (warning) {
+    ModelDownloadNetworkWarning.CELLULAR ->
+        R.string.settings_model_download_network_warning_cellular_format
+    ModelDownloadNetworkWarning.UNKNOWN ->
+        R.string.settings_model_download_network_warning_unknown_format
+}
+
 @Composable
 private fun menuItemLabel(id: MenuItemId, currentSkill: com.gameocr.app.data.FloatingSkill): String = when (id) {
-    MenuItemId.LOOP -> stringResource(R.string.settings_arc_menu_item_loop)
-    MenuItemId.REGION -> stringResource(R.string.settings_arc_menu_item_region)
-    MenuItemId.HOME -> stringResource(R.string.settings_arc_menu_item_home)
+        MenuItemId.LOOP -> stringResource(R.string.settings_arc_menu_item_loop)
+        MenuItemId.REGION -> stringResource(R.string.settings_arc_menu_item_region)
+        MenuItemId.LANGUAGE_PAIR -> stringResource(R.string.settings_arc_menu_item_language_pair)
+        MenuItemId.PRESET_SWITCH -> stringResource(R.string.settings_arc_menu_item_preset)
+        MenuItemId.SETTINGS -> stringResource(R.string.settings_arc_menu_item_settings)
+        MenuItemId.HOME -> stringResource(R.string.settings_arc_menu_item_home)
     // 技能槽：跟弧菜单实际显示一致，文案 = 「切换主球操作 — <切换目标>」。
     // 未来加新 FloatingSkill 值时只需扩展 menuItemIconRes / 这里的 when，无需改文案模板。
     MenuItemId.FULL_SCREEN_SKILL -> {
@@ -2846,10 +5395,164 @@ private fun menuItemLabel(id: MenuItemId, currentSkill: com.gameocr.app.data.Flo
     }
 }
 
-private fun menuItemIconRes(id: MenuItemId): Int = when (id) {
-    MenuItemId.LOOP -> R.drawable.ic_menu_loop
-    MenuItemId.REGION -> R.drawable.ic_menu_region
-    MenuItemId.HOME -> R.drawable.ic_menu_home
-    // 技能槽：用「划词翻译」图标表示这是「切换主球技能」槽位（默认 FULL_SCREEN 时菜单显示划词入口）
-    MenuItemId.FULL_SCREEN_SKILL -> R.drawable.ic_menu_word_select
+private fun menuItemIconRes(id: MenuItemId, currentSkill: com.gameocr.app.data.FloatingSkill): Int = when (id) {
+        MenuItemId.LOOP -> R.drawable.ic_menu_loop
+        MenuItemId.REGION -> R.drawable.ic_menu_region
+        MenuItemId.LANGUAGE_PAIR -> R.drawable.ic_menu_language_pair
+        MenuItemId.PRESET_SWITCH -> R.drawable.ic_menu_preset
+        MenuItemId.SETTINGS -> R.drawable.ic_menu_settings
+        MenuItemId.HOME -> R.drawable.ic_menu_home
+    // 技能槽预览要跟实际弧形菜单一致：图标表示“点击后切到的技能”。
+    MenuItemId.FULL_SCREEN_SKILL -> when (currentSkill) {
+        com.gameocr.app.data.FloatingSkill.FULL_SCREEN -> R.drawable.ic_menu_word_select
+        com.gameocr.app.data.FloatingSkill.WORD_SELECT -> R.drawable.ic_menu_full_screen
+    }
+}
+
+/**
+ * 端侧 LLM 翻译 Section。结构与 [PaddleSection] / [MangaOcrSection] 1:1 对应：
+ * 模型名 → 描述 → 状态行 → 主按钮对（下载 / 本地导入）→ 镜像 URL → 删除按钮。
+ * 与 OCR 两个 Section 唯一差异：不再单独印 "powered by" / license 文案——许可信息走关于页统一展示。
+ */
+@Composable
+private fun LocalLlmSection(
+    currentKindLabel: String,
+    deviceCapable: Boolean,
+    modelReady: Boolean,
+    status: String,
+    downloading: Boolean,
+    onDownload: () -> Unit,
+    onImport: (List<android.net.Uri>) -> Unit,
+    onDelete: () -> Unit
+) {
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetMultipleContents()
+    ) { uris -> if (uris.isNotEmpty()) onImport(uris) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                stringResource(R.string.llm_section_title),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                currentKindLabel,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(start = 6.dp)
+            )
+        }
+        Text(
+            stringResource(R.string.llm_section_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        if (!deviceCapable) {
+            Text(
+                stringResource(R.string.err_llm_device_unsupported),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            if (downloading) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    strokeWidth = 2.dp
+                )
+                Box(modifier = Modifier.size(8.dp))
+            }
+            Text(status, style = MaterialTheme.typography.bodyMedium)
+        }
+
+        // 下载源选择（含自定义 URL）放在「网络」section 内，跨 OCR / 翻译共用；此处不再重复展示。
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            Button(
+                enabled = localLlmDownloadEnabled(
+                    downloading = downloading,
+                    deviceCapable = deviceCapable,
+                    modelReady = modelReady,
+                ),
+                onClick = onDownload,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(stringResource(
+                    if (downloading) R.string.settings_paddle_btn_processing else R.string.llm_download_button
+                ))
+            }
+            OutlinedButton(
+                enabled = !downloading,
+                onClick = { importLauncher.launch("*/*") },
+                modifier = Modifier.weight(1f)
+            ) { Text(stringResource(R.string.settings_paddle_btn_local_import)) }
+        }
+
+        var showDeleteConfirm by remember { mutableStateOf(false) }
+        OutlinedButton(
+            onClick = { showDeleteConfirm = true },
+            modifier = Modifier.fillMaxWidth()
+        ) { Text(stringResource(R.string.llm_delete_button)) }
+        if (showDeleteConfirm) {
+            AlertDialog(
+                onDismissRequest = { showDeleteConfirm = false },
+                title = { Text(stringResource(R.string.settings_model_delete_confirm_title)) },
+                text = { Text(stringResource(R.string.settings_model_delete_confirm_message)) },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showDeleteConfirm = false
+                        onDelete()
+                    }) { Text(stringResource(R.string.settings_model_delete_confirm_yes)) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showDeleteConfirm = false }) {
+                        Text(stringResource(R.string.settings_model_delete_confirm_no))
+                    }
+                }
+            )
+        }
+    }
+}
+
+internal fun checkingPlaceholderIfUnresolved(currentStatus: String, checkingPlaceholder: String): String =
+    currentStatus.ifBlank { checkingPlaceholder }
+
+internal fun localLlmDownloadEnabled(
+    downloading: Boolean,
+    deviceCapable: Boolean,
+    modelReady: Boolean,
+): Boolean = !downloading && deviceCapable && !modelReady
+
+internal fun downloadableModelDownloadEnabled(
+    downloading: Boolean,
+    modelReady: Boolean,
+): Boolean = !downloading && !modelReady
+
+@Composable
+private fun LlmMirrorRadioRow(
+    label: String,
+    selected: Boolean,
+    enabled: Boolean,
+    onSelect: () -> Unit
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled, onClick = onSelect)
+    ) {
+        androidx.compose.material3.RadioButton(
+            selected = selected,
+            onClick = onSelect,
+            enabled = enabled
+        )
+        Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = 4.dp))
+    }
 }

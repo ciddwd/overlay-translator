@@ -1,6 +1,8 @@
 package com.gameocr.app.di
 
 import com.gameocr.app.BuildConfig
+import com.gameocr.app.data.AndroidKeystoreSettingsSecretCipher
+import com.gameocr.app.data.SettingsSecretCipher
 import com.gameocr.app.ocr.OcrEngine
 import com.gameocr.app.ocr.RoutingOcrEngine
 import com.gameocr.app.translate.RoutingTranslator
@@ -67,4 +69,10 @@ abstract class EngineBindings {
     @Binds
     @Singleton
     abstract fun bindTranslator(impl: RoutingTranslator): Translator
+
+    @Binds
+    @Singleton
+    abstract fun bindSettingsSecretCipher(
+        impl: AndroidKeystoreSettingsSecretCipher
+    ): SettingsSecretCipher
 }

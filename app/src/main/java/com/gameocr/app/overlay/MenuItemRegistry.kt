@@ -8,11 +8,6 @@ import com.gameocr.app.data.FloatingMenu
 import com.gameocr.app.data.FloatingSkill
 import com.gameocr.app.data.MenuItemId
 
-/**
- * 悬浮球弧形菜单按钮元信息。FloatingButtonManager 不感知具体业务，只按本 spec 渲染：
- *  - [iconRes] / [bgRes] / [labelRes]：图标 / 背景 / contentDescription
- *  - [onTap]：点击回调（在 dismissArcMenu 之后调用）
- */
 data class MenuItem(
     @DrawableRes val iconRes: Int,
     @DrawableRes val bgRes: Int,
@@ -20,16 +15,8 @@ data class MenuItem(
     val onTap: () -> Unit
 )
 
-/**
- * 把 [MenuItemId] 列表 + 当前运行时状态（循环 / 技能）→ [MenuItem] 列表。
- *
- * 「技能槽」处理：[MenuItemId.FULL_SCREEN_SKILL] 在菜单里呈现「与当前 skill 相反」的入口 —— 当前
- * skill = FULL_SCREEN 时显示「划词翻译」图标，点击切到 WORD_SELECT；当前 skill = WORD_SELECT 时
- * 显示「全屏翻译」图标，点击切到 FULL_SCREEN。一个 slot 完成两向切换，菜单不会同时出现两个互斥按钮。
- */
 object MenuItemRegistry {
 
-    /** 用于 FloatingButtonManager 翻页：构造「下一组」按钮（不在用户可配置的 MenuItemId 里）。 */
     fun buildNextPageItem(onTap: () -> Unit): MenuItem = MenuItem(
         iconRes = R.drawable.ic_menu_next_page,
         bgRes = R.drawable.bg_arc_menu_item,
@@ -37,9 +24,6 @@ object MenuItemRegistry {
         onTap = onTap
     )
 
-    /**
-     * 按 [ids] 顺序构造完整菜单项列表（**不**分页，分页交给 FloatingButtonManager 截 page-size）。
-     */
     fun build(
         @Suppress("UNUSED_PARAMETER") context: Context,
         ids: List<MenuItemId>,
@@ -61,6 +45,24 @@ object MenuItemRegistry {
                 bgRes = R.drawable.bg_arc_menu_item,
                 labelRes = R.string.menu_pick_region,
                 onTap = callbacks.onRegion
+            )
+            MenuItemId.LANGUAGE_PAIR -> MenuItem(
+                iconRes = R.drawable.ic_menu_language_pair,
+                bgRes = R.drawable.bg_arc_menu_item,
+                labelRes = R.string.menu_language_pair,
+                onTap = callbacks.onLanguagePair
+            )
+            MenuItemId.PRESET_SWITCH -> MenuItem(
+                iconRes = R.drawable.ic_menu_preset,
+                bgRes = R.drawable.bg_arc_menu_item,
+                labelRes = R.string.menu_preset_switch,
+                onTap = callbacks.onPresetSwitch
+            )
+            MenuItemId.SETTINGS -> MenuItem(
+                iconRes = R.drawable.ic_menu_settings,
+                bgRes = R.drawable.bg_arc_menu_item,
+                labelRes = R.string.menu_open_settings,
+                onTap = callbacks.onOpenSettings
             )
             MenuItemId.HOME -> MenuItem(
                 iconRes = R.drawable.ic_menu_home,
@@ -86,32 +88,39 @@ object MenuItemRegistry {
     }
 
     /**
-     * 按 [FloatingMenu.PAGE_SIZE] 把菜单切成 N 页。总数 ≤ PAGE_SIZE 时不切，单页全显。
-     * 总数 > PAGE_SIZE 时把每页最后 1 格让给「下一组」按钮，剩余项继续分到下一页。
-     *
-     * @return 二维列表，外层每个元素是一页的按钮列表（含尾部翻页按钮，若需要）。
+     * pageSize is the total number of visible buttons, including the Next page button.
+     * For example, pageSize=6 means up to 5 real actions plus 1 Next page button.
+     * When pagination is needed, every page includes Next; the last page loops back to page 0.
      */
-    fun paginate(items: List<MenuItem>, onNextPage: (Int) -> Unit): List<List<MenuItem>> {
-        if (items.size <= FloatingMenu.PAGE_SIZE) return listOf(items)
+    fun paginate(
+        items: List<MenuItem>,
+        pageSize: Int = FloatingMenu.DEFAULT_PAGE_SIZE,
+        onNextPage: (Int) -> Unit
+    ): List<List<MenuItem>> {
+        val normalizedPageSize = FloatingMenu.coercePageSize(pageSize)
+        if (items.size <= normalizedPageSize) return listOf(items)
+
+        val realItemsPerPage = normalizedPageSize - 1
+        val pageCount = (items.size + realItemsPerPage - 1) / realItemsPerPage
         val pages = mutableListOf<List<MenuItem>>()
-        val perPage = FloatingMenu.PAGE_SIZE - 1   // 最后一格让给翻页键
-        var idx = 0
-        while (idx < items.size) {
-            val end = minOf(idx + perPage, items.size)
-            val chunk = items.subList(idx, end).toMutableList<MenuItem>()
-            val targetPage = pages.size + 1  // 0-based 序号下一个
+        for (pageIndex in 0 until pageCount) {
+            val start = pageIndex * realItemsPerPage
+            val end = minOf(start + realItemsPerPage, items.size)
+            val chunk = items.subList(start, end).toMutableList()
+            val targetPage = (pageIndex + 1) % pageCount
             chunk.add(buildNextPageItem { onNextPage(targetPage) })
             pages.add(chunk)
-            idx = end
         }
         return pages
     }
 
-    /** 菜单项点击回调收集器，FloatingButtonManager 注入。 */
     data class Callbacks(
         val onLoop: () -> Unit,
         val onRegion: () -> Unit,
+        val onLanguagePair: () -> Unit,
         val onOpenMain: () -> Unit,
+        val onOpenSettings: () -> Unit,
+        val onPresetSwitch: () -> Unit,
         val onSwitchToFullScreen: () -> Unit,
         val onSwitchToWordSelect: () -> Unit
     )
