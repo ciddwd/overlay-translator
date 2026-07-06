@@ -97,7 +97,7 @@ class RoutingOcrEngine @Inject constructor(
      *           横排：水平区间相交 + 上下邻接 → 换行拼接（漫画气泡 3 行小字 → 单条 3 行）
      *           竖排：垂直区间相交 + 左右邻接 → 换行拼接，且**列拼接顺序按 right-to-left**（日文竖排）
      *
-     * 方向通过 [detectOrientation] 自动探测（按 box 高宽比中位数 / portrait 占比）。这样
+     * 方向通过 [detectMergeOrientation] 自动探测（按强竖排列 / portrait 占比）。这样
      * OCR 行级输出 → 视觉段落级输出，下游叠加层只看到几个大 box，不会因"一段话被拆成 5
      * 个相邻框"导致译文层互相重叠。
      */
@@ -106,7 +106,20 @@ class RoutingOcrEngine @Inject constructor(
         val preDirectionLimits = preDirectionNoiseLimits(blocks)
         val directionBlocks = removePreDirectionOcrNoise(blocks, preDirectionLimits)
         if (directionBlocks.size <= 1) return directionBlocks
-        val orientation = detectOrientation(directionBlocks)
+        val orientationDecision = detectMergeOrientation(
+            directionBlocks.map { it.boundingBox.toMergeDebugRect() }
+        )
+        Timber.tag("OcrMerge").i(
+            "[detect] orientation=%s reason=%s portrait=%d landscape=%d strongVertical=%d total=%d portraitRatio=%.2f",
+            orientationDecision.orientation,
+            orientationDecision.reason,
+            orientationDecision.portraitCount,
+            orientationDecision.landscapeCount,
+            orientationDecision.strongVerticalCount,
+            orientationDecision.total,
+            orientationDecision.portraitRatio
+        )
+        val orientation = orientationDecision.orientation
         return when (orientation) {
             Orientation.HORIZONTAL -> {
                 val lineMerged = mergeSameLine(directionBlocks, params)
@@ -225,7 +238,7 @@ class RoutingOcrEngine @Inject constructor(
     /**
      * 探测当前帧排版方向。
      *
-     * 判据：把 box 按 h/w 比分成 portrait（h > w * [PARAGRAPH_CLUSTER_PORTRAIT_RATIO]）
+     * 判据：把 box 按 h/w 比分成 portrait（h > w * [MERGE_PORTRAIT_RATIO]）
      * 与其它，portrait 占比 ≥ 50% → 竖排。这里不复用
      * [HeuristicOrientationClassifier.PORTRAIT_RATIO]：方向路由用 2.0，宁可 UNKNOWN 也别误切引擎；
      * 段落聚类用 1.3，保留漫画 / 字幕场景调优过的 3-4 字短列合并行为。
@@ -233,31 +246,6 @@ class RoutingOcrEngine @Inject constructor(
      * 同时打日志，让 logcat 能溯源到为什么走了某条路径——竖排日漫一旦被误判为横排，stage2
      * 就用错了"水平相交"判据，导致即使激进档也合不上。
      */
-    private fun detectOrientation(blocks: List<TextBlock>): Orientation {
-        val threshold = PARAGRAPH_CLUSTER_PORTRAIT_RATIO
-        val portrait = blocks.count {
-            val r = it.boundingBox
-            r.height() > r.width() * threshold
-        }
-        val landscape = blocks.count {
-            val r = it.boundingBox
-            r.width() > r.height() * threshold
-        }
-        val portraitRatio = portrait.toFloat() / blocks.size
-        val orientation = if (portrait > landscape && portraitRatio >= 0.5f)
-            Orientation.VERTICAL else Orientation.HORIZONTAL
-        val msg = "[detect] orientation=$orientation, portrait=$portrait landscape=$landscape " +
-            "total=${blocks.size} (portraitRatio=${"%.2f".format(portraitRatio)})"
-        Timber.tag("OcrMerge").i(msg)
-        return orientation
-    }
-
-    private companion object {
-        const val PARAGRAPH_CLUSTER_PORTRAIT_RATIO: Float = 1.3f
-    }
-
-    private enum class Orientation { HORIZONTAL, VERTICAL }
-
     private fun mergeSameLine(blocks: List<TextBlock>, params: MergeParams): List<TextBlock> {
         val sorted = blocks.sortedWith(compareBy({ it.boundingBox.top }, { it.boundingBox.left }))
         val result = mutableListOf<TextBlock>()
@@ -298,7 +286,9 @@ class RoutingOcrEngine @Inject constructor(
             used[i] = true
             for (j in i + 1 until sorted.size) {
                 if (used[j]) continue
-                if (verticallyAdjacent(acc, sorted[j], params)) {
+                val adjacent = verticallyAdjacent(acc, sorted[j], params)
+                logVerticalParagraphCandidate(acc, sorted[j], params, adjacent)
+                if (adjacent) {
                     acc = unionMerge(acc, sorted[j], separator = "\n")
                     used[j] = true
                     anyMerged = true
@@ -338,11 +328,36 @@ class RoutingOcrEngine @Inject constructor(
         val ha = ra.height().coerceAtLeast(1)
         val hb = rb.height().coerceAtLeast(1)
         val avgH = (ha + hb) / 2
-        if (maxOf(ha, hb).toFloat() / minOf(ha, hb) > params.heightRatioLimit) return false
-        val sameLine = kotlin.math.abs(ra.top - rb.top) < avgH * params.sameLineTopTolerance
-        if (!sameLine) return false
         val gap = rb.left - ra.right
-        return gap >= -5 && gap <= avgH * params.adjacentGapRatio
+        val topDelta = kotlin.math.abs(ra.top - rb.top)
+        val heightRatio = maxOf(ha, hb).toFloat() / minOf(ha, hb)
+        val maxTopDelta = avgH * params.sameLineTopTolerance
+        val maxGap = avgH * params.adjacentGapRatio
+        val reason = when {
+            heightRatio > params.heightRatioLimit -> "heightRatio"
+            topDelta >= maxTopDelta -> "topDelta"
+            gap < -5 -> "backtrack"
+            gap > maxGap -> "gap"
+            else -> "merge"
+        }
+        val allowed = reason == "merge"
+        Timber.tag("OcrMerge").i(
+            "[H] stage1 sameLine allow=%s reason=%s gap=%d maxGap=%.1f topDelta=%d maxTopDelta=%.1f " +
+                "heightRatio=%.2f maxHeightRatio=%.2f left=%s right=%s text=%s + %s",
+            allowed,
+            reason,
+            gap,
+            maxGap,
+            topDelta,
+            maxTopDelta,
+            heightRatio,
+            params.heightRatioLimit,
+            ra.toMergeDebugRect().toLogString(),
+            rb.toMergeDebugRect().toLogString(),
+            previewForLog(a.text),
+            previewForLog(b.text)
+        )
+        return allowed
     }
 
     /**
@@ -388,7 +403,6 @@ class RoutingOcrEngine @Inject constructor(
         for (b in sorted) {
             val last = result.lastOrNull()
             if (last != null && sameColumnAdjacent(last, b, params)) {
-                logSameColumnMerge(last, b, params)
                 result[result.size - 1] = unionMerge(last, b, separator = "\n")
             } else {
                 result.add(b)
@@ -443,7 +457,6 @@ class RoutingOcrEngine @Inject constructor(
             for (j in i + 1 until sorted.size) {
                 if (used[j]) continue
                 if (columnsHorizontallyAdjacent(acc, sorted[j], params, limits)) {
-                    logColumnsToParagraphMerge(acc, sorted[j], params, limits)
                     // acc 是右列（sort desc by left 保证），sorted[j] 是左列 → 文本顺序 acc 在前
                     acc = unionMerge(acc, sorted[j], separator = "\n")
                     used[j] = true
@@ -464,36 +477,36 @@ class RoutingOcrEngine @Inject constructor(
         val wa = ra.width().coerceAtLeast(1)
         val wb = rb.width().coerceAtLeast(1)
         val avgW = (wa + wb) / 2
-        if (maxOf(wa, wb).toFloat() / minOf(wa, wb) > params.heightRatioLimit) return false
-        val sameCol = kotlin.math.abs(ra.left - rb.left) < avgW * params.sameLineTopTolerance
-        if (!sameCol) return false
         val gap = rb.top - ra.bottom
-        return gap >= -5 && gap <= avgW * params.adjacentGapRatio
-    }
-
-    private fun logSameColumnMerge(a: TextBlock, b: TextBlock, params: MergeParams) {
-        val (upper, lower) = if (a.boundingBox.top <= b.boundingBox.top) a to b else b to a
-        val upperRect = upper.boundingBox.toMergeDebugRect()
-        val lowerRect = lower.boundingBox.toMergeDebugRect()
-        val avgW = (upperRect.width + lowerRect.width) / 2f
-        val gap = lowerRect.top - upperRect.bottom
-        val leftDelta = kotlin.math.abs(upperRect.left - lowerRect.left)
-        val widthRatio = maxOf(upperRect.width, lowerRect.width).toFloat() /
-            minOf(upperRect.width, lowerRect.width).coerceAtLeast(1)
+        val leftDelta = kotlin.math.abs(ra.left - rb.left)
+        val widthRatio = maxOf(wa, wb).toFloat() / minOf(wa, wb)
+        val maxLeftDelta = avgW * params.sameLineTopTolerance
+        val maxGap = avgW * params.adjacentGapRatio
+        val reason = when {
+            widthRatio > params.heightRatioLimit -> "widthRatio"
+            leftDelta >= maxLeftDelta -> "leftDelta"
+            gap < -5 -> "backtrack"
+            gap > maxGap -> "gap"
+            else -> "merge"
+        }
+        val allowed = reason == "merge"
         Timber.tag("OcrMerge").i(
-            "[V] merge sameColumn gap=%d maxGap=%.1f leftDelta=%d maxLeftDelta=%.1f " +
+            "[V] stage1 sameColumn allow=%s reason=%s gap=%d maxGap=%.1f leftDelta=%d maxLeftDelta=%.1f " +
                 "widthRatio=%.2f maxWidthRatio=%.2f upper=%s lower=%s text=%s + %s",
+            allowed,
+            reason,
             gap,
-            avgW * params.adjacentGapRatio,
+            maxGap,
             leftDelta,
-            avgW * params.sameLineTopTolerance,
+            maxLeftDelta,
             widthRatio,
             params.heightRatioLimit,
-            upperRect.toLogString(),
-            lowerRect.toLogString(),
-            previewForLog(upper.text),
-            previewForLog(lower.text)
+            ra.toMergeDebugRect().toLogString(),
+            rb.toMergeDebugRect().toLogString(),
+            previewForLog(a.text),
+            previewForLog(b.text)
         )
+        return allowed
     }
 
     /**
@@ -508,22 +521,15 @@ class RoutingOcrEngine @Inject constructor(
     ): Boolean {
         val ra = a.boundingBox; val rb = b.boundingBox
         val debug = verticalColumnAdjacencyDebug(ra.toMergeDebugRect(), rb.toMergeDebugRect())
-        // 左右先 normalize：rR 是右列、rL 是左列
-        // 镜像 verticallyAdjacent 的 "rb.top < ra.bottom - lineH * 0.3"：允许小重叠
-        return verticalColumnMergeAllowed(debug, limits, params.horizontalOverlapRatio)
-        // 同 verticallyAdjacent：stage2 不再做 size ratio limit
-    }
-
-    private fun logColumnsToParagraphMerge(
-        a: TextBlock,
-        b: TextBlock,
-        params: MergeParams,
-        limits: VerticalColumnMergeLimits
-    ) {
-        val debug = verticalColumnAdjacencyDebug(a.boundingBox.toMergeDebugRect(), b.boundingBox.toMergeDebugRect())
+        val rejectReason = verticalColumnMergeRejectReason(debug, limits, params.horizontalOverlapRatio)
+        val wideParagraphGapAllowed = rejectReason == "gap" &&
+            wideVerticalParagraphGapAllowed(debug, limits, a.text, b.text)
+        val allowed = rejectReason == null || wideParagraphGapAllowed
         Timber.tag("OcrMerge").i(
-            "[V] merge columnsToPara hGap=%d maxGap=%.1f overlapH=%d minOverlapH=%d " +
+            "[V] stage2 columnsToPara allow=%s reason=%s hGap=%d maxGap=%.1f overlapH=%d minOverlapH=%d " +
                 "overlapRatio=%.2f minOverlapRatio=%.2f backtrackLimit=%.1f right=%s left=%s text=%s + %s",
+            allowed,
+            if (wideParagraphGapAllowed) "wideParagraphGap" else rejectReason ?: "merge",
             debug.horizontalGap,
             limits.maxHorizontalGap,
             debug.overlapHeight,
@@ -533,6 +539,53 @@ class RoutingOcrEngine @Inject constructor(
             debug.columnWidth * 0.3f,
             debug.rightColumn.toLogString(),
             debug.leftColumn.toLogString(),
+            previewForLog(a.text),
+            previewForLog(b.text)
+        )
+        // 左右先 normalize：rR 是右列、rL 是左列
+        // 镜像 verticallyAdjacent 的 "rb.top < ra.bottom - lineH * 0.3"：允许小重叠
+        return allowed
+        // 同 verticallyAdjacent：stage2 不再做 size ratio limit
+    }
+
+    private fun logVerticalParagraphCandidate(
+        a: TextBlock,
+        b: TextBlock,
+        params: MergeParams,
+        allowed: Boolean
+    ) {
+        val ra = a.boundingBox; val rb = b.boundingBox
+        val lineH = minOf(ra.height().coerceAtLeast(1), rb.height().coerceAtLeast(1))
+        val vGap = rb.top - ra.bottom
+        val maxGap = lineH * params.verticalGapRatio
+        val backtrackLimit = lineH * 0.3f
+        val overlapLeft = maxOf(ra.left, rb.left)
+        val overlapRight = minOf(ra.right, rb.right)
+        val overlapW = overlapRight - overlapLeft
+        val minW = minOf(ra.width(), rb.width()).coerceAtLeast(1)
+        val overlapRatio = overlapW.toFloat() / minW
+        val reason = when {
+            allowed -> "merge"
+            rb.top < ra.bottom - backtrackLimit -> "backtrack"
+            vGap > maxGap -> "gap"
+            overlapW <= 0 -> "noOverlap"
+            overlapRatio < params.horizontalOverlapRatio -> "overlapRatio"
+            else -> "blocked"
+        }
+        Timber.tag("OcrMerge").i(
+            "[H] stage2 paragraph allow=%s reason=%s vGap=%d maxGap=%.1f overlapW=%d minOverlapW=%d " +
+                "overlapRatio=%.2f minOverlapRatio=%.2f backtrackLimit=%.1f upper=%s lower=%s text=%s + %s",
+            allowed,
+            reason,
+            vGap,
+            maxGap,
+            overlapW,
+            1,
+            overlapRatio,
+            params.horizontalOverlapRatio,
+            backtrackLimit,
+            ra.toMergeDebugRect().toLogString(),
+            rb.toMergeDebugRect().toLogString(),
             previewForLog(a.text),
             previewForLog(b.text)
         )
@@ -599,6 +652,62 @@ class RoutingOcrEngine @Inject constructor(
         }
     }
 }
+
+internal enum class Orientation { HORIZONTAL, VERTICAL }
+
+internal data class MergeOrientationDecision(
+    val orientation: Orientation,
+    val reason: String,
+    val portraitCount: Int,
+    val landscapeCount: Int,
+    val strongVerticalCount: Int,
+    val total: Int,
+    val portraitRatio: Float
+)
+
+internal fun detectMergeOrientation(rects: List<MergeDebugRect>): MergeOrientationDecision {
+    if (rects.isEmpty()) {
+        return MergeOrientationDecision(
+            orientation = Orientation.HORIZONTAL,
+            reason = "empty",
+            portraitCount = 0,
+            landscapeCount = 0,
+            strongVerticalCount = 0,
+            total = 0,
+            portraitRatio = 0f
+        )
+    }
+    val portrait = rects.count { it.height > it.width * MERGE_PORTRAIT_RATIO }
+    val landscape = rects.count { it.width > it.height * MERGE_PORTRAIT_RATIO }
+    val strongVertical = rects.count { it.height > it.width * MERGE_STRONG_VERTICAL_RATIO }
+    val portraitRatio = portrait.toFloat() / rects.size
+    val orientation = if (
+        strongVertical >= MERGE_STRONG_VERTICAL_MIN_COUNT ||
+        (portrait > landscape && portraitRatio >= 0.5f)
+    ) {
+        Orientation.VERTICAL
+    } else {
+        Orientation.HORIZONTAL
+    }
+    val reason = when {
+        strongVertical >= MERGE_STRONG_VERTICAL_MIN_COUNT -> "strongVertical"
+        orientation == Orientation.VERTICAL -> "portraitMajority"
+        else -> "fallbackHorizontal"
+    }
+    return MergeOrientationDecision(
+        orientation = orientation,
+        reason = reason,
+        portraitCount = portrait,
+        landscapeCount = landscape,
+        strongVerticalCount = strongVertical,
+        total = rects.size,
+        portraitRatio = portraitRatio
+    )
+}
+
+private const val MERGE_PORTRAIT_RATIO: Float = 1.3f
+private const val MERGE_STRONG_VERTICAL_RATIO: Float = 5.0f
+private const val MERGE_STRONG_VERTICAL_MIN_COUNT: Int = 3
 
 internal data class MergeDebugRect(
     val left: Int,
@@ -711,11 +820,40 @@ internal fun verticalColumnMergeAllowed(
     limits: VerticalColumnMergeLimits,
     horizontalOverlapRatio: Float
 ): Boolean {
-    if (debug.horizontalGap > limits.maxHorizontalGap) return false
-    if (debug.overlapHeight < limits.minOverlapHeight) return false
-    if (debug.overlapRatio < horizontalOverlapRatio) return false
-    return true
+    return verticalColumnMergeRejectReason(debug, limits, horizontalOverlapRatio) == null
 }
+
+internal fun verticalColumnMergeRejectReason(
+    debug: VerticalColumnAdjacencyDebug,
+    limits: VerticalColumnMergeLimits,
+    horizontalOverlapRatio: Float
+): String? {
+    if (debug.horizontalGap > limits.maxHorizontalGap) return "gap"
+    if (debug.overlapHeight < limits.minOverlapHeight) return "overlapHeight"
+    if (debug.overlapRatio < horizontalOverlapRatio) return "overlapRatio"
+    return null
+}
+
+internal fun wideVerticalParagraphGapAllowed(
+    debug: VerticalColumnAdjacencyDebug,
+    limits: VerticalColumnMergeLimits,
+    rightText: String,
+    leftText: String
+): Boolean {
+    val rightLines = rightText.visualLineCountForOcrMerge()
+    val leftLines = leftText.visualLineCountForOcrMerge()
+    val maxWideGap = limits.baseColumnWidth * 1.8f
+    val minTallOverlap = limits.baseColumnWidth * 4
+    return rightLines >= 4 &&
+        leftLines >= 4 &&
+        debug.horizontalGap > limits.maxHorizontalGap &&
+        debug.horizontalGap <= maxWideGap &&
+        debug.overlapHeight >= maxOf(limits.minOverlapHeight, minTallOverlap) &&
+        debug.overlapRatio >= 0.85f
+}
+
+private fun String.visualLineCountForOcrMerge(): Int =
+    split('\n').count { it.isNotBlank() }.coerceAtLeast(1)
 
 internal fun verticalColumnAdjacencyDebug(
     first: MergeDebugRect,

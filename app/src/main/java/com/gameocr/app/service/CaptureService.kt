@@ -308,6 +308,22 @@ class CaptureService : Service() {
         }
     }
 
+    private suspend fun prepareCleanCaptureFrame(hideFloatingButton: Boolean) {
+        mainScope.launch {
+            overlay?.clear()
+            translationCard?.dismiss()
+            if (hideFloatingButton) floatingButton?.hide()
+        }.join()
+        delay(CAPTURE_CHROME_SETTLE_MS)
+    }
+
+    private fun restoreCaptureChrome(showLoading: Boolean, restoreFloatingButton: Boolean) {
+        mainScope.launch {
+            if (restoreFloatingButton) floatingButton?.show()
+            if (showLoading) overlay?.showLoadingHint()
+        }
+    }
+
     /**
      * 包裹 [ServiceCompat.startForeground]，处理 Android 14+ HyperOS/MIUI 上的 `android:project_media`
      * app-op race：MediaProjectionRequestActivity 拿到 RESULT_OK 后 op grant 是异步的，立刻 startForeground
@@ -356,9 +372,14 @@ class CaptureService : Service() {
     }
 
     private fun triggerOnce() {
-        // 立刻给视觉反馈，避免几秒空窗
-        mainScope.launch { overlay?.showLoadingHint() }
-        scope.launch { captureOnce() }
+        // MediaProjection 会截到应用自己的 overlay；先拿干净帧，再恢复悬浮球和 loading。
+        scope.launch {
+            prepareCleanCaptureFrame(hideFloatingButton = true)
+            captureOnce(
+                showLoadingAfterScreenshot = true,
+                restoreFloatingButtonAfterScreenshot = true
+            )
+        }
     }
 
     /**
@@ -374,8 +395,14 @@ class CaptureService : Service() {
             floatingButton?.hide()
             ws.show(
                 onTranslate = { rect ->
-                    mainScope.launch { floatingButton?.show() }
-                    scope.launch { runWordSelectPipeline(rect) }
+                    scope.launch {
+                        prepareCleanCaptureFrame(hideFloatingButton = true)
+                        runWordSelectPipeline(
+                            rect,
+                            showLoadingAfterScreenshot = true,
+                            restoreFloatingButtonAfterScreenshot = true
+                        )
+                    }
                 },
                 onCancel = {
                     mainScope.launch { floatingButton?.show() }
@@ -385,23 +412,57 @@ class CaptureService : Service() {
     }
 
     /** 框选后真正跑流水线。screenshot → crop → OCR → translate → 弹卡片。 */
-    private suspend fun runWordSelectPipeline(rect: android.graphics.Rect) {
-        if (!captureLock.tryLock()) return
+    private suspend fun runWordSelectPipeline(
+        rect: android.graphics.Rect,
+        showLoadingAfterScreenshot: Boolean = false,
+        restoreFloatingButtonAfterScreenshot: Boolean = false
+    ) {
+        if (!captureLock.tryLock()) {
+            restoreCaptureChrome(
+                showLoading = false,
+                restoreFloatingButton = restoreFloatingButtonAfterScreenshot
+            )
+            return
+        }
         val diagId = ++captureSequence
+        var captureChromeRestored = false
+        fun restoreCaptureChromeOnce(showLoading: Boolean) {
+            if (captureChromeRestored) return
+            captureChromeRestored = true
+            restoreCaptureChrome(
+                showLoading = showLoading,
+                restoreFloatingButton = restoreFloatingButtonAfterScreenshot
+            )
+        }
         try {
             logVerticalDiag(diagId, "wordSelect start rect=${rect.toDiagString()}")
-            mainScope.launch { overlay?.showLoadingHint() }
             val shotter = screenshotter ?: run {
                 logVerticalDiag(diagId, "skip: screenshotter is null")
+                restoreCaptureChromeOnce(showLoading = false)
                 return
             }
             val full = shotter.capture()
             if (full == null) {
+                restoreCaptureChromeOnce(showLoading = false)
                 val msg = getString(R.string.toast_capture_failed)
                 mainScope.launch { overlay?.showErrorHint(msg) }
                 return
             }
-            logVerticalDiag(diagId, "screenshot full=${full.width}x${full.height}")
+            restoreCaptureChromeOnce(showLoading = showLoadingAfterScreenshot)
+            val fullStats = sampleBitmapFrameStats(full)
+            logVerticalDiag(
+                diagId,
+                "screenshot full=${full.width}x${full.height} stats=${fullStats.toDiagString()}"
+            )
+            dumpCaptureFrameForDebug(this, diagId, "word-select-full", full)?.let { file ->
+                logVerticalDiag(diagId, "debug frame dumped path=${file.absolutePath}")
+                logRepository.info(
+                    LogRepository.Category.CAPTURE,
+                    getString(R.string.log_msg_capture_frame_dumped_format, file.name),
+                    imagePath = file.absolutePath
+                )
+            }
+            logBlankLikeFrame(diagId, "screenshot", fullStats)
             val settings = settingsRepository.get()
             // 用 word-select rect 裁剪，**不**走 settings.captureRegion——划词是一次性独立选区
             val cropped = try {
@@ -416,6 +477,13 @@ class CaptureService : Service() {
                 mainScope.launch { overlay?.showErrorHint(msg) }
                 return
             }
+            val croppedStats = sampleBitmapFrameStats(cropped)
+            logVerticalDiag(
+                diagId,
+                "wordSelect workBitmap=${cropped.width}x${cropped.height} " +
+                    "rect=${rect.toDiagString()} stats=${croppedStats.toDiagString()}"
+            )
+            logBlankLikeFrame(diagId, "wordSelect workBitmap", croppedStats)
             val ocrStartedAt = System.currentTimeMillis()
             val ocrBlocks = try {
                 ocrEngine.recognize(cropped, settings.ocrEngine)
@@ -514,6 +582,7 @@ class CaptureService : Service() {
                 card.show(text, displayedTranslation.ifBlank { null }, wordResult, settings)
             }
         } finally {
+            restoreCaptureChromeOnce(showLoading = false)
             logVerticalDiag(diagId, "finish")
             mainScope.launch { overlay?.dismissLoading() }
             captureLock.unlock()
@@ -744,9 +813,27 @@ class CaptureService : Service() {
     private fun elapsedSince(startMs: Long): Long =
         (System.currentTimeMillis() - startMs).coerceAtLeast(0L)
 
-    private suspend fun captureOnce() {
-        if (!captureLock.tryLock()) return
+    private suspend fun captureOnce(
+        showLoadingAfterScreenshot: Boolean = false,
+        restoreFloatingButtonAfterScreenshot: Boolean = false
+    ) {
+        if (!captureLock.tryLock()) {
+            restoreCaptureChrome(
+                showLoading = false,
+                restoreFloatingButton = restoreFloatingButtonAfterScreenshot
+            )
+            return
+        }
         val diagId = ++captureSequence
+        var captureChromeRestored = false
+        fun restoreCaptureChromeOnce(showLoading: Boolean) {
+            if (captureChromeRestored) return
+            captureChromeRestored = true
+            restoreCaptureChrome(
+                showLoading = showLoading,
+                restoreFloatingButton = restoreFloatingButtonAfterScreenshot
+            )
+        }
         try {
             logVerticalDiag(diagId, "start loopMode=$loopMode")
             // 循环模式优化：上一帧译文 box 还挂在屏幕上（用户没点掉/未手动 clear），
@@ -756,18 +843,37 @@ class CaptureService : Service() {
                 logVerticalDiag(diagId, "skip active overlay in loop mode")
                 return
             }
-            val shotter = screenshotter ?: return
+            val shotter = screenshotter ?: run {
+                restoreCaptureChromeOnce(showLoading = false)
+                return
+            }
             val full = shotter.capture()
             if (full == null) {
                 // 截屏链路返回 null（MediaProjection token 失效 / Shizuku 调用失败等），
                 // 之前直接 return，用户只看到圈转一下；现在显式提示。
                 Timber.w("Screenshot capture returned null")
+                restoreCaptureChromeOnce(showLoading = false)
                 logRepository.error(LogRepository.Category.CAPTURE, getString(R.string.log_msg_capture_failed))
                 val msg = getString(R.string.toast_capture_failed)
                 mainScope.launch { overlay?.showErrorHint(msg) }
                 return
             }
             // 在拿 settings 之前先 rescale region，免得拿到的是旧屏幕方向的坐标。
+            restoreCaptureChromeOnce(showLoading = showLoadingAfterScreenshot)
+            val fullStats = sampleBitmapFrameStats(full)
+            logVerticalDiag(
+                diagId,
+                "screenshot full=${full.width}x${full.height} stats=${fullStats.toDiagString()}"
+            )
+            dumpCaptureFrameForDebug(this, diagId, "full", full)?.let { file ->
+                logVerticalDiag(diagId, "debug frame dumped path=${file.absolutePath}")
+                logRepository.info(
+                    LogRepository.Category.CAPTURE,
+                    getString(R.string.log_msg_capture_frame_dumped_format, file.name),
+                    imagePath = file.absolutePath
+                )
+            }
+            logBlankLikeFrame(diagId, "screenshot", fullStats)
             val dmNow = resources.displayMetrics
             settingsRepository.rescaleCaptureRegionIfNeeded(dmNow.widthPixels, dmNow.heightPixels)
             val settings = settingsRepository.get()
@@ -784,6 +890,16 @@ class CaptureService : Service() {
                 diagId,
                 "workBitmap=${workBitmap.width}x${workBitmap.height} region=${region.toDiagString()}"
             )
+            val workStats = if (workBitmap === full) {
+                fullStats
+            } else {
+                sampleBitmapFrameStats(workBitmap)
+            }
+            logVerticalDiag(
+                diagId,
+                "workBitmap stats=${workStats.toDiagString()}"
+            )
+            logBlankLikeFrame(diagId, "workBitmap", workStats)
             if (workBitmap !== full) full.recycle()
 
             // 端到端引擎（有道图片翻译）：跳过 OCR 阶段，直接拿带译文的 box；不走 mergeAdjacentBlocks
@@ -1202,6 +1318,7 @@ class CaptureService : Service() {
                 RenderMode.FLOATING_WINDOW -> renderFloatingWindow(blocks, settings, diagId)
             }
         } finally {
+            restoreCaptureChromeOnce(showLoading = false)
             logVerticalDiag(diagId, "finish")
             // 兜底：所有提前 return / 异常路径下都要把 loading 圈关掉，避免"一直转圈"。
             // 正常完成时 showBlocks/showFullScreen 内部已经 dismiss 过；幂等调用没害。
@@ -1283,7 +1400,9 @@ class CaptureService : Service() {
                 blocks.mapIndexed { idx, block ->
                     async {
                         translateOne(block.text, settings, diagId, idx) { partial ->
-                            mainScope.launch { overlay?.updateBlockText(idx, partial) }
+                            withContext(Dispatchers.Main) {
+                                overlay?.updateBlockText(idx, partial)
+                            }
                         }
                     }
                 }.awaitAll()
@@ -1428,7 +1547,9 @@ class CaptureService : Service() {
             blocks.mapIndexed { idx, block ->
                 async {
                     translateOne(block.text, settings, diagId, idx) { partial ->
-                        mainScope.launch { overlay?.updateFloatingWindowText(idx, partial) }
+                        withContext(Dispatchers.Main) {
+                            overlay?.updateFloatingWindowText(idx, partial)
+                        }
                     }
                 }
             }.awaitAll()
@@ -1440,7 +1561,7 @@ class CaptureService : Service() {
         settings: Settings,
         diagId: Long? = null,
         blockIndex: Int? = null,
-        onPartial: (String) -> Unit
+        onPartial: suspend (String) -> Unit
     ) {
         diagId?.let {
             logVerticalDiag(
@@ -1539,6 +1660,14 @@ class CaptureService : Service() {
 
     private fun logVerticalDiag(t: Throwable, diagId: Long, message: String) {
         VerticalDiagnosticLog.w(t, "capture#$diagId $message")
+    }
+
+    private fun logBlankLikeFrame(diagId: Long, label: String, stats: BitmapFrameStats) {
+        if (!stats.blankLike) return
+        logVerticalDiag(
+            diagId,
+            "$label blank-like frame; MediaProjection may be seeing a protected or empty surface"
+        )
     }
 
     private fun logVerticalSettings(
@@ -1663,48 +1792,44 @@ class CaptureService : Service() {
         )
     }
 
-    private fun applyOverlayConfig(settings: Settings) {
-        overlay?.apply {
-            textSizeSp = settings.overlayTextSizeSp
-            alpha = settings.overlayAlpha
-            regionOffset = settings.captureRegion?.let { Point(it.left, it.top) } ?: Point(0, 0)
-            placement = settings.overlayPlacement
-            offsetX = settings.overlayOffsetX
-            offsetY = settings.overlayOffsetY
-            theme = settings.overlayTheme
-            customBg = settings.customBgColor
-            customFg = settings.customFgColor
-            customBorder = settings.customBorderColor
-            customBorderWidthDp = settings.customBorderWidth
-            allowWrap = settings.overlayAllowWrap
-            avoidCollision = settings.overlayAvoidCollision
-            floatingWindowContentMode = settings.floatingWindowContentMode
-            customBorderStyle = settings.customBorderStyle
-            overlayTypeface = overlayFontManager.typefaceFor(settings)
-        }
-        // syncFloatingWindowFromSettings 内部会重设 rootView.background / setContent，必须主线程。
-        // applyOverlayConfig 自身被 settings flow collect 在 Dispatchers.Default 上调用，
-        // 直接调用会抛 CalledFromWrongThreadException。
-        mainScope.launch {
-            overlay?.syncFloatingWindowFromSettings(settings)
-        }
-        // 圆球大小也同步（已 show 后改 sizeDp 调 applyResize 即时生效）
-        floatingButton?.let {
-            if (it.sizeDp != settings.floatingButtonSizeDp) {
-                it.sizeDp = settings.floatingButtonSizeDp
-                mainScope.launch { it.applyResize() }
+    private suspend fun applyOverlayConfig(settings: Settings) {
+        val typeface = overlayFontManager.typefaceFor(settings)
+        val dockEdgeInsetPx = (settings.floatingButtonDockInsetDp * resources.displayMetrics.density).toInt()
+        withContext(Dispatchers.Main) {
+            overlay?.apply {
+                textSizeSp = settings.overlayTextSizeSp
+                alpha = settings.overlayAlpha
+                regionOffset = settings.captureRegion?.let { Point(it.left, it.top) } ?: Point(0, 0)
+                placement = settings.overlayPlacement
+                offsetX = settings.overlayOffsetX
+                offsetY = settings.overlayOffsetY
+                theme = settings.overlayTheme
+                customBg = settings.customBgColor
+                customFg = settings.customFgColor
+                customBorder = settings.customBorderColor
+                customBorderWidthDp = settings.customBorderWidth
+                allowWrap = settings.overlayAllowWrap
+                avoidCollision = settings.overlayAvoidCollision
+                floatingWindowContentMode = settings.floatingWindowContentMode
+                customBorderStyle = settings.customBorderStyle
+                overlayTypeface = typeface
+                syncFloatingWindowFromSettings(settings)
             }
-            // applySnapPreference 内部启动 SpringAnimation，必须在主线程；settings flow
-            // collect 跑在 Dispatchers.Default，不切主线程会 IllegalStateException 闪退。
-            mainScope.launch { it.applySnapPreference(settings.floatingButtonSnapToEdge) }
-            it.autoDockEnabled = settings.floatingButtonAutoDock
-            it.dockEdgeInsetPx = (settings.floatingButtonDockInsetDp * resources.displayMetrics.density).toInt()
-            it.menuItemOrder = settings.floatingMenuItemOrder
-            it.arcMenuPageSize = settings.arcMenuPageSize
-            // 技能字段同步 + 即时图标切换（settings 改 skill 也会到这里）
-            if (it.skill != settings.floatingButtonSkill) {
-                it.skill = settings.floatingButtonSkill
-                mainScope.launch { it.applySkillIcon() }
+            // Overlay / floating button both own Android Views; keep every visible update on main.
+            floatingButton?.let {
+                if (it.sizeDp != settings.floatingButtonSizeDp) {
+                    it.sizeDp = settings.floatingButtonSizeDp
+                    it.applyResize()
+                }
+                it.applySnapPreference(settings.floatingButtonSnapToEdge)
+                it.autoDockEnabled = settings.floatingButtonAutoDock
+                it.dockEdgeInsetPx = dockEdgeInsetPx
+                it.menuItemOrder = settings.floatingMenuItemOrder
+                it.arcMenuPageSize = settings.arcMenuPageSize
+                if (it.skill != settings.floatingButtonSkill) {
+                    it.skill = settings.floatingButtonSkill
+                    it.applySkillIcon()
+                }
             }
         }
     }
@@ -1759,6 +1884,7 @@ class CaptureService : Service() {
         const val EXTRA_RESULT_CODE = "extra_result_code"
         const val EXTRA_RESULT_DATA = "extra_result_data"
         const val EXTRA_USE_SHIZUKU = "extra_use_shizuku"
+        private const val CAPTURE_CHROME_SETTLE_MS = 80L
 
         fun stopIntent(context: Context): Intent =
             Intent(context, CaptureService::class.java).apply { action = ACTION_STOP }

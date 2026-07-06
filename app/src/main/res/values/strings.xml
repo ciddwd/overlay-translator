@@ -470,6 +470,8 @@
     <string name="log_filter_capture">Capture</string>
     <string name="log_empty_no_logs">No logs yet — they show up here once the capture service runs.</string>
     <string name="log_empty_no_match">No logs match the current filter</string>
+    <string name="log_load_more_format">Showing %1$d/%2$d. Load older logs</string>
+    <string name="log_all_loaded_format">All %1$d logs loaded</string>
     <string name="log_category_capture">Capture</string>
     <string name="log_category_ocr">OCR</string>
     <string name="log_category_translate">Translate</string>
@@ -477,13 +479,29 @@
     <string name="log_export_export_time">Exported at: </string>
     <string name="log_export_source">Source: </string>
     <string name="log_export_translated">Translation: </string>
+    <string name="log_export_image">OCR screenshot: </string>
     <string name="log_card_source_format">Source: %1$s</string>
     <string name="log_card_translated_format">Translation: %1$s</string>
+    <string name="log_capture_image_content_description">OCR screenshot used for this log entry</string>
+    <string name="log_capture_image_missing_format">Screenshot file unavailable: %1$s</string>
+    <string name="log_capture_image_dialog_title">OCR screenshot</string>
+    <string name="log_export_options_title">Export logs</string>
+    <string name="log_export_options_message">Choose what to include in the shared export.</string>
+    <string name="log_export_include_images">Include OCR screenshots and export a ZIP</string>
+    <string name="log_export_include_images_unavailable">No OCR screenshots in the current log filter</string>
+    <string name="log_export_action">Export</string>
+    <string name="log_export_cancel">Cancel</string>
     <string name="log_snack_copied_format">Copied %1$d log entries to clipboard</string>
+    <string name="log_snack_copied_full">Copied full log to clipboard</string>
+    <string name="log_snack_copied_summary">Log was too large for the clipboard, so a summary was copied. Use share to save the full log.</string>
     <string name="log_share_chooser">Share / save logs</string>
     <string name="log_share_subject">Screen Translator logs</string>
     <string name="log_clipboard_label">Screen Translator logs</string>
     <string name="log_message_pair">Source → Translation</string>
+    <string name="log_action_expand_full">Expand full log</string>
+    <string name="log_action_collapse">Collapse</string>
+    <string name="log_action_copy_full">Copy full log</string>
+    <string name="log_action_share_full">Share full log</string>
 
     <!-- Language picker -->
     <string name="lang_picker_search_placeholder">Search languages</string>
@@ -522,6 +540,7 @@
     <string name="log_msg_loop_off">Loop mode off</string>
     <string name="log_msg_loop_on">Loop mode on</string>
     <string name="log_msg_capture_failed">Capture failed: no frame (may need to re-authorize / Shizuku unavailable)</string>
+    <string name="log_msg_capture_frame_dumped_format">OCR screenshot saved: %1$s</string>
     <string name="log_msg_shizuku_dry_run_failed">Shizuku dry-run failed at service start — likely not paired via ADB. Stopped capture service.</string>
     <string name="log_msg_ocr_failed_format">OCR failed [%1$s]</string>
     <string name="log_msg_ocr_results_format">Recognized %1$d block(s) [%2$s]: %3$s</string>

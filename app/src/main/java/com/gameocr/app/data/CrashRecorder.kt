@@ -8,8 +8,10 @@ import androidx.annotation.RequiresApi
 import com.gameocr.app.BuildConfig
 import timber.log.Timber
 import java.io.File
+import java.io.InputStream
 import java.io.PrintWriter
 import java.io.StringWriter
+import java.security.MessageDigest
 
 /**
  * 闪退记录器：挂全局 [Thread.UncaughtExceptionHandler]，把 stacktrace 写到磁盘；
@@ -26,6 +28,7 @@ import java.io.StringWriter
 object CrashRecorder {
 
     private const val MAX_FILES = 5
+    private const val MAX_EXIT_TRACE_CHARS = 16 * 1024
     private const val CRASH_DIR_NAME = "crash"
     private const val PREFS_NAME = "crash_recorder"
     private const val KEY_LAST_EXIT_CHECK = "last_exit_check"
@@ -259,12 +262,16 @@ object CrashRecorder {
             .sortedBy { it.timestamp }
             .forEach { info ->
                 val trace = runCatching {
-                    info.traceInputStream?.bufferedReader()?.use { it.readText() }
+                    formatExitTraceForLog(info.traceInputStream)
                 }.getOrNull()
                 val msg = buildString {
                     append("[CRASH-EXIT] ").append(reasonName(info.reason))
                     append(" status=").append(info.status)
                     append(" pid=").append(info.pid)
+                    append(" process=").append(info.processName)
+                    append(" importance=").append(info.importance)
+                    append(" pssKb=").append(info.pss)
+                    append(" rssKb=").append(info.rss)
                     if (!info.description.isNullOrBlank()) {
                         append('\n').append(info.description)
                     }
@@ -276,6 +283,46 @@ object CrashRecorder {
             }
         prefs.edit().putLong(KEY_LAST_EXIT_CHECK, System.currentTimeMillis()).apply()
     }
+
+    internal fun formatExitTraceForLog(input: InputStream?): String? =
+        input?.use { formatExitTraceForLog(it.readBytes()) }
+
+    internal fun formatExitTraceForLog(bytes: ByteArray): String? {
+        if (bytes.isEmpty()) return null
+        if (!isLikelyText(bytes)) {
+            return "<binary trace omitted: ${bytes.size} bytes, sha256=${sha256(bytes)}, head=${headHex(bytes)}. " +
+                "Native tombstone may be protobuf; capture adb logcat -b crash for the C/C++ backtrace.>"
+        }
+
+        val text = bytes.toString(Charsets.UTF_8).trim()
+        if (text.isBlank()) return null
+        return if (text.length <= MAX_EXIT_TRACE_CHARS) {
+            text
+        } else {
+            text.take(MAX_EXIT_TRACE_CHARS) +
+                "\n<truncated ${text.length - MAX_EXIT_TRACE_CHARS} chars>"
+        }
+    }
+
+    private fun isLikelyText(bytes: ByteArray): Boolean {
+        var control = 0
+        bytes.forEach { raw ->
+            val b = raw.toInt() and 0xff
+            if (b == 0) return false
+            if (b < 0x20 && b != '\n'.code && b != '\r'.code && b != '\t'.code) {
+                control++
+            }
+        }
+        return control * 20 <= bytes.size
+    }
+
+    private fun sha256(bytes: ByteArray): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(bytes)
+            .joinToString("") { "%02x".format(it.toInt() and 0xff) }
+
+    private fun headHex(bytes: ByteArray): String =
+        bytes.take(16).joinToString(" ") { "%02x".format(it.toInt() and 0xff) }
 
     @RequiresApi(Build.VERSION_CODES.R)
     private fun reasonName(reason: Int): String = when (reason) {

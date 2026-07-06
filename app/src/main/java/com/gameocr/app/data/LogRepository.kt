@@ -32,6 +32,7 @@ class LogRepository @Inject constructor() {
         val category: Category,
         val message: String,
         val elapsedMs: Long? = null,
+        val imagePath: String? = null,
         /** 可选：OCR / 翻译这种场景的源文本。 */
         val source: String? = null,
         /** 可选：翻译完成后的译文。 */
@@ -42,11 +43,11 @@ class LogRepository @Inject constructor() {
     private val _entries = MutableStateFlow<List<Entry>>(emptyList())
     val entries: StateFlow<List<Entry>> = _entries.asStateFlow()
 
-    fun info(category: Category, message: String, elapsedMs: Long? = null) =
-        add(Level.INFO, category, message, elapsedMs)
+    fun info(category: Category, message: String, elapsedMs: Long? = null, imagePath: String? = null) =
+        add(Level.INFO, category, message, elapsedMs, imagePath)
 
-    fun warn(category: Category, message: String, elapsedMs: Long? = null) =
-        add(Level.WARN, category, message, elapsedMs)
+    fun warn(category: Category, message: String, elapsedMs: Long? = null, imagePath: String? = null) =
+        add(Level.WARN, category, message, elapsedMs, imagePath)
 
     fun error(category: Category, message: String, t: Throwable? = null, elapsedMs: Long? = null) {
         val full = if (t != null) "$message: ${t.javaClass.simpleName}: ${t.message}" else message
@@ -72,7 +73,13 @@ class LogRepository @Inject constructor() {
         _entries.value = emptyList()
     }
 
-    private fun add(level: Level, category: Category, message: String, elapsedMs: Long?) {
+    private fun add(
+        level: Level,
+        category: Category,
+        message: String,
+        elapsedMs: Long?,
+        imagePath: String? = null
+    ) {
         push(
             Entry(
                 id = idGen.incrementAndGet(),
@@ -80,7 +87,8 @@ class LogRepository @Inject constructor() {
                 level = level,
                 category = category,
                 message = message,
-                elapsedMs = elapsedMs
+                elapsedMs = elapsedMs,
+                imagePath = imagePath
             )
         )
     }

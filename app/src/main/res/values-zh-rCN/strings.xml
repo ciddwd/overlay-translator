@@ -470,6 +470,8 @@
     <string name="log_filter_capture">截屏</string>
     <string name="log_empty_no_logs">暂无日志，启动截屏服务后这里会显示运行情况</string>
     <string name="log_empty_no_match">当前筛选下没有日志</string>
+    <string name="log_load_more_format">已显示 %1$d/%2$d，加载更早日志</string>
+    <string name="log_all_loaded_format">已显示全部 %1$d 条日志</string>
     <string name="log_category_capture">截屏</string>
     <string name="log_category_ocr">OCR</string>
     <string name="log_category_translate">翻译</string>
@@ -477,13 +479,29 @@
     <string name="log_export_export_time">导出时间：</string>
     <string name="log_export_source">原文: </string>
     <string name="log_export_translated">译文: </string>
+    <string name="log_export_image">OCR 截图: </string>
     <string name="log_card_source_format">原文：%1$s</string>
     <string name="log_card_translated_format">译文：%1$s</string>
+    <string name="log_capture_image_content_description">本条日志使用的 OCR 截图</string>
+    <string name="log_capture_image_missing_format">截图文件不可用：%1$s</string>
+    <string name="log_capture_image_dialog_title">OCR 截图</string>
+    <string name="log_export_options_title">导出日志</string>
+    <string name="log_export_options_message">选择本次分享导出的内容。</string>
+    <string name="log_export_include_images">包含 OCR 截图并导出 ZIP</string>
+    <string name="log_export_include_images_unavailable">当前筛选下没有 OCR 截图</string>
+    <string name="log_export_action">导出</string>
+    <string name="log_export_cancel">取消</string>
     <string name="log_snack_copied_format">已复制 %1$d 条日志到剪贴板</string>
+    <string name="log_snack_copied_full">已复制完整日志到剪贴板</string>
+    <string name="log_snack_copied_summary">日志过大，已复制摘要。如需完整日志，请用分享保存。</string>
     <string name="log_share_chooser">分享 / 保存日志</string>
     <string name="log_share_subject">屏译 运行日志</string>
     <string name="log_clipboard_label">屏译 运行日志</string>
     <string name="log_message_pair">原文 → 译文</string>
+    <string name="log_action_expand_full">展开完整日志</string>
+    <string name="log_action_collapse">收起</string>
+    <string name="log_action_copy_full">复制完整日志</string>
+    <string name="log_action_share_full">分享完整日志</string>
 
     <!-- 语言选择器 -->
     <string name="lang_picker_search_placeholder">搜索语言</string>
@@ -522,6 +540,7 @@
     <string name="log_msg_loop_off">循环模式关闭</string>
     <string name="log_msg_loop_on">循环模式开启</string>
     <string name="log_msg_capture_failed">截屏失败：未拿到画面（可能需要重新授权 / Shizuku 不可用）</string>
+    <string name="log_msg_capture_frame_dumped_format">OCR 截图已保存：%1$s</string>
     <string name="log_msg_shizuku_dry_run_failed">Shizuku dry-run 失败——大概率未通过 ADB 配对。已停止截屏服务。</string>
     <string name="log_msg_ocr_failed_format">OCR 识别失败 [%1$s]</string>
     <string name="log_msg_ocr_results_format">识别到 %1$d 段 [%2$s]: %3$s</string>

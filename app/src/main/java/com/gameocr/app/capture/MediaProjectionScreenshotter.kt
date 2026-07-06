@@ -4,7 +4,6 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.graphics.Point
-import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.Image
 import android.media.ImageReader
@@ -72,11 +71,13 @@ class MediaProjectionScreenshotter(
         virtualDisplay = projection.createVirtualDisplay(
             "屏译截屏",
             width, height, density,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR or DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC,
+            MediaProjectionCaptureConfig.virtualDisplayFlags,
             imageReader!!.surface,
             null, handler
         )
-        Timber.i("MediaProjection ready: ${width}x$height @ $density dpi")
+        Timber.i(
+            "MediaProjection ready: ${width}x$height @ $density dpi flags=${MediaProjectionCaptureConfig.virtualDisplayFlags}"
+        )
     }
 
     override val isReady: Boolean

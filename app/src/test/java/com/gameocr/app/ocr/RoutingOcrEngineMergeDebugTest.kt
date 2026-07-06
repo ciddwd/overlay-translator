@@ -342,4 +342,148 @@ class RoutingOcrEngineMergeDebugTest {
             }
         }
     }
+
+    @Test
+    fun detectMergeOrientation_tableDriven_prefersStrongVerticalTextOverUiNoise() {
+        data class Case(
+            val name: String,
+            val rects: List<MergeDebugRect>,
+            val expectedOrientation: Orientation,
+            val expectedReason: String,
+            val expectedStrongVerticalCount: Int
+        )
+
+        val logcatMixedUiAndVerticalText = listOf(
+            MergeDebugRect(82, 62, 213, 112),
+            MergeDebugRect(462, 56, 666, 115),
+            MergeDebugRect(890, 51, 1052, 118),
+            MergeDebugRect(1114, 53, 1348, 118),
+            MergeDebugRect(98, 232, 183, 300),
+            MergeDebugRect(423, 192, 1007, 271),
+            MergeDebugRect(654, 292, 779, 342),
+            MergeDebugRect(439, 1689, 482, 2131),
+            MergeDebugRect(490, 1689, 536, 2389),
+            MergeDebugRect(539, 1685, 599, 2320),
+            MergeDebugRect(603, 1689, 649, 2342),
+            MergeDebugRect(657, 1689, 703, 2331),
+            MergeDebugRect(776, 1689, 822, 2201),
+            MergeDebugRect(831, 1689, 884, 2342),
+            MergeDebugRect(882, 1685, 939, 2227),
+            MergeDebugRect(943, 1689, 989, 2165),
+            MergeDebugRect(998, 1689, 1044, 2201),
+            MergeDebugRect(1200, 2557, 1425, 2610),
+            MergeDebugRect(496, 2942, 578, 3031),
+            MergeDebugRect(1210, 2950, 1286, 3029),
+            MergeDebugRect(146, 3035, 222, 3085),
+            MergeDebugRect(500, 3039, 579, 3089),
+            MergeDebugRect(850, 3012, 939, 3094),
+            MergeDebugRect(1204, 3034, 1286, 3088)
+        )
+
+        val cases = listOf(
+            Case(
+                name = "logcat vertical manga text with horizontal ui noise",
+                rects = logcatMixedUiAndVerticalText,
+                expectedOrientation = Orientation.VERTICAL,
+                expectedReason = "strongVertical",
+                expectedStrongVerticalCount = 10
+            ),
+            Case(
+                name = "normal horizontal ui remains horizontal",
+                rects = listOf(
+                    MergeDebugRect(10, 10, 200, 50),
+                    MergeDebugRect(10, 70, 260, 115),
+                    MergeDebugRect(10, 130, 180, 175)
+                ),
+                expectedOrientation = Orientation.HORIZONTAL,
+                expectedReason = "fallbackHorizontal",
+                expectedStrongVerticalCount = 0
+            )
+        )
+
+        cases.forEach { case ->
+            val actual = detectMergeOrientation(case.rects)
+            assertEquals(case.name, case.expectedOrientation, actual.orientation)
+            assertEquals(case.name, case.expectedReason, actual.reason)
+            assertEquals(case.name, case.expectedStrongVerticalCount, actual.strongVerticalCount)
+        }
+    }
+
+    @Test
+    fun wideVerticalParagraphGapAllowed_tableDriven_allowsOnlyTallMultiLineParagraphs() {
+        data class Case(
+            val name: String,
+            val first: MergeDebugRect,
+            val second: MergeDebugRect,
+            val rightText: String,
+            val leftText: String,
+            val expected: Boolean
+        )
+
+        val limits = VerticalColumnMergeLimits(
+            baseColumnWidth = 46,
+            maxHorizontalGap = 35.5f,
+            minOverlapHeight = 34,
+            gapSamples = listOf(9, 4, 6, 73, 8, 4, 3, 8)
+        )
+        val fiveLineRight = listOf(
+            "我所在的誠南高中棒球部",
+            "雖然不能算是頂尖的隊",
+            "但部具們的士氣並不低落。",
+            "他們每天都全力以赴地努力訓練",
+            "以期能夠取得優異的成績"
+        ).joinToString("\n")
+        val fiveLineLeft = listOf(
+            "而給予我們動力的重要因素之一",
+            "就是一直在比赛中為我們加油的",
+            "誠南高中啦啦隊部的女孩子們。",
+            "而且，我現在的女朋友，藤野沙織",
+            "也曾經是其中的一員。"
+        ).joinToString("\n")
+
+        val cases = listOf(
+            Case(
+                name = "logcat gap seventy three between tall vertical paragraphs",
+                first = MergeDebugRect(776, 1685, 1044, 2344),
+                second = MergeDebugRect(439, 1685, 703, 2389),
+                rightText = fiveLineRight,
+                leftText = fiveLineLeft,
+                expected = true
+            ),
+            Case(
+                name = "same geometry but short ui labels remain blocked",
+                first = MergeDebugRect(776, 1685, 1044, 2344),
+                second = MergeDebugRect(439, 1685, 703, 2389),
+                rightText = "删除",
+                leftText = "编辑",
+                expected = false
+            ),
+            Case(
+                name = "wide gap still blocked even for paragraphs",
+                first = MergeDebugRect(900, 1685, 1168, 2344),
+                second = MergeDebugRect(439, 1685, 703, 2389),
+                rightText = fiveLineRight,
+                leftText = fiveLineLeft,
+                expected = false
+            ),
+            Case(
+                name = "low vertical overlap remains blocked",
+                first = MergeDebugRect(776, 1685, 1044, 1900),
+                second = MergeDebugRect(439, 2100, 703, 2389),
+                rightText = fiveLineRight,
+                leftText = fiveLineLeft,
+                expected = false
+            )
+        )
+
+        cases.forEach { case ->
+            val debug = verticalColumnAdjacencyDebug(case.first, case.second)
+            val actual = wideVerticalParagraphGapAllowed(debug, limits, case.rightText, case.leftText)
+            if (case.expected) {
+                assertTrue(case.name, actual)
+            } else {
+                assertFalse(case.name, actual)
+            }
+        }
+    }
 }

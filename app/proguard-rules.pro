@@ -25,6 +25,12 @@
 -keep class com.google.mlkit.** { *; }
 -dontwarn com.google.mlkit.**
 
+# ONNX Runtime Java objects are constructed from libonnxruntime4j_jni with
+# hard-coded ai/onnxruntime class names, so release R8 must not rename them.
+-keep class ai.onnxruntime.** { *; }
+-keep interface ai.onnxruntime.** { *; }
+-dontwarn ai.onnxruntime.**
+
 # Timber
 -dontwarn org.jetbrains.annotations.**
 
