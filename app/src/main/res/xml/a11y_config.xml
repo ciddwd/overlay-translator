@@ -4,6 +4,7 @@
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagRequestFilterKeyEvents"
     android:canRequestFilterKeyEvents="true"
+    android:canRetrieveWindowContent="false"
     android:notificationTimeout="100"
     android:description="@string/a11y_desc"
     android:summary="@string/a11y_summary" />
