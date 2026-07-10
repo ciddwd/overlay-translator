@@ -31,6 +31,9 @@ object OcrLanguageCapability {
     /** PaddleOCR PP-OCRv5 mobile rec 字典涵盖的语言（中英日融合）。韩 / 拉丁系扩展暂未打包。 */
     private val PADDLE_V5_LANGS = setOf("zh", "zh-CN", "zh-TW", "en", "ja")
 
+    /** PP-OCRv6 medium/small covers Chinese, English, Japanese, and Latin-script languages. */
+    private val PADDLE_V6_AI_STUDIO_LANGS = ML_KIT_LATIN_LANGS + setOf("zh", "zh-CN", "zh-TW", "ja")
+
     /** 有道智云 OCR (ocrapi) 支持的 langType 对应 BCP-47 集合。 */
     private val YOUDAO_LANGS = setOf("zh", "zh-CN", "zh-TW", "en", "ja", "ko", "fr", "de", "es", "ru", "pt", "it")
 
@@ -76,6 +79,7 @@ object OcrLanguageCapability {
             OcrEngineKind.ML_KIT_KOREAN -> code == "ko"
             OcrEngineKind.ML_KIT_CHINESE -> code.startsWith("zh")
             OcrEngineKind.PADDLE_ONNX -> code in PADDLE_V5_LANGS
+            OcrEngineKind.PADDLE_AI_STUDIO -> code in PADDLE_V6_AI_STUDIO_LANGS
             OcrEngineKind.BAIDU -> baiduSupports(baiduEndpoint, baiduLanguage, code)
             OcrEngineKind.TENCENT -> tencentSupports(tencentEndpoint, tencentLanguage, code)
             // 有道 OCR 由 sourceLang 直接映射 langType，覆盖 zh/en/ja/ko/fr/de/es/ru/pt/it/auto
@@ -103,6 +107,7 @@ object OcrLanguageCapability {
     ): Boolean = when (engine) {
         OcrEngineKind.ML_KIT_AUTO -> true
         OcrEngineKind.PADDLE_ONNX -> true
+        OcrEngineKind.PADDLE_AI_STUDIO -> true
         // 有道 OCR 支持 langType=auto，可视作通用模式
         OcrEngineKind.YOUDAO -> true
         OcrEngineKind.UMI_OCR -> true
@@ -327,6 +332,7 @@ object OcrLanguageCapability {
     ): Recommendation? = when (currentEngine) {
         OcrEngineKind.ML_KIT_AUTO,
         OcrEngineKind.PADDLE_ONNX,
+        OcrEngineKind.PADDLE_AI_STUDIO,
         OcrEngineKind.UMI_OCR,
         OcrEngineKind.LUNA_OCR -> null
         // manga-ocr 在 sourceLang=auto 时不合适（仅训练日文），推回 ML_KIT_AUTO
@@ -442,6 +448,7 @@ object OcrLanguageCapability {
         OcrEngineKind.ML_KIT_AUTO,
         OcrEngineKind.ML_KIT_LATIN,
         OcrEngineKind.PADDLE_ONNX,
+        OcrEngineKind.PADDLE_AI_STUDIO,
         // 有道 OCR 由 sourceLang 反向映射 langType，没有单独的"OCR 内部语种"字段
         OcrEngineKind.YOUDAO,
         OcrEngineKind.UMI_OCR,

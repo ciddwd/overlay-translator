@@ -10,12 +10,16 @@ import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.IBinder
+import android.view.Surface
+import android.view.WindowManager
 import androidx.core.app.ServiceCompat
 import com.gameocr.app.R
+import com.gameocr.app.capture.CaptureCoordinateRelation
 import com.gameocr.app.capture.CaptureRegion
 import com.gameocr.app.capture.MediaProjectionScreenshotter
 import com.gameocr.app.capture.Screenshotter
 import com.gameocr.app.capture.ShizukuScreenshotter
+import com.gameocr.app.capture.diagnoseCaptureGeometry
 import com.gameocr.app.shizuku.ShizukuCapabilities
 import com.gameocr.app.data.LogRepository
 import com.gameocr.app.data.OcrEngineKind
@@ -125,6 +129,11 @@ class CaptureService : Service() {
 
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
         super.onConfigurationChanged(newConfig)
+        VerticalDiagnosticLog.i(
+            "service configurationChanged orientation=${newConfig.orientation.toDiagOrientation()} " +
+                "display=${currentDisplayGeometry().toDiagString()} projection=${projectionDiagnosticSummary()}"
+        )
+        resizeProjectionForCurrentDisplay("serviceConfigurationChanged")
         // 屏幕方向变了把圆球 + 悬浮窗口 + 截屏区域都按比例重算位置。
         // captureRegion 走 SettingsRepository.rescaleCaptureRegionIfNeeded——
         // 它用 saved 元数据按当前屏幕尺寸自动算比例，比"上次 onConfigurationChanged 拿到的尺寸"更稳。
@@ -202,6 +211,11 @@ class CaptureService : Service() {
             screenshotter = MediaProjectionScreenshotter(this, mp)
             Timber.i("CaptureService started with MediaProjection path")
         }
+
+        VerticalDiagnosticLog.i(
+            "service capture path=${screenshotter?.javaClass?.simpleName ?: "null"} " +
+                "display=${currentDisplayGeometry().toDiagString()} projection=${projectionDiagnosticSummary()}"
+        )
 
         overlay = OverlayManager(this, settingsRepository, scope)
         floatingButton = FloatingButtonManager(
@@ -308,9 +322,12 @@ class CaptureService : Service() {
         }
     }
 
-    private suspend fun prepareCleanCaptureFrame(hideFloatingButton: Boolean) {
+    private suspend fun prepareCleanCaptureFrame(
+        hideFloatingButton: Boolean,
+        keepLoading: Boolean = false
+    ) {
         mainScope.launch {
-            overlay?.clear()
+            overlay?.clear(keepLoading = keepLoading)
             translationCard?.dismiss()
             if (hideFloatingButton) floatingButton?.hide()
         }.join()
@@ -372,11 +389,17 @@ class CaptureService : Service() {
     }
 
     private fun triggerOnce() {
-        // MediaProjection 会截到应用自己的 overlay；先拿干净帧，再恢复悬浮球和 loading。
+        if (captureLock.isLocked) {
+            Timber.i("Skip manual trigger because capture is already running")
+            return
+        }
+        // MediaProjection captures the app's own overlay; capture a clean frame first,
+        // then restore the floating button and loading indicator.
         scope.launch {
-            prepareCleanCaptureFrame(hideFloatingButton = true)
+            val loadingShown = mainScope.async { overlay?.showLoadingHint() == true }.await()
+            prepareCleanCaptureFrame(hideFloatingButton = true, keepLoading = loadingShown)
             captureOnce(
-                showLoadingAfterScreenshot = true,
+                showLoadingAfterScreenshot = !loadingShown,
                 restoreFloatingButtonAfterScreenshot = true
             )
         }
@@ -422,6 +445,7 @@ class CaptureService : Service() {
                 showLoading = false,
                 restoreFloatingButton = restoreFloatingButtonAfterScreenshot
             )
+            mainScope.launch { overlay?.dismissLoading() }
             return
         }
         val diagId = ++captureSequence
@@ -454,6 +478,7 @@ class CaptureService : Service() {
                 diagId,
                 "screenshot full=${full.width}x${full.height} stats=${fullStats.toDiagString()}"
             )
+            logCaptureGeometry(diagId, "wordSelect", full)
             dumpCaptureFrameForDebug(this, diagId, "word-select-full", full)?.let { file ->
                 logVerticalDiag(diagId, "debug frame dumped path=${file.absolutePath}")
                 logRepository.info(
@@ -822,6 +847,7 @@ class CaptureService : Service() {
                 showLoading = false,
                 restoreFloatingButton = restoreFloatingButtonAfterScreenshot
             )
+            mainScope.launch { overlay?.dismissLoading() }
             return
         }
         val diagId = ++captureSequence
@@ -865,6 +891,7 @@ class CaptureService : Service() {
                 diagId,
                 "screenshot full=${full.width}x${full.height} stats=${fullStats.toDiagString()}"
             )
+            logCaptureGeometry(diagId, "fullScreen", full)
             dumpCaptureFrameForDebug(this, diagId, "full", full)?.let { file ->
                 logVerticalDiag(diagId, "debug frame dumped path=${file.absolutePath}")
                 logRepository.info(
@@ -1358,7 +1385,7 @@ class CaptureService : Service() {
         }
         when (settings.renderMode) {
             RenderMode.BLOCKS -> withContext(Dispatchers.Main) {
-                overlay?.showBlocks(items)
+                overlay?.showBlocks(items, diagnosticId = diagId)
             }
             RenderMode.FLOATING_WINDOW -> withContext(Dispatchers.Main) {
                 overlay?.showFullScreen(items.map { (b, dst) -> b.text to dst })
@@ -1380,7 +1407,7 @@ class CaptureService : Service() {
         }
         // 先把所有原文块以占位"…"显示在原文下方。orientation 决定用 TextView 还是 VerticalTextView
         withContext(Dispatchers.Main) {
-            overlay?.showBlocks(blocks.map { it to "…" }, orientation)
+            overlay?.showBlocks(blocks.map { it to "…" }, orientation, diagnosticId = diagId)
         }
         // 引擎支持批处理（如 DeepL）→ 一次 HTTP 译多段，避免限频。否则保留逐段流式
         // 调用 translateOne（OpenAI 兼容 LLM 用户依赖逐 token 流式更新体验）。
@@ -1654,6 +1681,83 @@ class CaptureService : Service() {
         }
     }
 
+    private data class DisplayGeometrySnapshot(
+        val overlayWidth: Int,
+        val overlayHeight: Int,
+        val currentBounds: String,
+        val maximumBounds: String,
+        val rotation: Int,
+        val configurationOrientation: Int,
+        val densityDpi: Int
+    ) {
+        fun toDiagString(): String =
+            "resources=${overlayWidth}x$overlayHeight currentBounds=$currentBounds " +
+                "maximumBounds=$maximumBounds rotation=${rotation.toDiagRotation()} " +
+                "config=${configurationOrientation.toDiagOrientation()} densityDpi=$densityDpi"
+    }
+
+    private fun currentDisplayGeometry(): DisplayGeometrySnapshot {
+        val dm = resources.displayMetrics
+        val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        val currentBounds = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            runCatching { wm.currentWindowMetrics.bounds.toDiagString() }.getOrElse { "unavailable" }
+        } else {
+            "legacy"
+        }
+        val maximumBounds = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            runCatching { wm.maximumWindowMetrics.bounds.toDiagString() }.getOrElse { "unavailable" }
+        } else {
+            "legacy"
+        }
+        return DisplayGeometrySnapshot(
+            overlayWidth = dm.widthPixels,
+            overlayHeight = dm.heightPixels,
+            currentBounds = currentBounds,
+            maximumBounds = maximumBounds,
+            rotation = currentDisplayRotation(wm),
+            configurationOrientation = resources.configuration.orientation,
+            densityDpi = resources.configuration.densityDpi
+        )
+    }
+
+    @Suppress("DEPRECATION")
+    private fun currentDisplayRotation(wm: WindowManager): Int = wm.defaultDisplay.rotation
+
+    private fun projectionDiagnosticSummary(): String =
+        (screenshotter as? MediaProjectionScreenshotter)?.diagnosticSummary()
+            ?: "type=${screenshotter?.javaClass?.simpleName ?: "null"} ready=${screenshotter?.isReady ?: false}"
+
+    @Suppress("DEPRECATION")
+    private fun resizeProjectionForCurrentDisplay(reason: String) {
+        val projectionScreenshotter = screenshotter as? MediaProjectionScreenshotter ?: return
+        val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        val target = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val bounds = wm.maximumWindowMetrics.bounds
+            Point(bounds.width(), bounds.height())
+        } else {
+            Point().also { wm.defaultDisplay.getRealSize(it) }
+        }
+        projectionScreenshotter.resizeProjection(target.x, target.y, reason)
+    }
+
+    private fun logCaptureGeometry(diagId: Long, stage: String, bitmap: Bitmap) {
+        val display = currentDisplayGeometry()
+        val diagnostic = diagnoseCaptureGeometry(
+            frameWidth = bitmap.width,
+            frameHeight = bitmap.height,
+            overlayWidth = display.overlayWidth,
+            overlayHeight = display.overlayHeight
+        )
+        val message =
+            "capture#$diagId coordinateSpace stage=$stage ${diagnostic.toDiagString()} " +
+                "display=${display.toDiagString()} projection=${projectionDiagnosticSummary()}"
+        if (diagnostic.relation == CaptureCoordinateRelation.MATCH) {
+            VerticalDiagnosticLog.i(message)
+        } else {
+            VerticalDiagnosticLog.w("$message COORDINATE_SPACE_WARNING")
+        }
+    }
+
     private fun logVerticalDiag(diagId: Long, message: String) {
         VerticalDiagnosticLog.i("capture#$diagId $message")
     }
@@ -1889,4 +1993,19 @@ class CaptureService : Service() {
         fun stopIntent(context: Context): Intent =
             Intent(context, CaptureService::class.java).apply { action = ACTION_STOP }
     }
+}
+
+private fun Int.toDiagRotation(): String = when (this) {
+    Surface.ROTATION_0 -> "ROTATION_0"
+    Surface.ROTATION_90 -> "ROTATION_90"
+    Surface.ROTATION_180 -> "ROTATION_180"
+    Surface.ROTATION_270 -> "ROTATION_270"
+    else -> "UNKNOWN($this)"
+}
+
+private fun Int.toDiagOrientation(): String = when (this) {
+    android.content.res.Configuration.ORIENTATION_PORTRAIT -> "PORTRAIT"
+    android.content.res.Configuration.ORIENTATION_LANDSCAPE -> "LANDSCAPE"
+    android.content.res.Configuration.ORIENTATION_UNDEFINED -> "UNDEFINED"
+    else -> "UNKNOWN($this)"
 }

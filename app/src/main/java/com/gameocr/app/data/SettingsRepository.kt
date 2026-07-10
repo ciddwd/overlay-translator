@@ -99,6 +99,7 @@ class SettingsRepository @Inject constructor(
         val BaiduLanguage = stringPreferencesKey("baidu_ocr_language")
         val UmiOcrBaseUrl = stringPreferencesKey("umi_ocr_base_url")
         val LunaOcrBaseUrl = stringPreferencesKey("luna_ocr_base_url")
+        val PaddleAiStudioToken = stringPreferencesKey("paddle_ai_studio_token")
         val TencentEndpoint = stringPreferencesKey("tencent_ocr_endpoint")
         val TencentLanguage = stringPreferencesKey("tencent_ocr_language")
         val ApiTimeoutSec = intPreferencesKey("api_timeout_seconds")
@@ -160,6 +161,7 @@ class SettingsRepository @Inject constructor(
         Keys.DeeplCustomToken,
         Keys.YoudaoAppKey,
         Keys.YoudaoAppSecret,
+        Keys.PaddleAiStudioToken,
         Keys.VolcAccessKeyId,
         Keys.VolcSecretAccessKey,
         Keys.BaiduFanyiAppId,
@@ -326,6 +328,7 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.BaiduLanguage] = next.baiduOcrLanguage.name
             prefs.putSecure(Keys.UmiOcrBaseUrl, next.umiOcrBaseUrl)
             prefs.putSecure(Keys.LunaOcrBaseUrl, next.lunaOcrBaseUrl)
+            prefs.putSecure(Keys.PaddleAiStudioToken, next.paddleAiStudioToken)
             prefs[Keys.TencentEndpoint] = next.tencentOcrEndpoint.name
             prefs[Keys.TencentLanguage] = next.tencentOcrLanguage.name
             prefs[Keys.ApiTimeoutSec] = next.apiTimeoutSeconds
@@ -486,6 +489,7 @@ class SettingsRepository @Inject constructor(
                 .getOrDefault(default.baiduOcrLanguage),
             umiOcrBaseUrl = secureString(Keys.UmiOcrBaseUrl, default.umiOcrBaseUrl),
             lunaOcrBaseUrl = secureString(Keys.LunaOcrBaseUrl, default.lunaOcrBaseUrl),
+            paddleAiStudioToken = secureString(Keys.PaddleAiStudioToken, default.paddleAiStudioToken),
             tencentOcrEndpoint = runCatching { TencentOcrEndpoint.valueOf(this[Keys.TencentEndpoint] ?: "") }
                 .getOrDefault(default.tencentOcrEndpoint),
             tencentOcrLanguage = runCatching { TencentOcrLanguage.valueOf(this[Keys.TencentLanguage] ?: "") }

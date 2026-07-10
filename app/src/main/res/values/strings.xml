@@ -239,6 +239,7 @@
     <string name="settings_ocr_chip_baidu">Baidu</string>
     <string name="settings_ocr_chip_tencent">Tencent</string>
     <string name="settings_ocr_chip_youdao">Youdao</string>
+    <string name="settings_ocr_chip_paddle_ai_studio">PP-OCRv6 Online</string>
     <string name="settings_ocr_group_local">On-device (no network, models downloaded on demand)</string>
     <string name="settings_ocr_group_cloud">Cloud (requires API key, pay per call)</string>
     <string name="settings_ocr_disabled_by_pictrans">"Youdao PicTrans" end-to-end engine is active — it does OCR + translation in one call, so the OCR settings below are ignored.</string>
@@ -253,6 +254,7 @@
     <string name="settings_luna_ocr_url_label">LunaTranslator OCR API URL</string>
     <string name="settings_luna_ocr_url_placeholder">http://192.168.0.2:2333/api/ocr</string>
     <string name="settings_luna_ocr_url_hint">Run LunaTranslator on the PC, enable its API service, and use the PC LAN IP here. The app sends PNG screenshots as the image field and reads results/text/box from the response.</string>
+    <string name="settings_paddle_ai_studio_token">AI Studio Access Token</string>
     <string name="settings_ocr_intro">Pick the OCR engine for the text type:\n• Auto / Japanese / Korean / Chinese / Latin: Google ML Kit on-device (free, offline). \"Auto\" picks the model by detecting Hangul / kana; pinning a specific language slightly improves accuracy.\n• PaddleOCR: on-device multilingual; better on complex layouts. First use downloads ~20MB models. (Korean dict not bundled — use ML Kit or cloud for Korean.)\n• Manga-OCR (Japanese manga, on-device, ≈ 160 MB; encoder + decoder + tokenizer files)\n• Baidu / Tencent Cloud: cloud OCR with API key (pay-as-you-go); pick Korean / Japanese etc. under \"Recognition language\" as a fallback.</string>
     <string name="settings_baidu_api_key">Baidu API Key</string>
     <string name="settings_baidu_secret_key">Baidu Secret Key</string>
@@ -648,6 +650,7 @@
     <string name="err_tencent_no_keys">Tencent OCR: SecretId / SecretKey not configured</string>
     <string name="err_umi_ocr_no_url">Umi-OCR URL not configured</string>
     <string name="err_luna_ocr_no_url">LunaTranslator OCR URL not configured</string>
+    <string name="err_paddle_ai_studio_no_token">PaddleOCR AI Studio token not configured</string>
     <string name="err_tencent_parse_failed_format">Tencent parse failed: %1$s</string>
     <string name="err_paddle_not_ready">PaddleOCR model not ready. Tap \"Download PaddleOCR model\" in Settings.</string>
     <string name="err_paddle_all_mirrors_failed_format">%1$s: all mirrors failed: %2$s</string>

@@ -120,6 +120,7 @@ object CrashRecorder {
         line("baiduOcrLanguage", s.baiduOcrLanguage)
         line("umiOcrBaseUrl", customUrl(s.umiOcrBaseUrl))
         line("lunaOcrBaseUrl", customUrl(s.lunaOcrBaseUrl))
+        line("paddleAiStudioToken", mask(s.paddleAiStudioToken))
         line("tencentSecretId", mask(s.tencentSecretId))
         line("tencentSecretKey", mask(s.tencentSecretKey))
         line("tencentRegion", s.tencentRegion)

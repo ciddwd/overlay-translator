@@ -227,6 +227,7 @@ fun SettingsScreen(
     var baiduLanguage by remember { mutableStateOf(com.gameocr.app.data.BaiduOcrLanguage.CHN_ENG) }
     var umiOcrBaseUrl by remember { mutableStateOf("") }
     var lunaOcrBaseUrl by remember { mutableStateOf("") }
+    var paddleAiStudioToken by remember { mutableStateOf("") }
     var tencentId by remember { mutableStateOf("") }
     var tencentKey by remember { mutableStateOf("") }
     // Region 同时被 OCR (ocr.tencentcloudapi.com) 和 TMT (tmt.tencentcloudapi.com) 使用；
@@ -544,6 +545,7 @@ fun SettingsScreen(
         baiduOcrLanguage = baiduLanguage,
         umiOcrBaseUrl = umiOcrBaseUrl,
         lunaOcrBaseUrl = lunaOcrBaseUrl,
+        paddleAiStudioToken = paddleAiStudioToken,
         tencentSecretId = tencentId,
         tencentSecretKey = tencentKey,
         tencentRegion = tencentRegion,
@@ -720,6 +722,7 @@ fun SettingsScreen(
             baiduLanguage = baiduLanguage,
             umiOcrBaseUrl = umiOcrBaseUrl,
             lunaOcrBaseUrl = lunaOcrBaseUrl,
+            paddleAiStudioToken = paddleAiStudioToken,
             tencentId = tencentId, tencentKey = tencentKey, tencentRegion = tencentRegion,
             tencentEndpoint = tencentEndpoint,
             tencentLanguage = tencentLanguage,
@@ -1561,6 +1564,7 @@ fun SettingsScreen(
             baiduLanguage = s.baiduOcrLanguage
             umiOcrBaseUrl = s.umiOcrBaseUrl
             lunaOcrBaseUrl = s.lunaOcrBaseUrl
+            paddleAiStudioToken = s.paddleAiStudioToken
             tencentId = s.tencentSecretId
             tencentKey = s.tencentSecretKey
             tencentRegion = s.tencentRegion
@@ -2396,6 +2400,7 @@ fun SettingsScreen(
                     EngineChip(ocrEngine, OcrEngineKind.BAIDU, stringResource(R.string.settings_ocr_chip_baidu), enabled = !ocrSectionDisabled) { ocrEngine = it }
                     EngineChip(ocrEngine, OcrEngineKind.TENCENT, stringResource(R.string.settings_ocr_chip_tencent), enabled = !ocrSectionDisabled) { ocrEngine = it }
                     EngineChip(ocrEngine, OcrEngineKind.YOUDAO, stringResource(R.string.settings_ocr_chip_youdao), enabled = !ocrSectionDisabled) { ocrEngine = it }
+                    EngineChip(ocrEngine, OcrEngineKind.PADDLE_AI_STUDIO, stringResource(R.string.settings_ocr_chip_paddle_ai_studio), enabled = !ocrSectionDisabled) { ocrEngine = it }
                 }
                 if (ocrEngine == OcrEngineKind.BAIDU) {
                     SecretTextField(
@@ -2568,6 +2573,15 @@ fun SettingsScreen(
                         stringResource(R.string.settings_youdao_tip),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                if (ocrEngine == OcrEngineKind.PADDLE_AI_STUDIO) {
+                    SecretTextField(
+                        value = paddleAiStudioToken,
+                        onValueChange = { paddleAiStudioToken = it },
+                        label = stringResource(R.string.settings_paddle_ai_studio_token),
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
 
@@ -4173,6 +4187,7 @@ private fun ocrEngineLabel(engine: OcrEngineKind): String = stringResource(
         OcrEngineKind.BAIDU -> R.string.settings_ocr_chip_baidu
         OcrEngineKind.TENCENT -> R.string.settings_ocr_chip_tencent
         OcrEngineKind.YOUDAO -> R.string.settings_ocr_chip_youdao
+        OcrEngineKind.PADDLE_AI_STUDIO -> R.string.settings_ocr_chip_paddle_ai_studio
         OcrEngineKind.UMI_OCR -> R.string.settings_ocr_chip_umi
         OcrEngineKind.LUNA_OCR -> R.string.settings_ocr_chip_luna
         OcrEngineKind.PADDLE_ONNX -> R.string.settings_ocr_chip_paddle
@@ -4599,6 +4614,7 @@ private fun ocrEngineLabelRes(engine: com.gameocr.app.data.OcrEngineKind): Int =
     com.gameocr.app.data.OcrEngineKind.BAIDU -> R.string.settings_ocr_chip_baidu
     com.gameocr.app.data.OcrEngineKind.TENCENT -> R.string.settings_ocr_chip_tencent
     com.gameocr.app.data.OcrEngineKind.YOUDAO -> R.string.settings_ocr_chip_youdao
+    com.gameocr.app.data.OcrEngineKind.PADDLE_AI_STUDIO -> R.string.settings_ocr_chip_paddle_ai_studio
     com.gameocr.app.data.OcrEngineKind.UMI_OCR -> R.string.settings_ocr_chip_umi
     com.gameocr.app.data.OcrEngineKind.LUNA_OCR -> R.string.settings_ocr_chip_luna
     com.gameocr.app.data.OcrEngineKind.PADDLE_ONNX -> R.string.settings_ocr_chip_paddle
@@ -4739,6 +4755,7 @@ internal fun translationPresetModelIssues(
         OcrEngineKind.BAIDU,
         OcrEngineKind.TENCENT,
         OcrEngineKind.YOUDAO,
+        OcrEngineKind.PADDLE_AI_STUDIO,
         OcrEngineKind.UMI_OCR,
         OcrEngineKind.LUNA_OCR -> Unit
     }
@@ -4833,7 +4850,8 @@ internal fun translationPresetOtherDownloadHintVisible(
 internal fun isCloudOcrEngineForUpscaleWarning(engine: OcrEngineKind): Boolean = when (engine) {
     OcrEngineKind.BAIDU,
     OcrEngineKind.TENCENT,
-    OcrEngineKind.YOUDAO -> true
+    OcrEngineKind.YOUDAO,
+    OcrEngineKind.PADDLE_AI_STUDIO -> true
     OcrEngineKind.ML_KIT_AUTO,
     OcrEngineKind.ML_KIT_LATIN,
     OcrEngineKind.ML_KIT_JAPANESE,

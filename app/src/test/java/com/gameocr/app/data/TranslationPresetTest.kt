@@ -13,6 +13,7 @@ class TranslationPresetTest {
             apiKey = "openai-key",
             baiduOcrApiKey = "baidu-key",
             baiduOcrSecretKey = "baidu-secret",
+            paddleAiStudioToken = "paddle-ai-studio-token",
             tencentSecretId = "tencent-id",
             tencentSecretKey = "tencent-secret",
             deeplApiKey = "deepl-key",
@@ -41,6 +42,7 @@ class TranslationPresetTest {
         assertEquals(base.apiKey, applied.apiKey)
         assertEquals(base.baiduOcrApiKey, applied.baiduOcrApiKey)
         assertEquals(base.baiduOcrSecretKey, applied.baiduOcrSecretKey)
+        assertEquals(base.paddleAiStudioToken, applied.paddleAiStudioToken)
         assertEquals(base.tencentSecretId, applied.tencentSecretId)
         assertEquals(base.tencentSecretKey, applied.tencentSecretKey)
         assertEquals(base.deeplApiKey, applied.deeplApiKey)
@@ -86,6 +88,7 @@ class TranslationPresetTest {
             "apiKey",
             "baiduOcrApiKey",
             "baiduOcrSecretKey",
+            "paddleAiStudioToken",
             "tencentSecretId",
             "tencentSecretKey",
             "deeplApiKey",

@@ -1299,6 +1299,7 @@ class SettingsScreenModelStatusTest {
             Case("Baidu cloud OCR warns when upscale is enabled", OcrEngineKind.BAIDU, true, true),
             Case("Tencent cloud OCR warns when upscale is enabled", OcrEngineKind.TENCENT, true, true),
             Case("Youdao cloud OCR warns when upscale is enabled", OcrEngineKind.YOUDAO, true, true),
+            Case("PaddleOCR AI Studio cloud OCR warns when upscale is enabled", OcrEngineKind.PADDLE_AI_STUDIO, true, true),
             Case("Umi local HTTP OCR is not cloud cost warning", OcrEngineKind.UMI_OCR, true, false),
             Case("Luna local HTTP OCR is not cloud cost warning", OcrEngineKind.LUNA_OCR, true, false),
             Case("Baidu cloud OCR does not warn when upscale is off", OcrEngineKind.BAIDU, false, false),

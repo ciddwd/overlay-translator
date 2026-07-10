@@ -73,6 +73,7 @@ data class Settings(
     val umiOcrBaseUrl: String = "",
     /** LunaTranslator HTTP image OCR endpoint, e.g. http://192.168.0.2:2333/api/ocr. */
     val lunaOcrBaseUrl: String = "",
+    val paddleAiStudioToken: String = "",
     val tencentSecretId: String = "",
     val tencentSecretKey: String = "",
     val tencentRegion: String = "ap-guangzhou",
@@ -1063,6 +1064,7 @@ enum class OcrEngineKind {
     BAIDU,            // 百度通用文字识别（云端，需要 API Key + Secret）
     TENCENT,          // 腾讯云 GeneralBasicOCR（云端，需要 SecretId + SecretKey）
     YOUDAO,           // 有道智云通用文字识别 ocrapi（云端，需要 AppKey + AppSecret）
+    PADDLE_AI_STUDIO, // PaddleOCR AI Studio async jobs API (cloud, requires bearer token)
     PADDLE_ONNX,      // PaddleOCR PP-OCRv5 mobile (ONNX Runtime 端侧，按需下载模型)
     MANGA_OCR_JA      // l0wgear/manga-ocr-2025-onnx 日漫专用（端侧；复用 PaddleOCR DBNet 检测；~140MB 按需下载，需开代理）
 }
