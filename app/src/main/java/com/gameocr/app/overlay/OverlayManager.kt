@@ -763,9 +763,14 @@ class OverlayManager(
             width = WindowManager.LayoutParams.MATCH_PARENT
             height = WindowManager.LayoutParams.MATCH_PARENT
         }
+        val cutoutMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            cutoutModeLogLabel(params.layoutInDisplayCutoutMode)
+        } else {
+            cutoutModeLogLabel(null)
+        }
         VerticalDiagnosticLog.i(
             "${diagPrefix}overlay window add screen=${screenW}x$screenH type=${params.type} " +
-                "flags=0x${params.flags.toString(16)} cutoutMode=${params.layoutInDisplayCutoutMode}"
+                "flags=0x${params.flags.toString(16)} cutoutMode=$cutoutMode"
         )
         runCatching { wm.addView(root, params) }
             .onSuccess { VerticalDiagnosticLog.i("${diagPrefix}overlay window added") }
@@ -897,3 +902,5 @@ class OverlayManager(
         }
     }
 }
+
+internal fun cutoutModeLogLabel(mode: Int?): String = mode?.toString() ?: "unsupported"

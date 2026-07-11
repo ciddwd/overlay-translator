@@ -6,12 +6,12 @@ import android.graphics.Paint
 import android.graphics.Typeface
 import android.view.Gravity
 import android.view.View
-import android.widget.TextView
+import androidx.appcompat.widget.AppCompatTextView
 import com.gameocr.app.data.OverlayTextAlignment
 import com.gameocr.app.data.OverlayTextStyle
 
 /** TextView that draws an optional outline before the normal filled translation text. */
-class StyledTranslationTextView(context: Context) : TextView(context) {
+class StyledTranslationTextView(context: Context) : AppCompatTextView(context) {
     private var outlineWidthPx = 0f
     private var outlineColor = 0
     private var shadowEnabled = false
