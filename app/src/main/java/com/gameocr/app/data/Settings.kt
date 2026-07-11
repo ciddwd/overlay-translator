@@ -26,6 +26,7 @@ data class Settings(
     val captureRegionSavedScreenW: Int = 0,
     val captureRegionSavedScreenH: Int = 0,
     val overlayTextSizeSp: Int = 14,
+    val overlayTextStyle: OverlayTextStyle = OverlayTextStyle(),
     val overlayAlpha: Float = 0.85f,
     val overlayFontFileName: String = "",
     val overlayFontDisplayName: String = "",
@@ -73,6 +74,7 @@ data class Settings(
     val umiOcrBaseUrl: String = "",
     /** LunaTranslator HTTP image OCR endpoint, e.g. http://192.168.0.2:2333/api/ocr. */
     val lunaOcrBaseUrl: String = "",
+    val paddleAiStudioToken: String = "",
     val tencentSecretId: String = "",
     val tencentSecretKey: String = "",
     val tencentRegion: String = "ap-guangzhou",
@@ -219,7 +221,7 @@ data class Settings(
     /**
      * 划词翻译：单词模式专用的 LLM 词典 prompt 模板（仅 OpenAI 兼容引擎生效）。
      * 用占位符 `{source}` / `{target}` 同 [promptTemplate]。返回 JSON 让卡片显示音标 / 词性 /
-     * 释义 / 例句；解析失败回退到 [promptTemplate]。读取时若 key 缺省，按 UI locale 给出本地化默认。
+     * 释义 / 难点解释 / 例句；解析失败回退到 [promptTemplate]。读取时若 key 缺省，按 UI locale 给出本地化默认。
      */
     val dictionaryPrompt: String = DEFAULT_DICTIONARY_PROMPT,
     /**
@@ -304,6 +306,7 @@ data class Settings(
   "phonetic": "音标或读音（{source}; 无则空串）",
   "pos": ["词性，{target}缩写，如 名/动/形 或 n./v./adj.; 无则空数组"],
   "definitions": ["{target}释义 1", "{target}释义 2"],
+  "difficulty_notes": ["用{target}解释生僻含义、专业领域、缩写全称或易混淆用法；普通词为空数组"],
   "examples": [
     { "src": "{source}例句", "dst": "{target}译文" }
   ]
@@ -312,7 +315,8 @@ data class Settings(
 1. 必须是合法 JSON，键名与上面完全一致；
 2. 没有信息的字段用空串或空数组占位；
 3. 例句最多 2 条，太多删减；
-4. 不要把整段当句子翻译，只做词典查询。
+4. 生僻词、专业名词、缩写、文化专名或易混淆用法必须给出难点解释，最多 3 条，不要重复释义；普通词用空数组；
+5. 不要把整段当句子翻译，只做词典查询。
 """
     }
 }
@@ -345,6 +349,7 @@ data class TranslationPreset(
     val customBorderWidth: Int = 0,
     val customBorderStyle: BorderStyle = BorderStyle.SOLID,
     val overlayTextSizeSp: Int = 14,
+    val overlayTextStyle: OverlayTextStyle = OverlayTextStyle(),
     val overlayAlpha: Float = 0.85f,
     val overlayFontFileName: String = "",
     val overlayFontDisplayName: String = "",
@@ -402,6 +407,7 @@ data class TranslationPreset(
         customBorderWidth = customBorderWidth,
         customBorderStyle = customBorderStyle,
         overlayTextSizeSp = overlayTextSizeSp,
+        overlayTextStyle = overlayTextStyle.normalized(),
         overlayAlpha = overlayAlpha,
         overlayFontFileName = overlayFontFileName,
         overlayFontDisplayName = overlayFontDisplayName,
@@ -496,6 +502,7 @@ object TranslationPresetCatalog {
             customBorderWidth = settings.customBorderWidth,
             customBorderStyle = settings.customBorderStyle,
             overlayTextSizeSp = settings.overlayTextSizeSp,
+            overlayTextStyle = settings.overlayTextStyle.normalized(),
             overlayAlpha = settings.overlayAlpha,
             overlayFontFileName = settings.overlayFontFileName,
             overlayFontDisplayName = settings.overlayFontDisplayName,
@@ -549,66 +556,83 @@ object TranslationPresetCatalog {
     ).settingsHash
 
     fun matchesHash(preset: TranslationPreset, settingsHash: String): Boolean =
-        preset.settingsHash.ifBlank { settingsHash(preset) } == settingsHash
+        preset.settingsHash == settingsHash || settingsHash(preset) == settingsHash
 
-    private fun settingsHash(preset: TranslationPreset): String = sha256(
-        preset.baseUrl,
-        preset.model,
-        preset.sourceLang,
-        preset.targetLang,
-        preset.promptTemplate,
-        preset.dictionaryPrompt,
-        preset.ocrEngine.name,
-        preset.preprocess.upscale2x,
-        preset.preprocess.invert,
-        preset.preprocess.binarize,
-        preset.renderMode.name,
-        preset.overlayPlacement.name,
-        preset.overlayTheme.name,
-        preset.customBgColor,
-        preset.customFgColor,
-        preset.customBorderColor,
-        preset.customBorderWidth,
-        preset.customBorderStyle.name,
-        preset.overlayTextSizeSp,
-        preset.overlayAlpha.toBits(),
-        preset.overlayFontFileName,
-        preset.overlayFontDisplayName,
-        preset.overlayOffsetX,
-        preset.overlayOffsetY,
-        preset.overlayAllowWrap,
-        preset.overlayAvoidCollision,
-        preset.streamingTranslate,
-        preset.translatorEngine.name,
-        preset.deeplPro,
-        preset.deeplProtocol.name,
-        preset.deeplBaseUrl,
-        preset.deeplBearerAuth,
-        preset.baiduOcrEndpoint.name,
-        preset.baiduOcrLanguage.name,
-        preset.umiOcrBaseUrl,
-        preset.lunaOcrBaseUrl,
-        preset.tencentRegion,
-        preset.tencentOcrEndpoint.name,
-        preset.tencentOcrLanguage.name,
-        preset.paddleModelVersion.name,
-        preset.apiTimeoutSeconds,
-        preset.mergeAdjacentBlocks,
-        preset.mergeStrength.name,
-        preset.textOrientationAutoDetect,
-        preset.manualTextOrientation?.name.orEmpty(),
-        preset.localLlmTemperature.toBits(),
-        preset.localLlmTopP.toBits(),
-        preset.localLlmTopK,
-        preset.localLlmRepetitionPenalty.toBits(),
-        preset.localLlmContextSize,
-        preset.localLlmMaxNewTokens,
-        preset.dbnetProbThresh.toBits(),
-        preset.dbnetBoxScoreThresh.toBits(),
-        preset.dbnetUnclipRatio.toBits(),
-        preset.mangaOcrDbnetUnclipRatio.toBits(),
-        preset.bubbleClusterGap
-    )
+    private fun settingsHash(preset: TranslationPreset): String {
+        val textStyle = preset.overlayTextStyle.normalized()
+        return sha256(
+            preset.baseUrl,
+            preset.model,
+            preset.sourceLang,
+            preset.targetLang,
+            preset.promptTemplate,
+            preset.dictionaryPrompt,
+            preset.ocrEngine.name,
+            preset.preprocess.upscale2x,
+            preset.preprocess.invert,
+            preset.preprocess.binarize,
+            preset.renderMode.name,
+            preset.overlayPlacement.name,
+            preset.overlayTheme.name,
+            preset.customBgColor,
+            preset.customFgColor,
+            preset.customBorderColor,
+            preset.customBorderWidth,
+            preset.customBorderStyle.name,
+            preset.overlayTextSizeSp,
+            textStyle.bold,
+            textStyle.italic,
+            textStyle.underline,
+            textStyle.letterSpacingEm.toBits(),
+            textStyle.lineSpacingMultiplier.toBits(),
+            textStyle.alignment.name,
+            textStyle.strokeEnabled,
+            textStyle.strokeWidthDp.toBits(),
+            textStyle.strokeColor,
+            textStyle.shadowEnabled,
+            textStyle.shadowRadiusDp.toBits(),
+            textStyle.shadowOffsetXDp.toBits(),
+            textStyle.shadowOffsetYDp.toBits(),
+            textStyle.shadowColor,
+            preset.overlayAlpha.toBits(),
+            preset.overlayFontFileName,
+            preset.overlayFontDisplayName,
+            preset.overlayOffsetX,
+            preset.overlayOffsetY,
+            preset.overlayAllowWrap,
+            preset.overlayAvoidCollision,
+            preset.streamingTranslate,
+            preset.translatorEngine.name,
+            preset.deeplPro,
+            preset.deeplProtocol.name,
+            preset.deeplBaseUrl,
+            preset.deeplBearerAuth,
+            preset.baiduOcrEndpoint.name,
+            preset.baiduOcrLanguage.name,
+            preset.umiOcrBaseUrl,
+            preset.lunaOcrBaseUrl,
+            preset.tencentRegion,
+            preset.tencentOcrEndpoint.name,
+            preset.tencentOcrLanguage.name,
+            preset.paddleModelVersion.name,
+            preset.apiTimeoutSeconds,
+            preset.mergeAdjacentBlocks,
+            preset.mergeStrength.name,
+            preset.textOrientationAutoDetect,
+            preset.manualTextOrientation?.name.orEmpty(),
+            preset.localLlmTemperature.toBits(),
+            preset.localLlmTopP.toBits(),
+            preset.localLlmTopK,
+            preset.localLlmRepetitionPenalty.toBits(),
+            preset.localLlmContextSize,
+            preset.localLlmMaxNewTokens,
+            preset.dbnetProbThresh.toBits(),
+            preset.dbnetBoxScoreThresh.toBits(),
+            preset.dbnetUnclipRatio.toBits(),
+            preset.mangaOcrDbnetUnclipRatio.toBits(),
+            preset.bubbleClusterGap
+        )
+    }
 
     private fun sha256(vararg parts: Any?): String {
         val source = buildString {
@@ -1063,6 +1087,7 @@ enum class OcrEngineKind {
     BAIDU,            // 百度通用文字识别（云端，需要 API Key + Secret）
     TENCENT,          // 腾讯云 GeneralBasicOCR（云端，需要 SecretId + SecretKey）
     YOUDAO,           // 有道智云通用文字识别 ocrapi（云端，需要 AppKey + AppSecret）
+    PADDLE_AI_STUDIO, // PaddleOCR AI Studio async jobs API (cloud, requires bearer token)
     PADDLE_ONNX,      // PaddleOCR PP-OCRv5 mobile (ONNX Runtime 端侧，按需下载模型)
     MANGA_OCR_JA      // l0wgear/manga-ocr-2025-onnx 日漫专用（端侧；复用 PaddleOCR DBNet 检测；~140MB 按需下载，需开代理）
 }

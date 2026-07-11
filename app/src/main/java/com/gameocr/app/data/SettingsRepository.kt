@@ -38,6 +38,7 @@ class SettingsRepository @Inject constructor(
         val OcrEngine = stringPreferencesKey("ocr_engine")
         val LoopInterval = longPreferencesKey("loop_interval_ms")
         val TextSize = intPreferencesKey("overlay_text_size")
+        val OverlayTextStyle = stringPreferencesKey("overlay_text_style_json")
         val Alpha = floatPreferencesKey("overlay_alpha")
         val OverlayFontFileName = stringPreferencesKey("overlay_font_file_name")
         val OverlayFontDisplayName = stringPreferencesKey("overlay_font_display_name")
@@ -99,6 +100,7 @@ class SettingsRepository @Inject constructor(
         val BaiduLanguage = stringPreferencesKey("baidu_ocr_language")
         val UmiOcrBaseUrl = stringPreferencesKey("umi_ocr_base_url")
         val LunaOcrBaseUrl = stringPreferencesKey("luna_ocr_base_url")
+        val PaddleAiStudioToken = stringPreferencesKey("paddle_ai_studio_token")
         val TencentEndpoint = stringPreferencesKey("tencent_ocr_endpoint")
         val TencentLanguage = stringPreferencesKey("tencent_ocr_language")
         val ApiTimeoutSec = intPreferencesKey("api_timeout_seconds")
@@ -144,6 +146,10 @@ class SettingsRepository @Inject constructor(
 
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
     private val secretCodec = SettingsSecretCodec(secretCipher)
+    private var defaultPromptProvider: () -> String = { context.getString(R.string.default_prompt) }
+    private var defaultDictionaryPromptProvider: () -> String = {
+        context.getString(R.string.default_dictionary_prompt)
+    }
     private val secureStringKeys = listOf(
         Keys.BaseUrl,
         Keys.ApiKey,
@@ -160,6 +166,7 @@ class SettingsRepository @Inject constructor(
         Keys.DeeplCustomToken,
         Keys.YoudaoAppKey,
         Keys.YoudaoAppSecret,
+        Keys.PaddleAiStudioToken,
         Keys.VolcAccessKeyId,
         Keys.VolcSecretAccessKey,
         Keys.BaiduFanyiAppId,
@@ -175,6 +182,14 @@ class SettingsRepository @Inject constructor(
     val settings: Flow<Settings> = context.dataStore.data.map { prefs -> prefs.toSettings() }
 
     suspend fun get(): Settings = settings.first()
+
+    internal fun setDefaultPromptProvidersForTest(
+        prompt: () -> String,
+        dictionaryPrompt: () -> String,
+    ) {
+        defaultPromptProvider = prompt
+        defaultDictionaryPromptProvider = dictionaryPrompt
+    }
 
     suspend fun migratePlaintextSecretsIfNeeded(): Int {
         var migrated = 0
@@ -266,6 +281,7 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.OcrEngine] = next.ocrEngine.name
             prefs[Keys.LoopInterval] = next.captureLoopIntervalMs
             prefs[Keys.TextSize] = next.overlayTextSizeSp
+            prefs[Keys.OverlayTextStyle] = json.encodeToString(next.overlayTextStyle.normalized())
             prefs[Keys.Alpha] = next.overlayAlpha
             prefs[Keys.OverlayFontFileName] = next.overlayFontFileName
             prefs[Keys.OverlayFontDisplayName] = next.overlayFontDisplayName
@@ -326,6 +342,7 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.BaiduLanguage] = next.baiduOcrLanguage.name
             prefs.putSecure(Keys.UmiOcrBaseUrl, next.umiOcrBaseUrl)
             prefs.putSecure(Keys.LunaOcrBaseUrl, next.lunaOcrBaseUrl)
+            prefs.putSecure(Keys.PaddleAiStudioToken, next.paddleAiStudioToken)
             prefs[Keys.TencentEndpoint] = next.tencentOcrEndpoint.name
             prefs[Keys.TencentLanguage] = next.tencentOcrLanguage.name
             prefs[Keys.ApiTimeoutSec] = next.apiTimeoutSeconds
@@ -387,11 +404,17 @@ class SettingsRepository @Inject constructor(
             targetLang = this[Keys.TargetLang] ?: default.targetLang,
             // 首次启动（Keys.Prompt 不存在）使用资源里的本地化默认 prompt（中文系统给中文，英文给英文）。
             // 用户保存过自己的 prompt 后这里读到自己的，不会被覆盖。
-            promptTemplate = secureString(Keys.Prompt, context.getString(R.string.default_prompt)),
+            promptTemplate = secureString(Keys.Prompt, defaultPromptProvider()),
             ocrEngine = runCatching { OcrEngineKind.valueOf(this[Keys.OcrEngine] ?: "") }
                 .getOrDefault(default.ocrEngine),
             captureLoopIntervalMs = this[Keys.LoopInterval] ?: default.captureLoopIntervalMs,
             overlayTextSizeSp = this[Keys.TextSize] ?: default.overlayTextSizeSp,
+            overlayTextStyle = this[Keys.OverlayTextStyle]
+                ?.takeIf { it.isNotBlank() }
+                ?.let { raw ->
+                    runCatching { json.decodeFromString<OverlayTextStyle>(raw).normalized() }.getOrNull()
+                }
+                ?: default.overlayTextStyle,
             overlayAlpha = this[Keys.Alpha] ?: default.overlayAlpha,
             overlayFontFileName = this[Keys.OverlayFontFileName] ?: default.overlayFontFileName,
             overlayFontDisplayName = this[Keys.OverlayFontDisplayName] ?: default.overlayFontDisplayName,
@@ -486,6 +509,7 @@ class SettingsRepository @Inject constructor(
                 .getOrDefault(default.baiduOcrLanguage),
             umiOcrBaseUrl = secureString(Keys.UmiOcrBaseUrl, default.umiOcrBaseUrl),
             lunaOcrBaseUrl = secureString(Keys.LunaOcrBaseUrl, default.lunaOcrBaseUrl),
+            paddleAiStudioToken = secureString(Keys.PaddleAiStudioToken, default.paddleAiStudioToken),
             tencentOcrEndpoint = runCatching { TencentOcrEndpoint.valueOf(this[Keys.TencentEndpoint] ?: "") }
                 .getOrDefault(default.tencentOcrEndpoint),
             tencentOcrLanguage = runCatching { TencentOcrLanguage.valueOf(this[Keys.TencentLanguage] ?: "") }
@@ -554,7 +578,7 @@ class SettingsRepository @Inject constructor(
                 .getOrDefault(default.floatingButtonSkill),
             dictionaryPrompt = secureString(
                 Keys.DictionaryPrompt,
-                context.getString(R.string.default_dictionary_prompt)
+                defaultDictionaryPromptProvider()
             ),
             localLlmTemperature = this[Keys.LocalLlmTemperature] ?: default.localLlmTemperature,
             localLlmTopP = this[Keys.LocalLlmTopP] ?: default.localLlmTopP,

@@ -1,5 +1,6 @@
 package com.gameocr.app.overlay
 
+import com.gameocr.app.data.OverlayTextAlignment
 import com.gameocr.app.overlay.VerticalTextDrawer.GlyphKind
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -13,6 +14,33 @@ import org.junit.Test
  * 测试设计：W3C CSS Writing Modes 4 §4 + Unicode Vertical_Orientation 属性表常用子集。
  */
 class VerticalTextDrawerTest {
+
+    @Test
+    fun verticalAlignmentOffsetIsClampedAndTableDriven() {
+        data class Case(
+            val name: String,
+            val available: Float,
+            val content: Float,
+            val alignment: OverlayTextAlignment,
+            val expected: Float
+        )
+
+        val cases = listOf(
+            Case("start", 100f, 40f, OverlayTextAlignment.START, 0f),
+            Case("center", 100f, 40f, OverlayTextAlignment.CENTER, 30f),
+            Case("end", 100f, 40f, OverlayTextAlignment.END, 60f),
+            Case("overflow clamps", 40f, 80f, OverlayTextAlignment.END, 0f)
+        )
+
+        cases.forEach { case ->
+            assertEquals(
+                case.name,
+                case.expected,
+                VerticalTextDrawer.alignmentOffset(case.available, case.content, case.alignment),
+                0.001f
+            )
+        }
+    }
 
     @Test
     fun classify_table_driven_common_codepoints() {

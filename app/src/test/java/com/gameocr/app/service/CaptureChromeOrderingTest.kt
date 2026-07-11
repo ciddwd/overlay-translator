@@ -41,23 +41,68 @@ class CaptureChromeOrderingTest {
         data class Case(
             val name: String,
             val signature: String,
-            val pipelineCall: String
+            val pipelineCall: String,
+            val prepareCall: String
         )
 
         val source = captureServiceSource()
         val cases = listOf(
-            Case("full screen trigger", "private fun triggerOnce()", "captureOnce("),
-            Case("word select trigger", "private fun triggerWordSelect()", "runWordSelectPipeline(")
+            Case(
+                "full screen trigger",
+                "private fun triggerOnce()",
+                "captureOnce(",
+                "prepareCleanCaptureFrame(hideFloatingButton = true, keepLoading = loadingShown)"
+            ),
+            Case(
+                "word select trigger",
+                "private fun triggerWordSelect()",
+                "runWordSelectPipeline(",
+                "prepareCleanCaptureFrame(hideFloatingButton = true)"
+            )
         )
 
         cases.forEach { case ->
             val snippet = functionSnippet(source, case.signature)
-            val prepareIndex = snippet.indexOf("prepareCleanCaptureFrame(hideFloatingButton = true)")
+            val prepareIndex = snippet.indexOf(case.prepareCall)
             val pipelineIndex = snippet.indexOf(case.pipelineCall, prepareIndex)
 
             assertTrue("${case.name} should prepare a clean frame", prepareIndex >= 0)
             assertTrue("${case.name} should prepare before starting capture pipeline", pipelineIndex > prepareIndex)
         }
+    }
+
+    @Test
+    fun fullScreenTrigger_showsImmediateLoadingAndKeepsItWhileHidingButton() {
+        val snippet = functionSnippet(captureServiceSource(), "private fun triggerOnce()")
+
+        val loadingIndex = snippet.indexOf("overlay?.showLoadingHint() == true")
+        val prepareIndex = snippet.indexOf("prepareCleanCaptureFrame(hideFloatingButton = true, keepLoading = loadingShown)")
+        val captureIndex = snippet.indexOf("captureOnce(", prepareIndex)
+
+        assertTrue("full screen trigger should show loading immediately", loadingIndex >= 0)
+        assertTrue("loading should be shown before hiding capture chrome", loadingIndex < prepareIndex)
+        assertTrue("trigger should preserve already-shown loading while clearing overlays", prepareIndex >= 0)
+        assertTrue("trigger should start capture after clean-frame preparation", captureIndex > prepareIndex)
+        assertTrue(
+            "captureOnce should not show a duplicate loading if immediate loading was visible",
+            "showLoadingAfterScreenshot = !loadingShown" in snippet
+        )
+    }
+
+    @Test
+    fun overlayClear_supportsKeepingImmediateLoadingDuringCleanCapture() {
+        val snippet = functionSnippet(
+            File("src/main/java/com/gameocr/app/overlay/OverlayManager.kt").readText(),
+            "fun clear(keepLoading: Boolean = false)"
+        )
+
+        assertTrue(
+            "clear should only dismiss loading when keepLoading is false",
+            "if (!keepLoading) clearLoading()" in snippet
+        )
+        assertTrue("clear should still dismiss stale errors", "dismissError()" in snippet)
+        assertTrue("clear should still hide floating translation window", "floatingWindow.hide()" in snippet)
+        assertTrue("clear should still remove block overlays", "blocksView?.let" in snippet)
     }
 
     @Test

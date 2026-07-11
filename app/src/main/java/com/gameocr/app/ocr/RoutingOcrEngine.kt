@@ -21,6 +21,7 @@ class RoutingOcrEngine @Inject constructor(
     private val baidu: BaiduOcrEngine,
     private val tencent: TencentOcrEngine,
     private val paddle: PaddleOcrEngine,
+    private val paddleAiStudio: PaddleAiStudioOcrEngine,
     private val youdao: YoudaoOcrEngine,
     private val umi: UmiOcrEngine,
     private val luna: LunaOcrEngine,
@@ -35,6 +36,7 @@ class RoutingOcrEngine @Inject constructor(
             OcrEngineKind.YOUDAO -> youdao.recognize(bitmap, kind)
             OcrEngineKind.UMI_OCR -> umi.recognize(bitmap, kind)
             OcrEngineKind.LUNA_OCR -> luna.recognize(bitmap, kind)
+            OcrEngineKind.PADDLE_AI_STUDIO -> paddleAiStudio.recognize(bitmap, kind)
             OcrEngineKind.PADDLE_ONNX -> paddle.recognize(bitmap, kind)
             OcrEngineKind.MANGA_OCR_JA -> manga.recognize(bitmap, kind)
             else -> mlKit.recognize(bitmap, kind)

@@ -13,6 +13,7 @@ class TranslationPresetTest {
             apiKey = "openai-key",
             baiduOcrApiKey = "baidu-key",
             baiduOcrSecretKey = "baidu-secret",
+            paddleAiStudioToken = "paddle-ai-studio-token",
             tencentSecretId = "tencent-id",
             tencentSecretKey = "tencent-secret",
             deeplApiKey = "deepl-key",
@@ -41,6 +42,7 @@ class TranslationPresetTest {
         assertEquals(base.apiKey, applied.apiKey)
         assertEquals(base.baiduOcrApiKey, applied.baiduOcrApiKey)
         assertEquals(base.baiduOcrSecretKey, applied.baiduOcrSecretKey)
+        assertEquals(base.paddleAiStudioToken, applied.paddleAiStudioToken)
         assertEquals(base.tencentSecretId, applied.tencentSecretId)
         assertEquals(base.tencentSecretKey, applied.tencentSecretKey)
         assertEquals(base.deeplApiKey, applied.deeplApiKey)
@@ -86,6 +88,7 @@ class TranslationPresetTest {
             "apiKey",
             "baiduOcrApiKey",
             "baiduOcrSecretKey",
+            "paddleAiStudioToken",
             "tencentSecretId",
             "tencentSecretKey",
             "deeplApiKey",
@@ -148,6 +151,7 @@ class TranslationPresetTest {
             settings = base
         )
         val legacyPreset = preset.copy(settingsHash = "")
+        val staleHashPreset = preset.copy(settingsHash = "old-version-hash")
 
         assertTrue(preset.settingsHash.isNotBlank())
         assertTrue(
@@ -162,6 +166,12 @@ class TranslationPresetTest {
                 base.copy(apiKey = "changed-key", deeplCustomToken = "changed-token")
             )
         )
+        assertTrue(
+            TranslationPresetCatalog.matchesSettings(
+                staleHashPreset,
+                base.copy(apiKey = "changed-key", deeplCustomToken = "changed-token")
+            )
+        )
 
         data class Case(
             val name: String,
@@ -170,6 +180,10 @@ class TranslationPresetTest {
         val cases = listOf(
             Case("target language", base.copy(targetLang = "en")),
             Case("dictionary prompt", base.copy(dictionaryPrompt = "dictionary prompt v2")),
+            Case(
+                "overlay text style",
+                base.copy(overlayTextStyle = OverlayTextStyle(bold = true, strokeEnabled = true))
+            ),
             Case("OCR engine", base.copy(ocrEngine = OcrEngineKind.PADDLE_ONNX)),
             Case("translator engine", base.copy(translatorEngine = TranslatorEngine.LOCAL_HY_MT2)),
             Case("merge strength", base.copy(mergeStrength = MergeStrength.STANDARD)),
@@ -202,5 +216,141 @@ class TranslationPresetTest {
                 base.copy(dictionaryPrompt = "changed dictionary prompt")
             )
         )
+    }
+
+    @Test
+    fun translationPresetRoundTripsGlobalOverlayTextStyle() {
+        val style = OverlayTextStyle(
+            bold = true,
+            italic = true,
+            underline = true,
+            letterSpacingEm = 0.12f,
+            lineSpacingMultiplier = 1.4f,
+            alignment = OverlayTextAlignment.CENTER,
+            strokeEnabled = true,
+            strokeWidthDp = 2.5f,
+            strokeColor = 0xFF102030.toInt(),
+            shadowEnabled = true,
+            shadowRadiusDp = 5f,
+            shadowOffsetXDp = -2f,
+            shadowOffsetYDp = 3f,
+            shadowColor = 0xAA405060.toInt()
+        )
+        val base = Settings(
+            overlayTheme = OverlayTheme.PAPER_LIGHT,
+            overlayTextStyle = style
+        )
+        val preset = TranslationPresetCatalog.fromSettings(
+            id = "custom_text_style",
+            name = "Text style",
+            shortName = "Style",
+            settings = base
+        )
+        val applied = preset.applyTo(Settings(overlayTheme = OverlayTheme.CUSTOM))
+
+        assertEquals(style, preset.overlayTextStyle)
+        assertEquals(style, applied.overlayTextStyle)
+        assertEquals(OverlayTheme.PAPER_LIGHT, applied.overlayTheme)
+        assertTrue(TranslationPresetCatalog.matchesSettings(preset, base))
+    }
+
+    @Test
+    fun translationPreset_allContentFieldsRoundTripByBehavior() {
+        val preset = TranslationPreset(
+            id = "custom_behavior",
+            name = "Behavior",
+            shortName = "Behave",
+            baseUrl = "https://behavior.example/v1/",
+            model = "behavior-model",
+            sourceLang = "ko",
+            targetLang = "en",
+            promptTemplate = "behavior prompt",
+            dictionaryPrompt = "behavior dictionary",
+            ocrEngine = OcrEngineKind.PADDLE_ONNX,
+            preprocess = PreprocessOptions(upscale2x = true, invert = true, binarize = true),
+            renderMode = RenderMode.FLOATING_WINDOW,
+            overlayPlacement = OverlayPlacement.BELOW,
+            overlayTheme = OverlayTheme.CUSTOM,
+            customBgColor = 0xAA102030.toInt(),
+            customFgColor = 0xFF405060.toInt(),
+            customBorderColor = 0xCC708090.toInt(),
+            customBorderWidth = 5,
+            customBorderStyle = BorderStyle.DASHED,
+            overlayTextSizeSp = 23,
+            overlayTextStyle = OverlayTextStyle(
+                bold = true,
+                italic = true,
+                underline = true,
+                letterSpacingEm = 0.13f,
+                lineSpacingMultiplier = 1.7f,
+                alignment = OverlayTextAlignment.END,
+                strokeEnabled = true,
+                strokeWidthDp = 2.4f,
+                strokeColor = 0xFF112233.toInt(),
+                shadowEnabled = true,
+                shadowRadiusDp = 4.2f,
+                shadowOffsetXDp = -2f,
+                shadowOffsetYDp = 3f,
+                shadowColor = 0xAA445566.toInt(),
+            ),
+            overlayAlpha = 0.63f,
+            overlayFontFileName = "${"a".repeat(64)}.ttf",
+            overlayFontDisplayName = "Behavior.ttf",
+            overlayOffsetX = 37,
+            overlayOffsetY = -19,
+            overlayAllowWrap = false,
+            overlayAvoidCollision = false,
+            streamingTranslate = false,
+            translatorEngine = TranslatorEngine.DEEPL,
+            deeplPro = true,
+            deeplProtocol = DeeplProtocol.DEEPLX,
+            deeplBaseUrl = "https://deeplx.example/",
+            deeplBearerAuth = true,
+            baiduOcrEndpoint = BaiduOcrEndpoint.ACCURATE,
+            baiduOcrLanguage = BaiduOcrLanguage.JAP,
+            umiOcrBaseUrl = "http://127.0.0.1:1224/api/ocr",
+            lunaOcrBaseUrl = "http://127.0.0.1:2333/api/ocr",
+            tencentRegion = "ap-singapore",
+            tencentOcrEndpoint = TencentOcrEndpoint.GENERAL_ACCURATE,
+            tencentOcrLanguage = TencentOcrLanguage.ZH_RARE,
+            paddleModelVersion = PaddleModelVersion.V5_MOBILE,
+            apiTimeoutSeconds = 47,
+            mergeAdjacentBlocks = true,
+            mergeStrength = MergeStrength.CONSERVATIVE,
+            textOrientationAutoDetect = false,
+            manualTextOrientation = com.gameocr.app.ocr.TextOrientation.VERTICAL_RTL,
+            localLlmTemperature = 0.31f,
+            localLlmTopP = 0.42f,
+            localLlmTopK = 17,
+            localLlmRepetitionPenalty = 1.21f,
+            localLlmContextSize = 3072,
+            localLlmMaxNewTokens = 333,
+            dbnetProbThresh = 0.19f,
+            dbnetBoxScoreThresh = 0.44f,
+            dbnetUnclipRatio = 1.37f,
+            mangaOcrDbnetUnclipRatio = 1.83f,
+            bubbleClusterGap = 47,
+        )
+        val applied = preset.applyTo(Settings())
+        val rebuilt = TranslationPresetCatalog.fromSettings(
+            id = preset.id,
+            name = preset.name,
+            shortName = preset.shortName,
+            settings = applied,
+        )
+        val metadata = setOf("id", "name", "shortName", "settingsHash")
+        val fields = TranslationPreset::class.java.declaredFields.filterNot {
+            java.lang.reflect.Modifier.isStatic(it.modifiers) || it.name in metadata
+        }
+
+        fields.forEach { presetField ->
+            presetField.isAccessible = true
+            val settingsField = Settings::class.java.getDeclaredField(presetField.name).apply {
+                isAccessible = true
+            }
+            val expected = presetField.get(preset)
+            assertEquals("applyTo ${presetField.name}", expected, settingsField.get(applied))
+            assertEquals("fromSettings ${presetField.name}", expected, presetField.get(rebuilt))
+        }
     }
 }

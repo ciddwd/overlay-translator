@@ -221,6 +221,7 @@ class OpenAiTranslator @Inject constructor(
             .replace("{source_lang}", sourceDisplay)
             .replace("{target}", targetDisplay)
             .replace("{target_lang}", targetDisplay)
+            .withDifficultyNotesContract(targetDisplay)
 
         val reqBody = ChatRequest(
             model = settings.model,
@@ -257,66 +258,7 @@ class OpenAiTranslator @Inject constructor(
             }
         }.getOrNull() ?: return null
 
-        val jsonText = extractJsonObject(raw) ?: return null
-        return runCatching {
-            val obj = json.parseToJsonElement(jsonText).let { it as? kotlinx.serialization.json.JsonObject }
-                ?: return@runCatching null
-            val phonetic = (obj["phonetic"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull.orEmpty()
-            val pos = (obj["pos"] as? kotlinx.serialization.json.JsonArray)?.mapNotNull {
-                (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull?.takeIf { s -> s.isNotBlank() }
-            }.orEmpty()
-            val definitions = (obj["definitions"] as? kotlinx.serialization.json.JsonArray)?.mapNotNull {
-                (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull?.takeIf { s -> s.isNotBlank() }
-            }.orEmpty()
-            val examples = (obj["examples"] as? kotlinx.serialization.json.JsonArray)?.mapNotNull { el ->
-                val eo = el as? kotlinx.serialization.json.JsonObject ?: return@mapNotNull null
-                val src = (eo["src"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull.orEmpty()
-                val dst = (eo["dst"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull.orEmpty()
-                if (src.isBlank() && dst.isBlank()) null else ExamplePair(src, dst)
-            }.orEmpty()
-            val result = WordResult(
-                phonetic = phonetic,
-                pos = pos,
-                definitions = definitions,
-                examples = examples
-            )
-            if (result.isEmpty()) null else result
-        }.getOrNull()
-    }
-
-    /**
-     * 从 LLM 输出里抽出第一个完整 JSON 对象。容错处理常见包装：
-     *  - ```json ... ``` / ```...``` 代码块包裹
-     *  - 前后多余的解释文本（"以下是结果：{...}"）
-     * 找不到 {} 配对返回 null，调用方就放弃词典化。
-     */
-    private fun extractJsonObject(raw: String): String? {
-        if (raw.isBlank()) return null
-        val stripped = raw
-            .removePrefix("```json").removePrefix("```")
-            .removeSuffix("```")
-            .trim()
-        val start = stripped.indexOf('{')
-        if (start < 0) return null
-        var depth = 0
-        var i = start
-        var inStr = false
-        var escape = false
-        while (i < stripped.length) {
-            val c = stripped[i]
-            if (escape) { escape = false; i++; continue }
-            if (c == '\\' && inStr) { escape = true; i++; continue }
-            if (c == '"') { inStr = !inStr; i++; continue }
-            if (!inStr) {
-                if (c == '{') depth++
-                else if (c == '}') {
-                    depth--
-                    if (depth == 0) return stripped.substring(start, i + 1)
-                }
-            }
-            i++
-        }
-        return null
+        return parseWordResult(raw, json)
     }
 
     private fun buildRequest(text: String, settings: Settings, stream: Boolean): Request {
@@ -362,4 +304,80 @@ class OpenAiTranslator @Inject constructor(
     }
 
     private fun ensureSlash(url: String): String = if (url.endsWith("/")) url else "$url/"
+}
+
+internal fun String.withDifficultyNotesContract(targetDisplay: String): String {
+    if (contains("\"difficulty_notes\"")) return this
+    val requirement = """
+        Additional required JSON field:
+        "difficulty_notes": an array written in $targetDisplay. For rare words, specialized terms, acronyms, culture-specific references, or easily confused usages, briefly explain the domain/context, full form, concept, or ambiguity. Use an empty array for ordinary terms. Include at most 3 items and do not repeat the definitions.
+    """.trimIndent()
+    return trimEnd() + "\n\n" + requirement
+}
+
+internal fun parseWordResult(raw: String, json: Json): WordResult? {
+    val jsonText = extractJsonObject(raw) ?: return null
+    return runCatching {
+        val obj = json.parseToJsonElement(jsonText) as? JsonObject ?: return@runCatching null
+        val examples = (obj["examples"] as? JsonArray)?.mapNotNull { element ->
+            val example = element as? JsonObject ?: return@mapNotNull null
+            val src = (example["src"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+            val dst = (example["dst"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+            if (src.isBlank() && dst.isBlank()) null else ExamplePair(src, dst)
+        }.orEmpty()
+        WordResult(
+            phonetic = (obj["phonetic"] as? JsonPrimitive)?.contentOrNull.orEmpty(),
+            pos = obj.stringList("pos"),
+            definitions = obj.stringList("definitions"),
+            difficultyNotes = obj.stringList("difficulty_notes"),
+            examples = examples
+        ).takeUnless(WordResult::isEmpty)
+    }.getOrNull()
+}
+
+private fun JsonObject.stringList(key: String): List<String> =
+    (this[key] as? JsonArray)?.mapNotNull { element ->
+        (element as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+    }.orEmpty()
+
+/** Extracts the first complete JSON object from optional prose or a fenced response. */
+private fun extractJsonObject(raw: String): String? {
+    if (raw.isBlank()) return null
+    val stripped = raw
+        .removePrefix("```json").removePrefix("```")
+        .removeSuffix("```")
+        .trim()
+    val start = stripped.indexOf('{')
+    if (start < 0) return null
+    var depth = 0
+    var index = start
+    var inString = false
+    var escaped = false
+    while (index < stripped.length) {
+        val char = stripped[index]
+        if (escaped) {
+            escaped = false
+            index++
+            continue
+        }
+        if (char == '\\' && inString) {
+            escaped = true
+            index++
+            continue
+        }
+        if (char == '"') {
+            inString = !inString
+            index++
+            continue
+        }
+        if (!inString) {
+            if (char == '{') depth++
+            if (char == '}') {
+                depth--
+                if (depth == 0) return stripped.substring(start, index + 1)
+            }
+        }
+        index++
+    }
+    return null
 }

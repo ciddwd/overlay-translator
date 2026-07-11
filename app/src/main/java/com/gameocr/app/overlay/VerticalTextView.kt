@@ -9,6 +9,7 @@ import android.graphics.drawable.Drawable
 import android.text.TextPaint
 import android.util.TypedValue
 import android.view.View
+import com.gameocr.app.data.OverlayTextStyle
 
 /**
  * 竖排（tategaki）文本 View。**包装 [VerticalTextDrawer]**——`measure` 走 Drawer.measure，
@@ -29,6 +30,8 @@ class VerticalTextView(context: Context) : View(context) {
         color = Color.WHITE
         textSize = sp2px(14f)
     }
+    private var textColor: Int = Color.WHITE
+    private var textStyle: OverlayTextStyle = OverlayTextStyle()
 
     /**
      * 当前文本。setter 会触发 [requestLayout]（重算尺寸）+ [invalidate]（重绘）。
@@ -54,7 +57,7 @@ class VerticalTextView(context: Context) : View(context) {
         set(value) {
             if (field == value) return
             field = value
-            paint.typeface = value
+            applyTypefaceStyle()
             requestLayout()
             invalidate()
         }
@@ -77,7 +80,17 @@ class VerticalTextView(context: Context) : View(context) {
     }
 
     fun setTextColor(color: Int) {
+        textColor = color
         paint.color = color
+        invalidate()
+    }
+
+    fun applyTextStyle(style: OverlayTextStyle) {
+        textStyle = style.normalized()
+        applyTypefaceStyle()
+        paint.isUnderlineText = textStyle.underline
+        applyShadowStyle()
+        requestLayout()
         invalidate()
     }
 
@@ -94,7 +107,13 @@ class VerticalTextView(context: Context) : View(context) {
         }
 
         val layoutText = normalizeVerticalOverlayText(text)
-        val (contentW, contentH) = VerticalTextDrawer.measure(layoutText, paint, maxContentH)
+        val (contentW, contentH) = VerticalTextDrawer.measure(
+            layoutText,
+            paint,
+            maxContentH,
+            letterSpacingEm = textStyle.letterSpacingEm,
+            lineSpacingMultiplier = textStyle.lineSpacingMultiplier
+        )
         val desiredW = contentW + padL + padR
         val desiredH = contentH + padT + padB
 
@@ -122,9 +141,58 @@ class VerticalTextView(context: Context) : View(context) {
         canvas.save()
         canvas.clipRect(padL, padT, width - padR, height - padB)
         canvas.translate(padL.toFloat(), padT.toFloat())
-        VerticalTextDrawer.draw(canvas, layoutText, paint, contentW, contentH, leftToRight)
+        if (textStyle.strokeEnabled) {
+            paint.clearShadowLayer()
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = textStyle.strokeWidthDp * resources.displayMetrics.density
+            paint.strokeJoin = Paint.Join.ROUND
+            paint.color = textStyle.strokeColor
+            drawVerticalText(canvas, layoutText, contentW, contentH)
+        }
+        paint.style = Paint.Style.FILL
+        paint.color = textColor
+        applyShadowStyle()
+        drawVerticalText(canvas, layoutText, contentW, contentH)
         canvas.restore()
         paint.textSize = originalTextSize
+    }
+
+    private fun drawVerticalText(canvas: Canvas, layoutText: String, contentW: Float, contentH: Float) {
+        VerticalTextDrawer.draw(
+            canvas = canvas,
+            text = layoutText,
+            paint = paint,
+            boundsW = contentW,
+            boundsH = contentH,
+            leftToRight = leftToRight,
+            letterSpacingEm = textStyle.letterSpacingEm,
+            lineSpacingMultiplier = textStyle.lineSpacingMultiplier,
+            alignment = textStyle.alignment
+        )
+    }
+
+    private fun applyTypefaceStyle() {
+        val style = when {
+            textStyle.bold && textStyle.italic -> Typeface.BOLD_ITALIC
+            textStyle.bold -> Typeface.BOLD
+            textStyle.italic -> Typeface.ITALIC
+            else -> Typeface.NORMAL
+        }
+        paint.typeface = Typeface.create(typeface ?: Typeface.DEFAULT, style)
+    }
+
+    private fun applyShadowStyle() {
+        if (textStyle.shadowEnabled) {
+            val density = resources.displayMetrics.density
+            paint.setShadowLayer(
+                textStyle.shadowRadiusDp * density,
+                textStyle.shadowOffsetXDp * density,
+                textStyle.shadowOffsetYDp * density,
+                textStyle.shadowColor
+            )
+        } else {
+            paint.clearShadowLayer()
+        }
     }
 
     private fun sp2px(sp: Float): Float =
@@ -145,7 +213,13 @@ class VerticalTextView(context: Context) : View(context) {
             minReadableTextSizePx = sp2px(12f)
         )
         repeat(4) {
-            val requiredW = VerticalTextDrawer.measure(layoutText, paint, contentH.toInt()).first
+            val requiredW = VerticalTextDrawer.measure(
+                layoutText,
+                paint,
+                contentH.toInt(),
+                letterSpacingEm = textStyle.letterSpacingEm,
+                lineSpacingMultiplier = textStyle.lineSpacingMultiplier
+            ).first
             if (requiredW <= contentW || paint.textSize <= minTextSize) return
             val ratio = (contentW / requiredW).coerceIn(0.86f, 0.97f)
             paint.textSize = (paint.textSize * ratio).coerceAtLeast(minTextSize)

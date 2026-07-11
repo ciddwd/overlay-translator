@@ -24,6 +24,7 @@ import kotlinx.coroutines.sync.withLock
  */
 abstract class LocalLlamaTranslator(
     protected val holder: LlamaEngineHolder,
+    private val cache: TranslationCache,
 ) : Translator {
 
     protected abstract val modelKind: LlmModelKind
@@ -44,31 +45,58 @@ abstract class LocalLlamaTranslator(
 
     override suspend fun translate(source: String, settings: Settings): String? {
         if (source.isBlank()) return null
+        val userPrompt = buildUserPrompt(source, settings)
+        val cacheKey = cacheKey(source, settings, userPrompt)
+        cache.get(cacheKey)?.let { return it }
         val engine = holder.ensureLoaded(modelKind, systemPrompt)
         // 推理串行：translateBatch 默认并发触发多个 translate，端侧 LLM engine 一次只能跑一段，
         // 用 holder 的全局 inferenceMutex 排队，避免后段被 binding 丢弃。
         return holder.inferenceMutex.withLock {
+            cache.get(cacheKey)?.let { return@withLock it }
             val sb = StringBuilder()
-            engine.sendUserPrompt(buildUserPrompt(source, settings), settings.localLlmMaxNewTokens)
+            engine.sendUserPrompt(userPrompt, settings.localLlmMaxNewTokens)
                 .collect { token -> sb.append(token) }
             holder.touch()
-            sb.toString().trim().ifBlank { null }
+            sb.toString().trim().ifBlank { null }?.also { cache.put(cacheKey, it) }
         }
     }
 
     override fun translateStream(source: String, settings: Settings): Flow<String> = flow {
         if (source.isBlank()) return@flow
+        val userPrompt = buildUserPrompt(source, settings)
+        val cacheKey = cacheKey(source, settings, userPrompt)
+        cache.get(cacheKey)?.let { cached ->
+            emit(cached)
+            return@flow
+        }
         val engine = holder.ensureLoaded(modelKind, systemPrompt)
         holder.inferenceMutex.withLock {
+            cache.get(cacheKey)?.let { cached ->
+                emit(cached)
+                return@withLock
+            }
             val sb = StringBuilder()
-            engine.sendUserPrompt(buildUserPrompt(source, settings), settings.localLlmMaxNewTokens)
+            engine.sendUserPrompt(userPrompt, settings.localLlmMaxNewTokens)
                 .collect { token ->
                     sb.append(token)
                     emit(sb.toString())
                 }
             holder.touch()
+            sb.toString().trim().takeIf { it.isNotBlank() }?.let { cache.put(cacheKey, it) }
         }
     }
+
+    private fun cacheKey(source: String, settings: Settings, userPrompt: String): String =
+        LocalLlamaTranslationCacheKey.build(
+            cache = cache,
+            source = source,
+            modelKind = modelKind,
+            sourceLang = settings.sourceLang,
+            targetLang = settings.targetLang,
+            maxNewTokens = settings.localLlmMaxNewTokens,
+            systemPrompt = systemPrompt,
+            userPrompt = userPrompt,
+        )
 
     override suspend fun testConnection(settings: Settings): TestResult = runCatching {
         if (!holder.isDeviceCapable()) {

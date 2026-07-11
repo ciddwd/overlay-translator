@@ -69,4 +69,19 @@ class LogRepositoryTest {
             assertEquals(case.name, case.expectedImagePath, repo.entries.value.single().imagePath)
         }
     }
+
+    @Test
+    fun entries_preserveExplicitHistoricalTimestamp() {
+        val repo = LogRepository()
+
+        repo.error(
+            category = LogRepository.Category.CRASH,
+            message = "historical crash",
+            timestamp = 1_725_000_000_000L,
+        )
+
+        val entry = repo.entries.value.single()
+        assertEquals(LogRepository.Category.CRASH, entry.category)
+        assertEquals(1_725_000_000_000L, entry.timestamp)
+    }
 }

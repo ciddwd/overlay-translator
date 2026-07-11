@@ -11,7 +11,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * 基于 Shizuku 的截屏实现（experimental）：通过反射调用 Shizuku 的 hidden `newProcess`
- * API 在 shell uid 下执行 `screencap -p`，读 PNG 字节流后解码成 Bitmap。
+ * API 在 shell uid 下执行 raw `screencap`，不兼容时回退到 `screencap -p` PNG。
  *
  * 优势：
  * - 免 MediaProjection 每次系统授权窗（Android 14+ 强制弹）
@@ -37,43 +37,76 @@ class ShizukuScreenshotter : Screenshotter {
             return@withContext null
         }
         try {
-            // 直接执行 screencap（不经 sh -c）：避免 shell 把二进制 PNG 字节流当文本处理的风险。
-            val process = invokeNewProcess(arrayOf("screencap", "-p"))
-            if (process == null) {
-                Timber.w("[shizuku-cap] newProcess returned null — reflection target missing (R8 stripped Shizuku.newProcess?)")
-                return@withContext null
+            // Raw screencap avoids vendor-specific PNG stream corruption. Keep PNG as a
+            // compatibility fallback for devices whose raw header or pixel format is unknown.
+            val rawBitmap = executeScreencap(arrayOf("screencap"), "raw")?.let { bytes ->
+                runCatching { ShizukuRawScreencapDecoder.decode(bytes) }
+                    .onFailure { Timber.w(it, "[shizuku-cap] raw decode threw") }
+                    .getOrNull()
             }
-            val out = ByteArrayOutputStream(8 * 1024 * 1024)
-            val inStream = process.javaClass.getMethod("getInputStream").invoke(process) as java.io.InputStream
-            inStream.use { it.copyTo(out) }
-            val ec = runCatching {
-                process.javaClass.getMethod("waitFor").invoke(process) as Int
-            }.getOrElse { -1 }
-            val bytes = out.toByteArray()
-            if (ec != 0) {
-                // 把 stderr 读出来一起打：screencap 失败时常常在 stderr 写明 selinux denied 之类
-                val err = runCatching {
-                    val es = process.javaClass.getMethod("getErrorStream").invoke(process) as java.io.InputStream
-                    es.use { String(it.readBytes()).take(300) }
-                }.getOrElse { "<no stderr>" }
-                Timber.w("[shizuku-cap] screencap exit=%d, stdoutBytes=%d, stderr=%s", ec, bytes.size, err)
-                return@withContext null
+            if (rawBitmap != null) {
+                Timber.d("[shizuku-cap] raw ok %dx%d", rawBitmap.width, rawBitmap.height)
+                return@withContext rawBitmap
             }
-            if (bytes.isEmpty()) {
-                Timber.w("[shizuku-cap] screencap exit=0 but empty payload")
-                return@withContext null
-            }
-            val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-            if (bmp == null) {
-                Timber.w("[shizuku-cap] decode PNG failed, bytes=%d, head=%s",
-                    bytes.size, bytes.take(8).joinToString { "%02x".format(it) })
+
+            Timber.w("[shizuku-cap] raw capture/decode failed; retrying PNG")
+            val pngBytes = executeScreencap(arrayOf("screencap", "-p"), "png")
+                ?: return@withContext null
+            val bitmap = BitmapFactory.decodeByteArray(pngBytes, 0, pngBytes.size)
+            if (bitmap == null) {
+                Timber.w(
+                    "[shizuku-cap] decode PNG failed, bytes=%d, head=%s",
+                    pngBytes.size,
+                    pngBytes.take(8).joinToString { "%02x".format(it) }
+                )
             } else {
-                Timber.d("[shizuku-cap] ok %dx%d", bmp.width, bmp.height)
+                Timber.d("[shizuku-cap] png ok %dx%d", bitmap.width, bitmap.height)
             }
-            bmp
+            bitmap
         } catch (t: Throwable) {
             Timber.w(t, "[shizuku-cap] capture threw")
             null
+        }
+    }
+
+    private fun executeScreencap(command: Array<String>, format: String): ByteArray? {
+        val process = invokeNewProcess(command)
+        if (process == null) {
+            Timber.w(
+                "[shizuku-cap] newProcess returned null — reflection target missing " +
+                    "(R8 stripped Shizuku.newProcess?)"
+            )
+            return null
+        }
+        return try {
+            val out = ByteArrayOutputStream(16 * 1024 * 1024)
+            val input = process.javaClass.getMethod("getInputStream").invoke(process) as java.io.InputStream
+            input.use { it.copyTo(out) }
+            val exitCode = runCatching {
+                process.javaClass.getMethod("waitFor").invoke(process) as Int
+            }.getOrElse { -1 }
+            val bytes = out.toByteArray()
+            if (exitCode != 0) {
+                val error = runCatching {
+                    val stream = process.javaClass.getMethod("getErrorStream").invoke(process) as java.io.InputStream
+                    stream.use { String(it.readBytes()).take(300) }
+                }.getOrElse { "<no stderr>" }
+                Timber.w(
+                    "[shizuku-cap] %s exit=%d, stdoutBytes=%d, stderr=%s",
+                    format,
+                    exitCode,
+                    bytes.size,
+                    error
+                )
+                null
+            } else if (bytes.isEmpty()) {
+                Timber.w("[shizuku-cap] %s exit=0 but empty payload", format)
+                null
+            } else {
+                bytes
+            }
+        } finally {
+            runCatching { process.javaClass.getMethod("destroy").invoke(process) }
         }
     }
 

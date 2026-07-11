@@ -44,7 +44,10 @@ object OrientationRouting {
         val isJapanese = lang == "ja" || lang.startsWith("ja-")
         val isChinese = lang.startsWith("zh")
         val isAuto = lang == "auto"
-        val userAlreadyChoseCloudOcr = userEngine == OcrEngineKind.BAIDU
+        val userAlreadyChoseCloudOcr = userEngine == OcrEngineKind.BAIDU ||
+            userEngine == OcrEngineKind.TENCENT ||
+            userEngine == OcrEngineKind.YOUDAO ||
+            userEngine == OcrEngineKind.PADDLE_AI_STUDIO
 
         if (
             userAlreadyChoseCloudOcr ||

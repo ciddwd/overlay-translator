@@ -135,6 +135,7 @@ class RoutingTranslator @Inject constructor(
         val normalized = result.copy(
             pos = result.pos.map { normalizePlain(it, settings) },
             definitions = result.definitions.map { normalizePlain(it, settings) },
+            difficultyNotes = result.difficultyNotes.map { normalizePlain(it, settings) },
             examples = result.examples.map { example ->
                 example.copy(dst = normalizePlain(example.dst, settings))
             },

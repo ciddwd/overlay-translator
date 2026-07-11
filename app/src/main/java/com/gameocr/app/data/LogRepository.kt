@@ -22,7 +22,7 @@ import kotlinx.coroutines.flow.asStateFlow
 class LogRepository @Inject constructor() {
 
     enum class Level { INFO, WARN, ERROR }
-    enum class Category { CAPTURE, OCR, TRANSLATE }
+    enum class Category { CAPTURE, OCR, TRANSLATE, CRASH }
 
     data class Entry(
         /** 全局递增唯一 id。同毫秒并发产生多条日志时也保证不撞，给 LazyColumn 用作稳定 key。 */
@@ -43,15 +43,31 @@ class LogRepository @Inject constructor() {
     private val _entries = MutableStateFlow<List<Entry>>(emptyList())
     val entries: StateFlow<List<Entry>> = _entries.asStateFlow()
 
-    fun info(category: Category, message: String, elapsedMs: Long? = null, imagePath: String? = null) =
-        add(Level.INFO, category, message, elapsedMs, imagePath)
+    fun info(
+        category: Category,
+        message: String,
+        elapsedMs: Long? = null,
+        imagePath: String? = null,
+        timestamp: Long = System.currentTimeMillis(),
+    ) = add(Level.INFO, category, message, elapsedMs, imagePath, timestamp)
 
-    fun warn(category: Category, message: String, elapsedMs: Long? = null, imagePath: String? = null) =
-        add(Level.WARN, category, message, elapsedMs, imagePath)
+    fun warn(
+        category: Category,
+        message: String,
+        elapsedMs: Long? = null,
+        imagePath: String? = null,
+        timestamp: Long = System.currentTimeMillis(),
+    ) = add(Level.WARN, category, message, elapsedMs, imagePath, timestamp)
 
-    fun error(category: Category, message: String, t: Throwable? = null, elapsedMs: Long? = null) {
+    fun error(
+        category: Category,
+        message: String,
+        t: Throwable? = null,
+        elapsedMs: Long? = null,
+        timestamp: Long = System.currentTimeMillis(),
+    ) {
         val full = if (t != null) "$message: ${t.javaClass.simpleName}: ${t.message}" else message
-        add(Level.ERROR, category, full, elapsedMs)
+        add(Level.ERROR, category, full, elapsedMs, timestamp = timestamp)
     }
 
     /** 记录一对"原文 → 译文"（翻译场景）。 */
@@ -78,12 +94,13 @@ class LogRepository @Inject constructor() {
         category: Category,
         message: String,
         elapsedMs: Long?,
-        imagePath: String? = null
+        imagePath: String? = null,
+        timestamp: Long = System.currentTimeMillis(),
     ) {
         push(
             Entry(
                 id = idGen.incrementAndGet(),
-                timestamp = System.currentTimeMillis(),
+                timestamp = timestamp,
                 level = level,
                 category = category,
                 message = message,

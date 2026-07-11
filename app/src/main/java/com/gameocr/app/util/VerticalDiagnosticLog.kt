@@ -27,6 +27,10 @@ internal object VerticalDiagnosticLog {
         }
     }
 
+    fun w(message: String) {
+        chunks(message).forEach { chunk -> Timber.tag(TAG).w("%s", chunk) }
+    }
+
     fun text(value: String?): String =
         value.orEmpty()
             .replace("\r", "\\r")

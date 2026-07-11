@@ -3,6 +3,7 @@ package com.gameocr.app.overlay
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Rect
+import com.gameocr.app.data.OverlayTextAlignment
 import kotlin.math.ceil
 import kotlin.math.max
 
@@ -78,11 +79,17 @@ object VerticalTextDrawer {
      *  @param maxHeightPx 单列高度上限（超出换列）。<= 0 = 无限高，单列到底
      *  @return Pair(width, height)
      */
-    fun measure(text: String, paint: Paint, maxHeightPx: Int = 0): Pair<Int, Int> {
+    fun measure(
+        text: String,
+        paint: Paint,
+        maxHeightPx: Int = 0,
+        letterSpacingEm: Float = 0f,
+        lineSpacingMultiplier: Float = 1f
+    ): Pair<Int, Int> {
         if (text.isEmpty()) return 0 to 0
         val cps = text.codePoints().toArray()
-        val lineH = lineHeight(paint)
-        val colW = columnWidth(paint)
+        val lineH = glyphStep(paint, letterSpacingEm)
+        val colW = columnWidth(paint) * lineSpacingMultiplier.coerceIn(1f, 2f)
         val effectiveMaxH = if (maxHeightPx <= 0) Int.MAX_VALUE.toFloat() else maxHeightPx.toFloat()
 
         var y = 0f
@@ -130,13 +137,16 @@ object VerticalTextDrawer {
         paint: Paint,
         boundsW: Float,
         boundsH: Float,
-        leftToRight: Boolean = false
+        leftToRight: Boolean = false,
+        letterSpacingEm: Float = 0f,
+        lineSpacingMultiplier: Float = 1f,
+        alignment: OverlayTextAlignment = OverlayTextAlignment.START
     ) {
         if (text.isEmpty()) return
         val cps = text.codePoints().toArray()
         val fm = paint.fontMetrics
-        val lineH = lineHeight(paint)
-        val colW = columnWidth(paint)
+        val lineH = glyphStep(paint, letterSpacingEm)
+        val colW = columnWidth(paint) * lineSpacingMultiplier.coerceIn(1f, 2f)
 
         // 列起始 x：RTL 起最右一列中心；LTR 起最左一列中心。每列向左 / 向右步进 colW
         val firstColCenterX = if (leftToRight) colW / 2f else boundsW - colW / 2f
@@ -145,30 +155,47 @@ object VerticalTextDrawer {
         // 每列字数上限 = floor(boundsH / lineH)；至少 1（避免 boundsH 太小整段卡住）
         val perColCap = max(1, (boundsH / lineH).toInt())
 
-        var colIdx = 0
-        var inColIdx = 0  // 当前列已画的字数（含换行触发的归零）
-        for (cp in cps) {
-            if (cp == 0x000A) {
-                // 显式换行：进下一列
-                colIdx++
-                inColIdx = 0
-                continue
-            }
-            if (inColIdx >= perColCap) {
-                colIdx++
-                inColIdx = 0
-            }
+        val columns = layoutColumns(cps, perColCap)
+        columns.forEachIndexed { colIdx, column ->
             val colCenterX = firstColCenterX + colIdx * colStepX
             // 越界保护：列起点已超出画布范围则停止绘制（避免画到外面）
-            if (colCenterX < -colW || colCenterX > boundsW + colW) break
-
-            // baseline y = (inColIdx + 1) 个字格的下沿 + 字格内 baseline 偏移
-            val cellTop = inColIdx * lineH
-            val baselineY = cellTop - fm.ascent  // ascent 是负值，相对 baseline 向上
-
-            drawSingleGlyph(canvas, cp, paint, colCenterX, baselineY, lineH, colW)
-            inColIdx++
+            if (colCenterX < -colW || colCenterX > boundsW + colW) return@forEachIndexed
+            val columnHeight = column.size * lineH
+            val yOffset = alignmentOffset(boundsH, columnHeight, alignment)
+            column.forEachIndexed { inColIdx, cp ->
+                // baseline y = (inColIdx + 1) 个字格的下沿 + 字格内 baseline 偏移
+                val cellTop = yOffset + inColIdx * lineH
+                val baselineY = cellTop - fm.ascent
+                drawSingleGlyph(canvas, cp, paint, colCenterX, baselineY, lineH, colW)
+            }
         }
+    }
+
+    internal fun alignmentOffset(
+        availableSize: Float,
+        contentSize: Float,
+        alignment: OverlayTextAlignment
+    ): Float {
+        val remaining = (availableSize - contentSize).coerceAtLeast(0f)
+        return when (alignment) {
+            OverlayTextAlignment.START -> 0f
+            OverlayTextAlignment.CENTER -> remaining / 2f
+            OverlayTextAlignment.END -> remaining
+        }
+    }
+
+    private fun layoutColumns(codePoints: IntArray, capacity: Int): List<List<Int>> {
+        val columns = mutableListOf(mutableListOf<Int>())
+        codePoints.forEach { codePoint ->
+            val current = columns.last()
+            if (codePoint == 0x000A) {
+                columns += mutableListOf<Int>()
+            } else {
+                if (current.size >= capacity) columns += mutableListOf<Int>()
+                columns.last().add(codePoint)
+            }
+        }
+        return columns
     }
 
     /**
@@ -220,6 +247,9 @@ object VerticalTextDrawer {
         val fm = paint.fontMetrics
         return (fm.descent - fm.ascent) * 1.05f
     }
+
+    private fun glyphStep(paint: Paint, letterSpacingEm: Float): Float =
+        lineHeight(paint) + paint.textSize * letterSpacingEm.coerceIn(0f, 0.2f)
 
     /** 列宽（左右占用空间）。竖排单列宽度 ≈ 单字宽度，用 "国" 这种全角字 measureText 近似。 */
     fun columnWidth(paint: Paint): Float {

@@ -19,7 +19,8 @@ import javax.inject.Singleton
 @Singleton
 class SakuraGalTranslator @Inject constructor(
     holder: LlamaEngineHolder,
-) : LocalLlamaTranslator(holder) {
+    cache: TranslationCache,
+) : LocalLlamaTranslator(holder, cache) {
 
     override val modelKind = LlmModelKind.SAKURA_1_5B_Q4
 

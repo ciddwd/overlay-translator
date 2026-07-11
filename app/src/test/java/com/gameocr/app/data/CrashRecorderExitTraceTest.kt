@@ -5,6 +5,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.InputStream
 
 class CrashRecorderExitTraceTest {
 
@@ -63,6 +64,50 @@ class CrashRecorderExitTraceTest {
 
         cases.forEach { case ->
             case.assertResult(CrashRecorder.formatExitTraceForLog(case.bytes))
+        }
+    }
+
+    @Test
+    fun formatExitTraceForLog_boundsInputBeforeFormatting() {
+        data class Case(
+            val name: String,
+            val byteValue: Int,
+            val expectedFragment: String,
+        )
+
+        val cases = listOf(
+            Case("large text trace", 'a'.code, "trace input truncated"),
+            Case("large binary trace", 0, "binary trace omitted"),
+        )
+
+        cases.forEach { case ->
+            val input = CountingInputStream(totalBytes = 512 * 1024, byteValue = case.byteValue)
+            val result = requireNotNull(CrashRecorder.formatExitTraceForLog(input))
+            assertTrue(case.name, result.contains(case.expectedFragment))
+            assertTrue(case.name, result.contains("trace input truncated after 65536 bytes"))
+            assertEquals(case.name, 65_537, input.bytesRead)
+        }
+    }
+
+    private class CountingInputStream(
+        private val totalBytes: Int,
+        private val byteValue: Int,
+    ) : InputStream() {
+        var bytesRead: Int = 0
+            private set
+
+        override fun read(): Int {
+            if (bytesRead >= totalBytes) return -1
+            bytesRead++
+            return byteValue
+        }
+
+        override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+            if (bytesRead >= totalBytes) return -1
+            val count = minOf(length, totalBytes - bytesRead)
+            buffer.fill(byteValue.toByte(), offset, offset + count)
+            bytesRead += count
+            return count
         }
     }
 }

@@ -9,16 +9,26 @@ import android.os.Build
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
+import android.view.WindowInsets
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import com.gameocr.app.R
 import com.gameocr.app.data.BorderStyle
 import com.gameocr.app.data.OverlayTheme
+import com.gameocr.app.data.OverlayFontPolicy
 import com.gameocr.app.data.Settings
 import com.gameocr.app.translate.WordResult
+
+private data class TranslationCardWindowArea(
+    val widthPx: Int,
+    val heightPx: Int,
+    val safeInsets: TranslationCardSafeInsets,
+)
 
 /**
  * 划词翻译结果浮卡。屏幕中下方居中弹出，**不**自动消失（卡片可能含多行释义，用户需要时间阅读）。
@@ -30,7 +40,7 @@ import com.gameocr.app.translate.WordResult
  * 渲染分区：
  *  - 标题：原文（小字、单行）
  *  - 主区：译文（大字、可折行）
- *  - 字典区（仅 [show] 传入的 wordResult 非空时）：音标 / 词性 / 释义列表 / 例句对
+ *  - 字典区（仅 [show] 传入的 wordResult 非空时）：音标 / 词性 / 释义 / 难点解释 / 例句
  *  - 动作行：复制原文 / 复制译文 按钮 + 点击短暂反馈
  *
  * 卡片背景 / 文字 / 边框 / 边框样式跟随 [Settings.overlayTheme]——和 [DraggableOverlayWindow]
@@ -74,6 +84,14 @@ class TranslationCardOverlay(private val context: Context) {
     ) {
         dismiss()
         val density = context.resources.displayMetrics.density
+        val padH = (16 * density).toInt()
+        val padV = (12 * density).toInt()
+        val windowArea = currentWindowArea()
+        var layoutSpec = translationCardLayoutSpec(
+            screenWidthPx = windowArea.widthPx,
+            screenHeightPx = windowArea.heightPx,
+            safeInsets = windowArea.safeInsets,
+        )
 
         // 主题色一次取齐，避免多次 when 分支不同步
         val theme = settings.overlayTheme
@@ -84,7 +102,18 @@ class TranslationCardOverlay(private val context: Context) {
 
         // 内层 card 只承担"内容容器"角色，不带背景 / padding——
         // 背景 + 边框 + padding 在外壳 shell 上，让滚动时只有文字动、外壳保持不动。
-        val card = LinearLayout(context).apply {
+        val card = object : LinearLayout(context) {
+            override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+                val maxHeight = layoutSpec.cardHeightPx(shellVerticalPaddingPx = padV * 2)
+                super.onMeasure(
+                    widthMeasureSpec,
+                    View.MeasureSpec.makeMeasureSpec(maxHeight, View.MeasureSpec.EXACTLY),
+                )
+            }
+        }.apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        val scrollContent = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
         }
 
@@ -122,11 +151,11 @@ class TranslationCardOverlay(private val context: Context) {
 
         // 主区：译文（大字）
         if (!translation.isNullOrBlank()) {
-            val translationTv = TextView(context).apply {
+            val translationTv = StyledTranslationTextView(context).apply {
                 text = translation
                 setTextColor(fgColor)
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
-                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                applyOverlayTextStyle(settings.overlayTextStyle, settingsTypeface(settings))
                 val mt = (10 * density).toInt()
                 val mb = if (wordResult == null) 0 else (8 * density).toInt()
                 setPadding(0, mt, 0, mb)
@@ -136,14 +165,14 @@ class TranslationCardOverlay(private val context: Context) {
                     true
                 }
             }
-            card.addView(translationTv)
+            scrollContent.addView(translationTv)
         }
 
         // 字典区
         if (wordResult != null && !wordResult.isEmpty()) {
-            card.addView(buildDivider(density, mutedColor))
+            scrollContent.addView(buildDivider(density, mutedColor))
             if (wordResult.phonetic.isNotBlank()) {
-                card.addView(buildLabeledLine(
+                scrollContent.addView(buildLabeledLine(
                     context.getString(R.string.word_card_label_phonetic),
                     wordResult.phonetic,
                     density,
@@ -153,7 +182,7 @@ class TranslationCardOverlay(private val context: Context) {
                 ))
             }
             if (wordResult.pos.isNotEmpty()) {
-                card.addView(buildLabeledLine(
+                scrollContent.addView(buildLabeledLine(
                     context.getString(R.string.word_card_label_pos),
                     wordResult.pos.joinToString(" / "),
                     density,
@@ -162,13 +191,13 @@ class TranslationCardOverlay(private val context: Context) {
                 ))
             }
             if (wordResult.definitions.isNotEmpty()) {
-                card.addView(buildLabel(
+                scrollContent.addView(buildLabel(
                     context.getString(R.string.word_card_label_definitions),
                     density,
                     accentColor
                 ))
                 wordResult.definitions.forEachIndexed { idx, d ->
-                    card.addView(TextView(context).apply {
+                    scrollContent.addView(TextView(context).apply {
                         text = "${idx + 1}. $d"
                         setTextColor(fgColor)
                         setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
@@ -177,8 +206,24 @@ class TranslationCardOverlay(private val context: Context) {
                     })
                 }
             }
+            if (wordResult.difficultyNotes.isNotEmpty()) {
+                scrollContent.addView(buildLabel(
+                    context.getString(R.string.word_card_label_difficulty_notes),
+                    density,
+                    accentColor
+                ))
+                wordResult.difficultyNotes.forEach { note ->
+                    scrollContent.addView(TextView(context).apply {
+                        text = "・$note"
+                        setTextColor(fgColor)
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                        val pad = (2 * density).toInt()
+                        setPadding(0, pad, 0, pad)
+                    })
+                }
+            }
             if (wordResult.examples.isNotEmpty()) {
-                card.addView(buildLabel(
+                scrollContent.addView(buildLabel(
                     context.getString(R.string.word_card_label_examples),
                     density,
                     accentColor
@@ -196,14 +241,33 @@ class TranslationCardOverlay(private val context: Context) {
                         val mb = (6 * density).toInt()
                         setPadding(0, 0, 0, mb)
                     }
-                    card.addView(srcTv)
-                    card.addView(dstTv)
+                    scrollContent.addView(srcTv)
+                    scrollContent.addView(dstTv)
                 }
             }
         }
 
         // 动作行：复制原文 / 复制译文（仅在对应文本非空时）。
         // 显式按钮主要解决「用户不知道能复制」；长按 srcLabel/translationTv 的快捷方式保留。
+        val scroll = ScrollView(context).apply {
+            isFillViewport = false
+            addView(
+                scrollContent,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+        }
+        card.addView(
+            scroll,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f,
+            ),
+        )
+
         val actionRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.END
@@ -231,41 +295,14 @@ class TranslationCardOverlay(private val context: Context) {
         }
         card.addView(actionRow)
 
-        val padH = (16 * density).toInt()
-        val padV = (12 * density).toInt()
-
         // 内层 ScrollView：滚动 viewport。重写 onMeasure 把高度限制为屏幕高 * 0.6 —
         // 旋转后 displayMetrics 跟随系统 configuration 自动更新，省掉 layout listener。
-        val scroll = object : ScrollView(context) {
-            override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-                val dm = resources.displayMetrics
-                val maxH = (dm.heightPixels * 0.6f).toInt()
-                super.onMeasure(
-                    widthMeasureSpec,
-                    android.view.View.MeasureSpec.makeMeasureSpec(
-                        maxH,
-                        android.view.View.MeasureSpec.AT_MOST
-                    )
-                )
-            }
-        }.apply {
-            isFillViewport = false
-            addView(
-                card,
-                FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.MATCH_PARENT,
-                    FrameLayout.LayoutParams.WRAP_CONTENT
-                )
-            )
-        }
-
         // 外壳：背景 + 边框 + padding 全在这层，滚动时保持不动。
         // 重写 onMeasure 把宽度锁成"父 (backdrop = 屏幕) 宽 * 0.88"，旋转后 backdrop 自动重算
         // → shell 的 measureSpec 也会带新 parentW 进来，竖屏不会塞横屏宽。
         val shell = object : FrameLayout(context) {
             override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-                val parentW = android.view.View.MeasureSpec.getSize(widthMeasureSpec)
-                val maxW = (parentW * 0.88f).toInt()
+                val maxW = layoutSpec.shellWidthPx()
                 super.onMeasure(
                     android.view.View.MeasureSpec.makeMeasureSpec(
                         maxW,
@@ -278,7 +315,7 @@ class TranslationCardOverlay(private val context: Context) {
             background = shellBackground(theme, settings, density)
             setPadding(padH, padV, padH, padV)
             addView(
-                scroll,
+                card,
                 FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.MATCH_PARENT,
                     FrameLayout.LayoutParams.WRAP_CONTENT
@@ -289,6 +326,12 @@ class TranslationCardOverlay(private val context: Context) {
         // 外层全屏背景（半透明黑），吸收点击关闭
         val backdrop = FrameLayout(context).apply {
             setBackgroundColor(0x55000000.toInt())
+            setPadding(
+                windowArea.safeInsets.left,
+                windowArea.safeInsets.top,
+                windowArea.safeInsets.right,
+                windowArea.safeInsets.bottom,
+            )
             isClickable = true
             setOnClickListener { dismiss() }
             addView(
@@ -299,6 +342,27 @@ class TranslationCardOverlay(private val context: Context) {
                     Gravity.CENTER
                 )
             )
+        }
+        ViewCompat.setOnApplyWindowInsetsListener(backdrop) { view, insets ->
+            val safe = insets.getInsetsIgnoringVisibility(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
+            )
+            val latestArea = currentWindowArea()
+            val latestInsets = TranslationCardSafeInsets(
+                left = safe.left,
+                top = safe.top,
+                right = safe.right,
+                bottom = safe.bottom,
+            )
+            layoutSpec = translationCardLayoutSpec(
+                screenWidthPx = latestArea.widthPx,
+                screenHeightPx = latestArea.heightPx,
+                safeInsets = latestInsets,
+            )
+            view.setPadding(safe.left, safe.top, safe.right, safe.bottom)
+            shell.requestLayout()
+            card.requestLayout()
+            insets
         }
         // 拦截卡片内点击不冒泡到 backdrop（否则点字典区也会关闭）
         shell.setOnClickListener { /* swallow */ }
@@ -319,7 +383,35 @@ class TranslationCardOverlay(private val context: Context) {
             }
         }
         runCatching { wm.addView(backdrop, params) }
+        ViewCompat.requestApplyInsets(backdrop)
         rootView = backdrop
+    }
+
+    private fun currentWindowArea(): TranslationCardWindowArea {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            runCatching {
+                val metrics = wm.currentWindowMetrics
+                val insets = metrics.windowInsets.getInsetsIgnoringVisibility(
+                    WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout(),
+                )
+                return TranslationCardWindowArea(
+                    widthPx = metrics.bounds.width(),
+                    heightPx = metrics.bounds.height(),
+                    safeInsets = TranslationCardSafeInsets(
+                        left = insets.left,
+                        top = insets.top,
+                        right = insets.right,
+                        bottom = insets.bottom,
+                    ),
+                )
+            }
+        }
+        val displayMetrics = context.resources.displayMetrics
+        return TranslationCardWindowArea(
+            widthPx = displayMetrics.widthPixels,
+            heightPx = displayMetrics.heightPixels,
+            safeInsets = TranslationCardSafeInsets(),
+        )
     }
 
     private fun buildLabel(text: String, density: Float, color: Int): TextView = TextView(context).apply {
@@ -403,6 +495,14 @@ class TranslationCardOverlay(private val context: Context) {
             as android.content.ClipboardManager
         cm.setPrimaryClip(android.content.ClipData.newPlainText("translation", text))
     }
+
+    private fun settingsTypeface(settings: Settings): android.graphics.Typeface? =
+        runCatching {
+            OverlayFontPolicy.normalizeStoredFileName(settings.overlayFontFileName)?.let { fileName ->
+                val directory = java.io.File(context.filesDir, OverlayFontPolicy.FONT_DIR_NAME)
+                android.graphics.Typeface.Builder(java.io.File(directory, fileName)).build()
+            }
+        }.getOrNull()
 
     // —— 主题色：与 DraggableOverlayWindow 同步。把两边维护成一致以保持视觉统一。——
 

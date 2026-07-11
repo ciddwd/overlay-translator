@@ -256,6 +256,7 @@ class PresetQuickSwitchOverlay(private val context: Context) {
         OcrEngineKind.ML_KIT_KOREAN -> context.getString(R.string.settings_ocr_chip_korean)
         OcrEngineKind.ML_KIT_CHINESE -> context.getString(R.string.settings_ocr_chip_chinese)
         OcrEngineKind.PADDLE_ONNX -> context.getString(R.string.settings_ocr_chip_paddle)
+        OcrEngineKind.PADDLE_AI_STUDIO -> context.getString(R.string.settings_ocr_chip_paddle_ai_studio)
         OcrEngineKind.BAIDU -> context.getString(R.string.settings_ocr_chip_baidu)
         OcrEngineKind.TENCENT -> context.getString(R.string.settings_ocr_chip_tencent)
         OcrEngineKind.YOUDAO -> context.getString(R.string.settings_ocr_chip_youdao)

@@ -407,6 +407,7 @@ private fun LogCard(
             LogRepository.Category.CAPTURE -> R.string.log_category_capture
             LogRepository.Category.OCR -> R.string.log_category_ocr
             LogRepository.Category.TRANSLATE -> R.string.log_category_translate
+            LogRepository.Category.CRASH -> R.string.log_category_crash
         }
     )
     Card(
@@ -609,6 +610,7 @@ private fun formatForExport(context: Context, entries: List<LogRepository.Entry>
                 LogRepository.Category.CAPTURE -> R.string.log_category_capture
                 LogRepository.Category.OCR -> R.string.log_category_ocr
                 LogRepository.Category.TRANSLATE -> R.string.log_category_translate
+                LogRepository.Category.CRASH -> R.string.log_category_crash
             }
         )
         sb.append(ts.format(Date(e.timestamp)))

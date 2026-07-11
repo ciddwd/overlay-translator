@@ -8,6 +8,7 @@ import com.gameocr.app.R
 import com.gameocr.app.data.FloatingMenu
 import com.gameocr.app.data.OcrEngineKind
 import com.gameocr.app.data.OverlayFontEntry
+import com.gameocr.app.data.OverlayTextStyle
 import com.gameocr.app.data.OverlayFontImportResult
 import com.gameocr.app.data.OverlayFontManager
 import com.gameocr.app.data.OverlayPlacement
@@ -15,9 +16,15 @@ import com.gameocr.app.data.OverlayTheme
 import com.gameocr.app.data.PreprocessOptions
 import com.gameocr.app.data.RenderMode
 import com.gameocr.app.data.Settings
+import com.gameocr.app.data.SettingsBundleExportResult
+import com.gameocr.app.data.SettingsBundleImportResult
+import com.gameocr.app.data.SettingsBundlePreview
+import com.gameocr.app.data.SettingsBundleTransfer
 import com.gameocr.app.data.SettingsRepository
 import com.gameocr.app.data.TranslationPreset
 import com.gameocr.app.data.TranslationPresetCatalog
+import com.gameocr.app.data.TranslationPresetImportResult
+import com.gameocr.app.data.TranslationPresetTransfer
 import com.gameocr.app.data.TranslatorEngine
 import com.gameocr.app.llm.LlamaEngineHolder
 import com.gameocr.app.llm.LlmModelInstaller
@@ -31,7 +38,9 @@ import com.gameocr.app.translate.TestResult
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.withContext
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
@@ -47,6 +56,66 @@ class SettingsViewModel @Inject constructor(
 ) : ViewModel() {
 
     suspend fun load(): Settings = repo.get()
+
+    suspend fun exportSettingsBundle(
+        uri: Uri,
+        settings: Settings,
+    ): SettingsBundleExportResult = withContext(Dispatchers.IO) {
+        val output = appContext.contentResolver.openOutputStream(uri, "w")
+            ?: error("Could not open the selected export file.")
+        output.use {
+            SettingsBundleTransfer.write(it, settings, overlayFontManager::transferFileFor)
+        }
+    }
+
+    suspend fun previewSettingsBundle(uri: Uri): SettingsBundlePreview = withContext(Dispatchers.IO) {
+        val input = appContext.contentResolver.openInputStream(uri)
+            ?: error("Could not open the selected settings file.")
+        input.use(SettingsBundleTransfer::readPreview)
+    }
+
+    suspend fun importSettingsBundle(uri: Uri): SettingsBundleImportResult = withContext(Dispatchers.IO) {
+        val installedFonts = mutableListOf<OverlayFontEntry>()
+        val input = appContext.contentResolver.openInputStream(uri)
+            ?: error("Could not open the selected settings file.")
+        val preview = input.use { source ->
+            SettingsBundleTransfer.read(source) { font, fontInput ->
+                installedFonts += overlayFontManager.installTransferredFont(font, fontInput)
+            }
+        }
+        if (preview.legacyPresetOnly) {
+            val imported = importTranslationPresets(preview.presets)
+            return@withContext SettingsBundleImportResult(
+                settings = repo.get(),
+                importedPresetCount = imported.importedCount,
+                overwrittenPresetNames = imported.overwrittenNames,
+                importedFontCount = 0,
+                legacyPresetOnly = true,
+            )
+        }
+
+        val importedSettings = requireNotNull(preview.settings)
+        val before = repo.get()
+        val availableFonts = overlayFontManager.existingFontEntries(
+            before.overlayFonts + importedSettings.overlayFonts + installedFonts,
+        )
+        var mergeResult: com.gameocr.app.data.SettingsBundleMergeResult? = null
+        repo.update { current ->
+            SettingsBundleTransfer.mergeImportedSettings(
+                current = current,
+                imported = importedSettings,
+                availableFonts = availableFonts,
+            ).also { mergeResult = it }.settings
+        }
+        val merged = requireNotNull(mergeResult)
+        SettingsBundleImportResult(
+            settings = merged.settings,
+            importedPresetCount = merged.presetResult.importedCount,
+            overwrittenPresetNames = merged.presetResult.overwrittenNames,
+            importedFontCount = installedFonts.size,
+            legacyPresetOnly = false,
+        )
+    }
 
     suspend fun importOverlayFont(uri: Uri): OverlayFontImportResult =
         overlayFontManager.importFont(uri)
@@ -73,6 +142,7 @@ class SettingsViewModel @Inject constructor(
         sourceLang: String,
         prompt: String,
         textSize: Int,
+        overlayTextStyle: OverlayTextStyle,
         alpha: Float,
         loopMs: Long,
         streaming: Boolean,
@@ -92,6 +162,7 @@ class SettingsViewModel @Inject constructor(
         baiduLanguage: com.gameocr.app.data.BaiduOcrLanguage,
         umiOcrBaseUrl: String,
         lunaOcrBaseUrl: String,
+        paddleAiStudioToken: String,
         tencentId: String,
         tencentKey: String,
         tencentRegion: String,
@@ -135,6 +206,7 @@ class SettingsViewModel @Inject constructor(
                 sourceLang = sourceLang.trim(),
                 promptTemplate = prompt,
                 overlayTextSizeSp = textSize.coerceIn(10, 28),
+                overlayTextStyle = overlayTextStyle.normalized(),
                 overlayAlpha = alpha.coerceIn(0.3f, 1f),
                 captureLoopIntervalMs = loopMs.coerceAtLeast(200),
                 streamingTranslate = streaming,
@@ -154,6 +226,7 @@ class SettingsViewModel @Inject constructor(
                 baiduOcrLanguage = baiduLanguage,
                 umiOcrBaseUrl = umiOcrBaseUrl.trim(),
                 lunaOcrBaseUrl = lunaOcrBaseUrl.trim(),
+                paddleAiStudioToken = paddleAiStudioToken.trim(),
                 tencentSecretId = tencentId.trim(),
                 tencentSecretKey = tencentKey.trim(),
                 tencentRegion = tencentRegion.trim().ifBlank { "ap-guangzhou" },
@@ -305,6 +378,27 @@ class SettingsViewModel @Inject constructor(
                 activeTranslationPresetId = current.activeTranslationPresetId.takeIf { it != id }.orEmpty()
             )
         }
+    }
+
+    suspend fun importTranslationPresets(
+        imported: List<TranslationPreset>
+    ): TranslationPresetImportResult {
+        var importResult: TranslationPresetImportResult? = null
+        repo.update { current ->
+            val result = TranslationPresetTransfer.mergeImportedPresets(
+                existing = current.translationPresets,
+                imported = imported,
+            )
+            importResult = result
+            val activeId = current.activeTranslationPresetId.takeIf { id ->
+                id.isNotBlank() && TranslationPresetCatalog.find(result.presets, id) != null
+            }.orEmpty()
+            current.copy(
+                translationPresets = result.presets,
+                activeTranslationPresetId = activeId,
+            )
+        }
+        return requireNotNull(importResult)
     }
 
     suspend fun applyTranslationPreset(id: String): Settings? {

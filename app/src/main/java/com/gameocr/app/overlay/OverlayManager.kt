@@ -17,6 +17,7 @@ import com.gameocr.app.R
 import com.gameocr.app.data.BorderStyle
 import com.gameocr.app.data.FloatingWindowContentMode
 import com.gameocr.app.data.OverlayPlacement
+import com.gameocr.app.data.OverlayTextStyle
 import com.gameocr.app.data.OverlayTheme
 import com.gameocr.app.data.Settings
 import com.gameocr.app.data.SettingsRepository
@@ -58,7 +59,8 @@ class OverlayManager(
         FloatingWindowContentMode.SRC_AND_DST,
     /** CUSTOM 主题的边框样式（仅 CUSTOM 主题生效）。CaptureService 同步。 */
     @Volatile var customBorderStyle: BorderStyle = BorderStyle.SOLID,
-    @Volatile var overlayTypeface: Typeface? = null
+    @Volatile var overlayTypeface: Typeface? = null,
+    @Volatile var overlayTextStyle: OverlayTextStyle = OverlayTextStyle()
 ) {
 
     private val wm by lazy { context.getSystemService(Context.WINDOW_SERVICE) as WindowManager }
@@ -68,6 +70,7 @@ class OverlayManager(
     private var countdownView: View? = null
     // 译文 View 缓存：横排走 TextView，竖排走 VerticalTextView。updateBlockText 会按实际类型分支 setText
     private val blockViews = mutableMapOf<Int, View>()
+    private var blocksDiagnosticId: Long? = null
 
     /** 悬浮窗口（[com.gameocr.app.data.RenderMode.FLOATING_WINDOW]）外壳。lazy 创建。 */
     private val floatingWindow: DraggableOverlayWindow by lazy {
@@ -91,7 +94,7 @@ class OverlayManager(
      * 即时反馈：显示一个旋转 ProgressBar（图标，OCR 抓不到 → 避免 loading 文字被翻译）。
      * 透明圆底，浮在屏幕顶部中央。后续译文出来后会被替换。
      */
-    fun showLoadingHint() {
+    fun showLoadingHint(): Boolean {
         clearLoading()
         val density = context.resources.displayMetrics.density
         val size = (40 * density).toInt()
@@ -117,8 +120,12 @@ class OverlayManager(
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
             y = (24 * density).toInt()
         }
-        runCatching { wm.addView(container, params) }
-        loadingView = container
+        return runCatching {
+            wm.addView(container, params)
+            loadingView = container
+        }.onFailure {
+            Timber.w(it, "Failed to show loading overlay")
+        }.isSuccess
     }
 
     /** 关闭 loading 圈。captureOnce 失败 / 帧差跳过等"没有译文要显示"的路径里调用，避免一直转圈。 */
@@ -425,6 +432,11 @@ class OverlayManager(
 
     /** 屏幕方向变化时被 CaptureService.onConfigurationChanged 调用——按比例重算悬浮窗位置。 */
     fun onConfigurationChanged() {
+        val dm = context.resources.displayMetrics
+        VerticalDiagnosticLog.i(
+            "${blocksDiagnosticId.toDiagPrefix()}overlay configurationChanged " +
+                "screen=${dm.widthPixels}x${dm.heightPixels} activeBlocks=${blockViews.size}"
+        )
         floatingWindow.onConfigurationChanged()
     }
 
@@ -455,11 +467,11 @@ class OverlayManager(
                     setTextColor(themeFgMutedColor())
                 })
             }
-            val dstView = TextView(context).apply {
+            val dstView = StyledTranslationTextView(context).apply {
                 text = dst
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, textSizeSp.toFloat())
                 setTextColor(themeFgColor())
-                typeface = overlayTypeface
+                applyOverlayTextStyle(overlayTextStyle, overlayTypeface)
                 if (isSrcAndDst) {
                     val mt = (2 * context.resources.displayMetrics.density).toInt()
                     val mb = (8 * context.resources.displayMetrics.density).toInt()
@@ -500,11 +512,14 @@ class OverlayManager(
 
     fun showBlocks(
         blocks: List<Pair<TextBlock, String>>,
-        orientation: TextOrientation = TextOrientation.HORIZONTAL_LTR
+        orientation: TextOrientation = TextOrientation.HORIZONTAL_LTR,
+        diagnosticId: Long? = null
     ) {
         clearLoading()
         clear()
         if (blocks.isEmpty()) return
+        blocksDiagnosticId = diagnosticId
+        val diagPrefix = diagnosticId.toDiagPrefix()
 
         val root = FrameLayout(context).apply { this.alpha = this@OverlayManager.alpha }
         val dm = context.resources.displayMetrics
@@ -514,14 +529,16 @@ class OverlayManager(
             orientation == TextOrientation.VERTICAL_LTR
         val leftToRight = orientation == TextOrientation.VERTICAL_LTR
         VerticalDiagnosticLog.i(
-            "overlay showBlocks count=${blocks.size} orientation=$orientation vertical=$isVertical " +
+            "${diagPrefix}overlay showBlocks count=${blocks.size} orientation=$orientation vertical=$isVertical " +
                 "leftToRight=$leftToRight screen=${screenW}x${screenH} textSizeSp=$textSizeSp " +
                 "alpha=$alpha placement=$placement offset=(${offsetX},${offsetY}) " +
                 "regionOffset=(${regionOffset.x},${regionOffset.y}) allowWrap=$allowWrap " +
                 "avoidCollision=$avoidCollision theme=$theme"
         )
         // 估算每行像素高度（行间距系数 1.3，跟 setLineSpacing 一致）
-        val lineHeightPx = (textSizeSp * dm.density * 1.3f).toInt().coerceAtLeast(16)
+        val lineHeightPx = (
+            textSizeSp * dm.density * 1.3f * overlayTextStyle.lineSpacingMultiplier
+        ).toInt().coerceAtLeast(16)
         val verticalTextPaddingHorizontalPx = 8
         val verticalMinReadableSlotWidthPx = (
             ceil(
@@ -551,7 +568,7 @@ class OverlayManager(
             val origW = (b.right - b.left).coerceAtLeast(0)
             val origH = (b.bottom - b.top).coerceAtLeast(0)
             VerticalDiagnosticLog.i(
-                "overlay block#${idx + 1} orientation=$orientation box=${b.toDiagString()} " +
+                "${diagPrefix}overlay block#${idx + 1} orientation=$orientation box=${b.toDiagString()} " +
                     "screenBox=${overlayRect.toDiagString()} orig=${origW}x${origH} " +
                     "src=${block.text.toDiagText()} dst=${dst.toDiagText()}"
             )
@@ -624,7 +641,7 @@ class OverlayManager(
                     verticalHeightPx
                 )
                 VerticalDiagnosticLog.i(
-                    "overlay vertical block#${idx + 1} slot=${slot.toDiagString()} " +
+                    "${diagPrefix}overlay vertical block#${idx + 1} slot=${slot.toDiagString()} " +
                         "slotW=${slot.width} minW=$verticalMinReadableSlotWidthPx " +
                         "height=$verticalHeightPx leftToRight=$leftToRight " +
                         "normalizedDst=${normalizeVerticalOverlayText(dst).toDiagText()}"
@@ -636,6 +653,7 @@ class OverlayManager(
                     this.text = dst
                     this.leftToRight = leftToRight
                     this.typeface = overlayTypeface
+                    applyTextStyle(overlayTextStyle)
                     this.background = themeBg()
                     setTextColor(themeFgColor())
                     setTextSizeSp(textSizeSp.toFloat())
@@ -644,19 +662,22 @@ class OverlayManager(
                     setPadding(verticalTextPaddingHorizontalPx, 4, verticalTextPaddingHorizontalPx, 4)
                 }
             } else {
-                TextView(context).apply {
+                StyledTranslationTextView(context).apply {
                     text = dst
                     background = themeBg()
                     setTextColor(themeFgColor())
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, textSizeSp.toFloat())
-                    typeface = overlayTypeface
+                    applyOverlayTextStyle(
+                        style = overlayTextStyle,
+                        baseTypeface = overlayTypeface,
+                        baseLineSpacingMultiplier = 1.05f
+                    )
                     if (allowWrap) {
                         setSingleLine(false)
                         // maxLines 固定 10 行：showBlocks 时 dst 是占位"…"无法算最终行数；
                         // updateBlockText 又只更新 text 不动 maxLines；用大值保证段落聚类
                         // 多行译文不被截断。代价是可能盖到下方相邻原文 box，但比"看到 …"好。
                         maxLines = 10
-                        setLineSpacing(2f, 1.05f)
                         // 不显示省略号——即使超过 10 行也直接截，省略号在 OCR 场景看着像 bug
                         ellipsize = null
                     } else {
@@ -720,7 +741,20 @@ class OverlayManager(
                     leftMargin = finalLeft
                 }
             }
+            VerticalDiagnosticLog.i(
+                "${diagPrefix}overlay layout block#${idx + 1} left=${lp.leftMargin} top=${lp.topMargin} " +
+                    "rightMargin=${lp.rightMargin} width=${lp.width} height=${lp.height} gravity=${lp.gravity} " +
+                    "baseTop=$baseTop finalMaxW=$finalMaxW belowNeighborTop=$belowNeighborTop"
+            )
             root.addView(view, lp)
+            view.post {
+                val location = IntArray(2)
+                view.getLocationOnScreen(location)
+                VerticalDiagnosticLog.i(
+                    "${diagPrefix}overlay measured block#${idx + 1} " +
+                        "screenPos=(${location[0]},${location[1]}) measured=${view.width}x${view.height}"
+                )
+            }
             blockViews[idx] = view
         }
         root.setOnClickListener { clear() }
@@ -729,14 +763,26 @@ class OverlayManager(
             width = WindowManager.LayoutParams.MATCH_PARENT
             height = WindowManager.LayoutParams.MATCH_PARENT
         }
+        val cutoutMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            cutoutModeLogLabel(params.layoutInDisplayCutoutMode)
+        } else {
+            cutoutModeLogLabel(null)
+        }
+        VerticalDiagnosticLog.i(
+            "${diagPrefix}overlay window add screen=${screenW}x$screenH type=${params.type} " +
+                "flags=0x${params.flags.toString(16)} cutoutMode=$cutoutMode"
+        )
         runCatching { wm.addView(root, params) }
+            .onSuccess { VerticalDiagnosticLog.i("${diagPrefix}overlay window added") }
+            .onFailure { VerticalDiagnosticLog.w(it, "${diagPrefix}overlay window add failed") }
         blocksView = root
     }
 
     fun updateBlockText(index: Int, text: String) {
         val target = blockViews[index]
         VerticalDiagnosticLog.i(
-            "overlay updateBlockText block#${index + 1} view=${target?.javaClass?.simpleName ?: "missing"} " +
+            "${blocksDiagnosticId.toDiagPrefix()}overlay updateBlockText block#${index + 1} " +
+                "view=${target?.javaClass?.simpleName ?: "missing"} " +
                 text.toDiagText()
         )
         when (val v = blockViews[index]) {
@@ -752,8 +798,8 @@ class OverlayManager(
      */
     fun hasActiveBlocks(): Boolean = blocksView != null && blockViews.isNotEmpty()
 
-    fun clear() {
-        clearLoading()
+    fun clear(keepLoading: Boolean = false) {
+        if (!keepLoading) clearLoading()
         dismissError()
         floatingWindow.hide()
         floatingDstViews = null
@@ -761,6 +807,7 @@ class OverlayManager(
         blocksView?.let { runCatching { wm.removeView(it) } }
         blocksView = null
         blockViews.clear()
+        blocksDiagnosticId = null
     }
 
     /**
@@ -808,6 +855,8 @@ class OverlayManager(
     private fun VerticalOverlaySlot.toDiagString(): String =
         "($left,$right)"
 
+    private fun Long?.toDiagPrefix(): String = this?.let { "capture#$it " } ?: ""
+
     private fun themeFgColor(): Int = when (theme) {
         OverlayTheme.CLASSIC_DARK -> 0xFFFFFFFF.toInt()
         OverlayTheme.AMBER_GOLD -> 0xFFFFD27F.toInt()
@@ -853,3 +902,5 @@ class OverlayManager(
         }
     }
 }
+
+internal fun cutoutModeLogLabel(mode: Int?): String = mode?.toString() ?: "unsupported"

@@ -54,6 +54,7 @@ class MlKitOcrEngine @Inject constructor() : OcrEngine {
             OcrEngineKind.BAIDU,
             OcrEngineKind.TENCENT,
             OcrEngineKind.YOUDAO,
+            OcrEngineKind.PADDLE_AI_STUDIO,
             OcrEngineKind.UMI_OCR,
             OcrEngineKind.LUNA_OCR,
             OcrEngineKind.PADDLE_ONNX,

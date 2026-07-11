@@ -19,7 +19,8 @@ import javax.inject.Singleton
 class HyMt2Translator @Inject constructor(
     @ApplicationContext private val appContext: Context,
     holder: LlamaEngineHolder,
-) : LocalLlamaTranslator(holder) {
+    cache: TranslationCache,
+) : LocalLlamaTranslator(holder, cache) {
 
     override val modelKind = LlmModelKind.HY_MT2_1_8B_Q4_K_M
 

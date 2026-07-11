@@ -2,18 +2,24 @@ package com.gameocr.app.ui
 
 import android.content.Intent
 import android.content.Context
+import android.net.Uri
 import android.provider.Settings as AndroidSettings
 import android.util.TypedValue
+import android.widget.Toast
 import timber.log.Timber
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.AlertDialog
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -32,19 +38,29 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.FormatAlignCenter
+import androidx.compose.material.icons.automirrored.filled.FormatAlignLeft
+import androidx.compose.material.icons.automirrored.filled.FormatAlignRight
+import androidx.compose.material.icons.filled.FormatBold
+import androidx.compose.material.icons.filled.FormatItalic
+import androidx.compose.material.icons.filled.FormatUnderlined
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.outlined.HelpOutline
+import java.util.Locale
 import kotlin.math.roundToInt
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
@@ -76,14 +92,17 @@ import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TooltipBox
@@ -110,7 +129,16 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.gameocr.app.R
 import com.gameocr.app.data.FloatingMenu
@@ -123,15 +151,24 @@ import com.gameocr.app.data.OverlayFontPolicy
 import com.gameocr.app.data.OverlayFontEntry
 import com.gameocr.app.data.OverlayPlacement
 import com.gameocr.app.data.OverlayTheme
+import com.gameocr.app.data.OverlayTextAlignment
+import com.gameocr.app.data.OverlayTextStyle
 import com.gameocr.app.data.PaddleModelVersion
 import com.gameocr.app.data.PreprocessOptions
 import com.gameocr.app.data.RenderMode
 import com.gameocr.app.data.Settings
+import com.gameocr.app.data.SettingsBundlePreview
+import com.gameocr.app.data.SettingsBundleTransfer
 import com.gameocr.app.data.TranslationPreset
 import com.gameocr.app.data.TranslationPresetCatalog
+import com.gameocr.app.data.TranslationPresetImportPlan
+import com.gameocr.app.data.TranslationPresetTransfer
 import com.gameocr.app.data.TranslatorEngine
 import com.gameocr.app.llm.LlmModelKind
+import com.gameocr.app.overlay.StyledTranslationTextView
+import com.gameocr.app.overlay.applyOverlayTextStyle
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.graphicsLayer
@@ -142,6 +179,23 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+internal const val PADDLE_AI_STUDIO_PAGE_URL = "https://aistudio.baidu.com/paddleocr"
+
+internal fun shouldShowPaddleAiStudioHelp(ocrEngine: OcrEngineKind): Boolean =
+    ocrEngine == OcrEngineKind.PADDLE_AI_STUDIO
+
+private fun openExternalBrowser(context: Context, url: String) {
+    runCatching {
+        context.startActivity(
+            Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    }.onFailure { error ->
+        Timber.w(error, "Could not open external browser url=%s", url)
+        Toast.makeText(context, R.string.settings_external_browser_unavailable, Toast.LENGTH_SHORT).show()
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -192,6 +246,7 @@ fun SettingsScreen(
     var fetchedModels by remember { mutableStateOf<List<String>>(emptyList()) }
     var modelPickerExpanded by remember { mutableStateOf(false) }
     var textSize by remember { mutableStateOf(14f) }
+    var overlayTextStyle by remember { mutableStateOf(OverlayTextStyle()) }
     var alpha by remember { mutableStateOf(0.85f) }
     var overlayFontFileName by remember { mutableStateOf("") }
     var overlayFontDisplayName by remember { mutableStateOf("") }
@@ -227,6 +282,7 @@ fun SettingsScreen(
     var baiduLanguage by remember { mutableStateOf(com.gameocr.app.data.BaiduOcrLanguage.CHN_ENG) }
     var umiOcrBaseUrl by remember { mutableStateOf("") }
     var lunaOcrBaseUrl by remember { mutableStateOf("") }
+    var paddleAiStudioToken by remember { mutableStateOf("") }
     var tencentId by remember { mutableStateOf("") }
     var tencentKey by remember { mutableStateOf("") }
     // Region 同时被 OCR (ocr.tencentcloudapi.com) 和 TMT (tmt.tencentcloudapi.com) 使用；
@@ -295,6 +351,10 @@ fun SettingsScreen(
     var translationPresets by remember { mutableStateOf<List<TranslationPreset>>(emptyList()) }
     var activeTranslationPresetId by remember { mutableStateOf("") }
     var presetMessage by remember { mutableStateOf<String?>(null) }
+    var pendingPresetImportPlan by remember { mutableStateOf<TranslationPresetImportPlan?>(null) }
+    var pendingSettingsImportUri by remember { mutableStateOf<android.net.Uri?>(null) }
+    var pendingSettingsImportPreview by remember { mutableStateOf<SettingsBundlePreview?>(null) }
+    var pendingSettingsExport by remember { mutableStateOf<Settings?>(null) }
     var presetLlmModelReady by remember { mutableStateOf<Map<LlmModelKind, Boolean>>(emptyMap()) }
     var presetPaddleModelReady by remember { mutableStateOf<Map<PaddleModelVersion, Boolean>>(emptyMap()) }
     var presetMangaOcrModelReady by remember { mutableStateOf(false) }
@@ -393,22 +453,41 @@ fun SettingsScreen(
 
     fun applyPresetSettingsToUi(s: Settings) {
         baseUrl = s.baseUrl
+        apiKey = s.apiKey
         model = s.model
         prompt = s.promptTemplate
         sourceLang = s.sourceLang
         targetLang = s.targetLang
         dictionaryPrompt = s.dictionaryPrompt
         translatorEngine = s.translatorEngine
+        deeplKey = s.deeplApiKey
+        deeplCustomToken = s.deeplCustomToken
+        youdaoAppKey = s.youdaoAppKey
+        youdaoAppSecret = s.youdaoAppSecret
+        volcAk = s.volcAccessKeyId
+        volcSk = s.volcSecretAccessKey
+        volcRegion = s.volcRegion
+        baiduFanyiAppId = s.baiduFanyiAppId
+        baiduFanyiSecret = s.baiduFanyiSecretKey
         ocrEngine = s.ocrEngine
         preUpscale = s.preprocess.upscale2x
         preInvert = s.preprocess.invert
         preBinarize = s.preprocess.binarize
         textSize = s.overlayTextSizeSp.toFloat()
+        overlayTextStyle = s.overlayTextStyle.normalized()
         alpha = s.overlayAlpha
         overlayFontFileName = s.overlayFontFileName
         overlayFontDisplayName = s.overlayFontDisplayName
+        overlayFontEntries = OverlayFontPolicy.upsertImportedFont(
+            s.overlayFonts,
+            s.overlayFontFileName,
+            s.overlayFontDisplayName,
+        )
+        loopInterval = s.captureLoopIntervalMs.toString()
         streaming = s.streamingTranslate
         renderMode = s.renderMode
+        floatingWindowContentMode = s.floatingWindowContentMode
+        floatingWindowLocked = s.floatingWindowLocked
         placement = s.overlayPlacement
         overlayTheme = s.overlayTheme
         customBg = s.customBgColor
@@ -426,12 +505,27 @@ fun SettingsScreen(
         deeplBearerAuth = s.deeplBearerAuth
         baiduEndpoint = s.baiduOcrEndpoint
         baiduLanguage = s.baiduOcrLanguage
+        baiduKey = s.baiduOcrApiKey
+        baiduSecret = s.baiduOcrSecretKey
         umiOcrBaseUrl = s.umiOcrBaseUrl
         lunaOcrBaseUrl = s.lunaOcrBaseUrl
+        paddleAiStudioToken = s.paddleAiStudioToken
+        tencentId = s.tencentSecretId
+        tencentKey = s.tencentSecretKey
         tencentRegion = s.tencentRegion
         tencentEndpoint = s.tencentOcrEndpoint
         tencentLanguage = s.tencentOcrLanguage
         paddleModelVersion = s.paddleModelVersion
+        llmMirrorChoice = s.localLlmMirror
+        llmMirror = s.localLlmMirrorUrl
+        a11yVolume = s.a11yVolumeTrigger
+        floatingSize = s.floatingButtonSizeDp.toFloat()
+        floatingSnapEdge = s.floatingButtonSnapToEdge
+        floatingAutoDock = s.floatingButtonAutoDock
+        floatingDockInset = s.floatingButtonDockInsetDp.toFloat()
+        menuOrder = s.floatingMenuItemOrder
+        arcMenuPageSize = s.arcMenuPageSize.toFloat()
+        currentSkill = s.floatingButtonSkill
         apiTimeoutSec = s.apiTimeoutSeconds.toFloat()
         mergeAdjacent = s.mergeAdjacentBlocks
         mergeStrength = s.mergeStrength
@@ -442,7 +536,10 @@ fun SettingsScreen(
         dbnetUnclip = s.dbnetUnclipRatio
         mangaOcrDbnetUnclip = s.mangaOcrDbnetUnclipRatio
         dbnetGap = s.bubbleClusterGap
+        translationPresets = s.translationPresets
         activeTranslationPresetId = s.activeTranslationPresetId
+        pinnedLanguages = s.pinnedLanguages
+        cleartextHostsText = s.cleartextAllowedHosts.joinToString("\n")
     }
     fun presetDisplayNameForMessage(preset: TranslationPreset): String = when (preset.id) {
         TranslationPresetCatalog.BUILTIN_MANGA_JA_ZH ->
@@ -487,6 +584,134 @@ fun SettingsScreen(
         }
     }
 
+    val presetExportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument(SettingsBundleTransfer.MIME_TYPE)
+    ) { uri ->
+        val settingsToExport = pendingSettingsExport
+        pendingSettingsExport = null
+        if (uri == null || settingsToExport == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            runCatching { viewModel.exportSettingsBundle(uri, settingsToExport) }.onSuccess { result ->
+                presetMessage = context.getString(
+                    R.string.settings_bundle_exported_format,
+                    result.presetCount,
+                    result.fontCount,
+                )
+            }.onFailure { error ->
+                presetMessage = context.getString(
+                    R.string.settings_bundle_export_failed_format,
+                    error.message ?: error.javaClass.simpleName
+                )
+            }
+        }
+    }
+    val presetImportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        scope.launch {
+            val preview = runCatching { viewModel.previewSettingsBundle(uri) }.getOrElse { error ->
+                presetMessage = context.getString(
+                    R.string.settings_bundle_import_failed_format,
+                    error.message ?: error.javaClass.simpleName
+                )
+                return@launch
+            }
+            val plan = TranslationPresetTransfer.planImport(translationPresets, preview.presets)
+            if (preview.legacyPresetOnly && plan.importedCount == 0) {
+                presetMessage = context.getString(R.string.settings_translation_preset_import_empty)
+            } else {
+                pendingPresetImportPlan = plan
+                pendingSettingsImportUri = uri
+                pendingSettingsImportPreview = preview
+            }
+        }
+    }
+
+    val importPreview = pendingSettingsImportPreview
+    val importUri = pendingSettingsImportUri
+    pendingPresetImportPlan?.takeIf { importPreview != null && importUri != null }?.let { plan ->
+        val overwritten = plan.overwrittenNames.joinToString(", ").ifBlank {
+            stringResource(R.string.settings_translation_preset_import_none)
+        }
+        AlertDialog(
+            onDismissRequest = {
+                pendingPresetImportPlan = null
+                pendingSettingsImportPreview = null
+                pendingSettingsImportUri = null
+            },
+            title = {
+                Text(
+                    stringResource(
+                        if (importPreview!!.legacyPresetOnly) {
+                            R.string.settings_translation_preset_import_confirm_title
+                        } else {
+                            R.string.settings_bundle_import_confirm_title
+                        }
+                    )
+                )
+            },
+            text = {
+                Text(
+                    if (importPreview!!.legacyPresetOnly) {
+                        stringResource(
+                            R.string.settings_translation_preset_import_confirm_message,
+                            plan.importedCount,
+                            overwritten,
+                        )
+                    } else {
+                        stringResource(
+                            R.string.settings_bundle_import_confirm_message,
+                            plan.importedCount,
+                            overwritten,
+                            importPreview.fonts.size,
+                        )
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingPresetImportPlan = null
+                    pendingSettingsImportPreview = null
+                    pendingSettingsImportUri = null
+                    scope.launch {
+                        runCatching { viewModel.importSettingsBundle(importUri!!) }
+                            .onSuccess { result ->
+                                androidx.compose.runtime.snapshots.Snapshot.withMutableSnapshot {
+                                    applyPresetSettingsToUi(result.settings)
+                                    initialSettings = result.settings
+                                }
+                                refreshPresetModelReadiness(result.settings.translationPresets)
+                                presetMessage = context.getString(
+                                    R.string.settings_bundle_imported_format,
+                                    result.importedPresetCount,
+                                    result.overwrittenPresetNames.size,
+                                    result.importedFontCount,
+                                )
+                            }
+                            .onFailure { error ->
+                                presetMessage = context.getString(
+                                    R.string.settings_bundle_import_failed_format,
+                                    error.message ?: error.javaClass.simpleName
+                                )
+                            }
+                    }
+                }) {
+                    Text(stringResource(R.string.settings_translation_preset_import))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    pendingPresetImportPlan = null
+                    pendingSettingsImportPreview = null
+                    pendingSettingsImportUri = null
+                }) {
+                    Text(stringResource(R.string.settings_model_delete_confirm_no))
+                }
+            }
+        )
+    }
+
     LaunchedEffect(showOverlayFontDeleteTip) {
         if (showOverlayFontDeleteTip) {
             for (remaining in 3 downTo 1) {
@@ -525,6 +750,7 @@ fun SettingsScreen(
         ocrEngine = ocrEngine,
         captureLoopIntervalMs = loopInterval.toLongOrNull() ?: 2000L,
         overlayTextSizeSp = textSize.toInt(),
+        overlayTextStyle = overlayTextStyle.normalized(),
         overlayAlpha = alpha,
         overlayFonts = overlayFontEntries,
         streamingTranslate = streaming,
@@ -544,6 +770,7 @@ fun SettingsScreen(
         baiduOcrLanguage = baiduLanguage,
         umiOcrBaseUrl = umiOcrBaseUrl,
         lunaOcrBaseUrl = lunaOcrBaseUrl,
+        paddleAiStudioToken = paddleAiStudioToken,
         tencentSecretId = tencentId,
         tencentSecretKey = tencentKey,
         tencentRegion = tencentRegion,
@@ -709,6 +936,7 @@ fun SettingsScreen(
             baseUrl = baseUrl, apiKey = apiKey, model = model,
             targetLang = targetLang, sourceLang = sourceLang, prompt = prompt,
             textSize = textSize.toInt(), alpha = alpha,
+            overlayTextStyle = overlayTextStyle,
             loopMs = loopInterval.toLongOrNull() ?: 2000L,
             streaming = streaming, renderMode = renderMode, placement = placement,
             overlayTheme = overlayTheme,
@@ -720,6 +948,7 @@ fun SettingsScreen(
             baiduLanguage = baiduLanguage,
             umiOcrBaseUrl = umiOcrBaseUrl,
             lunaOcrBaseUrl = lunaOcrBaseUrl,
+            paddleAiStudioToken = paddleAiStudioToken,
             tencentId = tencentId, tencentKey = tencentKey, tencentRegion = tencentRegion,
             tencentEndpoint = tencentEndpoint,
             tencentLanguage = tencentLanguage,
@@ -789,6 +1018,20 @@ fun SettingsScreen(
                 orientationModelReady = presetOrientationModelReady,
                 modelDownloading = modelDownloadBusy,
                 downloadingPresetId = downloadingPresetId,
+                onExport = {
+                    pendingSettingsExport = buildSnapshot()
+                    presetExportLauncher.launch(SettingsBundleTransfer.DEFAULT_FILE_NAME)
+                },
+                onImport = {
+                    presetImportLauncher.launch(
+                        arrayOf(
+                            SettingsBundleTransfer.MIME_TYPE,
+                            "application/json",
+                            "application/octet-stream",
+                            "text/plain",
+                        )
+                    )
+                },
                 onSaveUnsaved = { preset ->
                     scope.launch {
                         val saved = viewModel.saveTranslationPreset(preset)
@@ -1532,6 +1775,7 @@ fun SettingsScreen(
             deeplBearerAuth = s.deeplBearerAuth
             deeplCustomToken = s.deeplCustomToken
             textSize = s.overlayTextSizeSp.toFloat()
+            overlayTextStyle = s.overlayTextStyle.normalized()
             alpha = s.overlayAlpha
             overlayFontFileName = s.overlayFontFileName
             overlayFontDisplayName = s.overlayFontDisplayName
@@ -1561,6 +1805,7 @@ fun SettingsScreen(
             baiduLanguage = s.baiduOcrLanguage
             umiOcrBaseUrl = s.umiOcrBaseUrl
             lunaOcrBaseUrl = s.lunaOcrBaseUrl
+            paddleAiStudioToken = s.paddleAiStudioToken
             tencentId = s.tencentSecretId
             tencentKey = s.tencentSecretKey
             tencentRegion = s.tencentRegion
@@ -2396,6 +2641,7 @@ fun SettingsScreen(
                     EngineChip(ocrEngine, OcrEngineKind.BAIDU, stringResource(R.string.settings_ocr_chip_baidu), enabled = !ocrSectionDisabled) { ocrEngine = it }
                     EngineChip(ocrEngine, OcrEngineKind.TENCENT, stringResource(R.string.settings_ocr_chip_tencent), enabled = !ocrSectionDisabled) { ocrEngine = it }
                     EngineChip(ocrEngine, OcrEngineKind.YOUDAO, stringResource(R.string.settings_ocr_chip_youdao), enabled = !ocrSectionDisabled) { ocrEngine = it }
+                    EngineChip(ocrEngine, OcrEngineKind.PADDLE_AI_STUDIO, stringResource(R.string.settings_ocr_chip_paddle_ai_studio), enabled = !ocrSectionDisabled) { ocrEngine = it }
                 }
                 if (ocrEngine == OcrEngineKind.BAIDU) {
                     SecretTextField(
@@ -2568,6 +2814,35 @@ fun SettingsScreen(
                         stringResource(R.string.settings_youdao_tip),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                if (shouldShowPaddleAiStudioHelp(ocrEngine)) {
+                    Text(
+                        stringResource(R.string.settings_paddle_ai_studio_description),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    val openPageLabel = stringResource(R.string.settings_paddle_ai_studio_open_page)
+                    OutlinedButton(
+                        onClick = { openExternalBrowser(context, PADDLE_AI_STUDIO_PAGE_URL) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .semantics { contentDescription = openPageLabel }
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null)
+                        Text(
+                            text = PADDLE_AI_STUDIO_PAGE_URL,
+                            modifier = Modifier.padding(start = 8.dp),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    SecretTextField(
+                        value = paddleAiStudioToken,
+                        onValueChange = { paddleAiStudioToken = it },
+                        label = stringResource(R.string.settings_paddle_ai_studio_token),
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
 
@@ -3003,6 +3278,11 @@ fun SettingsScreen(
                     }
                 }
 
+                OverlayTextStyleEditor(
+                    style = overlayTextStyle,
+                    onChange = { overlayTextStyle = it.normalized() }
+                )
+
                 Text(stringResource(R.string.settings_alpha_label_format, (alpha * 100).toInt()), style = MaterialTheme.typography.labelLarge)
                 Slider(value = alpha, onValueChange = { alpha = it }, valueRange = 0.3f..1f)
 
@@ -3018,7 +3298,8 @@ fun SettingsScreen(
                     customBorderStyle = customBorderStyle,
                     textSize = textSize,
                     alpha = alpha,
-                    overlayTypeface = overlayFontTypeface
+                    overlayTypeface = overlayFontTypeface,
+                    textStyle = overlayTextStyle
                 )
 
                 // —— 几何项（预览看不到，只能实际触发翻译时看到效果）——
@@ -3392,6 +3673,185 @@ private fun overlayFontImportErrorMessage(
 )
 
 @Composable
+private fun OverlayTextStyleEditor(
+    style: OverlayTextStyle,
+    onChange: (OverlayTextStyle) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(stringResource(R.string.settings_text_style_label), style = MaterialTheme.typography.labelLarge)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            StyleIconToggle(
+                checked = style.bold,
+                icon = Icons.Default.FormatBold,
+                label = stringResource(R.string.settings_text_style_bold),
+                onCheckedChange = { onChange(style.copy(bold = it)) }
+            )
+            StyleIconToggle(
+                checked = style.italic,
+                icon = Icons.Default.FormatItalic,
+                label = stringResource(R.string.settings_text_style_italic),
+                onCheckedChange = { onChange(style.copy(italic = it)) }
+            )
+            StyleIconToggle(
+                checked = style.underline,
+                icon = Icons.Default.FormatUnderlined,
+                label = stringResource(R.string.settings_text_style_underline),
+                onCheckedChange = { onChange(style.copy(underline = it)) }
+            )
+        }
+
+        Text(
+            stringResource(R.string.settings_letter_spacing_format, style.letterSpacingEm),
+            style = MaterialTheme.typography.labelLarge
+        )
+        Slider(
+            value = style.letterSpacingEm,
+            onValueChange = { value ->
+                onChange(style.copy(letterSpacingEm = (value * 100f).roundToInt() / 100f))
+            },
+            valueRange = OverlayTextStyle.MIN_LETTER_SPACING_EM..OverlayTextStyle.MAX_LETTER_SPACING_EM,
+            steps = 19
+        )
+
+        Text(
+            stringResource(R.string.settings_line_spacing_format, style.lineSpacingMultiplier),
+            style = MaterialTheme.typography.labelLarge
+        )
+        Slider(
+            value = style.lineSpacingMultiplier,
+            onValueChange = { value ->
+                onChange(style.copy(lineSpacingMultiplier = (value * 20f).roundToInt() / 20f))
+            },
+            valueRange = OverlayTextStyle.MIN_LINE_SPACING..OverlayTextStyle.MAX_LINE_SPACING,
+            steps = 19
+        )
+
+        Text(stringResource(R.string.settings_text_alignment_label), style = MaterialTheme.typography.labelLarge)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            StyleIconToggle(
+                checked = style.alignment == OverlayTextAlignment.START,
+                icon = Icons.AutoMirrored.Filled.FormatAlignLeft,
+                label = stringResource(R.string.settings_text_alignment_start),
+                onCheckedChange = { if (it) onChange(style.copy(alignment = OverlayTextAlignment.START)) }
+            )
+            StyleIconToggle(
+                checked = style.alignment == OverlayTextAlignment.CENTER,
+                icon = Icons.Default.FormatAlignCenter,
+                label = stringResource(R.string.settings_text_alignment_center),
+                onCheckedChange = { if (it) onChange(style.copy(alignment = OverlayTextAlignment.CENTER)) }
+            )
+            StyleIconToggle(
+                checked = style.alignment == OverlayTextAlignment.END,
+                icon = Icons.AutoMirrored.Filled.FormatAlignRight,
+                label = stringResource(R.string.settings_text_alignment_end),
+                onCheckedChange = { if (it) onChange(style.copy(alignment = OverlayTextAlignment.END)) }
+            )
+        }
+
+        SwitchRow(stringResource(R.string.settings_text_stroke_enabled), style.strokeEnabled) {
+            onChange(style.copy(strokeEnabled = it))
+        }
+        if (style.strokeEnabled) {
+            Text(
+                stringResource(R.string.settings_text_stroke_width_format, style.strokeWidthDp),
+                style = MaterialTheme.typography.labelLarge
+            )
+            Slider(
+                value = style.strokeWidthDp,
+                onValueChange = { value ->
+                    onChange(style.copy(strokeWidthDp = (value * 2f).roundToInt() / 2f))
+                },
+                valueRange = OverlayTextStyle.MIN_STROKE_WIDTH_DP..OverlayTextStyle.MAX_STROKE_WIDTH_DP,
+                steps = 10
+            )
+            VisualColorPickerRow(
+                stringResource(R.string.settings_text_stroke_color),
+                style.strokeColor
+            ) { onChange(style.copy(strokeColor = it)) }
+        }
+
+        SwitchRow(stringResource(R.string.settings_text_shadow_enabled), style.shadowEnabled) {
+            onChange(style.copy(shadowEnabled = it))
+        }
+        if (style.shadowEnabled) {
+            Text(
+                stringResource(R.string.settings_text_shadow_radius_format, style.shadowRadiusDp),
+                style = MaterialTheme.typography.labelLarge
+            )
+            Slider(
+                value = style.shadowRadiusDp,
+                onValueChange = { onChange(style.copy(shadowRadiusDp = it.roundToInt().toFloat())) },
+                valueRange = OverlayTextStyle.MIN_SHADOW_RADIUS_DP..OverlayTextStyle.MAX_SHADOW_RADIUS_DP,
+                steps = 11
+            )
+            Text(
+                stringResource(R.string.settings_text_shadow_offset_x_format, style.shadowOffsetXDp),
+                style = MaterialTheme.typography.labelLarge
+            )
+            Slider(
+                value = style.shadowOffsetXDp,
+                onValueChange = { onChange(style.copy(shadowOffsetXDp = it.roundToInt().toFloat())) },
+                valueRange = OverlayTextStyle.MIN_SHADOW_OFFSET_DP..OverlayTextStyle.MAX_SHADOW_OFFSET_DP,
+                steps = 15
+            )
+            Text(
+                stringResource(R.string.settings_text_shadow_offset_y_format, style.shadowOffsetYDp),
+                style = MaterialTheme.typography.labelLarge
+            )
+            Slider(
+                value = style.shadowOffsetYDp,
+                onValueChange = { onChange(style.copy(shadowOffsetYDp = it.roundToInt().toFloat())) },
+                valueRange = OverlayTextStyle.MIN_SHADOW_OFFSET_DP..OverlayTextStyle.MAX_SHADOW_OFFSET_DP,
+                steps = 15
+            )
+            VisualColorPickerRow(
+                stringResource(R.string.settings_text_shadow_color),
+                style.shadowColor
+            ) { onChange(style.copy(shadowColor = it)) }
+        }
+
+        TextButton(onClick = { onChange(OverlayTextStyle()) }) {
+            Text(stringResource(R.string.settings_text_style_reset))
+        }
+    }
+}
+
+@Composable
+private fun StyleIconToggle(
+    checked: Boolean,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+        tooltip = { PlainTooltip { Text(label) } },
+        state = rememberTooltipState()
+    ) {
+        IconToggleButton(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            modifier = Modifier
+                .size(48.dp)
+                .background(
+                    if (checked) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
+                    RoundedCornerShape(4.dp)
+                )
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = label,
+                tint = if (checked) {
+                    MaterialTheme.colorScheme.onSecondaryContainer
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
+            )
+        }
+    }
+}
+
+@Composable
 private fun OverlayPreviewCard(
     theme: OverlayTheme,
     customBg: Int,
@@ -3401,7 +3861,8 @@ private fun OverlayPreviewCard(
     customBorderStyle: com.gameocr.app.data.BorderStyle,
     textSize: Float,
     alpha: Float,
-    overlayTypeface: android.graphics.Typeface?
+    overlayTypeface: android.graphics.Typeface?,
+    textStyle: OverlayTextStyle
 ) {
     val colors = overlayThemeColors(theme, customBg, customFg, customBorder, customBorderW.toInt())
     // 仅 CUSTOM 主题 + borderDp > 0 时让用户选的 borderStyle 生效；与 DraggableOverlayWindow 一致
@@ -3445,9 +3906,9 @@ private fun OverlayPreviewCard(
                 AndroidView(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(48.dp),
+                        .height(80.dp),
                     factory = { ctx ->
-                        android.widget.TextView(ctx).apply {
+                        StyledTranslationTextView(ctx).apply {
                             setIncludeFontPadding(true)
                             gravity = android.view.Gravity.CENTER_VERTICAL
                         }
@@ -3456,7 +3917,7 @@ private fun OverlayPreviewCard(
                         view.text = previewText
                         view.setTextColor(colors.fg)
                         view.setTextSize(TypedValue.COMPLEX_UNIT_SP, textSize)
-                        view.typeface = overlayTypeface
+                        view.applyOverlayTextStyle(textStyle, overlayTypeface)
                     }
                 )
             }
@@ -3654,20 +4115,50 @@ private data class SearchEntry(
     val keywords: List<String> = emptyList()
 ) {
     fun matches(context: android.content.Context, q: String): Boolean {
-        val s = q.trim().lowercase()
-        if (s.isEmpty()) return false
-        return context.getString(itemLabelRes).lowercase().contains(s) ||
-            context.getString(sectionLabelRes).lowercase().contains(s) ||
-            keywords.any { it.lowercase().contains(s) }
+        return settingsSearchMatches(
+            query = q,
+            searchableTexts = listOf(
+                context.getString(itemLabelRes),
+                context.getString(sectionLabelRes),
+            ) + keywords
+        )
     }
+}
+
+private val SETTINGS_SEARCH_SEPARATOR = Regex("[^\\p{L}\\p{N}]+")
+
+internal fun settingsSearchMatches(query: String, searchableTexts: List<String>): Boolean {
+    fun normalize(value: String): String = value
+        .lowercase(Locale.ROOT)
+        .replace(SETTINGS_SEARCH_SEPARATOR, " ")
+        .trim()
+
+    val terms = normalize(query).split(' ').filter { it.isNotBlank() }
+    if (terms.isEmpty()) return false
+    val haystack = searchableTexts.joinToString(" ") { normalize(it) }
+    return terms.all(haystack::contains)
 }
 
 /**
  * 设置项可搜索索引。新增设置项时同步加一行；匹配后跳到所在 section 顶部。
  * keywords 混合中英文：英文系统下用户用英文输入仍能搜到中文 section / 反之亦然。
  */
+internal val SETTINGS_SEARCH_TRANSFER_KEYWORDS = listOf(
+    "settings import", "settings export", "preset import", "preset export", "font backup",
+    "configuration backup", "backup", "restore", "设置导入", "设置导出", "预设导入",
+    "预设导出", "字体备份", "配置备份", "备份", "恢复",
+)
+
+internal val SETTINGS_SEARCH_COLOR_KEYWORDS = listOf(
+    "custom", "color", "colour", "background color", "text color", "border color", "hue",
+    "saturation", "brightness", "opacity", "border", "自定义", "配色", "颜色", "背景色",
+    "文字色", "文字颜色", "边框色", "边框颜色", "色相", "鲜艳度", "饱和度", "亮度",
+    "透明度", "边框",
+)
+
 private val SETTING_ITEMS: List<SearchEntry> = listOf(
     SearchEntry(SectionKeys.PRESETS, R.string.settings_section_translation_presets, R.string.settings_section_translation_presets, listOf("preset", "presets", "profile", "mode", "系统预设方案", "翻译预设", "预设", "模式")),
+    SearchEntry(SectionKeys.PRESETS, R.string.settings_section_translation_presets, R.string.settings_search_item_preset_transfer, SETTINGS_SEARCH_TRANSFER_KEYWORDS),
 
     // —— 翻译后端 ——
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_translator_engine, listOf("OpenAI", "DeepL", "LLM", "翻译引擎")),
@@ -3687,10 +4178,12 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_prompt, listOf("prompt", "提示词", "system")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_dictionary_prompt, listOf("dictionary", "词典", "划词", "word select", "phonetic", "音标", "释义", "definition", "prompt")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_streaming, listOf("streaming", "流式")),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_local_llm_model, listOf("local llm", "gguf", "hy-mt", "sakura", "model download", "model import", "端侧模型", "本地模型", "模型下载", "模型导入")),
 
     // —— OCR 引擎 ——
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_ocr_switch, listOf("ML Kit", "百度", "腾讯", "Paddle", "OCR engine")),
-    SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_paddle_download, listOf("ONNX", "v5", "镜像", "mirror", "本地导入", "local import", "import", "导入", "delete", "删除")),
+    SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_paddle_ai_studio, listOf("PP-OCRv6 Online", "Paddle AI Studio", "Access Token", "在线 OCR", "云端 OCR")),
+    SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_paddle_download, listOf("ONNX", "v5", "v6", "PP-OCRv6", "模型", "model", "镜像", "mirror", "本地导入", "local import", "import", "导入", "delete", "删除")),
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_manga_ocr_download, listOf("manga", "manga-ocr", "日漫", "漫画", "竖排", "vertical", "ONNX", "模型", "model", "download", "下载", "本地导入", "local import", "import", "导入", "delete", "删除")),
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_umi_ocr, listOf("umi", "Umi-OCR", "local http", "局域网", "本机", "PC", "1224", "api/ocr")),
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_luna_ocr, listOf("luna", "LunaTranslator", "露娜", "local http", "局域网", "本机", "PC", "api/ocr")),
@@ -3717,9 +4210,10 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_placement, listOf("下方", "上方", "覆盖", "below", "above", "overlap", "placement")),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_offset, listOf("offset", "微调")),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_overlay_theme, listOf("深色", "浅色", "纸张", "霜玻璃", "琥珀", "theme", "dark", "light", "frost", "amber")),
-    SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_custom_theme, listOf("custom", "border", "自定义", "边框")),
+    SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_custom_theme, SETTINGS_SEARCH_COLOR_KEYWORDS),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_border_style, listOf("solid", "dashed", "dotted", "double", "groove", "实线", "虚线", "点线", "双线", "凹槽", "边框样式")),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_text_size, listOf("font size", "字号", "字体大小")),
+    SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_text_style, listOf("bold", "italic", "underline", "letter spacing", "line spacing", "alignment", "outline", "stroke", "shadow", "加粗", "倾斜", "下划线", "字符间距", "行距", "对齐", "描边", "阴影")),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_overlay_font, listOf("font", "ttf", "字体", "自定义字体", "译文字体")),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_alpha, listOf("alpha", "opacity", "透明度")),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_floating_window_content, listOf("floating window", "悬浮窗", "原文+译文", "仅译文", "src dst", "content mode")),
@@ -3755,6 +4249,7 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
 )
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 private fun TranslationPresetSection(
     customPresets: List<TranslationPreset>,
     activeId: String,
@@ -3767,6 +4262,8 @@ private fun TranslationPresetSection(
     orientationModelReady: Boolean,
     modelDownloading: Boolean,
     downloadingPresetId: String?,
+    onExport: () -> Unit,
+    onImport: () -> Unit,
     onSaveUnsaved: (TranslationPreset) -> Unit,
     onApply: (TranslationPreset) -> Unit,
     onCopy: (TranslationPreset) -> Unit,
@@ -3784,6 +4281,20 @@ private fun TranslationPresetSection(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.primary
         )
+    }
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        OutlinedButton(onClick = onImport) {
+            Text(stringResource(R.string.settings_translation_preset_import))
+        }
+        OutlinedButton(
+            onClick = onExport,
+        ) {
+            Text(stringResource(R.string.settings_translation_preset_export))
+        }
     }
     HorizontalDivider()
     TranslationPresetUnsavedSlot(
@@ -4173,6 +4684,7 @@ private fun ocrEngineLabel(engine: OcrEngineKind): String = stringResource(
         OcrEngineKind.BAIDU -> R.string.settings_ocr_chip_baidu
         OcrEngineKind.TENCENT -> R.string.settings_ocr_chip_tencent
         OcrEngineKind.YOUDAO -> R.string.settings_ocr_chip_youdao
+        OcrEngineKind.PADDLE_AI_STUDIO -> R.string.settings_ocr_chip_paddle_ai_studio
         OcrEngineKind.UMI_OCR -> R.string.settings_ocr_chip_umi
         OcrEngineKind.LUNA_OCR -> R.string.settings_ocr_chip_luna
         OcrEngineKind.PADDLE_ONNX -> R.string.settings_ocr_chip_paddle
@@ -4599,6 +5111,7 @@ private fun ocrEngineLabelRes(engine: com.gameocr.app.data.OcrEngineKind): Int =
     com.gameocr.app.data.OcrEngineKind.BAIDU -> R.string.settings_ocr_chip_baidu
     com.gameocr.app.data.OcrEngineKind.TENCENT -> R.string.settings_ocr_chip_tencent
     com.gameocr.app.data.OcrEngineKind.YOUDAO -> R.string.settings_ocr_chip_youdao
+    com.gameocr.app.data.OcrEngineKind.PADDLE_AI_STUDIO -> R.string.settings_ocr_chip_paddle_ai_studio
     com.gameocr.app.data.OcrEngineKind.UMI_OCR -> R.string.settings_ocr_chip_umi
     com.gameocr.app.data.OcrEngineKind.LUNA_OCR -> R.string.settings_ocr_chip_luna
     com.gameocr.app.data.OcrEngineKind.PADDLE_ONNX -> R.string.settings_ocr_chip_paddle
@@ -4739,6 +5252,7 @@ internal fun translationPresetModelIssues(
         OcrEngineKind.BAIDU,
         OcrEngineKind.TENCENT,
         OcrEngineKind.YOUDAO,
+        OcrEngineKind.PADDLE_AI_STUDIO,
         OcrEngineKind.UMI_OCR,
         OcrEngineKind.LUNA_OCR -> Unit
     }
@@ -4833,7 +5347,8 @@ internal fun translationPresetOtherDownloadHintVisible(
 internal fun isCloudOcrEngineForUpscaleWarning(engine: OcrEngineKind): Boolean = when (engine) {
     OcrEngineKind.BAIDU,
     OcrEngineKind.TENCENT,
-    OcrEngineKind.YOUDAO -> true
+    OcrEngineKind.YOUDAO,
+    OcrEngineKind.PADDLE_AI_STUDIO -> true
     OcrEngineKind.ML_KIT_AUTO,
     OcrEngineKind.ML_KIT_LATIN,
     OcrEngineKind.ML_KIT_JAPANESE,
@@ -4868,64 +5383,327 @@ private fun CustomThemeEditor(
     borderW: Float, onBorderWChange: (Float) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        ArgbPicker(stringResource(R.string.settings_custom_color_bg), bg, onBgChange)
-        ArgbPicker(stringResource(R.string.settings_custom_color_fg), fg, onFgChange)
-        ArgbPicker(stringResource(R.string.settings_custom_color_border), border, onBorderChange)
+        VisualColorPickerRow(stringResource(R.string.settings_custom_color_bg), bg, onBgChange)
+        VisualColorPickerRow(stringResource(R.string.settings_custom_color_fg), fg, onFgChange)
+        VisualColorPickerRow(stringResource(R.string.settings_custom_color_border), border, onBorderChange)
         Text(stringResource(R.string.settings_custom_color_border_w_format, borderW.toInt()), style = MaterialTheme.typography.labelLarge)
         Slider(value = borderW, onValueChange = onBorderWChange, valueRange = 0f..6f, steps = 5)
     }
 }
 
 @Composable
-private fun ArgbPicker(label: String, argb: Int, onChange: (Int) -> Unit) {
-    val a = ((argb ushr 24) and 0xFF)
-    val r = ((argb ushr 16) and 0xFF)
-    val g = ((argb ushr 8) and 0xFF)
-    val b = (argb and 0xFF)
-    fun pack(na: Int, nr: Int, ng: Int, nb: Int): Int =
-        ((na and 0xFF) shl 24) or ((nr and 0xFF) shl 16) or ((ng and 0xFF) shl 8) or (nb and 0xFF)
+private fun VisualColorPickerRow(label: String, argb: Int, onChange: (Int) -> Unit) {
+    var pickerOpen by remember { mutableStateOf(false) }
+    var draft by remember(argb, pickerOpen) { mutableStateOf(VisualColorPickerState.fromArgb(argb)) }
+    val chooseColorLabel = stringResource(R.string.settings_color_choose)
 
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier
-                    .size(28.dp)
-                    .background(
-                        androidx.compose.ui.graphics.Color(argb),
-                        shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp)
-                    )
-            )
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(4.dp))
+            .clickable(role = Role.Button) { pickerOpen = true }
+            .padding(horizontal = 4.dp, vertical = 10.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(label, style = MaterialTheme.typography.labelLarge)
             Text(
-                "$label  #${"%08X".format(argb)}",
-                style = MaterialTheme.typography.labelLarge,
-                modifier = Modifier.padding(start = 12.dp)
+                chooseColorLabel,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        SmallSlider("A", a) { onChange(pack(it, r, g, b)) }
-        SmallSlider("R", r) { onChange(pack(a, it, g, b)) }
-        SmallSlider("G", g) { onChange(pack(a, r, it, b)) }
-        SmallSlider("B", b) { onChange(pack(a, r, g, it)) }
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .background(Color(argb), RoundedCornerShape(4.dp))
+                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(4.dp))
+        )
+        Icon(
+            imageVector = Icons.Default.Palette,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier
+                .padding(start = 8.dp)
+                .size(24.dp),
+        )
+    }
+
+    if (pickerOpen) {
+        VisualColorPickerDialog(
+            label = label,
+            state = draft,
+            onStateChange = { draft = it.normalized() },
+            onDismiss = { pickerOpen = false },
+            onApply = {
+                onChange(draft.toArgb())
+                pickerOpen = false
+            },
+        )
     }
 }
 
 @Composable
-private fun SmallSlider(label: String, value: Int, onChange: (Int) -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelMedium,
-            modifier = Modifier.size(width = 16.dp, height = 24.dp)
+private fun VisualColorPickerDialog(
+    label: String,
+    state: VisualColorPickerState,
+    onStateChange: (VisualColorPickerState) -> Unit,
+    onDismiss: () -> Unit,
+    onApply: () -> Unit,
+) {
+    val previewArgb = state.toArgb()
+    val opacityLabel = stringResource(R.string.settings_color_opacity)
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        BoxWithConstraints(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .fillMaxSize()
+                .safeDrawingPadding()
+                .padding(16.dp),
+        ) {
+            val dialogBounds = visualColorDialogBounds(maxWidth.value, maxHeight.value)
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                tonalElevation = 6.dp,
+                modifier = Modifier
+                    .width(dialogBounds.widthDp.dp)
+                    .heightIn(max = dialogBounds.maxHeightDp.dp),
+            ) {
+                Column {
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.headlineSmall,
+                        modifier = Modifier.padding(
+                            start = 24.dp,
+                            top = 20.dp,
+                            end = 24.dp,
+                            bottom = 12.dp,
+                        ),
+                    )
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 24.dp),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(40.dp)
+                                .background(Color(previewArgb), RoundedCornerShape(4.dp))
+                                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(4.dp))
+                        )
+                        SaturationValuePicker(
+                            state = state,
+                            label = stringResource(R.string.settings_color_visual_area),
+                            stateText = stringResource(
+                                R.string.settings_color_visual_state_format,
+                                (state.saturation * 100f).roundToInt(),
+                                (state.value * 100f).roundToInt(),
+                            ),
+                            increaseSaturationLabel = stringResource(R.string.settings_color_saturation_increase),
+                            decreaseSaturationLabel = stringResource(R.string.settings_color_saturation_decrease),
+                            increaseValueLabel = stringResource(R.string.settings_color_brightness_increase),
+                            decreaseValueLabel = stringResource(R.string.settings_color_brightness_decrease),
+                            onChange = onStateChange,
+                        )
+                        Text(
+                            stringResource(R.string.settings_color_hue),
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                        VisualHueSlider(
+                            hue = state.hue,
+                            label = stringResource(R.string.settings_color_hue),
+                            onChange = { onStateChange(state.copy(hue = it).normalized()) },
+                        )
+                        Text(
+                            stringResource(
+                                R.string.settings_color_opacity_format,
+                                (state.alpha * 100f).roundToInt(),
+                            ),
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                        Slider(
+                            value = state.alpha,
+                            onValueChange = { onStateChange(state.copy(alpha = it).normalized()) },
+                            valueRange = 0f..1f,
+                            modifier = Modifier.semantics {
+                                contentDescription = opacityLabel
+                            },
+                        )
+                    }
+                    Row(
+                        horizontalArrangement = Arrangement.End,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                    ) {
+                        TextButton(onClick = onDismiss) {
+                            Text(stringResource(R.string.settings_color_cancel))
+                        }
+                        TextButton(onClick = onApply) {
+                            Text(stringResource(R.string.settings_color_apply))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SaturationValuePicker(
+    state: VisualColorPickerState,
+    label: String,
+    stateText: String,
+    increaseSaturationLabel: String,
+    decreaseSaturationLabel: String,
+    increaseValueLabel: String,
+    decreaseValueLabel: String,
+    onChange: (VisualColorPickerState) -> Unit,
+) {
+    val hueArgb = android.graphics.Color.HSVToColor(floatArrayOf(state.hue, 1f, 1f))
+    val selectorArgb = android.graphics.Color.HSVToColor(
+        floatArrayOf(state.hue, state.saturation, state.value)
+    )
+    fun updatePosition(x: Float, y: Float, width: Float, height: Float) {
+        val selection = saturationValueFromPosition(x, y, width, height)
+        onChange(
+            state.copy(
+                saturation = selection.saturation,
+                value = selection.value,
+            )
         )
+    }
+
+    Canvas(
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(1.45f)
+            .clip(RoundedCornerShape(4.dp))
+            .pointerInput(state.hue, state.alpha) {
+                detectTapGestures { offset ->
+                    updatePosition(
+                        offset.x,
+                        offset.y,
+                        size.width.toFloat(),
+                        size.height.toFloat(),
+                    )
+                }
+            }
+            .pointerInput(state.hue, state.alpha) {
+                detectDragGestures(
+                    onDragStart = { offset ->
+                        updatePosition(
+                            offset.x,
+                            offset.y,
+                            size.width.toFloat(),
+                            size.height.toFloat(),
+                        )
+                    },
+                    onDrag = { change, _ ->
+                        change.consume()
+                        updatePosition(
+                            change.position.x,
+                            change.position.y,
+                            size.width.toFloat(),
+                            size.height.toFloat(),
+                        )
+                    },
+                )
+            }
+            .semantics {
+                contentDescription = label
+                stateDescription = stateText
+                customActions = listOf(
+                    CustomAccessibilityAction(increaseSaturationLabel) {
+                        onChange(state.copy(saturation = state.saturation + 0.05f).normalized())
+                        true
+                    },
+                    CustomAccessibilityAction(decreaseSaturationLabel) {
+                        onChange(state.copy(saturation = state.saturation - 0.05f).normalized())
+                        true
+                    },
+                    CustomAccessibilityAction(increaseValueLabel) {
+                        onChange(state.copy(value = state.value + 0.05f).normalized())
+                        true
+                    },
+                    CustomAccessibilityAction(decreaseValueLabel) {
+                        onChange(state.copy(value = state.value - 0.05f).normalized())
+                        true
+                    },
+                )
+            }
+    ) {
+        drawRect(
+            brush = Brush.horizontalGradient(
+                listOf(Color.White, Color(hueArgb))
+            )
+        )
+        drawRect(
+            brush = Brush.verticalGradient(
+                listOf(Color.Transparent, Color.Black)
+            )
+        )
+        val center = Offset(
+            x = state.saturation * size.width,
+            y = (1f - state.value) * size.height,
+        )
+        drawCircle(Color.Black, radius = 11.dp.toPx(), center = center)
+        drawCircle(Color.White, radius = 8.dp.toPx(), center = center)
+        drawCircle(Color(selectorArgb), radius = 5.dp.toPx(), center = center)
+    }
+}
+
+@Composable
+private fun VisualHueSlider(
+    hue: Float,
+    label: String,
+    onChange: (Float) -> Unit,
+) {
+    val hueColors = listOf(
+        Color(0xFFFF0000),
+        Color(0xFFFFFF00),
+        Color(0xFF00FF00),
+        Color(0xFF00FFFF),
+        Color(0xFF0000FF),
+        Color(0xFFFF00FF),
+        Color(0xFFFF0000),
+    )
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(48.dp),
+    ) {
+        Canvas(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(12.dp)
+                .clip(RoundedCornerShape(6.dp))
+        ) {
+            drawRect(brush = Brush.horizontalGradient(hueColors))
+        }
         Slider(
-            value = value.toFloat(),
-            onValueChange = { onChange(it.toInt().coerceIn(0, 255)) },
-            valueRange = 0f..255f,
-            modifier = Modifier.weight(1f).padding(horizontal = 4.dp)
-        )
-        Text(
-            value.toString(),
-            style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.size(width = 32.dp, height = 24.dp)
+            value = hue,
+            onValueChange = onChange,
+            valueRange = 0f..VisualColorPickerState.MAX_HUE,
+            colors = SliderDefaults.colors(
+                thumbColor = Color(
+                    android.graphics.Color.HSVToColor(floatArrayOf(hue, 1f, 1f))
+                ),
+                activeTrackColor = Color.Transparent,
+                inactiveTrackColor = Color.Transparent,
+                activeTickColor = Color.Transparent,
+                inactiveTickColor = Color.Transparent,
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .semantics { contentDescription = label },
         )
     }
 }

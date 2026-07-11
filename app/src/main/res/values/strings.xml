@@ -140,6 +140,9 @@
     <string name="settings_about_github_label">GitHub repository</string>
     <string name="settings_about_open_github">Open in browser</string>
     <string name="settings_about_tagline">Open-source on-screen translation / OCR overlay</string>
+    <string name="settings_about_qq_group_label">QQ community</string>
+    <string name="settings_about_qq_group_name_format">Screen Translator community · Group %1$s</string>
+    <string name="settings_about_join_qq_group">Join QQ group</string>
     <string name="settings_section_app_lang">App language</string>
     <string name="settings_app_lang_follow_system">Follow system</string>
     <string name="settings_app_lang_zh">简体中文</string>
@@ -239,6 +242,7 @@
     <string name="settings_ocr_chip_baidu">Baidu</string>
     <string name="settings_ocr_chip_tencent">Tencent</string>
     <string name="settings_ocr_chip_youdao">Youdao</string>
+    <string name="settings_ocr_chip_paddle_ai_studio">PP-OCRv6 Online</string>
     <string name="settings_ocr_group_local">On-device (no network, models downloaded on demand)</string>
     <string name="settings_ocr_group_cloud">Cloud (requires API key, pay per call)</string>
     <string name="settings_ocr_disabled_by_pictrans">"Youdao PicTrans" end-to-end engine is active — it does OCR + translation in one call, so the OCR settings below are ignored.</string>
@@ -253,6 +257,10 @@
     <string name="settings_luna_ocr_url_label">LunaTranslator OCR API URL</string>
     <string name="settings_luna_ocr_url_placeholder">http://192.168.0.2:2333/api/ocr</string>
     <string name="settings_luna_ocr_url_hint">Run LunaTranslator on the PC, enable its API service, and use the PC LAN IP here. The app sends PNG screenshots as the image field and reads results/text/box from the response.</string>
+    <string name="settings_paddle_ai_studio_token">AI Studio Access Token</string>
+    <string name="settings_paddle_ai_studio_description">PP-OCRv6 Online uses the PaddleOCR AI Studio asynchronous OCR service. Get an Access Token from the page below, then enter it here.</string>
+    <string name="settings_paddle_ai_studio_open_page">Open PaddleOCR AI Studio in an external browser</string>
+    <string name="settings_external_browser_unavailable">No browser is available to open this link.</string>
     <string name="settings_ocr_intro">Pick the OCR engine for the text type:\n• Auto / Japanese / Korean / Chinese / Latin: Google ML Kit on-device (free, offline). \"Auto\" picks the model by detecting Hangul / kana; pinning a specific language slightly improves accuracy.\n• PaddleOCR: on-device multilingual; better on complex layouts. First use downloads ~20MB models. (Korean dict not bundled — use ML Kit or cloud for Korean.)\n• Manga-OCR (Japanese manga, on-device, ≈ 160 MB; encoder + decoder + tokenizer files)\n• Baidu / Tencent Cloud: cloud OCR with API key (pay-as-you-go); pick Korean / Japanese etc. under \"Recognition language\" as a fallback.</string>
     <string name="settings_baidu_api_key">Baidu API Key</string>
     <string name="settings_baidu_secret_key">Baidu Secret Key</string>
@@ -284,6 +292,37 @@
     <string name="settings_theme_frost_glass">Frost glass</string>
     <string name="settings_theme_custom">Custom</string>
     <string name="settings_textsize_label_format">Text size: %1$d sp</string>
+    <string name="settings_text_style_label">Translation text style</string>
+    <string name="settings_text_style_bold">Bold</string>
+    <string name="settings_text_style_italic">Italic</string>
+    <string name="settings_text_style_underline">Underline</string>
+    <string name="settings_letter_spacing_format">Letter spacing: %1$.2f em</string>
+    <string name="settings_line_spacing_format">Line spacing: %1$.2f×</string>
+    <string name="settings_text_alignment_label">Text alignment</string>
+    <string name="settings_text_alignment_start">Align start</string>
+    <string name="settings_text_alignment_center">Align center</string>
+    <string name="settings_text_alignment_end">Align end</string>
+    <string name="settings_text_stroke_enabled">Text outline</string>
+    <string name="settings_text_stroke_width_format">Outline width: %1$.1f dp</string>
+    <string name="settings_text_stroke_color">Outline color</string>
+    <string name="settings_text_shadow_enabled">Text shadow</string>
+    <string name="settings_text_shadow_radius_format">Shadow blur: %1$.0f dp</string>
+    <string name="settings_text_shadow_offset_x_format">Shadow horizontal offset: %1$.0f dp</string>
+    <string name="settings_text_shadow_offset_y_format">Shadow vertical offset: %1$.0f dp</string>
+    <string name="settings_text_shadow_color">Shadow color</string>
+    <string name="settings_text_style_reset">Reset text style</string>
+    <string name="settings_color_choose">Choose color</string>
+    <string name="settings_color_apply">Apply</string>
+    <string name="settings_color_cancel">Cancel</string>
+    <string name="settings_color_visual_area">Color field</string>
+    <string name="settings_color_visual_state_format">Saturation %1$d%%, brightness %2$d%%</string>
+    <string name="settings_color_hue">Hue</string>
+    <string name="settings_color_opacity">Opacity</string>
+    <string name="settings_color_opacity_format">Opacity: %1$d%%</string>
+    <string name="settings_color_saturation_increase">Increase saturation</string>
+    <string name="settings_color_saturation_decrease">Decrease saturation</string>
+    <string name="settings_color_brightness_increase">Increase brightness</string>
+    <string name="settings_color_brightness_decrease">Decrease brightness</string>
     <string name="settings_overlay_font_label">Translation font</string>
     <string name="settings_overlay_font_default">System default</string>
     <string name="settings_overlay_font_current_format">Current: %1$s</string>
@@ -305,7 +344,7 @@
     <string name="settings_overlay_font_error_copy_failed">Could not save the font file.</string>
     <string name="settings_alpha_label_format">Opacity: %1$d%%</string>
     <string name="settings_overlay_preview_label">Overlay preview</string>
-    <string name="settings_overlay_preview_sample">Hello, world. The weather is lovely today.</string>
+    <string name="settings_overlay_preview_sample">Hello, world.\nThe weather is lovely today.</string>
     <string name="settings_render_mode_label">Display mode</string>
     <string name="settings_render_blocks_chip">Stick to text</string>
     <string name="settings_render_banner_chip">Bottom banner</string>
@@ -383,7 +422,10 @@
     <string name="settings_search_item_target_lang">Target language</string>
     <string name="settings_search_item_prompt">Prompt template</string>
     <string name="settings_search_item_streaming">Streaming translation</string>
+    <string name="settings_search_item_preset_transfer">Import / export settings, presets, and fonts</string>
+    <string name="settings_search_item_local_llm_model">Local LLM model management</string>
     <string name="settings_search_item_ocr_switch">OCR engine switch</string>
+    <string name="settings_search_item_paddle_ai_studio">PP-OCRv6 Online / AI Studio token</string>
     <string name="settings_search_item_paddle_download">PaddleOCR model download</string>
     <string name="settings_search_item_manga_ocr_download">Manga OCR model download</string>
     <string name="settings_search_item_manual_orientation">Manual text orientation lock</string>
@@ -401,6 +443,7 @@
     <string name="settings_search_item_overlay_theme">Overlay color theme</string>
     <string name="settings_search_item_custom_theme">Custom color / border</string>
     <string name="settings_search_item_text_size">Text size</string>
+    <string name="settings_search_item_text_style">Bold, italic, spacing, outline and shadow</string>
     <string name="settings_search_item_overlay_font">Translation font</string>
     <string name="settings_search_item_alpha">Opacity</string>
     <string name="settings_search_item_floating_size">Floating button size</string>
@@ -475,6 +518,7 @@
     <string name="log_category_capture">Capture</string>
     <string name="log_category_ocr">OCR</string>
     <string name="log_category_translate">Translate</string>
+    <string name="log_category_crash">Crash</string>
     <string name="log_export_header_format">Screen Translator logs (%1$d entries)</string>
     <string name="log_export_export_time">Exported at: </string>
     <string name="log_export_source">Source: </string>
@@ -648,6 +692,7 @@
     <string name="err_tencent_no_keys">Tencent OCR: SecretId / SecretKey not configured</string>
     <string name="err_umi_ocr_no_url">Umi-OCR URL not configured</string>
     <string name="err_luna_ocr_no_url">LunaTranslator OCR URL not configured</string>
+    <string name="err_paddle_ai_studio_no_token">PaddleOCR AI Studio token not configured</string>
     <string name="err_tencent_parse_failed_format">Tencent parse failed: %1$s</string>
     <string name="err_paddle_not_ready">PaddleOCR model not ready. Tap \"Download PaddleOCR model\" in Settings.</string>
     <string name="err_paddle_all_mirrors_failed_format">%1$s: all mirrors failed: %2$s</string>
@@ -853,6 +898,7 @@
     <string name="word_card_label_phonetic">Phonetic</string>
     <string name="word_card_label_pos">Part of speech</string>
     <string name="word_card_label_definitions">Definitions</string>
+    <string name="word_card_label_difficulty_notes">Usage and terminology notes</string>
     <string name="word_card_label_examples">Examples</string>
     <string name="word_card_btn_copy_source">Copy source</string>
     <string name="word_card_btn_copy_translation">Copy translation</string>
@@ -914,6 +960,22 @@
     <string name="settings_translation_preset_unsaved_name">Unsaved preset</string>
     <string name="settings_translation_preset_matched_placeholder">Current settings match an existing preset.</string>
     <string name="settings_translation_preset_save">Save</string>
+    <string name="settings_translation_preset_import">Import settings</string>
+    <string name="settings_translation_preset_export">Export settings</string>
+    <string name="settings_translation_preset_exported_format">Exported %1$d custom preset(s).</string>
+    <string name="settings_translation_preset_export_failed_format">Preset export failed: %1$s</string>
+    <string name="settings_translation_preset_import_failed_format">Preset import failed: %1$s</string>
+    <string name="settings_translation_preset_import_empty">The selected file contains no custom presets.</string>
+    <string name="settings_translation_preset_import_confirm_title">Import these presets?</string>
+    <string name="settings_translation_preset_import_confirm_message">Import %1$d preset(s). Presets replaced by name: %2$s</string>
+    <string name="settings_translation_preset_import_none">None</string>
+    <string name="settings_translation_preset_imported_format">Imported %1$d preset(s); replaced %2$d.</string>
+    <string name="settings_bundle_exported_format">Exported all non-sensitive settings, %1$d custom preset(s), and %2$d font(s). Credentials were not included.</string>
+    <string name="settings_bundle_export_failed_format">Settings export failed: %1$s</string>
+    <string name="settings_bundle_import_failed_format">Settings import failed: %1$s</string>
+    <string name="settings_bundle_import_confirm_title">Import these settings?</string>
+    <string name="settings_bundle_import_confirm_message">This replaces all non-sensitive settings and imports %1$d preset(s). Presets replaced by name: %2$s. Font files: %3$d. Existing API keys, tokens, and other credentials are kept.</string>
+    <string name="settings_bundle_imported_format">Imported settings, %1$d preset(s), and %3$d font(s); replaced %2$d preset(s).</string>
     <string name="preset_quick_title">Switch preset</string>
     <string name="preset_quick_summary_format">OCR: %1$s\nTranslator: %2$s\nLanguages: %3$s → %4$s</string>
     <string name="preset_quick_applied_format">Preset applied: %1$s</string>
@@ -922,7 +984,7 @@
 
     <!-- Settings: dictionary prompt -->
     <string name="settings_dictionary_prompt_title">Dictionary Prompt (Word Select, OpenAI-compatible only)</string>
-    <string name="settings_dictionary_prompt_desc">When the selected region looks like a single word, the LLM is asked for structured phonetic + definitions instead of plain translation. Non-OpenAI engines fall back to plain translation.</string>
+    <string name="settings_dictionary_prompt_desc">When the selected region looks like a single word or fixed phrase, the LLM returns structured pronunciation, definitions, difficult usage or terminology notes, and examples. Non-OpenAI engines fall back to plain translation.</string>
     <string name="settings_dictionary_prompt_reset">Reset to default</string>
     <string name="settings_prompt_reset_confirm_title">Reset translation prompt?</string>
     <string name="settings_dictionary_prompt_reset_confirm_title">Reset dictionary prompt?</string>
@@ -961,5 +1023,5 @@
     <string name="err_orientation_model_rename_failed_format">rename %1$s -> %2$s failed</string>
 
     <!-- Default dictionary prompt -->
-    <string name="default_dictionary_prompt">You are a {source}→{target} bilingual dictionary assistant. Treat the user input as a single word or fixed phrase and output ONLY the following JSON — no markdown, no code fence, no explanation.\n{\n  \"phonetic\": \"phonetic / pronunciation in {source}; empty string if unknown\",\n  \"pos\": [\"part of speech in {target}, e.g. n./v./adj.; empty array if unknown\"],\n  \"definitions\": [\"definition 1 in {target}\", \"definition 2 in {target}\"],\n  \"examples\": [\n    { \"src\": \"{source} example\", \"dst\": \"{target} translation\" }\n  ]\n}\nRules:\n1. Must be valid JSON with exactly these keys;\n2. Use empty string / empty array for missing info;\n3. At most 2 examples;\n4. Never translate the whole thing as a sentence — always a dictionary lookup.\n</string>
+    <string name="default_dictionary_prompt">You are a {source}→{target} bilingual dictionary assistant. Treat the user input as a single word or fixed phrase and output ONLY the following JSON — no markdown, no code fence, no explanation.\n{\n  \"phonetic\": \"phonetic / pronunciation in {source}; empty string if unknown\",\n  \"pos\": [\"part of speech in {target}, e.g. n./v./adj.; empty array if unknown\"],\n  \"definitions\": [\"definition 1 in {target}\", \"definition 2 in {target}\"],\n  \"difficulty_notes\": [\"explain in {target} any rare meaning, specialized domain, acronym expansion, cultural reference, or easily confused usage; empty array for ordinary terms\"],\n  \"examples\": [\n    { \"src\": \"{source} example\", \"dst\": \"{target} translation\" }\n  ]\n}\nRules:\n1. Must be valid JSON with exactly these keys;\n2. Use empty string / empty array for missing info;\n3. At most 2 examples;\n4. Rare words, specialized terms, acronyms, culture-specific names, and easily confused usages require concise difficulty notes (at most 3) without repeating the definitions; use an empty array for ordinary terms;\n5. Never translate the whole thing as a sentence — always a dictionary lookup.\n</string>
 </resources>
