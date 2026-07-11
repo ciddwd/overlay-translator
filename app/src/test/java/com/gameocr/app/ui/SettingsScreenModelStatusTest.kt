@@ -18,6 +18,59 @@ import javax.xml.parsers.DocumentBuilderFactory
 class SettingsScreenModelStatusTest {
 
     @Test
+    fun settingsSearchMatches_normalizesMultipleTermsAndPunctuation() {
+        data class Case(
+            val name: String,
+            val query: String,
+            val texts: List<String>,
+            val expected: Boolean,
+        )
+
+        val cases = listOf(
+            Case("PP-OCR multi term", "pp ocr v6 online", listOf("PP-OCRv6 Online"), true),
+            Case("AI Studio alias", "ai studio token", listOf("Paddle AI Studio Access Token"), true),
+            Case("Chinese terms in any order", "预设 导入", listOf("导入 / 导出翻译预设"), true),
+            Case("all terms are required", "local missing", listOf("Local LLM model"), false),
+            Case("blank query", "   ", listOf("Local LLM model"), false),
+        )
+
+        cases.forEach { case ->
+            assertEquals(
+                case.name,
+                case.expected,
+                settingsSearchMatches(case.query, case.texts),
+            )
+        }
+    }
+
+    @Test
+    fun settingsSearchKeywords_coverPortableSettingsAndVisualColorTerms() {
+        data class Case(
+            val name: String,
+            val query: String,
+            val searchableTexts: List<String>,
+        )
+
+        val cases = listOf(
+            Case("Chinese settings export", "设置导出", SETTINGS_SEARCH_TRANSFER_KEYWORDS),
+            Case("English font backup", "font backup", SETTINGS_SEARCH_TRANSFER_KEYWORDS),
+            Case("Chinese background color", "背景色", SETTINGS_SEARCH_COLOR_KEYWORDS),
+            Case("Chinese text color", "文字颜色", SETTINGS_SEARCH_COLOR_KEYWORDS),
+            Case("Chinese hue", "色相", SETTINGS_SEARCH_COLOR_KEYWORDS),
+            Case("Chinese saturation alias", "饱和度", SETTINGS_SEARCH_COLOR_KEYWORDS),
+            Case("English brightness", "brightness", SETTINGS_SEARCH_COLOR_KEYWORDS),
+            Case("English opacity", "opacity", SETTINGS_SEARCH_COLOR_KEYWORDS),
+        )
+
+        cases.forEach { case ->
+            assertTrue(
+                case.name,
+                settingsSearchMatches(case.query, case.searchableTexts),
+            )
+        }
+    }
+
+    @Test
     fun translationPresetSectionLabel_usesSystemPresetPlanText() {
         data class Case(
             val name: String,
@@ -666,8 +719,8 @@ class SettingsScreenModelStatusTest {
                 ),
             ),
             Case(
-                name = "font preview has fixed height to avoid scroll jumps",
-                expectedPattern = Regex("""AndroidView\([\s\S]*?\.height\(48\.dp\)"""),
+                name = "two-line typography preview has fixed height to avoid scroll jumps",
+                expectedPattern = Regex("""AndroidView\([\s\S]*?\.height\(80\.dp\)"""),
             ),
             Case(
                 name = "font message keeps stable reserved height",

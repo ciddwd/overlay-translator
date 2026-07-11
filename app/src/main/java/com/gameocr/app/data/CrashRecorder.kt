@@ -29,6 +29,7 @@ object CrashRecorder {
 
     private const val MAX_FILES = 5
     private const val MAX_EXIT_TRACE_CHARS = 16 * 1024
+    private const val MAX_EXIT_TRACE_BYTES = 64 * 1024
     private const val CRASH_DIR_NAME = "crash"
     private const val PREFS_NAME = "crash_recorder"
     private const val KEY_LAST_EXIT_CHECK = "last_exit_check"
@@ -94,6 +95,7 @@ object CrashRecorder {
         line("captureRegionSavedScreenW", s.captureRegionSavedScreenW)
         line("captureRegionSavedScreenH", s.captureRegionSavedScreenH)
         line("overlayTextSizeSp", s.overlayTextSizeSp)
+        line("overlayTextStyle", s.overlayTextStyle)
         line("overlayAlpha", s.overlayAlpha)
         line("overlayFontFileName", s.overlayFontFileName.ifBlank { "<unset>" })
         line("overlayFontDisplayName", s.overlayFontDisplayName.ifBlank { "<unset>" })
@@ -229,7 +231,14 @@ object CrashRecorder {
         files.drop(MAX_FILES).forEach { runCatching { it.delete() } }
         files.take(MAX_FILES).sortedBy { it.lastModified() }.forEach { f ->
             val content = runCatching { f.readText() }.getOrNull() ?: return@forEach
-            logRepository.error(LogRepository.Category.CAPTURE, "[CRASH] $content")
+            logRepository.error(
+                category = LogRepository.Category.CRASH,
+                message = "[CRASH] $content",
+                timestamp = crashTimestamp(f.name, f.lastModified()),
+            )
+            if (!runCatching { f.delete() }.getOrDefault(false)) {
+                Timber.w("Failed to consume pending crash file: %s", f.name)
+            }
         }
     }
 
@@ -280,13 +289,47 @@ object CrashRecorder {
                         append("\nTrace:\n").append(trace)
                     }
                 }
-                logRepository.error(LogRepository.Category.CAPTURE, msg)
+                logRepository.error(
+                    category = LogRepository.Category.CRASH,
+                    message = msg,
+                    timestamp = info.timestamp,
+                )
             }
         prefs.edit().putLong(KEY_LAST_EXIT_CHECK, System.currentTimeMillis()).apply()
     }
 
-    internal fun formatExitTraceForLog(input: InputStream?): String? =
-        input?.use { formatExitTraceForLog(it.readBytes()) }
+    internal fun formatExitTraceForLog(input: InputStream?): String? = input?.use { source ->
+        val buffer = ByteArray(8 * 1024)
+        val output = java.io.ByteArrayOutputStream(MAX_EXIT_TRACE_BYTES)
+        var truncated = false
+        while (output.size() < MAX_EXIT_TRACE_BYTES) {
+            val remaining = MAX_EXIT_TRACE_BYTES - output.size()
+            val count = source.read(buffer, 0, minOf(buffer.size, remaining))
+            if (count < 0) break
+            output.write(buffer, 0, count)
+        }
+        if (output.size() == MAX_EXIT_TRACE_BYTES && source.read() >= 0) {
+            truncated = true
+        }
+        formatExitTraceForLog(output.toByteArray())?.let { formatted ->
+            if (truncated) {
+                "$formatted\n<trace input truncated after $MAX_EXIT_TRACE_BYTES bytes>"
+            } else {
+                formatted
+            }
+        }
+    }
+
+    internal fun crashTimestamp(
+        fileName: String,
+        lastModified: Long,
+        fallbackNow: Long = System.currentTimeMillis(),
+    ): Long =
+        fileName.substringBeforeLast(".crash")
+            .toLongOrNull()
+            ?.takeIf { it > 0L }
+            ?: lastModified.takeIf { it > 0L }
+            ?: fallbackNow
 
     internal fun formatExitTraceForLog(bytes: ByteArray): String? {
         if (bytes.isEmpty()) return null

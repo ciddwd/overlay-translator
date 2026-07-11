@@ -1,8 +1,11 @@
 package com.gameocr.app.data
 
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
+import java.util.Locale
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -27,6 +30,8 @@ data class TranslationPresetImportResult(
 
 object TranslationPresetTransfer {
     const val DEFAULT_FILE_NAME: String = "overlay-translator-presets.otpresets"
+    const val MAX_FILE_BYTES: Int = 2 * 1024 * 1024
+    const val MAX_PRESET_COUNT: Int = 100
 
     private const val FORMAT = "overlay-translator.translation-presets"
     private const val EXPORT_VERSION = 1
@@ -43,14 +48,18 @@ object TranslationPresetTransfer {
     private val secureRandom = SecureRandom()
 
     fun encodeEncrypted(presets: List<TranslationPreset>): String {
+        val preparedPresets = prepareImportedPresets(presets)
+        require(preparedPresets.size <= MAX_PRESET_COUNT) {
+            "Preset export exceeds the $MAX_PRESET_COUNT item limit."
+        }
         val payload = TranslationPresetExportPayload(
             version = EXPORT_VERSION,
-            presets = prepareImportedPresets(presets)
+            presets = preparedPresets
         )
         val plainText = json.encodeToString(payload).toByteArray(Charsets.UTF_8)
         val nonce = ByteArray(NONCE_BYTES).also(secureRandom::nextBytes)
         val encrypted = crypt(Cipher.ENCRYPT_MODE, nonce, plainText)
-        return json.encodeToString(
+        val encoded = json.encodeToString(
             TranslationPresetEncryptedEnvelope(
                 format = FORMAT,
                 version = ENVELOPE_VERSION,
@@ -59,9 +68,16 @@ object TranslationPresetTransfer {
                 ciphertext = Base64.getEncoder().encodeToString(encrypted),
             )
         )
+        require(encoded.toByteArray(Charsets.UTF_8).size <= MAX_FILE_BYTES) {
+            "Preset export exceeds the ${MAX_FILE_BYTES / 1024} KiB file limit."
+        }
+        return encoded
     }
 
     fun decodeEncrypted(text: String): List<TranslationPreset> {
+        require(text.toByteArray(Charsets.UTF_8).size <= MAX_FILE_BYTES) {
+            "Preset export file is too large."
+        }
         val envelope = runCatching {
             json.decodeFromString<TranslationPresetEncryptedEnvelope>(text)
         }.getOrElse {
@@ -87,7 +103,25 @@ object TranslationPresetTransfer {
             throw IllegalArgumentException("Invalid preset export payload.", it)
         }
         require(payload.version == EXPORT_VERSION) { "Unsupported preset payload version." }
+        require(payload.presets.size <= MAX_PRESET_COUNT) {
+            "Preset export exceeds the $MAX_PRESET_COUNT item limit."
+        }
         return prepareImportedPresets(payload.presets)
+    }
+
+    fun readUtf8Limited(input: InputStream, maxBytes: Int = MAX_FILE_BYTES): String {
+        require(maxBytes > 0) { "maxBytes must be positive." }
+        val output = ByteArrayOutputStream(minOf(maxBytes, 32 * 1024))
+        val buffer = ByteArray(8 * 1024)
+        var total = 0
+        while (true) {
+            val read = input.read(buffer)
+            if (read < 0) break
+            total += read
+            require(total <= maxBytes) { "Preset export file is too large." }
+            output.write(buffer, 0, read)
+        }
+        return output.toString(Charsets.UTF_8.name())
     }
 
     fun planImport(
@@ -239,7 +273,7 @@ object TranslationPresetTransfer {
         name.trim().takeIf { it.isNotEmpty() }
 
     private fun normalizedName(name: String): String =
-        name.trim().lowercase()
+        name.trim().lowercase(Locale.ROOT)
 
     private fun translationPresetShortName(name: String): String =
         name.take(8)

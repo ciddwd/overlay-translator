@@ -6,6 +6,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
+import java.io.InputStream
 import java.security.MessageDigest
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -190,6 +191,63 @@ class OverlayFontManager @Inject constructor(
         cachedFileName = normalized
         cachedTypeface = typeface
         return typeface
+    }
+
+    internal fun transferFileFor(fileName: String): File? {
+        val normalized = OverlayFontPolicy.normalizeStoredFileName(fileName) ?: return null
+        return File(fontDir, normalized).takeIf { it.isFile }
+    }
+
+    internal fun existingFontEntries(fonts: List<OverlayFontEntry>): List<OverlayFontEntry> =
+        OverlayFontPolicy.normalizeImportedFonts(fonts).filter { entry ->
+            val file = File(fontDir, entry.fileName)
+            file.isFile && canLoadTypeface(file)
+        }
+
+    internal fun installTransferredFont(
+        font: SettingsBundleFont,
+        input: InputStream,
+    ): OverlayFontEntry {
+        val normalizedFileName = requireNotNull(
+            OverlayFontPolicy.normalizeStoredFileName(font.fileName),
+        ) { "Transferred font has an invalid file name." }
+        val displayName = OverlayFontPolicy.sanitizeDisplayName(font.displayName)
+        require(font.byteCount in 1..OverlayFontPolicy.MAX_FONT_BYTES) {
+            "Transferred font has an invalid size."
+        }
+        val dir = fontDir
+        require(dir.exists() || dir.mkdirs()) { "Could not create the font directory." }
+        val tmp = File(dir, "transfer-${System.nanoTime()}.tmp")
+        val digest = MessageDigest.getInstance("SHA-256")
+        var byteCount = 0L
+        try {
+            tmp.outputStream().buffered().use { output ->
+                val buffer = ByteArray(8 * 1024)
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    byteCount += count
+                    require(byteCount <= OverlayFontPolicy.MAX_FONT_BYTES) {
+                        "Transferred font is too large."
+                    }
+                    digest.update(buffer, 0, count)
+                    output.write(buffer, 0, count)
+                }
+            }
+            require(byteCount == font.byteCount) { "Transferred font size does not match its manifest." }
+            require(OverlayFontPolicy.storedFileNameForSha256(digest.digest().toHexString()) == normalizedFileName) {
+                "Transferred font checksum does not match its file name."
+            }
+            require(canLoadTypeface(tmp)) { "Transferred font cannot be loaded." }
+            val target = File(dir, normalizedFileName)
+            if (!target.isFile || !canLoadTypeface(target)) {
+                tmp.copyTo(target, overwrite = true)
+            }
+            return OverlayFontEntry(normalizedFileName, displayName)
+        } finally {
+            runCatching { tmp.delete() }
+            invalidateCache()
+        }
     }
 
     private fun queryDisplayName(uri: Uri): String? {

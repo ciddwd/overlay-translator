@@ -17,6 +17,7 @@ import com.gameocr.app.R
 import com.gameocr.app.data.BorderStyle
 import com.gameocr.app.data.FloatingWindowContentMode
 import com.gameocr.app.data.OverlayPlacement
+import com.gameocr.app.data.OverlayTextStyle
 import com.gameocr.app.data.OverlayTheme
 import com.gameocr.app.data.Settings
 import com.gameocr.app.data.SettingsRepository
@@ -58,7 +59,8 @@ class OverlayManager(
         FloatingWindowContentMode.SRC_AND_DST,
     /** CUSTOM 主题的边框样式（仅 CUSTOM 主题生效）。CaptureService 同步。 */
     @Volatile var customBorderStyle: BorderStyle = BorderStyle.SOLID,
-    @Volatile var overlayTypeface: Typeface? = null
+    @Volatile var overlayTypeface: Typeface? = null,
+    @Volatile var overlayTextStyle: OverlayTextStyle = OverlayTextStyle()
 ) {
 
     private val wm by lazy { context.getSystemService(Context.WINDOW_SERVICE) as WindowManager }
@@ -465,11 +467,11 @@ class OverlayManager(
                     setTextColor(themeFgMutedColor())
                 })
             }
-            val dstView = TextView(context).apply {
+            val dstView = StyledTranslationTextView(context).apply {
                 text = dst
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, textSizeSp.toFloat())
                 setTextColor(themeFgColor())
-                typeface = overlayTypeface
+                applyOverlayTextStyle(overlayTextStyle, overlayTypeface)
                 if (isSrcAndDst) {
                     val mt = (2 * context.resources.displayMetrics.density).toInt()
                     val mb = (8 * context.resources.displayMetrics.density).toInt()
@@ -534,7 +536,9 @@ class OverlayManager(
                 "avoidCollision=$avoidCollision theme=$theme"
         )
         // 估算每行像素高度（行间距系数 1.3，跟 setLineSpacing 一致）
-        val lineHeightPx = (textSizeSp * dm.density * 1.3f).toInt().coerceAtLeast(16)
+        val lineHeightPx = (
+            textSizeSp * dm.density * 1.3f * overlayTextStyle.lineSpacingMultiplier
+        ).toInt().coerceAtLeast(16)
         val verticalTextPaddingHorizontalPx = 8
         val verticalMinReadableSlotWidthPx = (
             ceil(
@@ -649,6 +653,7 @@ class OverlayManager(
                     this.text = dst
                     this.leftToRight = leftToRight
                     this.typeface = overlayTypeface
+                    applyTextStyle(overlayTextStyle)
                     this.background = themeBg()
                     setTextColor(themeFgColor())
                     setTextSizeSp(textSizeSp.toFloat())
@@ -657,19 +662,22 @@ class OverlayManager(
                     setPadding(verticalTextPaddingHorizontalPx, 4, verticalTextPaddingHorizontalPx, 4)
                 }
             } else {
-                TextView(context).apply {
+                StyledTranslationTextView(context).apply {
                     text = dst
                     background = themeBg()
                     setTextColor(themeFgColor())
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, textSizeSp.toFloat())
-                    typeface = overlayTypeface
+                    applyOverlayTextStyle(
+                        style = overlayTextStyle,
+                        baseTypeface = overlayTypeface,
+                        baseLineSpacingMultiplier = 1.05f
+                    )
                     if (allowWrap) {
                         setSingleLine(false)
                         // maxLines 固定 10 行：showBlocks 时 dst 是占位"…"无法算最终行数；
                         // updateBlockText 又只更新 text 不动 maxLines；用大值保证段落聚类
                         // 多行译文不被截断。代价是可能盖到下方相邻原文 box，但比"看到 …"好。
                         maxLines = 10
-                        setLineSpacing(2f, 1.05f)
                         // 不显示省略号——即使超过 10 行也直接截，省略号在 OCR 场景看着像 bug
                         ellipsize = null
                     } else {

@@ -1917,6 +1917,7 @@ class CaptureService : Service() {
                 floatingWindowContentMode = settings.floatingWindowContentMode
                 customBorderStyle = settings.customBorderStyle
                 overlayTypeface = typeface
+                overlayTextStyle = settings.overlayTextStyle.normalized()
                 syncFloatingWindowFromSettings(settings)
             }
             // Overlay / floating button both own Android Views; keep every visible update on main.

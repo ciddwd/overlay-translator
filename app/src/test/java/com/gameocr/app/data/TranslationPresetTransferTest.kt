@@ -1,5 +1,7 @@
 package com.gameocr.app.data
 
+import java.io.ByteArrayInputStream
+import java.util.Locale
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -93,6 +95,29 @@ class TranslationPresetTransferTest {
     }
 
     @Test
+    fun mergeImportedPresets_usesLocaleIndependentNameMatching() {
+        val originalLocale = Locale.getDefault()
+        try {
+            Locale.setDefault(Locale.forLanguageTag("tr-TR"))
+            val cases = listOf(
+                "INDIGO" to "indigo",
+                "  INDIGO  " to "indigo",
+                "漫画" to "漫画",
+            )
+            cases.forEachIndexed { index, (existingName, importedName) ->
+                val result = TranslationPresetTransfer.mergeImportedPresets(
+                    existing = listOf(preset("existing_$index", existingName)),
+                    imported = listOf(preset("imported_$index", importedName)),
+                )
+                assertEquals("case $index", 1, result.presets.size)
+                assertEquals("case $index", listOf(existingName), result.overwrittenNames)
+            }
+        } finally {
+            Locale.setDefault(originalLocale)
+        }
+    }
+
+    @Test
     fun mergeImportedPresetsAddsNewNamesAndAvoidsIdCollisions() {
         val existing = preset(id = "custom_same_id", name = "Manga")
         val imported = preset(id = "custom_same_id", name = "Novel")
@@ -123,6 +148,31 @@ class TranslationPresetTransferTest {
 
         assertEquals(0, plan.importedCount)
         assertTrue(plan.importedPresets.isEmpty())
+    }
+
+    @Test
+    fun transferLimitsRejectOversizedStreamsAndPresetLists() {
+        val utf8 = "你好".toByteArray(Charsets.UTF_8)
+        assertEquals(
+            "你好",
+            TranslationPresetTransfer.readUtf8Limited(
+                ByteArrayInputStream(utf8),
+                maxBytes = utf8.size,
+            )
+        )
+        assertTrue(
+            runCatching {
+                TranslationPresetTransfer.readUtf8Limited(
+                    ByteArrayInputStream(utf8),
+                    maxBytes = utf8.size - 1,
+                )
+            }.isFailure
+        )
+
+        val tooMany = (0..TranslationPresetTransfer.MAX_PRESET_COUNT).map { index ->
+            preset(id = "custom_$index", name = "Preset $index")
+        }
+        assertTrue(runCatching { TranslationPresetTransfer.encodeEncrypted(tooMany) }.isFailure)
     }
 
     private fun preset(

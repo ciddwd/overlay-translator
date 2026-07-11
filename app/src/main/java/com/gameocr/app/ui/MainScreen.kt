@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
@@ -444,6 +445,8 @@ fun MainScreen(
 }
 
 private const val GITHUB_URL = "https://github.com/ciddwd/overlay-translator"
+internal const val QQ_GROUP_NUMBER = "1059655926"
+internal const val QQ_GROUP_URL = "https://qun.qq.com/universal-share/share?ac=1&authKey=%2Fs0%2FaO4mEHsgutzjUnhGIQEWLcAcGPXTefUY2YwdMkPdnHHuB%2FpLZm9hPjcrw6n5&busi_data=eyJncm91cENvZGUiOiIxMDU5NjU1OTI2IiwidG9rZW4iOiJ4b25nS0FvSFQyMko4WjJTMHhGRlIwSnppeVB2eGJCNjFua0FDTGZzNUhEWlY3VkdPcFVaOEdMams0aEY3aFBTIiwidWluIjoiNTcyMjQyOTk4In0%3D&data=j7H7DHUunIEqMXYLZxhTkx-K_LZTTs5aBJS95LT_Y50uQy37d5IiUU2y3gAPcy9CYRzRufvHuTCaSHOQsLTkTw&svctype=4&tempid=h5_group_info"
 
 @Composable
 private fun AboutContent() {
@@ -461,6 +464,31 @@ private fun AboutContent() {
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
+    Text(
+        text = stringResource(R.string.settings_about_qq_group_label),
+        style = MaterialTheme.typography.labelLarge
+    )
+    Text(
+        text = stringResource(R.string.settings_about_qq_group_name_format, QQ_GROUP_NUMBER),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    OutlinedButton(
+        onClick = {
+            runCatching {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(QQ_GROUP_URL))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(intent)
+            }
+        },
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null)
+        Text(
+            stringResource(R.string.settings_about_join_qq_group),
+            modifier = Modifier.padding(start = 8.dp)
+        )
+    }
     Text(
         text = stringResource(R.string.settings_about_github_label),
         style = MaterialTheme.typography.labelLarge
