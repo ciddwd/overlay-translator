@@ -9,9 +9,12 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.PointF
 import android.graphics.Rect
+import android.os.SystemClock
 import com.gameocr.app.R
 import com.gameocr.app.data.OcrEngineKind
 import com.gameocr.app.data.dbnetUnclipRatioFor
+import com.gameocr.app.util.CpuThreadPolicy
+import com.gameocr.app.util.InferenceTiming
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -65,23 +68,42 @@ class MangaOcrEngine @Inject constructor(
     private var encOutputName: String = "last_hidden_state"
     private var decInputIdsName: String = "input_ids"
     private var decHiddenName: String = "encoder_hidden_states"
+    private val availableProcessors by lazy { CpuThreadPolicy.availableProcessors() }
+    private val ortThreads by lazy { CpuThreadPolicy.select(availableProcessors) }
 
     override suspend fun recognize(bitmap: Bitmap, kind: OcrEngineKind): List<TextBlock> {
+        val startedAt = SystemClock.elapsedRealtime()
+        val mangaReadyStartedAt = SystemClock.elapsedRealtime()
         ensureReady()
+        val mangaReadyMs = InferenceTiming.elapsedMs(mangaReadyStartedAt, SystemClock.elapsedRealtime())
         // DBNet 也得就绪。Paddle 和 manga-ocr 都未就绪时分别抛各自的 ModelNotReadyException
+        val paddleReadyStartedAt = SystemClock.elapsedRealtime()
         paddle.ensureReady()
+        val paddleReadyMs = InferenceTiming.elapsedMs(paddleReadyStartedAt, SystemClock.elapsedRealtime())
         val s = settingsRepository.get()
-        return withContext(Dispatchers.Default) { runFull(bitmap, s) }
+        val results = withContext(Dispatchers.Default) { runFull(bitmap, s) }
+        Timber.tag(PERF_TAG).i(
+            "recognize totalMs=%d mangaReadyMs=%d paddleReadyMs=%d bitmap=%dx%d blocks=%d ortThreads=%d",
+            InferenceTiming.elapsedMs(startedAt, SystemClock.elapsedRealtime()),
+            mangaReadyMs,
+            paddleReadyMs,
+            bitmap.width,
+            bitmap.height,
+            results.size,
+            ortThreads,
+        )
+        return results
     }
 
     suspend fun ensureReady() = initLock.withLock {
         if (encSession != null && decSession != null) return@withLock
+        val startedAt = SystemClock.elapsedRealtime()
         val files = installer.checkInstalled()
             ?: throw ModelNotReadyException(context.getString(R.string.err_manga_ocr_not_ready))
         val e = env ?: OrtEnvironment.getEnvironment().also { env = it }
         val opts = OrtSession.SessionOptions().apply {
             // 端侧推理别抢主线程；2 thread 实测够用
-            setIntraOpNumThreads(2)
+            setIntraOpNumThreads(ortThreads)
         }
         val enc = e.createSession(files.encoder.absolutePath, opts)
         val dec = e.createSession(files.decoder.absolutePath, opts)
@@ -114,6 +136,15 @@ class MangaOcrEngine @Inject constructor(
             files.encoder.length() / 1024, files.decoder.length() / 1024, tokens.size,
             encOutputName, decInputIdsName, decHiddenName
         )
+        Timber.tag(PERF_TAG).i(
+            "init totalMs=%d encKb=%d decKb=%d vocab=%d availableProcessors=%d ortThreads=%d",
+            InferenceTiming.elapsedMs(startedAt, SystemClock.elapsedRealtime()),
+            files.encoder.length() / 1024,
+            files.decoder.length() / 1024,
+            tokens.size,
+            availableProcessors,
+            ortThreads,
+        )
     }
 
     private fun pickName(names: Set<String>, vararg candidates: String): String {
@@ -124,20 +155,31 @@ class MangaOcrEngine @Inject constructor(
     }
 
     private suspend fun runFull(bitmap: Bitmap, settings: com.gameocr.app.data.Settings): List<TextBlock> {
+        val startedAt = SystemClock.elapsedRealtime()
         // 1) 复用 paddle DBNet 检测 → quads；大图额外走重叠分块，提升整屏小字召回。
         val mangaUnclipRatio = settings.dbnetUnclipRatioFor(OcrEngineKind.MANGA_OCR_JA)
+        val detectStartedAt = SystemClock.elapsedRealtime()
         val quads = detectQuadsForManga(
             bitmap = bitmap,
             settings = settings,
             mangaUnclipRatio = mangaUnclipRatio
         )
+        val detectMs = InferenceTiming.elapsedMs(detectStartedAt, SystemClock.elapsedRealtime())
         if (quads.isEmpty()) {
             Timber.i("MangaOcr: DBNet returned 0 quads")
+            Timber.tag(PERF_TAG).i(
+                "run totalMs=%d detectMs=%d clusterMs=0 bubblesMs=0 bitmap=%dx%d quads=0 bubbles=0 blocks=0",
+                InferenceTiming.elapsedMs(startedAt, SystemClock.elapsedRealtime()),
+                detectMs,
+                bitmap.width,
+                bitmap.height,
+            )
             return emptyList()
         }
 
         // 2) quad → IntRect → 气泡聚类（用 BubbleClusterer.IntRect 而非 android.graphics.Rect，
         //    后者在 JVM 单测里是 Stub 不能直接构造）
+        val clusterStartedAt = SystemClock.elapsedRealtime()
         val rects = quads.map { quad ->
             val b = quad.axisAlignedBounds()
             BubbleClusterer.IntRect(
@@ -154,6 +196,7 @@ class MangaOcrEngine @Inject constructor(
             pad = CLUSTER_PAD_PX,
             gap = settings.bubbleClusterGap.coerceIn(8, 60)
         )
+        val clusterMs = InferenceTiming.elapsedMs(clusterStartedAt, SystemClock.elapsedRealtime())
         Timber.i(
             "MangaOcr: %d quads -> %d bubbles (gap=%d, dbnet=%.2f/%.2f×%.2f)",
             quads.size, bubbles.size, settings.bubbleClusterGap,
@@ -161,15 +204,31 @@ class MangaOcrEngine @Inject constructor(
         )
 
         // 3) 每气泡裁切 + 推理
+        val bubblesStartedAt = SystemClock.elapsedRealtime()
         val results = mutableListOf<TextBlock>()
         for ((i, bubble) in bubbles.withIndex()) {
             coroutineContext.ensureActive()
             val crop = cropBubble(bitmap, bubble.rect) ?: continue
-            val text = try {
-                recognizeBubble(crop).trim()
+            val bubbleStartedAt = SystemClock.elapsedRealtime()
+            val cropWidth = crop.width
+            val cropHeight = crop.height
+            val recognition = try {
+                recognizeBubble(crop)
             } finally {
                 crop.recycle()
             }
+            val text = recognition.text.trim()
+            Timber.tag(PERF_TAG).i(
+                "bubble index=%d totalMs=%d encoderMs=%d decoderMs=%d decoderSteps=%d crop=%dx%d chars=%d",
+                i,
+                InferenceTiming.elapsedMs(bubbleStartedAt, SystemClock.elapsedRealtime()),
+                recognition.encoderMs,
+                recognition.decoderMs,
+                recognition.decoderSteps,
+                cropWidth,
+                cropHeight,
+                text.length,
+            )
             Timber.i("MangaOcr bub[%d] %s -> '%s' (%d chars)", i, bubble.rect, text, text.length)
             if (text.isEmpty()) continue
             if (shouldDropMangaOcrEdgeNoise(text, bubble.rect, bitmap.width, bitmap.height)) {
@@ -183,6 +242,19 @@ class MangaOcrEngine @Inject constructor(
                 recognizedLanguage = "ja"
             )
         }
+        val bubblesMs = InferenceTiming.elapsedMs(bubblesStartedAt, SystemClock.elapsedRealtime())
+        Timber.tag(PERF_TAG).i(
+            "run totalMs=%d detectMs=%d clusterMs=%d bubblesMs=%d bitmap=%dx%d quads=%d bubbles=%d blocks=%d",
+            InferenceTiming.elapsedMs(startedAt, SystemClock.elapsedRealtime()),
+            detectMs,
+            clusterMs,
+            bubblesMs,
+            bitmap.width,
+            bitmap.height,
+            quads.size,
+            bubbles.size,
+            results.size,
+        )
         return results
     }
 
@@ -287,12 +359,20 @@ class MangaOcrEngine @Inject constructor(
         return ((r[2] - r[0]).coerceAtLeast(0) * (r[3] - r[1]).coerceAtLeast(0)).toFloat()
     }
 
-    private suspend fun recognizeBubble(crop: Bitmap): String {
-        val e = env ?: return ""
-        val enc = encSession ?: return ""
-        val dec = decSession ?: return ""
+    private data class BubbleRecognition(
+        val text: String,
+        val encoderMs: Long,
+        val decoderMs: Long,
+        val decoderSteps: Int,
+    )
+
+    private suspend fun recognizeBubble(crop: Bitmap): BubbleRecognition {
+        val e = env ?: return BubbleRecognition("", 0L, 0L, 0)
+        val enc = encSession ?: return BubbleRecognition("", 0L, 0L, 0)
+        val dec = decSession ?: return BubbleRecognition("", 0L, 0L, 0)
 
         // ---- encoder：一次 ----
+        val encoderStartedAt = SystemClock.elapsedRealtime()
         val pix = OnnxTensor.createTensor(
             e,
             FloatBuffer.wrap(preprocess224(crop)),
@@ -305,14 +385,18 @@ class MangaOcrEngine @Inject constructor(
                 copyHiddenState(orig as OnnxTensor)
             }
         }
+        val encoderMs = InferenceTiming.elapsedMs(encoderStartedAt, SystemClock.elapsedRealtime())
 
         // ---- decoder：greedy 自回归 ----
-        return encOut.use { hidden ->
+        val decoderStartedAt = SystemClock.elapsedRealtime()
+        var decoderSteps = 0
+        val text = encOut.use { hidden ->
             val ids = IntArray(MAX_TOKENS + 1)
             ids[0] = CLS_ID
             var len = 1
             for (step in 0 until MAX_TOKENS) {
                 coroutineContext.ensureActive()
+                decoderSteps++
                 val idsCopy = LongArray(len) { ids[it].toLong() }
                 val idsTensor = OnnxTensor.createTensor(
                     e,
@@ -338,6 +422,12 @@ class MangaOcrEngine @Inject constructor(
             }
             decodeTokens(ids, fromIdx = 1, toIdx = len)
         }
+        return BubbleRecognition(
+            text = text,
+            encoderMs = encoderMs,
+            decoderMs = InferenceTiming.elapsedMs(decoderStartedAt, SystemClock.elapsedRealtime()),
+            decoderSteps = decoderSteps,
+        )
     }
 
     /** ONNX result 出 use 块后底层 buffer 会释放，必须 deep copy。 */
@@ -446,6 +536,7 @@ class MangaOcrEngine @Inject constructor(
     }
 
     companion object {
+        private const val PERF_TAG = "MangaOcrPerf"
         const val PAD_ID = 0
         const val UNK_ID = 1
         const val CLS_ID = 2

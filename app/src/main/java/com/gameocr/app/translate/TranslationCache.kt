@@ -15,10 +15,15 @@ class TranslationCache(capacity: Int = 256) {
     fun get(key: String): String? = cache.get(key)
 
     fun put(key: String, value: String) {
+        if (!TranslationCachePolicy.shouldCache(value)) return
         cache.put(key, value)
     }
 
     fun clear() {
         cache.evictAll()
     }
+}
+
+internal object TranslationCachePolicy {
+    fun shouldCache(value: String): Boolean = value.isNotBlank()
 }

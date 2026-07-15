@@ -10,6 +10,7 @@ import android.graphics.Rect
 import android.util.TypedValue
 import android.view.MotionEvent
 import android.view.View
+import kotlin.math.ceil
 
 /**
  * 双阶段截屏区域选择：
@@ -168,23 +169,29 @@ class RegionPickerView(
 
     private fun drawSizeLabel(canvas: Canvas, r: Rect) {
         val label = "${r.width()} × ${r.height()}"
-        val padding = dp(6f)
-        val textW = sizePaint.measureText(label)
-        val textH = sizePaint.textSize
-        // 显示在框右上角内部；如果太靠近顶部就改放右下角
-        val bgRight = r.right.toFloat() - padding
-        val bgLeft = bgRight - textW - padding * 2
-        val bgTop: Float
-        val bgBottom: Float
-        if (r.top + textH + padding * 2 < r.bottom) {
-            bgTop = r.top.toFloat() + padding
-            bgBottom = bgTop + textH + padding
-        } else {
-            bgBottom = r.bottom.toFloat() - padding
-            bgTop = bgBottom - textH - padding
-        }
-        canvas.drawRect(bgLeft, bgTop, bgRight + padding, bgBottom, sizeBg)
-        canvas.drawText(label, bgLeft + padding, bgBottom - padding * 0.6f, sizePaint)
+        val padding = dp(6f).toInt()
+        val metrics = sizePaint.fontMetrics
+        val textHeight = ceil(metrics.descent - metrics.ascent).toInt()
+        val labelWidth = ceil(sizePaint.measureText(label)).toInt() + padding * 2
+        val labelHeight = textHeight + padding * 2
+        val placement = RegionSizeLabelPlacementPolicy.place(
+            selection = RegionSizeLabelRect(r.left, r.top, r.right, r.bottom),
+            viewportWidth = width,
+            viewportHeight = height,
+            labelWidth = labelWidth,
+            labelHeight = labelHeight,
+            gap = ceil(handleRadius + dp(3f)).toInt(),
+            margin = dp(4f).toInt(),
+        ) ?: return
+        canvas.drawRect(
+            placement.left.toFloat(),
+            placement.top.toFloat(),
+            placement.right.toFloat(),
+            placement.bottom.toFloat(),
+            sizeBg,
+        )
+        val baseline = placement.top + padding - metrics.ascent
+        canvas.drawText(label, (placement.left + padding).toFloat(), baseline, sizePaint)
     }
 
     /** 8 个 handle 中心坐标，顺序：4 角（NW NE SW SE）+ 4 边中点（N S W E）。 */

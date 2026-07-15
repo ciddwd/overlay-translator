@@ -46,6 +46,7 @@ android {
 
                 arguments += "-DGGML_NATIVE=OFF"
                 arguments += "-DGGML_BACKEND_DL=ON"
+                arguments += "-DGGML_VULKAN=ON"
                 // **必须 ON**：BACKEND_DL=ON 模式下 ggml 启动时扫 native lib dir 找
                 // `libggml-cpu-android_*.so` 多变体文件做 dlopen。关了 ALL_VARIANTS 只产
                 // libggml-cpu.so（无后缀），扫不到 → "no backends are loaded" → loadModel 必败。
@@ -87,6 +88,19 @@ android {
     }
 
     packaging {
+        jniLibs {
+            // Snapdragon 8 Gen 3 selected android_armv8.6_1, whose i8mm path produced
+            // incoherent Qwen2 output. Keep DOTPROD + FP16 but exclude every competing
+            // CPU variant so ggml's runtime scorer deterministically loads armv8.2_2.
+            excludes += setOf(
+                "**/libggml-cpu-android_armv8.0_1.so",
+                "**/libggml-cpu-android_armv8.2_1.so",
+                "**/libggml-cpu-android_armv8.6_1.so",
+                "**/libggml-cpu-android_armv9.0_1.so",
+                "**/libggml-cpu-android_armv9.2_1.so",
+                "**/libggml-cpu-android_armv9.2_2.so",
+            )
+        }
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }

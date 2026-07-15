@@ -1,6 +1,8 @@
 package com.gameocr.app
 
 import android.app.Application
+import androidx.hilt.work.HiltWorkerFactory
+import androidx.work.Configuration
 import com.gameocr.app.data.CrashRecorder
 import com.gameocr.app.data.LogRepository
 import com.gameocr.app.data.SettingsRepository
@@ -15,11 +17,17 @@ import kotlinx.coroutines.launch
 import timber.log.Timber
 
 @HiltAndroidApp
-class GameOcrApp : Application() {
+class GameOcrApp : Application(), Configuration.Provider {
 
     @Inject lateinit var logRepository: LogRepository
     @Inject lateinit var settingsRepository: SettingsRepository
     @Inject lateinit var cleartextInterceptor: PrivateCleartextInterceptor
+    @Inject lateinit var workerFactory: HiltWorkerFactory
+
+    override val workManagerConfiguration: Configuration
+        get() = Configuration.Builder()
+            .setWorkerFactory(workerFactory)
+            .build()
 
     /**
      * Application-scope 协程容器。Activity / Service 销毁不取消，可承接「Activity 提交任务后立刻 finish」

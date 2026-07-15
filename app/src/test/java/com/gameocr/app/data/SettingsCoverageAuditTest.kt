@@ -1,5 +1,6 @@
 package com.gameocr.app.data
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -7,37 +8,17 @@ import java.io.File
 class SettingsCoverageAuditTest {
 
     @Test
-    fun settingsFields_areCoveredByCrashSnapshotAndRepositoryPersistence() {
+    fun settingsFields_areClassifiedByPolicyAndRepositoryPersistence() {
         val settingsSource = sourceFile("src/main/java/com/gameocr/app/data/Settings.kt").readText()
         val fields = dataClassFields(settingsSource, "Settings")
-        val crashSource = sourceFile("src/main/java/com/gameocr/app/data/CrashRecorder.kt").readText()
         val repositorySource = sourceFile("src/main/java/com/gameocr/app/data/SettingsRepository.kt").readText()
-
-        data class Case(
-            val name: String,
-            val source: String,
-            val patternForField: (String) -> Regex,
+        assertEquals(
+            "SettingsFieldPolicy must classify every constructor field exactly once and in order",
+            fields,
+            SettingsFieldPolicy.rules.map(SettingsFieldRule::name),
         )
-
-        val cases = listOf(
-            Case(
-                name = "CrashRecorder.formatSettings",
-                source = crashSource,
-                patternForField = { field -> Regex("\"${Regex.escape(field)}\"") },
-            ),
-            Case(
-                name = "SettingsRepository",
-                source = repositorySource,
-                patternForField = ::wordPattern,
-            ),
-        )
-
-        cases.forEach { case ->
-            val missing = fields.filterNot { field ->
-                case.patternForField(field).containsMatchIn(case.source)
-            }
-            assertTrue("${case.name} missing Settings fields: $missing", missing.isEmpty())
-        }
+        val missingPersistence = fields.filterNot { field -> wordPattern(field).containsMatchIn(repositorySource) }
+        assertTrue("SettingsRepository missing Settings fields: $missingPersistence", missingPersistence.isEmpty())
     }
 
     @Test
@@ -103,6 +84,11 @@ class SettingsCoverageAuditTest {
             "paddleModelVersion",
             "textOrientationAutoDetect",
             "manualTextOrientation",
+            "translationOutputFollowRecognition",
+            "translationOutputLayout",
+            "translationOutputDirection",
+            "translationGlossaryEnabled",
+            "sendAppNameToTranslator",
             "dbnetProbThresh",
             "dbnetBoxScoreThresh",
             "dbnetUnclipRatio",
@@ -114,6 +100,43 @@ class SettingsCoverageAuditTest {
             Regex("""\b${Regex.escape(field)}\s=""").containsMatchIn(snapshotSource)
         }
         assertTrue("buildTranslationPresetSnapshot missing fields: $missing", missing.isEmpty())
+    }
+
+    @Test
+    fun settingsScreenTransferSnapshot_includesImmediatePortableSettings() {
+        val settingsScreenSource = sourceFile("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
+        val snapshotSource = slice(
+            settingsScreenSource,
+            startMarker = "fun buildSettingsTransferSnapshot()",
+            endMarker = "fun currentTranslationPresetHash()",
+        )
+        val exportSource = slice(
+            settingsScreenSource,
+            startMarker = "onExport = {",
+            endMarker = "onImport = {",
+        )
+
+        val fields = listOf("foregroundAppDetectionMode")
+        val missing = fields.filterNot { field ->
+            Regex("""\b${Regex.escape(field)}\s*=""").containsMatchIn(snapshotSource)
+        }
+        assertTrue("buildSettingsTransferSnapshot missing fields: $missing", missing.isEmpty())
+        assertTrue(
+            "buildSnapshot must overlay UI drafts on the complete persisted Settings value",
+            settingsScreenSource.contains("fun buildSnapshot(): Settings = (initialSettings ?: Settings()).copy("),
+        )
+        assertTrue(
+            "buildSnapshot must not start from Settings defaults",
+            !settingsScreenSource.contains("fun buildSnapshot(): Settings = Settings().copy("),
+        )
+        assertTrue(
+            "initial snapshot must retain the complete repository Settings value",
+            settingsScreenSource.contains("initialSettings = s"),
+        )
+        assertTrue(
+            "Settings export must use buildSettingsTransferSnapshot",
+            exportSource.contains("pendingSettingsExport = buildSettingsTransferSnapshot()"),
+        )
     }
 
     private fun sourceFile(path: String): File =

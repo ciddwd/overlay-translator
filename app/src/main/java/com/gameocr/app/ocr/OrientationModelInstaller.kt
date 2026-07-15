@@ -4,6 +4,7 @@ import android.content.Context
 import com.gameocr.app.R
 import com.gameocr.app.data.LlmMirrorChoice
 import com.gameocr.app.data.SettingsRepository
+import com.gameocr.app.util.HttpResumePolicy
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.io.FileOutputStream
@@ -12,6 +13,7 @@ import java.nio.charset.StandardCharsets
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
@@ -96,6 +98,10 @@ class OrientationModelInstaller @Inject constructor(
             .takeIf { settings.localLlmMirror == LlmMirrorChoice.CUSTOM && it.isNotBlank() }
         for (spec in MODEL_SPECS) {
             val dest = File(modelsDir, spec.fileName)
+            if (validateModelFile(spec.fileName, dest) == null) {
+                send(Progress(spec.fileName, "(already installed)", dest.length(), dest.length(), true))
+                continue
+            }
             var ok = false
             var lastErr: String? = null
 
@@ -107,6 +113,7 @@ class OrientationModelInstaller @Inject constructor(
                     send(Progress(spec.fileName, mirror, dest.length(), dest.length(), true))
                     break
                 } catch (t: Throwable) {
+                    if (t is CancellationException) throw t
                     lastErr = "${t.javaClass.simpleName}: ${t.message}"
                     Timber.w(t, "orientation model mirror failed: $url")
                     send(Progress(spec.fileName, mirror, 0, 0, false, error = lastErr))
@@ -135,16 +142,25 @@ class OrientationModelInstaller @Inject constructor(
     ) = runInterruptible {
         modelsDir.mkdirs()
         val tmp = File(dest.parentFile, dest.name + ".tmp")
-        Timber.i("orientation model trying: $url")
+        val resumeFrom = tmp.length().takeIf { tmp.exists() } ?: 0L
+        Timber.i("orientation model trying: $url resumeFrom=$resumeFrom")
         var expectedTotal = -1L
         var downloaded = 0L
-        client.newCall(Request.Builder().url(url).build()).execute().use { r ->
+        val request = Request.Builder().url(url).apply {
+            HttpResumePolicy.rangeHeader(resumeFrom)?.let { header("Range", it) }
+        }.build()
+        client.newCall(request).execute().use { r ->
             if (!r.isSuccessful) throw RuntimeException("HTTP ${r.code}")
             val body = r.body ?: throw RuntimeException("empty body")
-            expectedTotal = body.contentLength().takeIf { it > 0 } ?: -1
-            var lastReported = 0L
+            val contentLength = body.contentLength().takeIf { it > 0 } ?: -1L
+            val resumePlan = HttpResumePolicy.responsePlan(resumeFrom, r.code, contentLength)
+            expectedTotal = resumePlan.expectedTotal
+            downloaded = resumePlan.initialDownloaded
+            var lastReported = downloaded
+            val output = RandomAccessFile(tmp, "rw")
             body.byteStream().use { input ->
-                FileOutputStream(tmp).use { output ->
+                output.use {
+                    if (resumePlan.append) output.seek(resumeFrom) else output.setLength(0)
                     val buf = ByteArray(64 * 1024)
                     while (true) {
                         val n = input.read(buf)
@@ -160,7 +176,6 @@ class OrientationModelInstaller @Inject constructor(
             }
         }
         if (expectedTotal > 0 && downloaded != expectedTotal) {
-            tmp.delete()
             throw RuntimeException("download truncated: got $downloaded of $expectedTotal bytes")
         }
         val validationError = validateModelFile(name, tmp)

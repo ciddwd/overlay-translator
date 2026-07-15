@@ -1,17 +1,23 @@
 package com.gameocr.app.overlay
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Typeface
+import android.view.ActionMode
 import android.view.Gravity
 import android.view.View
-import androidx.appcompat.widget.AppCompatTextView
+import android.widget.TextView
 import com.gameocr.app.data.OverlayTextAlignment
 import com.gameocr.app.data.OverlayTextStyle
+import com.gameocr.app.util.VerticalDiagnosticLog
 
 /** TextView that draws an optional outline before the normal filled translation text. */
-class StyledTranslationTextView(context: Context) : AppCompatTextView(context) {
+@SuppressLint("AppCompatCustomView") // Platform TextView keeps the framework text-selection ActionMode.
+class StyledTranslationTextView(context: Context) : TextView(context) {
+    var horizontalRightToLeft: Boolean = false
+
     private var outlineWidthPx = 0f
     private var outlineColor = 0
     private var shadowEnabled = false
@@ -20,6 +26,15 @@ class StyledTranslationTextView(context: Context) : AppCompatTextView(context) {
     private var shadowDyPx = 0f
     private var shadowColor = 0
     private var drawingPass = false
+
+    override fun startActionMode(callback: ActionMode.Callback, type: Int): ActionMode? {
+        val mode = super.startActionMode(callback, type)
+        VerticalDiagnosticLog.i(
+            "overlay selection actionMode type=$type started=${mode != null} " +
+                "windowFocus=${hasWindowFocus()} focus=${hasFocus()}"
+        )
+        return mode
+    }
 
     fun configureOutline(widthPx: Float, color: Int) {
         outlineWidthPx = widthPx.coerceAtLeast(0f)

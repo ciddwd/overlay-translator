@@ -6,6 +6,32 @@ import org.junit.Test
 class TranslationCardLayoutPolicyTest {
 
     @Test
+    fun adaptiveHeight_usesNaturalHeightUntilTheMaximum() {
+        data class Case(
+            val name: String,
+            val naturalHeightPx: Int,
+            val maxHeightPx: Int,
+            val expectedHeightPx: Int,
+        )
+
+        val cases = listOf(
+            Case("short content stays compact", 240, 800, 240),
+            Case("exact maximum is unchanged", 800, 800, 800),
+            Case("long content is capped", 1200, 800, 800),
+            Case("zero natural height remains measurable", 0, 800, 1),
+            Case("invalid maximum remains measurable", 240, 0, 1),
+        )
+
+        cases.forEach { case ->
+            assertEquals(
+                case.name,
+                case.expectedHeightPx,
+                translationCardAdaptiveHeightPx(case.naturalHeightPx, case.maxHeightPx),
+            )
+        }
+    }
+
+    @Test
     fun layoutSpec_adaptsCardBoundsForPortraitAndLandscape() {
         data class Case(
             val name: String,

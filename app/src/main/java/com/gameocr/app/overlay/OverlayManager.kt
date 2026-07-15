@@ -1,14 +1,19 @@
 package com.gameocr.app.overlay
 
+import android.app.Dialog
 import android.content.Context
+import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
+import android.view.Window
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -21,6 +26,7 @@ import com.gameocr.app.data.OverlayTextStyle
 import com.gameocr.app.data.OverlayTheme
 import com.gameocr.app.data.Settings
 import com.gameocr.app.data.SettingsRepository
+import com.gameocr.app.data.TranslationBlockInteractionMode
 import com.gameocr.app.ocr.TextBlock
 import com.gameocr.app.ocr.TextOrientation
 import com.gameocr.app.util.VerticalDiagnosticLog
@@ -39,6 +45,7 @@ class OverlayManager(
     private val context: Context,
     private val settingsRepository: SettingsRepository,
     private val ioScope: CoroutineScope,
+    private val onTranslationBlockDetailRequested: (source: String, translation: String) -> Unit = { _, _ -> },
     @Volatile var textSizeSp: Int = 14,
     @Volatile var alpha: Float = 0.85f,
     @Volatile var regionOffset: android.graphics.Point = android.graphics.Point(0, 0),
@@ -57,20 +64,38 @@ class OverlayManager(
     /** 悬浮窗口内容形态。CaptureService 在 applyOverlayConfig 时同步。 */
     @Volatile var floatingWindowContentMode: FloatingWindowContentMode =
         FloatingWindowContentMode.SRC_AND_DST,
+    @Volatile var translationBlockInteractionMode: TranslationBlockInteractionMode =
+        TranslationBlockInteractionMode.COPY_BUTTON,
     /** CUSTOM 主题的边框样式（仅 CUSTOM 主题生效）。CaptureService 同步。 */
     @Volatile var customBorderStyle: BorderStyle = BorderStyle.SOLID,
     @Volatile var overlayTypeface: Typeface? = null,
-    @Volatile var overlayTextStyle: OverlayTextStyle = OverlayTextStyle()
+    @Volatile var overlayTextStyle: OverlayTextStyle = OverlayTextStyle(),
+    @Volatile var ocrDebugRedBoxActive: Boolean = false,
+    @Volatile var ocrDebugShowSourceText: Boolean = true,
+    @Volatile var ocrDebugShowTranslation: Boolean = false,
 ) {
 
     private val wm by lazy { context.getSystemService(Context.WINDOW_SERVICE) as WindowManager }
     private var blocksView: View? = null
+    private var blocksDialog: Dialog? = null
     private var loadingView: View? = null
     private var errorView: View? = null
     private var countdownView: View? = null
     // 译文 View 缓存：横排走 TextView，竖排走 VerticalTextView。updateBlockText 会按实际类型分支 setText
     private val blockViews = mutableMapOf<Int, View>()
+    private val blockContents = mutableMapOf<Int, TranslationBlockContent>()
     private var blocksDiagnosticId: Long? = null
+
+    private data class TranslationBlockContent(
+        val source: String,
+        var translation: String,
+    )
+
+    private data class OcrDebugBlockState(
+        val source: String,
+        val showSource: Boolean,
+        val showTranslation: Boolean,
+    )
 
     /** 悬浮窗口（[com.gameocr.app.data.RenderMode.FLOATING_WINDOW]）外壳。lazy 创建。 */
     private val floatingWindow: DraggableOverlayWindow by lazy {
@@ -519,12 +544,17 @@ class OverlayManager(
         clear()
         if (blocks.isEmpty()) return
         blocksDiagnosticId = diagnosticId
+        if (ocrDebugRedBoxActive) {
+            showOcrDebugBlocks(blocks, diagnosticId)
+            return
+        }
         val diagPrefix = diagnosticId.toDiagPrefix()
 
         val root = FrameLayout(context).apply { this.alpha = this@OverlayManager.alpha }
         val dm = context.resources.displayMetrics
         val screenW = dm.widthPixels
         val screenH = dm.heightPixels
+        val interactionPlan = translationBlockInteractionPlan(translationBlockInteractionMode)
         val isVertical = orientation == TextOrientation.VERTICAL_RTL ||
             orientation == TextOrientation.VERTICAL_LTR
         val leftToRight = orientation == TextOrientation.VERTICAL_LTR
@@ -563,6 +593,7 @@ class OverlayManager(
 
         blocks.forEachIndexed { idx, (block, dst) ->
             val b: Rect = block.boundingBox
+            blockContents[idx] = TranslationBlockContent(block.text, dst)
             val baseLeft = (b.left + regionOffset.x + offsetX).coerceAtLeast(0)
             val overlayRect = allOverlayRects[idx]
             val origW = (b.right - b.left).coerceAtLeast(0)
@@ -662,8 +693,21 @@ class OverlayManager(
                     setPadding(verticalTextPaddingHorizontalPx, 4, verticalTextPaddingHorizontalPx, 4)
                 }
             } else {
+                val horizontalRightToLeft = orientation == TextOrientation.HORIZONTAL_RTL
                 StyledTranslationTextView(context).apply {
-                    text = dst
+                    this.horizontalRightToLeft = horizontalRightToLeft
+                    text = if (horizontalRightToLeft) horizontalRtlDisplayText(dst) else dst
+                    // RLO keeps logical paragraph order but lets Android reorder each wrapped line.
+                    textDirection = if (horizontalRightToLeft) {
+                        View.TEXT_DIRECTION_RTL
+                    } else {
+                        View.TEXT_DIRECTION_LTR
+                    }
+                    gravity = if (horizontalRightToLeft) {
+                        Gravity.END
+                    } else {
+                        Gravity.START
+                    }
                     background = themeBg()
                     setTextColor(themeFgColor())
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, textSizeSp.toFloat())
@@ -672,6 +716,10 @@ class OverlayManager(
                         baseTypeface = overlayTypeface,
                         baseLineSpacingMultiplier = 1.05f
                     )
+                    if (horizontalRightToLeft) {
+                        gravity = (gravity and Gravity.VERTICAL_GRAVITY_MASK) or Gravity.END
+                        textAlignment = View.TEXT_ALIGNMENT_GRAVITY
+                    }
                     if (allowWrap) {
                         setSingleLine(false)
                         // maxLines 固定 10 行：showBlocks 时 dst 是占位"…"无法算最终行数；
@@ -747,6 +795,8 @@ class OverlayManager(
                     "baseTop=$baseTop finalMaxW=$finalMaxW belowNeighborTop=$belowNeighborTop"
             )
             root.addView(view, lp)
+            blockViews[idx] = view
+            configureTranslationBlockView(idx, view, interactionPlan)
             view.post {
                 val location = IntArray(2)
                 view.getLocationOnScreen(location)
@@ -755,11 +805,10 @@ class OverlayManager(
                         "screenPos=(${location[0]},${location[1]}) measured=${view.width}x${view.height}"
                 )
             }
-            blockViews[idx] = view
         }
         root.setOnClickListener { clear() }
 
-        val params = newLayoutParams().apply {
+        val params = newLayoutParams(focusable = interactionPlan.windowFocusable).apply {
             width = WindowManager.LayoutParams.MATCH_PARENT
             height = WindowManager.LayoutParams.MATCH_PARENT
         }
@@ -768,17 +817,219 @@ class OverlayManager(
         } else {
             cutoutModeLogLabel(null)
         }
+        val host = if (interactionPlan.useDecorViewActionModeHost) "dialog" else "window-manager"
         VerticalDiagnosticLog.i(
-            "${diagPrefix}overlay window add screen=${screenW}x$screenH type=${params.type} " +
+            "${diagPrefix}overlay window add host=$host screen=${screenW}x$screenH type=${params.type} " +
                 "flags=0x${params.flags.toString(16)} cutoutMode=$cutoutMode"
         )
-        runCatching { wm.addView(root, params) }
-            .onSuccess { VerticalDiagnosticLog.i("${diagPrefix}overlay window added") }
-            .onFailure { VerticalDiagnosticLog.w(it, "${diagPrefix}overlay window add failed") }
+        val addResult = if (interactionPlan.useDecorViewActionModeHost) {
+            showBlocksInActionModeDialog(root, params)
+        } else {
+            runCatching { wm.addView(root, params) }
+        }
+        addResult
+            .onSuccess { VerticalDiagnosticLog.i("${diagPrefix}overlay window added host=$host") }
+            .onFailure { VerticalDiagnosticLog.w(it, "${diagPrefix}overlay window add failed host=$host") }
         blocksView = root
     }
 
+    private fun showBlocksInActionModeDialog(
+        root: View,
+        params: WindowManager.LayoutParams,
+    ): Result<Unit> {
+        var pendingDialog: Dialog? = null
+        return runCatching {
+            val dialog = Dialog(context, R.style.Theme_GameOcr_Transparent)
+                .also { pendingDialog = it }
+            dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+            dialog.setCancelable(false)
+            dialog.setCanceledOnTouchOutside(false)
+            dialog.setContentView(root)
+            val window = requireNotNull(dialog.window) { "Overlay dialog window is unavailable" }
+            window.setType(params.type)
+            window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            window.setDimAmount(0f)
+            window.clearFlags(
+                WindowManager.LayoutParams.FLAG_DIM_BEHIND or
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+            )
+            window.addFlags(
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+            )
+            window.attributes = window.attributes.apply {
+                width = params.width
+                height = params.height
+                gravity = params.gravity
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    layoutInDisplayCutoutMode = params.layoutInDisplayCutoutMode
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    fitInsetsTypes = params.fitInsetsTypes
+                    fitInsetsSides = params.fitInsetsSides
+                }
+            }
+            window.decorView.setBackgroundColor(Color.TRANSPARENT)
+            dialog.show()
+            window.setLayout(params.width, params.height)
+            blocksDialog = dialog
+        }.onFailure {
+            runCatching { pendingDialog?.dismiss() }
+        }
+    }
+
+    private fun showOcrDebugBlocks(
+        blocks: List<Pair<TextBlock, String>>,
+        diagnosticId: Long?,
+    ) {
+        val root = FrameLayout(context)
+        val dm = context.resources.displayMetrics
+        val screenW = dm.widthPixels
+        val screenH = dm.heightPixels
+        val strokePx = (2f * dm.density).toInt().coerceAtLeast(2)
+        val paddingPx = (3f * dm.density).toInt().coerceAtLeast(2)
+        val red = 0xFFFF2020.toInt()
+
+        blocks.forEachIndexed { index, (block, translation) ->
+            val box = block.boundingBox
+            val left = (box.left + regionOffset.x).coerceIn(0, screenW)
+            val top = (box.top + regionOffset.y).coerceIn(0, screenH)
+            val right = (box.right + regionOffset.x).coerceIn(0, screenW)
+            val bottom = (box.bottom + regionOffset.y).coerceIn(0, screenH)
+            val state = OcrDebugBlockState(
+                source = block.text,
+                showSource = ocrDebugShowSourceText,
+                showTranslation = ocrDebugShowTranslation,
+            )
+            val label = debugBoxLabel(state, translation)
+            val view = TextView(context).apply {
+                text = label
+                tag = state
+                contentDescription = label.ifBlank { context.getString(R.string.ocr_debug_box_only) }
+                setTextColor(red)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+                maxLines = 8
+                setPadding(paddingPx, paddingPx, paddingPx, paddingPx)
+                background = GradientDrawable().apply {
+                    setColor(0x00000000)
+                    setStroke(strokePx, red)
+                }
+            }
+            root.addView(
+                view,
+                FrameLayout.LayoutParams(
+                    (right - left).coerceAtLeast(1),
+                    (bottom - top).coerceAtLeast(1),
+                ).apply {
+                    leftMargin = left
+                    topMargin = top
+                },
+            )
+            blockViews[index] = view
+        }
+        root.setOnClickListener { clear() }
+        val params = newLayoutParams().apply {
+            width = WindowManager.LayoutParams.MATCH_PARENT
+            height = WindowManager.LayoutParams.MATCH_PARENT
+        }
+        runCatching { wm.addView(root, params) }
+            .onFailure { Timber.w(it, "Failed to show OCR debug boxes") }
+        blocksView = root
+        VerticalDiagnosticLog.i(
+            "${diagnosticId.toDiagPrefix()}overlay OCR debug boxes count=${blocks.size} " +
+                "source=$ocrDebugShowSourceText translation=$ocrDebugShowTranslation"
+        )
+    }
+
+    private fun debugBoxLabel(state: OcrDebugBlockState, translation: String): String =
+        OcrDebugBoxLabelFormatter.format(
+            source = state.source,
+            translation = translation,
+            showSource = state.showSource,
+            showTranslation = state.showTranslation,
+            sourceLabel = context.getString(R.string.ocr_debug_source_label),
+            translationLabel = context.getString(R.string.ocr_debug_translation_label),
+        )
+
+    private fun configureTranslationBlockView(
+        index: Int,
+        view: View,
+        plan: TranslationBlockInteractionPlan,
+    ) {
+        view.isClickable = true
+        val nativeSelectionEnabled = plan.enableNativeTextSelection && view is TextView
+        if (nativeSelectionEnabled) {
+            (view as TextView).apply {
+                setTextIsSelectable(true)
+                isFocusableInTouchMode = true
+                setOnTouchListener { touchedView, event ->
+                    when (event.actionMasked) {
+                        MotionEvent.ACTION_DOWN -> {
+                            val hadFocus = touchedView.hasFocus()
+                            val focusReady = hadFocus || touchedView.requestFocus()
+                            VerticalDiagnosticLog.i(
+                                "${blocksDiagnosticId.toDiagPrefix()}overlay selection block#${index + 1} down " +
+                                    "windowFocus=${touchedView.hasWindowFocus()} hadFocus=$hadFocus " +
+                                    "focusReady=$focusReady selectable=$isTextSelectable " +
+                                    "movement=${movementMethod?.javaClass?.simpleName ?: "none"}"
+                            )
+                        }
+
+                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                            VerticalDiagnosticLog.i(
+                                "${blocksDiagnosticId.toDiagPrefix()}overlay selection block#${index + 1} " +
+                                    "${if (event.actionMasked == MotionEvent.ACTION_UP) "up" else "cancel"} " +
+                                    "windowFocus=${touchedView.hasWindowFocus()} focus=${touchedView.hasFocus()} " +
+                                    "selection=($selectionStart,$selectionEnd)"
+                            )
+                        }
+                    }
+                    false
+                }
+            }
+        } else {
+            view.isFocusable = false
+            view.isFocusableInTouchMode = false
+            view.isLongClickable = false
+            view.setOnLongClickListener(null)
+        }
+        updateTranslationBlockActionState(index)
+        if (plan.openCopyPanelOnBlockTap) {
+            view.setOnClickListener {
+                val content = blockContents[index] ?: return@setOnClickListener
+                if (!isTranslationBlockTextActionable(content.translation)) return@setOnClickListener
+                onTranslationBlockDetailRequested(content.source, content.translation)
+            }
+        } else {
+            view.setOnClickListener { clear() }
+        }
+    }
+
+    private fun updateTranslationBlockActionState(index: Int) {
+        val content = blockContents[index] ?: return
+        val actionable = isTranslationBlockTextActionable(content.translation)
+        val blockView = blockViews[index]
+        if (blockView?.isClickable == true) {
+            blockView.contentDescription = if (actionable) {
+                if (translationBlockInteractionMode == TranslationBlockInteractionMode.OPEN_COPY_PANEL) {
+                    context.getString(
+                        R.string.translation_block_open_panel_accessibility,
+                        content.translation,
+                    )
+                } else {
+                    context.getString(
+                        R.string.translation_block_direct_accessibility,
+                        content.translation,
+                    )
+                }
+            } else {
+                content.translation
+            }
+        }
+    }
+
     fun updateBlockText(index: Int, text: String) {
+        blockContents[index]?.translation = text
         val target = blockViews[index]
         VerticalDiagnosticLog.i(
             "${blocksDiagnosticId.toDiagPrefix()}overlay updateBlockText block#${index + 1} " +
@@ -786,17 +1037,29 @@ class OverlayManager(
                 text.toDiagText()
         )
         when (val v = blockViews[index]) {
-            is TextView -> v.text = text
+            is TextView -> {
+                val debugState = v.tag as? OcrDebugBlockState
+                if (debugState != null) {
+                    val label = debugBoxLabel(debugState, text)
+                    v.text = label
+                    v.contentDescription = label.ifBlank { context.getString(R.string.ocr_debug_box_only) }
+                } else {
+                    v.text = if (v is StyledTranslationTextView && v.horizontalRightToLeft) {
+                        horizontalRtlDisplayText(text)
+                    } else {
+                        text
+                    }
+                }
+            }
             is VerticalTextView -> v.text = text
             else -> { /* 找不到 view 静默忽略，避免清屏 race condition 抛 NPE */ }
         }
+        updateTranslationBlockActionState(index)
     }
 
-    /**
-     * 是否有"上一帧译文 box"仍然挂在屏幕上未被点掉。循环模式靠这个判断要不要跳过本轮
-     * 截屏——用户没看完译文，不打扰。
-     */
-    fun hasActiveBlocks(): Boolean = blocksView != null && blockViews.isNotEmpty()
+    /** 是否仍有贴字框或悬浮窗口译文显示在屏幕上。 */
+    fun hasActiveResult(): Boolean =
+        (blocksView != null && blockViews.isNotEmpty()) || floatingWindow.isShown()
 
     fun clear(keepLoading: Boolean = false) {
         if (!keepLoading) clearLoading()
@@ -804,9 +1067,16 @@ class OverlayManager(
         floatingWindow.hide()
         floatingDstViews = null
         lastFloatingPairs = null
-        blocksView?.let { runCatching { wm.removeView(it) } }
+        val dialog = blocksDialog
+        blocksDialog = null
+        if (dialog != null) {
+            runCatching { dialog.dismiss() }
+        } else {
+            blocksView?.let { runCatching { wm.removeView(it) } }
+        }
         blocksView = null
         blockViews.clear()
+        blockContents.clear()
         blocksDiagnosticId = null
     }
 
@@ -816,19 +1086,19 @@ class OverlayManager(
      *   避免横屏 cutout / status bar inset 把整体推右导致译文偏右。
      * - NOT_FOCUSABLE / NOT_TOUCH_MODAL 让 overlay 不抢焦点。
      */
-    private fun newLayoutParams(): WindowManager.LayoutParams =
+    private fun newLayoutParams(focusable: Boolean = false): WindowManager.LayoutParams =
         WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             overlayType,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+                (if (focusable) 0 else WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE),
             // 历史教训：曾经加过 FLAG_SECURE 阻止 MediaProjection 截到自己的 overlay，理论上
             // SurfaceFlinger 只单独排除该层但物理屏正常。可惜 MIUI / HyperOS 的反盗版逻辑
             // 看到屏幕上有 FLAG_SECURE 层就直接拒绝整张 MediaProjection 输出，Shizuku
             // screencap 也 exit=1。代价远大于自循环防护，已撤回。BLOCKS 模式自循环靠
-            // [hasActiveBlocks] 跳过逻辑保护；FLOATING_WINDOW 模式可能截到自己界面但不会崩。
+            // [hasActiveResult] 与循环结果生命周期共同避免把应用自己的译文截回去。
             PixelFormat.TRANSLUCENT
         ).apply {
             // 把 cutout / system bar 也算进 layout 区域，确保 overlay (0,0) = 物理屏幕 (0,0)

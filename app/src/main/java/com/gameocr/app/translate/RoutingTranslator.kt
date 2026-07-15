@@ -3,11 +3,14 @@ package com.gameocr.app.translate
 import android.graphics.Bitmap
 import com.gameocr.app.data.Settings
 import com.gameocr.app.data.TranslatorEngine
+import com.gameocr.app.glossary.TranslationContextResolver
 import com.gameocr.app.llm.LlamaEngineHolder
 import com.gameocr.app.ocr.TextBlock
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import timber.log.Timber
 
@@ -25,16 +28,22 @@ class RoutingTranslator @Inject constructor(
     private val sakura: SakuraGalTranslator,
     private val hyMt2: HyMt2Translator,
     private val llamaEngineHolder: LlamaEngineHolder,
+    private val translationContextResolver: TranslationContextResolver,
 ) : Translator {
-    override suspend fun translate(source: String, settings: Settings): String? =
-        normalizeText(
-            text = engineFor(settings).translate(source, settings),
-            settings = settings,
+    override suspend fun translate(source: String, settings: Settings): String? {
+        val enriched = translationContextResolver.enrich(source, settings)
+        return normalizeText(
+            text = engineFor(enriched).translate(source, enriched),
+            settings = enriched,
             stage = "translate"
         )
+    }
 
     override fun translateStream(source: String, settings: Settings): Flow<String> =
-        engineFor(settings).translateStream(source, settings)
+        flow {
+            val enriched = translationContextResolver.enrich(source, settings)
+            emitAll(engineFor(enriched).translateStream(source, enriched))
+        }
             .map { ChineseScriptNormalizer.normalizeForTarget(it, settings.targetLang) }
 
     /** RoutingTranslator 把 prefersBatch 直接转发到当前 settings 选中的引擎。 */
@@ -43,12 +52,14 @@ class RoutingTranslator @Inject constructor(
 
     fun prefersBatchFor(settings: Settings): Boolean = engineFor(settings).prefersBatch
 
-    override suspend fun translateBatch(sources: List<String>, settings: Settings): List<String?> =
-        normalizeBatch(
-            texts = engineFor(settings).translateBatch(sources, settings),
-            settings = settings,
+    override suspend fun translateBatch(sources: List<String>, settings: Settings): List<String?> {
+        val enriched = translationContextResolver.enrich(sources.joinToString("\n"), settings)
+        return normalizeBatch(
+            texts = engineFor(enriched).translateBatch(sources, enriched),
+            settings = enriched,
             stage = "batch"
         )
+    }
 
     override suspend fun testConnection(settings: Settings): TestResult =
         engineFor(settings).testConnection(settings)
@@ -66,8 +77,11 @@ class RoutingTranslator @Inject constructor(
             settings = settings
         )
 
-    override suspend fun translateWord(source: String, settings: Settings): WordResult? =
-        engineFor(settings).translateWord(source, settings)?.let { normalizeWordResult(it, settings) }
+    override suspend fun translateWord(source: String, settings: Settings): WordResult? {
+        val enriched = translationContextResolver.enrich(source, settings)
+        return engineFor(enriched).translateWord(source, enriched)
+            ?.let { normalizeWordResult(it, enriched) }
+    }
 
     private fun normalizeText(text: String?, settings: Settings, stage: String): String? {
         val raw = text ?: return null

@@ -99,9 +99,17 @@ class DraggableOverlayWindow(
         this.onDismiss = onDismiss
 
         val density = context.resources.displayMetrics.density
-        val w = (widthDp.coerceAtLeast(MIN_WIDTH_DP) * density).roundToInt()
-        val h = (heightDp.coerceAtLeast(MIN_HEIGHT_DP) * density).roundToInt()
         val (screenW, screenH) = currentScreenSize()
+        val fittedSize = constrainOverlayWindowSize(
+            requestedWidthPx = (widthDp.coerceAtLeast(MIN_WIDTH_DP) * density).roundToInt(),
+            requestedHeightPx = (heightDp.coerceAtLeast(MIN_HEIGHT_DP) * density).roundToInt(),
+            screenWidthPx = screenW,
+            screenHeightPx = screenH,
+            minimumWidthPx = (MIN_WIDTH_DP * density).roundToInt(),
+            minimumHeightPx = (MIN_HEIGHT_DP * density).roundToInt(),
+        )
+        val w = fittedSize.widthPx
+        val h = fittedSize.heightPx
 
         val root = buildShell(content)
 
@@ -152,8 +160,17 @@ class DraggableOverlayWindow(
         val oldH = lastKnownScreenH.takeIf { it > 0 } ?: newScreenH
         val ratioX = params.x.toFloat() / oldW
         val ratioY = params.y.toFloat() / oldH
-        val w = params.width
-        val h = params.height
+        val density = context.resources.displayMetrics.density
+        val fittedSize = constrainOverlayWindowSize(
+            requestedWidthPx = (widthDp.coerceAtLeast(MIN_WIDTH_DP) * density).roundToInt(),
+            requestedHeightPx = (heightDp.coerceAtLeast(MIN_HEIGHT_DP) * density).roundToInt(),
+            screenWidthPx = newScreenW,
+            screenHeightPx = newScreenH,
+            minimumWidthPx = (MIN_WIDTH_DP * density).roundToInt(),
+            minimumHeightPx = (MIN_HEIGHT_DP * density).roundToInt(),
+        )
+        val w = fittedSize.widthPx
+        val h = fittedSize.heightPx
         val statusBarH = statusBarHeightPx()
         val newX = (ratioX * newScreenW).toInt().coerceIn(0, (newScreenW - w).coerceAtLeast(0))
         val newY = ((ratioY * newScreenH).toInt())
@@ -161,16 +178,13 @@ class DraggableOverlayWindow(
                 (newScreenH - h).coerceAtLeast(0))
         params.x = newX
         params.y = newY
-        // resize 兜底：上次大小可能超过新屏（横竖切换）
-        if (w > newScreenW) params.width = newScreenW
-        if (h > newScreenH) params.height = newScreenH
+        params.width = w
+        params.height = h
         runCatching { wm.updateViewLayout(v, params) }
         lastKnownScreenW = newScreenW
         lastKnownScreenH = newScreenH
         initialX = newX
         initialY = newY
-        widthDp = (params.width / context.resources.displayMetrics.density).toInt()
-        heightDp = (params.height / context.resources.displayMetrics.density).toInt()
         persistGeometry()
     }
 

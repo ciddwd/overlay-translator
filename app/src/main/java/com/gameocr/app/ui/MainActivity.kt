@@ -8,6 +8,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -76,12 +77,13 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class Route { Main, Settings, Logs }
+private enum class Route { Main, Settings, Glossary, Logs, LegalNotices }
 
 @Composable
 private fun AppRoot(routeRequest: State<String?>) {
     // 用 rememberSaveable：语言切换会触发系统 recreate Activity，route 须跨重建保留。
     var routeName by rememberSaveable { mutableStateOf(routeRequest.value ?: Route.Main.name) }
+    val settingsListState = rememberLazyListState()
     LaunchedEffect(routeRequest.value) {
         val requested = routeRequest.value ?: return@LaunchedEffect
         if (Route.entries.any { it.name == requested }) {
@@ -97,10 +99,17 @@ private fun AppRoot(routeRequest: State<String?>) {
         when (route) {
             Route.Main -> MainScreen(
                 onOpenSettings = { routeName = Route.Settings.name },
-                onOpenLogs = { routeName = Route.Logs.name }
+                onOpenLogs = { routeName = Route.Logs.name },
+                onOpenLegalNotices = { routeName = Route.LegalNotices.name },
             )
-            Route.Settings -> SettingsScreen(onBack = { routeName = Route.Main.name })
+            Route.Settings -> SettingsScreen(
+                onBack = { routeName = Route.Main.name },
+                onOpenGlossary = { routeName = Route.Glossary.name },
+                listState = settingsListState,
+            )
+            Route.Glossary -> GlossaryScreen(onBack = { routeName = Route.Settings.name })
             Route.Logs -> LogScreen(onBack = { routeName = Route.Main.name })
+            Route.LegalNotices -> LegalNoticesScreen(onBack = { routeName = Route.Main.name })
         }
     }
 }

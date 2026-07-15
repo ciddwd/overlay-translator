@@ -90,6 +90,7 @@ import kotlinx.coroutines.launch
 fun MainScreen(
     onOpenSettings: () -> Unit,
     onOpenLogs: () -> Unit,
+    onOpenLegalNotices: () -> Unit,
     viewModel: MainViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
@@ -435,7 +436,7 @@ fun MainScreen(
 
             // 关于：放在主屏底部，方便用户一眼看到版本号 / GitHub
             ActionCard(title = stringResource(R.string.settings_section_about)) {
-                AboutContent()
+                AboutContent(onOpenLegalNotices = onOpenLegalNotices)
             }
 
             // 底部留空
@@ -449,7 +450,7 @@ internal const val QQ_GROUP_NUMBER = "1059655926"
 internal const val QQ_GROUP_URL = "https://qun.qq.com/universal-share/share?ac=1&authKey=%2Fs0%2FaO4mEHsgutzjUnhGIQEWLcAcGPXTefUY2YwdMkPdnHHuB%2FpLZm9hPjcrw6n5&busi_data=eyJncm91cENvZGUiOiIxMDU5NjU1OTI2IiwidG9rZW4iOiJ4b25nS0FvSFQyMko4WjJTMHhGRlIwSnppeVB2eGJCNjFua0FDTGZzNUhEWlY3VkdPcFVaOEdMams0aEY3aFBTIiwidWluIjoiNTcyMjQyOTk4In0%3D&data=j7H7DHUunIEqMXYLZxhTkx-K_LZTTs5aBJS95LT_Y50uQy37d5IiUU2y3gAPcy9CYRzRufvHuTCaSHOQsLTkTw&svctype=4&tempid=h5_group_info"
 
 @Composable
-private fun AboutContent() {
+private fun AboutContent(onOpenLegalNotices: () -> Unit) {
     val context = LocalContext.current
     val updateVm: com.gameocr.app.update.UpdateViewModel = hiltViewModel()
     val updateState by updateVm.state.collectAsState()
@@ -464,6 +465,57 @@ private fun AboutContent() {
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
+
+    OutlinedButton(
+        enabled = updateState !is com.gameocr.app.update.UpdateViewModel.State.Checking,
+        onClick = { updateVm.check() },
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text(
+            stringResource(
+                if (updateState is com.gameocr.app.update.UpdateViewModel.State.Checking)
+                    R.string.update_btn_checking
+                else R.string.update_btn_check
+            )
+        )
+    }
+
+    Text(
+        text = stringResource(R.string.settings_about_github_label),
+        style = MaterialTheme.typography.labelLarge
+    )
+    Text(
+        text = GITHUB_URL,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.primary
+    )
+    OutlinedButton(
+        onClick = {
+            runCatching {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(GITHUB_URL))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(intent)
+            }
+        },
+        modifier = Modifier.fillMaxWidth()
+    ) { Text(stringResource(R.string.settings_about_open_github)) }
+
+    Text(
+        text = stringResource(R.string.settings_about_open_source_licenses),
+        style = MaterialTheme.typography.labelLarge
+    )
+    Text(
+        text = stringResource(R.string.settings_about_third_party_notice_summary),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    OutlinedButton(
+        onClick = onOpenLegalNotices,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text(stringResource(R.string.settings_about_view_licenses))
+    }
+
     Text(
         text = stringResource(R.string.settings_about_qq_group_label),
         style = MaterialTheme.typography.labelLarge
@@ -487,40 +539,6 @@ private fun AboutContent() {
         Text(
             stringResource(R.string.settings_about_join_qq_group),
             modifier = Modifier.padding(start = 8.dp)
-        )
-    }
-    Text(
-        text = stringResource(R.string.settings_about_github_label),
-        style = MaterialTheme.typography.labelLarge
-    )
-    Text(
-        text = GITHUB_URL,
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.primary
-    )
-    OutlinedButton(
-        onClick = {
-            runCatching {
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(GITHUB_URL))
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                context.startActivity(intent)
-            }
-        },
-        modifier = Modifier.fillMaxWidth()
-    ) { Text(stringResource(R.string.settings_about_open_github)) }
-
-    // 检查更新：调 GitHub Releases API，失败让用户手动打开 Release 页（国内访问 api.github.com 偶尔抽风）
-    OutlinedButton(
-        enabled = updateState !is com.gameocr.app.update.UpdateViewModel.State.Checking,
-        onClick = { updateVm.check() },
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Text(
-            stringResource(
-                if (updateState is com.gameocr.app.update.UpdateViewModel.State.Checking)
-                    R.string.update_btn_checking
-                else R.string.update_btn_check
-            )
         )
     }
 

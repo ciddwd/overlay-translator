@@ -1,8 +1,11 @@
 package com.gameocr.app.ui
 
+import android.Manifest
 import android.content.Intent
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.provider.Settings as AndroidSettings
 import android.util.TypedValue
 import android.widget.Toast
@@ -13,6 +16,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.AlertDialog
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -35,7 +39,10 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
@@ -45,6 +52,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandMore
@@ -66,11 +74,10 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.widthIn
@@ -111,12 +118,14 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -139,10 +148,21 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.work.WorkInfo
 import com.gameocr.app.R
+import com.gameocr.app.capture.LoopFrameChangePolicy
+import com.gameocr.app.capture.LoopFrameStabilityPolicy
+import com.gameocr.app.appcontext.isUsageAccessGranted
 import com.gameocr.app.data.FloatingMenu
+import com.gameocr.app.data.FloatingSkill
 import com.gameocr.app.data.Languages
+import com.gameocr.app.data.LoopTriggerMode
+import com.gameocr.app.data.LoopTextRegionMode
 import com.gameocr.app.data.MenuItemId
 import com.gameocr.app.data.OcrEngineKind
 import com.gameocr.app.data.OverlayFontImportError
@@ -154,6 +174,8 @@ import com.gameocr.app.data.OverlayTheme
 import com.gameocr.app.data.OverlayTextAlignment
 import com.gameocr.app.data.OverlayTextStyle
 import com.gameocr.app.data.PaddleModelVersion
+import com.gameocr.app.download.ModelDownloadSpec
+import com.gameocr.app.download.ModelDownloadWorkPolicy
 import com.gameocr.app.data.PreprocessOptions
 import com.gameocr.app.data.RenderMode
 import com.gameocr.app.data.Settings
@@ -162,10 +184,15 @@ import com.gameocr.app.data.SettingsBundleTransfer
 import com.gameocr.app.data.TranslationPreset
 import com.gameocr.app.data.TranslationPresetCatalog
 import com.gameocr.app.data.TranslationPresetImportPlan
+import com.gameocr.app.data.TranslationBlockInteractionMode
 import com.gameocr.app.data.TranslationPresetTransfer
 import com.gameocr.app.data.TranslatorEngine
+import com.gameocr.app.data.resolveTranslationOutputSettings
+import com.gameocr.app.data.settingsSearchEntryId
+import com.gameocr.app.glossary.supportsTranslationPromptContext
 import com.gameocr.app.llm.LlmModelKind
 import com.gameocr.app.overlay.StyledTranslationTextView
+import com.gameocr.app.overlay.MenuItemRegistry
 import com.gameocr.app.overlay.applyOverlayTextStyle
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -185,6 +212,51 @@ internal const val PADDLE_AI_STUDIO_PAGE_URL = "https://aistudio.baidu.com/paddl
 internal fun shouldShowPaddleAiStudioHelp(ocrEngine: OcrEngineKind): Boolean =
     ocrEngine == OcrEngineKind.PADDLE_AI_STUDIO
 
+@OptIn(ExperimentalFoundationApi::class)
+private class SettingsSearchTargetRegistry {
+    private val requesters = mutableMapOf<Int, LinkedHashSet<BringIntoViewRequester>>()
+
+    fun register(targetIds: Set<Int>, requester: BringIntoViewRequester) {
+        targetIds.forEach { targetId ->
+            requesters.getOrPut(targetId) { linkedSetOf() }.add(requester)
+        }
+    }
+
+    fun unregister(targetIds: Set<Int>, requester: BringIntoViewRequester) {
+        targetIds.forEach { targetId ->
+            requesters[targetId]?.let { registered ->
+                registered.remove(requester)
+                if (registered.isEmpty()) requesters.remove(targetId)
+            }
+        }
+    }
+
+    fun latest(targetId: Int): BringIntoViewRequester? = requesters[targetId]?.lastOrNull()
+}
+
+@Composable
+@OptIn(ExperimentalFoundationApi::class)
+private fun SettingsSearchTarget(
+    registry: SettingsSearchTargetRegistry,
+    vararg targetIds: Int,
+    content: @Composable () -> Unit,
+) {
+    val requester = remember { BringIntoViewRequester() }
+    val registeredIds = targetIds.toSet()
+    DisposableEffect(registry, registeredIds) {
+        registry.register(registeredIds, requester)
+        onDispose { registry.unregister(registeredIds, requester) }
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .bringIntoViewRequester(requester),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        content()
+    }
+}
+
 private fun openExternalBrowser(context: Context, url: String) {
     runCatching {
         context.startActivity(
@@ -197,15 +269,49 @@ private fun openExternalBrowser(context: Context, url: String) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(
+    ExperimentalMaterial3Api::class,
+    ExperimentalLayoutApi::class,
+    ExperimentalFoundationApi::class,
+)
 @Composable
 fun SettingsScreen(
     modifier: Modifier = Modifier,
     onBack: () -> Unit,
+    onOpenGlossary: () -> Unit,
+    listState: LazyListState,
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val modelDownloadWorkInfos by viewModel.modelDownloadWorkInfos.collectAsState(initial = emptyList())
+    val unfinishedModelDownloads = modelDownloadWorkInfos.filterNot { it.state.isFinished }
+    val activeModelDownloadWork = unfinishedModelDownloads.firstOrNull { it.state == WorkInfo.State.RUNNING }
+        ?: unfinishedModelDownloads.firstOrNull()
+    val backgroundModelDownloadActive = activeModelDownloadWork != null
+    val activeModelDownloadSpec = ModelDownloadSpec.decode(
+        activeModelDownloadWork?.progress?.getString(
+            com.gameocr.app.download.ModelDownloadWorker.KEY_CURRENT_SPEC
+        ).orEmpty()
+    )
+    val backgroundModelDownloadStatus = activeModelDownloadWork?.progress?.getString(
+        com.gameocr.app.download.ModelDownloadWorker.KEY_STATUS
+    ).orEmpty()
+    val backgroundModelDownloadOwnerPresetId = activeModelDownloadWork?.tags
+        ?.let(ModelDownloadWorkPolicy::ownerPresetId)
+    val backgroundModelDownloadDownloaded = activeModelDownloadWork?.progress?.getLong(
+        com.gameocr.app.download.ModelDownloadWorker.KEY_DOWNLOADED,
+        0L,
+    ) ?: 0L
+    val backgroundModelDownloadTotal = activeModelDownloadWork?.progress?.getLong(
+        com.gameocr.app.download.ModelDownloadWorker.KEY_TOTAL,
+        -1L,
+    ) ?: -1L
+    fun statusDuringBackgroundDownload(spec: ModelDownloadSpec, fallback: String): String =
+        backgroundModelDownloadStatus.takeIf {
+            backgroundModelDownloadActive && activeModelDownloadSpec == spec && it.isNotBlank()
+        } ?: fallback
+    val usageAccessGranted = rememberUsageAccessGranted(context)
 
     var baseUrl by remember { mutableStateOf("") }
     var apiKey by remember { mutableStateOf("") }
@@ -258,8 +364,26 @@ fun SettingsScreen(
     var showOverlayFontDeleteTip by remember { mutableStateOf(false) }
     var overlayFontDeleteTipCountdown by remember { mutableStateOf(0) }
     var loopInterval by remember { mutableStateOf("1000") }
+    var loopTriggerMode by remember { mutableStateOf(LoopTriggerMode.WAIT_FOR_TEXT_COMPLETE) }
+    var loopTextStableDurationMs by remember {
+        mutableStateOf(LoopFrameStabilityPolicy.DEFAULT_STABLE_DURATION_MS)
+    }
+    var loopSkipSimilarFrames by remember { mutableStateOf(true) }
+    var loopFrameSimilarityThreshold by remember {
+        mutableStateOf(LoopFrameChangePolicy.DEFAULT_SIMILARITY_THRESHOLD)
+    }
+    var loopTextRegionMode by remember { mutableStateOf(LoopTextRegionMode.AUTO) }
+    var loopTranslateRegionOnly by remember { mutableStateOf(true) }
+    var developerOptionsEnabled by remember { mutableStateOf(false) }
+    var ocrRedBoxModeEnabled by remember { mutableStateOf(false) }
+    var ocrRedBoxShowSourceText by remember { mutableStateOf(true) }
+    var ocrRedBoxShowTranslation by remember { mutableStateOf(false) }
     var streaming by remember { mutableStateOf(true) }
+    var retryEmptyTranslation by remember { mutableStateOf(false) }
     var renderMode by remember { mutableStateOf(RenderMode.BLOCKS) }
+    var translationBlockInteractionMode by remember {
+        mutableStateOf(TranslationBlockInteractionMode.COPY_BUTTON)
+    }
     var floatingWindowContentMode by remember {
         mutableStateOf(com.gameocr.app.data.FloatingWindowContentMode.SRC_AND_DST)
     }
@@ -290,7 +414,7 @@ fun SettingsScreen(
     var tencentRegion by remember { mutableStateOf("ap-guangzhou") }
     var tencentEndpoint by remember { mutableStateOf(com.gameocr.app.data.TencentOcrEndpoint.GENERAL_BASIC) }
     var tencentLanguage by remember { mutableStateOf(com.gameocr.app.data.TencentOcrLanguage.AUTO) }
-    var paddleModelVersion by remember { mutableStateOf(com.gameocr.app.data.PaddleModelVersion.V6_SMALL) }
+    var paddleModelVersion by remember { mutableStateOf(com.gameocr.app.data.PaddleModelVersion.V5_MOBILE) }
     var paddleStatus by remember { mutableStateOf("") }
     var paddleDownloading by remember { mutableStateOf(false) }
     var paddleModelReady by remember { mutableStateOf(false) }
@@ -348,6 +472,18 @@ fun SettingsScreen(
     var dbnetAdvancedExpanded by remember { mutableStateOf(false) }
     var showDbnetResetConfirm by remember { mutableStateOf(false) }
     var manualTextOrient by remember { mutableStateOf<com.gameocr.app.ocr.TextOrientation?>(null) }
+    var translationOutputFollowRecognition by remember { mutableStateOf(true) }
+    var translationOutputLayout by remember {
+        mutableStateOf(com.gameocr.app.data.TranslationOutputLayout.HORIZONTAL)
+    }
+    var translationOutputDirection by remember {
+        mutableStateOf(com.gameocr.app.data.TranslationOutputDirection.LEFT_TO_RIGHT)
+    }
+    var translationGlossaryEnabled by remember { mutableStateOf(true) }
+    var foregroundAppDetectionMode by remember {
+        mutableStateOf(com.gameocr.app.data.ForegroundAppDetectionMode.AUTO)
+    }
+    var sendAppNameToTranslator by remember { mutableStateOf(false) }
     var translationPresets by remember { mutableStateOf<List<TranslationPreset>>(emptyList()) }
     var activeTranslationPresetId by remember { mutableStateOf("") }
     var presetMessage by remember { mutableStateOf<String?>(null) }
@@ -373,13 +509,43 @@ fun SettingsScreen(
     var showUnsavedDialog by remember { mutableStateOf(false) }
     var showSakuraFallbackDialog by remember { mutableStateOf(false) }
     var pendingModelDownload by remember { mutableStateOf<PendingModelDownload?>(null) }
+    var pendingDownloadAfterNotificationPermission by remember {
+        mutableStateOf<(() -> Unit)?>(null)
+    }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) {
+        val pendingDownload = pendingDownloadAfterNotificationPermission
+        pendingDownloadAfterNotificationPermission = null
+        pendingDownload?.invoke()
+    }
+
+    fun continueModelDownloadAfterNotificationPermission(onConfirmed: () -> Unit) {
+        val permissionGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS,
+            ) == PackageManager.PERMISSION_GRANTED
+        if (shouldRequestModelDownloadNotificationPermission(
+                sdkInt = Build.VERSION.SDK_INT,
+                permissionGranted = permissionGranted,
+            )
+        ) {
+            pendingDownloadAfterNotificationPermission = onConfirmed
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            onConfirmed()
+        }
+    }
 
     fun requestModelDownload(modelLabel: String, onConfirmed: () -> Unit) {
         val warning = modelDownloadNetworkWarningFor(currentModelDownloadNetworkKind(context))
         if (warning == null) {
-            onConfirmed()
+            continueModelDownloadAfterNotificationPermission(onConfirmed)
         } else {
-            pendingModelDownload = PendingModelDownload(modelLabel, warning, onConfirmed)
+            pendingModelDownload = PendingModelDownload(modelLabel, warning) {
+                continueModelDownloadAfterNotificationPermission(onConfirmed)
+            }
         }
     }
 
@@ -460,6 +626,9 @@ fun SettingsScreen(
         targetLang = s.targetLang
         dictionaryPrompt = s.dictionaryPrompt
         translatorEngine = s.translatorEngine
+        translationGlossaryEnabled = s.translationGlossaryEnabled
+        foregroundAppDetectionMode = s.foregroundAppDetectionMode
+        sendAppNameToTranslator = s.sendAppNameToTranslator
         deeplKey = s.deeplApiKey
         deeplCustomToken = s.deeplCustomToken
         youdaoAppKey = s.youdaoAppKey
@@ -484,8 +653,20 @@ fun SettingsScreen(
             s.overlayFontDisplayName,
         )
         loopInterval = s.captureLoopIntervalMs.toString()
+        loopTriggerMode = s.loopTriggerMode
+        loopTextStableDurationMs = s.loopTextStableDurationMs
+        loopSkipSimilarFrames = s.loopSkipSimilarFrames
+        loopFrameSimilarityThreshold = s.loopFrameSimilarityThreshold
+        loopTextRegionMode = s.loopTextRegionMode
+        loopTranslateRegionOnly = s.loopTranslateRegionOnly
+        developerOptionsEnabled = s.developerOptionsEnabled
+        ocrRedBoxModeEnabled = s.ocrRedBoxModeEnabled
+        ocrRedBoxShowSourceText = s.ocrRedBoxShowSourceText
+        ocrRedBoxShowTranslation = s.ocrRedBoxShowTranslation
         streaming = s.streamingTranslate
+        retryEmptyTranslation = s.retryEmptyTranslation
         renderMode = s.renderMode
+        translationBlockInteractionMode = s.translationBlockInteractionMode
         floatingWindowContentMode = s.floatingWindowContentMode
         floatingWindowLocked = s.floatingWindowLocked
         placement = s.overlayPlacement
@@ -531,6 +712,15 @@ fun SettingsScreen(
         mergeStrength = s.mergeStrength
         textOrientAutoDetect = s.textOrientationAutoDetect
         manualTextOrient = s.manualTextOrientation
+        resolveTranslationOutputSettings(
+            s.translationOutputFollowRecognition,
+            s.translationOutputLayout,
+            s.translationOutputDirection,
+        ).let { output ->
+            translationOutputFollowRecognition = output.followRecognition
+            translationOutputLayout = output.layout
+            translationOutputDirection = output.direction
+        }
         dbnetProb = s.dbnetProbThresh
         dbnetScore = s.dbnetBoxScoreThresh
         dbnetUnclip = s.dbnetUnclipRatio
@@ -548,7 +738,20 @@ fun SettingsScreen(
     }
 
     // —— 搜索：顶部输入 → 下拉匹配项 → 点击 animateScrollTo 到对应 section 顶部 ——
-    val scrollState = rememberScrollState()
+    var settingsViewportTopInWindow by remember { mutableStateOf(Float.NaN) }
+    var overlayPreviewTopInWindow by remember { mutableStateOf(Float.NaN) }
+    var overlayPreviewHeightPx by remember { mutableStateOf(0) }
+    var overlaySectionBottomInWindow by remember { mutableStateOf(Float.NaN) }
+    val overlayPreviewSticky by remember {
+        derivedStateOf {
+            StickyOverlayPreviewPolicy.shouldStick(
+                previewTopInWindow = overlayPreviewTopInWindow,
+                sectionBottomInWindow = overlaySectionBottomInWindow,
+                viewportTopInWindow = settingsViewportTopInWindow,
+                previewHeightPx = overlayPreviewHeightPx,
+            )
+        }
+    }
     val overlayFontImportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri ->
@@ -596,6 +799,7 @@ fun SettingsScreen(
                     R.string.settings_bundle_exported_format,
                     result.presetCount,
                     result.fontCount,
+                    result.glossaryTermCount,
                 )
             }.onFailure { error ->
                 presetMessage = context.getString(
@@ -665,6 +869,9 @@ fun SettingsScreen(
                             plan.importedCount,
                             overwritten,
                             importPreview.fonts.size,
+                            importPreview.glossaryTerms.size,
+                            importPreview.skippedSettingFields.size,
+                            importPreview.protectedLocalFieldCount,
                         )
                     }
                 )
@@ -687,6 +894,8 @@ fun SettingsScreen(
                                     result.importedPresetCount,
                                     result.overwrittenPresetNames.size,
                                     result.importedFontCount,
+                                    result.importedGlossaryTermCount,
+                                    result.skippedSettingFieldCount,
                                 )
                             }
                             .onFailure { error ->
@@ -728,19 +937,15 @@ fun SettingsScreen(
         }
     }
 
-    val anchors = remember { mutableStateMapOf<String, Int>() }
-    val onAnchor: (String, Int) -> Unit = { key, y -> anchors[key] = y }
     var searchActive by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     val searchFocusRequester = remember { FocusRequester() }
+    val searchTargetRegistry = remember { SettingsSearchTargetRegistry() }
 
-    // 从当前所有 state 构造一份 Settings 实例。`Settings()` 默认值起手，`.copy(...)` 覆盖设置页
-    // 能改的字段；不在设置页改的字段（captureRegion / preferShizukuCapture / tencentRegion /
-    // pinnedLanguages）保留 Settings 默认占位——initial 和 current 都用同一默认值，equals 时这些
-    // 字段始终相等，dirty 只反映用户在本页的实际改动。
-    //
+    // 从完整持久化快照起步，再覆盖本页尚未保存的草稿值。不能从 Settings() 默认值起步，否则
+    // 导出会把预设、固定语言、悬浮窗状态和本地 LLM 参数等非当前表单字段静默重置。
     // 类型转换跟 doSave 保持一致（textSize.toInt() / loopInterval.toLongOrNull() 等）。
-    fun buildSnapshot(): Settings = Settings().copy(
+    fun buildSnapshot(): Settings = (initialSettings ?: Settings()).copy(
         baseUrl = baseUrl,
         apiKey = apiKey,
         model = model,
@@ -749,12 +954,24 @@ fun SettingsScreen(
         promptTemplate = prompt,
         ocrEngine = ocrEngine,
         captureLoopIntervalMs = loopInterval.toLongOrNull() ?: 2000L,
+        loopTriggerMode = loopTriggerMode,
+        loopTextStableDurationMs = loopTextStableDurationMs,
+        loopSkipSimilarFrames = loopSkipSimilarFrames,
+        loopFrameSimilarityThreshold = loopFrameSimilarityThreshold,
+        loopTextRegionMode = loopTextRegionMode,
+        loopTranslateRegionOnly = loopTranslateRegionOnly,
+        developerOptionsEnabled = developerOptionsEnabled,
+        ocrRedBoxModeEnabled = ocrRedBoxModeEnabled,
+        ocrRedBoxShowSourceText = ocrRedBoxShowSourceText,
+        ocrRedBoxShowTranslation = ocrRedBoxShowTranslation,
         overlayTextSizeSp = textSize.toInt(),
         overlayTextStyle = overlayTextStyle.normalized(),
         overlayAlpha = alpha,
         overlayFonts = overlayFontEntries,
         streamingTranslate = streaming,
+        retryEmptyTranslation = retryEmptyTranslation,
         renderMode = renderMode,
+        translationBlockInteractionMode = translationBlockInteractionMode,
         overlayPlacement = placement,
         overlayTheme = overlayTheme,
         customBgColor = customBg,
@@ -815,11 +1032,20 @@ fun SettingsScreen(
         paddleModelVersion = paddleModelVersion,
         textOrientationAutoDetect = textOrientAutoDetect,
         manualTextOrientation = manualTextOrient,
+        translationOutputFollowRecognition = translationOutputFollowRecognition,
+        translationOutputLayout = translationOutputLayout,
+        translationOutputDirection = translationOutputDirection,
+        translationGlossaryEnabled = translationGlossaryEnabled,
+        sendAppNameToTranslator = sendAppNameToTranslator,
         dbnetProbThresh = dbnetProb,
         dbnetBoxScoreThresh = dbnetScore,
         dbnetUnclipRatio = dbnetUnclip,
         mangaOcrDbnetUnclipRatio = mangaOcrDbnetUnclip,
         bubbleClusterGap = dbnetGap
+    )
+
+    fun buildSettingsTransferSnapshot(): Settings = buildTranslationPresetSnapshot().copy(
+        foregroundAppDetectionMode = foregroundAppDetectionMode,
     )
 
     fun currentTranslationPresetHash(): String =
@@ -842,78 +1068,36 @@ fun SettingsScreen(
         val llmKinds = issues.mapNotNull { it.llmModelKind }.distinct()
         val paddleVersions = issues.mapNotNull { it.paddleModelVersion }.distinct()
 
-        for (kind in llmKinds) {
-            presetMessage = context.getString(
-                R.string.settings_translation_preset_downloading_model_format,
-                kind.displayName
-            )
-            llmDownloading = true
-            try {
-                viewModel.saveLlmMirror(llmMirrorChoice, llmMirror)
-                viewModel.downloadLlmModel(kind) { msg ->
-                    if (localLlmModelKindFor(translatorEngine) == kind) {
-                        llmModelStatus = msg
-                    }
-                    presetMessage = msg
-                }
-                refreshLlmModelState(kind)
-            } finally {
-                llmDownloading = false
-            }
+        val mangaMissing = issues.any { it.kind == TranslationPresetModelIssueKind.MANGA_OCR_MISSING }
+        val orientationMissing = issues.any { it.kind == TranslationPresetModelIssueKind.ORIENTATION_MISSING }
+        val specs = buildList {
+            llmKinds.forEach { add(ModelDownloadSpec.llm(it)) }
+            paddleVersions.forEach { add(ModelDownloadSpec.paddle(it)) }
+            if (mangaMissing) add(ModelDownloadSpec.mangaOcr())
+            if (orientationMissing) add(ModelDownloadSpec.orientation())
         }
+        if (specs.isEmpty()) return
 
-        for (version in paddleVersions) {
-            val versionLabel = context.getString(version.displayNameRes)
-            presetMessage = context.getString(
-                R.string.settings_translation_preset_downloading_model_format,
-                versionLabel
+        llmDownloading = llmKinds.isNotEmpty()
+        paddleDownloading = paddleVersions.isNotEmpty()
+        mangaOcrDownloading = mangaMissing
+        orientationModelDownloading = orientationMissing
+        try {
+            if (llmKinds.isNotEmpty()) viewModel.saveLlmMirror(llmMirrorChoice, llmMirror)
+            viewModel.downloadModels(
+                specs = specs,
+                onProgress = { msg -> presetMessage = msg },
+                ownerPresetId = preset.id,
             )
-            paddleDownloading = true
-            try {
-                viewModel.downloadPaddleModels(version) { msg ->
-                    if (paddleModelVersion == version) {
-                        paddleStatus = msg
-                    }
-                    presetMessage = msg
-                }
-                refreshPaddleModelState(version)
-            } finally {
-                paddleDownloading = false
-            }
-        }
-
-        if (issues.any { it.kind == TranslationPresetModelIssueKind.MANGA_OCR_MISSING }) {
-            presetMessage = context.getString(
-                R.string.settings_translation_preset_downloading_model_format,
-                context.getString(R.string.settings_manga_ocr_model_name)
-            )
-            mangaOcrDownloading = true
-            try {
-                viewModel.downloadMangaOcrModels { msg ->
-                    mangaOcrStatus = msg
-                    presetMessage = msg
-                }
-                refreshMangaOcrModelState()
-            } finally {
-                mangaOcrDownloading = false
-            }
-        }
-
-        if (issues.any { it.kind == TranslationPresetModelIssueKind.ORIENTATION_MISSING }) {
-            presetMessage = context.getString(
-                R.string.settings_translation_preset_downloading_model_format,
-                context.getString(R.string.settings_orientation_model_name)
-            )
-            orientationModelDownloading = true
-            try {
-                viewModel.downloadOrientationModel { msg ->
-                    orientationModelStatus = msg
-                    presetMessage = msg
-                }
-                refreshOrientationModelState()
-            } finally {
-                orientationModelDownloading = false
-            }
+            llmKinds.forEach { refreshLlmModelState(it) }
+            paddleVersions.forEach { refreshPaddleModelState(it) }
+            if (mangaMissing) refreshMangaOcrModelState()
+            if (orientationMissing) refreshOrientationModelState()
+        } finally {
+            llmDownloading = false
+            paddleDownloading = false
+            mangaOcrDownloading = false
+            orientationModelDownloading = false
         }
 
         refreshPresetModelReadiness()
@@ -938,7 +1122,21 @@ fun SettingsScreen(
             textSize = textSize.toInt(), alpha = alpha,
             overlayTextStyle = overlayTextStyle,
             loopMs = loopInterval.toLongOrNull() ?: 2000L,
-            streaming = streaming, renderMode = renderMode, placement = placement,
+            loopTriggerMode = loopTriggerMode,
+            loopTextStableDurationMs = loopTextStableDurationMs,
+            loopSkipSimilarFrames = loopSkipSimilarFrames,
+            loopFrameSimilarityThreshold = loopFrameSimilarityThreshold,
+            loopTextRegionMode = loopTextRegionMode,
+            loopTranslateRegionOnly = loopTranslateRegionOnly,
+            developerOptionsEnabled = developerOptionsEnabled,
+            ocrRedBoxModeEnabled = ocrRedBoxModeEnabled,
+            ocrRedBoxShowSourceText = ocrRedBoxShowSourceText,
+            ocrRedBoxShowTranslation = ocrRedBoxShowTranslation,
+            streaming = streaming,
+            retryEmptyTranslation = retryEmptyTranslation,
+            renderMode = renderMode,
+            translationBlockInteractionMode = translationBlockInteractionMode,
+            placement = placement,
             overlayTheme = overlayTheme,
             customBg = customBg, customFg = customFg,
             customBorder = customBorder, customBorderW = customBorderW.toInt(),
@@ -983,11 +1181,11 @@ fun SettingsScreen(
         )
     }
 
+    val modelDownloadBusy = backgroundModelDownloadActive || downloadingPresetId != null ||
+        llmDownloading || paddleDownloading || mangaOcrDownloading || orientationModelDownloading
     val translationPresetSection: @Composable () -> Unit = {
         SectionCard(
             title = stringResource(R.string.settings_section_translation_presets),
-            anchorKey = SectionKeys.PRESETS,
-            onAnchor = onAnchor,
             helpText = stringResource(R.string.settings_translation_preset_desc)
         ) {
             val presetSnapshot = buildTranslationPresetSnapshot()
@@ -1004,8 +1202,6 @@ fun SettingsScreen(
             } else {
                 null
             }
-            val modelDownloadBusy = downloadingPresetId != null ||
-                llmDownloading || paddleDownloading || mangaOcrDownloading || orientationModelDownloading
             TranslationPresetSection(
                 customPresets = translationPresets,
                 activeId = matchingPresetId,
@@ -1017,9 +1213,9 @@ fun SettingsScreen(
                 mangaOcrModelReady = presetMangaOcrModelReady,
                 orientationModelReady = presetOrientationModelReady,
                 modelDownloading = modelDownloadBusy,
-                downloadingPresetId = downloadingPresetId,
+                downloadingPresetId = downloadingPresetId ?: backgroundModelDownloadOwnerPresetId,
                 onExport = {
-                    pendingSettingsExport = buildSnapshot()
+                    pendingSettingsExport = buildSettingsTransferSnapshot()
                     presetExportLauncher.launch(SettingsBundleTransfer.DEFAULT_FILE_NAME)
                 },
                 onImport = {
@@ -1116,9 +1312,9 @@ fun SettingsScreen(
     val textOrientationSection: @Composable () -> Unit = {
         SectionCard(
             title = stringResource(R.string.settings_text_orientation_section_title),
-            anchorKey = SectionKeys.TEXT_ORIENTATION,
-            onAnchor = onAnchor
         ) {
+            SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_ORIENTATION_DETECTION) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             SwitchRow(
                 stringResource(R.string.settings_orient_auto_detect_title),
                 textOrientAutoDetect,
@@ -1163,8 +1359,11 @@ fun SettingsScreen(
                 }
                 HorizontalDivider()
                 OrientationModelSection(
-                    status = orientationModelStatus,
-                    downloading = orientationModelDownloading,
+                    status = statusDuringBackgroundDownload(
+                        ModelDownloadSpec.orientation(),
+                        orientationModelStatus,
+                    ),
+                    downloading = orientationModelDownloading || backgroundModelDownloadActive,
                     modelReady = orientationModelReady,
                     onDownload = {
                         requestModelDownload(context.getString(R.string.settings_orientation_model_name)) {
@@ -1210,6 +1409,73 @@ fun SettingsScreen(
                         }
                     }
                 )
+            }
+            }
+            }
+            HorizontalDivider()
+            SettingsSearchTarget(searchTargetRegistry, R.string.settings_translation_output_follow_title) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            SwitchRow(
+                stringResource(R.string.settings_translation_output_follow_title),
+                translationOutputFollowRecognition,
+                helpText = stringResource(R.string.settings_translation_output_follow_summary),
+            ) { enabled ->
+                translationOutputFollowRecognition = enabled
+                scope.launch { viewModel.saveTranslationOutputFollowRecognition(enabled) }
+            }
+            if (!translationOutputFollowRecognition) {
+            SettingsSearchTarget(searchTargetRegistry, R.string.settings_translation_output_layout_label) {
+            Text(
+                stringResource(R.string.settings_translation_output_layout_label),
+                style = MaterialTheme.typography.labelLarge,
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                com.gameocr.app.data.TranslationOutputLayout.entries
+                    .filterNot { it == com.gameocr.app.data.TranslationOutputLayout.FOLLOW_RECOGNITION }
+                    .forEach { layout ->
+                    val label = when (layout) {
+                        com.gameocr.app.data.TranslationOutputLayout.HORIZONTAL ->
+                            stringResource(R.string.settings_translation_output_horizontal)
+                        com.gameocr.app.data.TranslationOutputLayout.VERTICAL ->
+                            stringResource(R.string.settings_translation_output_vertical)
+                        com.gameocr.app.data.TranslationOutputLayout.FOLLOW_RECOGNITION -> return@forEach
+                    }
+                    EngineChip(translationOutputLayout, layout, label) {
+                        translationOutputLayout = it
+                        scope.launch { viewModel.saveTranslationOutputLayout(it) }
+                    }
+                }
+            }
+            Text(
+                stringResource(R.string.settings_translation_output_direction_label),
+                style = MaterialTheme.typography.labelLarge,
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                com.gameocr.app.data.TranslationOutputDirection.entries
+                    .filterNot { it == com.gameocr.app.data.TranslationOutputDirection.FOLLOW_RECOGNITION }
+                    .forEach { direction ->
+                    val label = when (direction) {
+                        com.gameocr.app.data.TranslationOutputDirection.LEFT_TO_RIGHT ->
+                            stringResource(R.string.settings_translation_output_ltr)
+                        com.gameocr.app.data.TranslationOutputDirection.RIGHT_TO_LEFT ->
+                            stringResource(R.string.settings_translation_output_rtl)
+                        com.gameocr.app.data.TranslationOutputDirection.FOLLOW_RECOGNITION -> return@forEach
+                    }
+                    EngineChip(translationOutputDirection, direction, label) {
+                        translationOutputDirection = it
+                        scope.launch { viewModel.saveTranslationOutputDirection(it) }
+                    }
+                }
+            }
+            }
+            }
+            }
             }
         }
     }
@@ -1331,35 +1597,36 @@ fun SettingsScreen(
                 )
             },
             confirmButton = {
-                TextButton(onClick = {
-                    pendingOverlayFontDelete = null
-                    scope.launch {
-                        val deleted = withContext(Dispatchers.IO) {
-                            viewModel.deleteOverlayFont(font.fileName)
-                        }
-                        if (deleted) {
-                            overlayFontEntries = OverlayFontPolicy.removeImportedFont(
-                                overlayFontEntries,
-                                font.fileName
-                            )
-                            if (overlayFontFileName == font.fileName) {
-                                overlayFontFileName = ""
-                                overlayFontDisplayName = ""
-                                overlayFontTypeface = null
+                DestructiveTextButton(
+                    label = stringResource(R.string.settings_model_delete_confirm_yes),
+                    onClick = {
+                        pendingOverlayFontDelete = null
+                        scope.launch {
+                            val deleted = withContext(Dispatchers.IO) {
+                                viewModel.deleteOverlayFont(font.fileName)
                             }
-                            overlayFontMessage = context.getString(
-                                R.string.settings_overlay_font_delete_success_format,
-                                font.displayName
-                            )
-                            overlayFontMessageIsError = false
-                        } else {
-                            overlayFontMessage = context.getString(R.string.settings_overlay_font_error_invalid)
-                            overlayFontMessageIsError = true
+                            if (deleted) {
+                                overlayFontEntries = OverlayFontPolicy.removeImportedFont(
+                                    overlayFontEntries,
+                                    font.fileName
+                                )
+                                if (overlayFontFileName == font.fileName) {
+                                    overlayFontFileName = ""
+                                    overlayFontDisplayName = ""
+                                    overlayFontTypeface = null
+                                }
+                                overlayFontMessage = context.getString(
+                                    R.string.settings_overlay_font_delete_success_format,
+                                    font.displayName
+                                )
+                                overlayFontMessageIsError = false
+                            } else {
+                                overlayFontMessage = context.getString(R.string.settings_overlay_font_error_invalid)
+                                overlayFontMessageIsError = true
+                            }
                         }
-                    }
-                }) {
-                    Text(stringResource(R.string.settings_model_delete_confirm_yes))
-                }
+                    },
+                )
             },
             dismissButton = {
                 TextButton(onClick = { pendingOverlayFontDelete = null }) {
@@ -1695,7 +1962,9 @@ fun SettingsScreen(
                                 rec.baiduEndpoint?.let { baiduEndpoint = it }
                                 rec.tencentEndpoint?.let { tencentEndpoint = it }
                                 scope.launch {
-                                    anchors[SectionKeys.OCR]?.let { y -> scrollState.animateScrollTo(y) }
+                                    settingsSectionIndex(SectionKeys.OCR)?.let { index ->
+                                        listState.animateScrollToItem(index)
+                                    }
                                 }
                             } else {
                                 ocrEngine = rec.engine
@@ -1785,8 +2054,17 @@ fun SettingsScreen(
                 s.overlayFontDisplayName
             )
             loopInterval = s.captureLoopIntervalMs.toString()
+            loopTriggerMode = s.loopTriggerMode
+            loopTextStableDurationMs = s.loopTextStableDurationMs
+            loopSkipSimilarFrames = s.loopSkipSimilarFrames
+            loopFrameSimilarityThreshold = s.loopFrameSimilarityThreshold
+            developerOptionsEnabled = s.developerOptionsEnabled
+            ocrRedBoxModeEnabled = s.ocrRedBoxModeEnabled
+            ocrRedBoxShowSourceText = s.ocrRedBoxShowSourceText
+            ocrRedBoxShowTranslation = s.ocrRedBoxShowTranslation
             streaming = s.streamingTranslate
             renderMode = s.renderMode
+            translationBlockInteractionMode = s.translationBlockInteractionMode
             floatingWindowContentMode = s.floatingWindowContentMode
             floatingWindowLocked = s.floatingWindowLocked
             customBorderStyle = s.customBorderStyle
@@ -1847,15 +2125,41 @@ fun SettingsScreen(
             mangaOcrDbnetUnclip = s.mangaOcrDbnetUnclipRatio
             dbnetGap = s.bubbleClusterGap
             manualTextOrient = s.manualTextOrientation
+            resolveTranslationOutputSettings(
+                s.translationOutputFollowRecognition,
+                s.translationOutputLayout,
+                s.translationOutputDirection,
+            ).let { output ->
+                translationOutputFollowRecognition = output.followRecognition
+                translationOutputLayout = output.layout
+                translationOutputDirection = output.direction
+            }
+            translationGlossaryEnabled = s.translationGlossaryEnabled
+            foregroundAppDetectionMode = s.foregroundAppDetectionMode
+            sendAppNameToTranslator = s.sendAppNameToTranslator
             cleartextHostsText = s.cleartextAllowedHosts.joinToString("\n")
-            // 同一个 snapshot 内 capture 初始 Settings——既走 buildSnapshot() 单源路径，
-            // 又跟所有 state 在同一原子 apply 里，不会被中间帧看到。
-            initialSettings = buildSnapshot()
+            // Keep the complete repository value as the baseline. Rebuilding it while
+            // initialSettings is still null would start from Settings defaults and lose fields
+            // owned by services or other screens before the first export.
+            initialSettings = s
         }
     }
 
     // paddleStatus 独立异步加载：file.exists() / file.length() 走 IO 线程，避免阻塞首帧。
     val settingsLoaded = initialSettings != null
+    val modelDownloadStateKey = modelDownloadWorkInfos.map { it.id to it.state }
+    val modelDownloadStageKey = activeModelDownloadSpec to activeModelDownloadWork?.progress?.getInt(
+        com.gameocr.app.download.ModelDownloadWorker.KEY_BATCH_INDEX,
+        0,
+    )
+    LaunchedEffect(settingsLoaded, modelDownloadStateKey, modelDownloadStageKey) {
+        if (!settingsLoaded) return@LaunchedEffect
+        localLlmModelKindFor(translatorEngine)?.let { refreshLlmModelState(it) }
+        refreshPaddleModelState(paddleModelVersion)
+        refreshMangaOcrModelState()
+        refreshOrientationModelState()
+        refreshPresetModelReadiness()
+    }
     LaunchedEffect(settingsLoaded, paddleModelVersion) {
         if (!settingsLoaded) return@LaunchedEffect
         refreshPaddleModelState(paddleModelVersion)
@@ -1882,54 +2186,73 @@ fun SettingsScreen(
     Scaffold(
         modifier = modifier.fillMaxSize(),
         topBar = {
-            TopAppBar(
-                title = {
-                    if (searchActive) {
-                        OutlinedTextField(
-                            value = searchQuery,
-                            onValueChange = { searchQuery = it },
-                            placeholder = { Text(stringResource(R.string.settings_search_placeholder)) },
-                            singleLine = true,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .focusRequester(searchFocusRequester),
-                            colors = TextFieldDefaults.colors(
-                                focusedContainerColor = MaterialTheme.colorScheme.background,
-                                unfocusedContainerColor = MaterialTheme.colorScheme.background,
-                                focusedIndicatorColor = MaterialTheme.colorScheme.primary,
-                                unfocusedIndicatorColor = MaterialTheme.colorScheme.outlineVariant
+            Column {
+                TopAppBar(
+                    title = {
+                        if (searchActive) {
+                            OutlinedTextField(
+                                value = searchQuery,
+                                onValueChange = { searchQuery = it },
+                                placeholder = { Text(stringResource(R.string.settings_search_placeholder)) },
+                                singleLine = true,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .focusRequester(searchFocusRequester),
+                                colors = TextFieldDefaults.colors(
+                                    focusedContainerColor = MaterialTheme.colorScheme.background,
+                                    unfocusedContainerColor = MaterialTheme.colorScheme.background,
+                                    focusedIndicatorColor = MaterialTheme.colorScheme.primary,
+                                    unfocusedIndicatorColor = MaterialTheme.colorScheme.outlineVariant
+                                )
                             )
-                        )
-                        LaunchedEffect(Unit) { searchFocusRequester.requestFocus() }
-                    } else {
-                        Text(stringResource(R.string.settings_title))
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = if (searchActive) closeSearch else tryBack) {
-                        Icon(
-                            if (searchActive) Icons.Default.Close else Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(
-                                if (searchActive) R.string.settings_search_close else R.string.common_back
-                            )
-                        )
-                    }
-                },
-                actions = {
-                    if (!searchActive) {
-                        IconButton(onClick = { searchActive = true }) {
+                            LaunchedEffect(Unit) { searchFocusRequester.requestFocus() }
+                        } else {
+                            Text(stringResource(R.string.settings_title))
+                        }
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = if (searchActive) closeSearch else tryBack) {
                             Icon(
-                                Icons.Default.Search,
-                                contentDescription = stringResource(R.string.settings_search_btn)
+                                if (searchActive) Icons.Default.Close else Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = stringResource(
+                                    if (searchActive) R.string.settings_search_close else R.string.common_back
+                                )
                             )
                         }
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
-                    scrolledContainerColor = MaterialTheme.colorScheme.background
+                    },
+                    actions = {
+                        if (!searchActive) {
+                            IconButton(onClick = { searchActive = true }) {
+                                Icon(
+                                    Icons.Default.Search,
+                                    contentDescription = stringResource(R.string.settings_search_btn)
+                                )
+                            }
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.background,
+                        scrolledContainerColor = MaterialTheme.colorScheme.background
+                    )
                 )
-            )
+                if (modelDownloadBusy) {
+                    Box(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    ) {
+                        ModelDownloadProgressCard(
+                            status = backgroundModelDownloadStatus
+                                .takeIf { backgroundModelDownloadActive }
+                                .orEmpty()
+                                .ifBlank { context.getString(R.string.model_download_waiting) },
+                            downloaded = backgroundModelDownloadDownloaded,
+                            total = backgroundModelDownloadTotal,
+                            onCancel = {
+                                activeModelDownloadWork?.id?.let(viewModel::cancelModelDownload)
+                            },
+                        )
+                    }
+                }
+            }
         },
         floatingActionButton = {
             ExtendedFloatingActionButton(
@@ -1947,32 +2270,54 @@ fun SettingsScreen(
             )
         }
     ) { inner ->
-        Box(modifier = Modifier.fillMaxSize().padding(inner)) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(inner)
+                .onGloballyPositioned { coordinates ->
+                    settingsViewportTopInWindow = coordinates.positionInWindow().y
+                }
+        ) {
             // 直接 inflate Column——不显示 spinner，避免"按下设置 → spinner → UI"那段空白卡顿感。
             // state 默认值（空字符串 / 默认 enum）会先短暂显示，LaunchedEffect 在 ~13ms 内 Snapshot
             // 原子更新所有 state 到实际保存值——肉眼几乎不察觉闪烁。代价：用户在 initialSettings
             // 还是 null 时点保存按钮会用默认值覆盖数据，所以下面 FAB 加了 enabled 防护。
-            Column(
+            LazyColumn(
+                state = listState,
                 modifier = Modifier
-                    .fillMaxSize()
-                    .verticalScroll(scrollState)
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                    .fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
             // —— 应用语言 ——
-            SectionCard(title = stringResource(R.string.settings_section_app_lang), anchorKey = SectionKeys.APP_LANG, onAnchor = onAnchor) {
-                AppLanguageSelector()
+            item(key = SectionKeys.APP_LANG) {
+                SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_APP_LANGUAGE) {
+                SectionCard(title = stringResource(R.string.settings_section_app_lang)) {
+                    AppLanguageSelector()
+                }
+                }
             }
 
             // —— 主题模式 ——
-            SectionCard(title = stringResource(R.string.settings_section_theme_mode), anchorKey = SectionKeys.THEME_MODE, onAnchor = onAnchor) {
-                ThemeModeSelector()
+            item(key = SectionKeys.THEME_MODE) {
+                SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_THEME_MODE) {
+                SectionCard(title = stringResource(R.string.settings_section_theme_mode)) {
+                    ThemeModeSelector()
+                }
+                }
             }
 
-            translationPresetSection()
+            item(key = SectionKeys.PRESETS) {
+                SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_PRESETS) {
+                    translationPresetSection()
+                }
+            }
 
             // —— 翻译后端 ——
-            SectionCard(title = stringResource(R.string.settings_section_translator), anchorKey = SectionKeys.TRANSLATE, onAnchor = onAnchor) {
+            item(key = SectionKeys.TRANSLATE) {
+            SectionCard(title = stringResource(R.string.settings_section_translator)) {
+                SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_TRANSLATOR_ENGINE) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(stringResource(R.string.settings_label_translator_engine), style = MaterialTheme.typography.labelLarge)
 
                 // 与 OCR 一样分组：端侧 LLM / 云端 LLM / 云端翻译。chip 多了平铺 FlowRow 也能换行，
@@ -2029,7 +2374,6 @@ fun SettingsScreen(
                     EngineChip(translatorEngine, TranslatorEngine.TENCENT, stringResource(R.string.settings_engine_tencent)) { translatorEngine = it }
                     EngineChip(translatorEngine, TranslatorEngine.YOUDAO_PICTRANS, stringResource(R.string.settings_engine_youdao_pictrans)) { translatorEngine = it }
                 }
-                // 切换引擎时清掉上一引擎的测试结果——继续显示会让用户以为新引擎"已经测过"。
                 LaunchedEffect(translatorEngine) {
                     testMessage = null
                     testSuccess = false
@@ -2050,8 +2394,11 @@ fun SettingsScreen(
                         currentKindLabel = currentKind.displayName,
                         deviceCapable = localLlmDeviceCapable,
                         modelReady = llmModelReady,
-                        status = llmModelStatus.ifBlank { stringResource(R.string.llm_status_missing) },
-                        downloading = llmDownloading,
+                        status = statusDuringBackgroundDownload(
+                            ModelDownloadSpec.llm(currentKind),
+                            llmModelStatus.ifBlank { stringResource(R.string.llm_status_missing) },
+                        ),
+                        downloading = llmDownloading || backgroundModelDownloadActive,
                         onDownload = {
                             requestModelDownload(currentKind.displayName) {
                                 scope.launch {
@@ -2093,6 +2440,12 @@ fun SettingsScreen(
                 }
 
                 if (translatorEngine == TranslatorEngine.OPENAI) {
+                    SettingsSearchTarget(
+                        searchTargetRegistry,
+                        R.string.settings_search_item_base_url,
+                        R.string.settings_search_item_api_key,
+                        R.string.settings_search_item_model_name,
+                    ) {
                     OutlinedTextField(
                         value = baseUrl, onValueChange = { baseUrl = it },
                         label = { Text(stringResource(R.string.settings_base_url)) },
@@ -2144,7 +2497,14 @@ fun SettingsScreen(
                             }
                         }
                     }
+                    }
                 } else if (translatorEngine == TranslatorEngine.DEEPL) {
+                    SettingsSearchTarget(
+                        searchTargetRegistry,
+                        R.string.settings_search_item_deepl_api_key,
+                        R.string.settings_search_item_deepl_pro,
+                        R.string.settings_search_item_deepl_advanced,
+                    ) {
                     SecretTextField(
                         value = deeplKey, onValueChange = { deeplKey = it },
                         label = stringResource(R.string.settings_deepl_api_key),
@@ -2241,7 +2601,9 @@ fun SettingsScreen(
                             )
                         )
                     }
+                    }
                 } else if (translatorEngine == TranslatorEngine.YOUDAO_PICTRANS) {
+                    SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_youdao_pictrans) {
                     // YOUDAO_PICTRANS：端到端引擎，OCR + 翻译一起出，会绕过 ocrEngine 设置
                     SecretTextField(
                         value = youdaoAppKey, onValueChange = { youdaoAppKey = it },
@@ -2260,7 +2622,9 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    }
                 } else if (translatorEngine == TranslatorEngine.VOLC) {
+                    SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_volc) {
                     // 火山引擎机器翻译：AK + SK + region；SignV4 鉴权
                     SecretTextField(
                         value = volcAk, onValueChange = { volcAk = it },
@@ -2286,7 +2650,9 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    }
                 } else if (translatorEngine == TranslatorEngine.BAIDU_FANYI) {
+                    SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_baidu_fanyi) {
                     // 百度翻译开放平台（fanyi-api.baidu.com）—— 与百度智能云 OCR 不是一回事
                     OutlinedTextField(
                         value = baiduFanyiAppId, onValueChange = { baiduFanyiAppId = it },
@@ -2306,7 +2672,9 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    }
                 } else if (translatorEngine == TranslatorEngine.TENCENT) {
+                    SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_tencent_translator) {
                     // 腾讯云翻译：与 OCR 共用同一套 SecretId/Key/Region（state 双向绑定，
                     // 在这里改和在 OCR 区改完全等价）。region 默认 ap-guangzhou，TMT 各地域通用。
                     OutlinedTextField(
@@ -2330,7 +2698,9 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    }
                 } else if (translatorEngine == TranslatorEngine.GOOGLE) {
+                    SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_google) {
                     // GOOGLE：无 key，仅提示风险。改 else if 明确匹配——避免后续新增枚举（如 LOCAL_*）
                     // 落入 else 兜底，错误显示 Google 文案。
                     Text(
@@ -2338,6 +2708,7 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error
                     )
+                    }
                 }
 
                 // —— 测试连接 ——
@@ -2405,12 +2776,20 @@ fun SettingsScreen(
                         else MaterialTheme.colorScheme.error
                     )
                 }
-                val onTogglePin: (String) -> Unit = { code ->
                     // 乐观更新本地 + 异步落盘。togglePinLanguage 内部用 repo.update 是原子的。
-                    pinnedLanguages = if (pinnedLanguages.contains(code))
-                        pinnedLanguages - code else pinnedLanguages + code
+                // Prompt / 流式开关只对 LLM 类（OpenAI 兼容）翻译引擎有意义；
+                // DeepL 是机器翻译 API，不读 prompt、也不走 SSE，隐藏避免误导。
+                }
+                }
+                val onTogglePin: (String) -> Unit = { code ->
+                    pinnedLanguages = if (pinnedLanguages.contains(code)) {
+                        pinnedLanguages - code
+                    } else {
+                        pinnedLanguages + code
+                    }
                     scope.launch { viewModel.togglePinLanguage(code) }
                 }
+                SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_SOURCE_LANGUAGE) {
                 LanguagePicker(
                     label = stringResource(R.string.settings_source_lang),
                     currentCode = sourceLang,
@@ -2419,157 +2798,103 @@ fun SettingsScreen(
                             "[user-select-source] %s -> %s", sourceLang, it
                         )
                         sourceLang = it
-                        if (translatorEngine == TranslatorEngine.LOCAL_SAKURA && !supportsSakuraLanguagePair(it, targetLang)) {
+                        if (
+                            translatorEngine == TranslatorEngine.LOCAL_SAKURA &&
+                            !supportsSakuraLanguagePair(it, targetLang)
+                        ) {
                             showSakuraFallbackDialog = true
                         }
                     },
                     pinned = pinnedLanguages,
-                    onTogglePin = onTogglePin
+                    onTogglePin = onTogglePin,
                 )
+                }
+                SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_TARGET_LANGUAGE) {
                 LanguagePicker(
                     label = stringResource(R.string.settings_target_lang),
                     currentCode = targetLang,
                     onSelect = {
                         targetLang = it
-                        if (translatorEngine == TranslatorEngine.LOCAL_SAKURA && !supportsSakuraLanguagePair(sourceLang, it)) {
+                        if (
+                            translatorEngine == TranslatorEngine.LOCAL_SAKURA &&
+                            !supportsSakuraLanguagePair(sourceLang, it)
+                        ) {
                             showSakuraFallbackDialog = true
                         }
                     },
                     pinned = pinnedLanguages,
-                    onTogglePin = onTogglePin
+                    onTogglePin = onTogglePin,
                 )
-                // Prompt / 流式开关只对 LLM 类（OpenAI 兼容）翻译引擎有意义；
-                // DeepL 是机器翻译 API，不读 prompt、也不走 SSE，隐藏避免误导。
-                if (translatorEngine == TranslatorEngine.OPENAI) {
-                    OutlinedTextField(
-                        value = prompt, onValueChange = { prompt = it },
-                        label = { Text(stringResource(R.string.settings_prompt_label)) },
-                        modifier = Modifier.fillMaxWidth(),
-                        minLines = 3, maxLines = 6
-                    )
-
-                    // Prompt 健康检查：缺占位符时显眼提示，可能时给一键修复按钮
-                    // （把已硬编码的目标/源语言字样替换为 {target}/{source} 占位符）
-                    val hasTargetPlaceholder = prompt.contains("{target}") || prompt.contains("{target_lang}")
-                    val hasSourcePlaceholder = prompt.contains("{source}") || prompt.contains("{source_lang}")
-                    val targetName = com.gameocr.app.data.Languages.nameOf(context, targetLang)
-                    val sourceName = com.gameocr.app.data.Languages.nameOf(context, sourceLang)
-                    val autoName = com.gameocr.app.data.Languages.nameOf(context, com.gameocr.app.data.Languages.AUTO.code)
-                    val canFixTarget = !hasTargetPlaceholder && targetName.isNotBlank() &&
-                        prompt.contains(targetName)
-                    val canFixSource = !hasSourcePlaceholder && sourceName.isNotBlank() &&
-                        sourceName != autoName && prompt.contains(sourceName)
-                    if (!hasTargetPlaceholder || !hasSourcePlaceholder) {
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f)
-                            ),
-                            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                val missingPart = buildString {
-                                    if (!hasTargetPlaceholder) append("{target}")
-                                    if (!hasTargetPlaceholder && !hasSourcePlaceholder) append(" / ")
-                                    if (!hasSourcePlaceholder) append("{source}")
-                                }
-                                Text(
-                                    stringResource(R.string.settings_prompt_warn_missing_format, missingPart),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onErrorContainer
-                                )
-                                Text(
-                                    stringResource(R.string.settings_prompt_warn_hint_format, targetName),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                if (canFixTarget) {
-                                    TextButton(onClick = {
-                                        prompt = prompt.replace(targetName, "{target}")
-                                    }) { Text(stringResource(R.string.settings_prompt_replace_target_format, targetName)) }
-                                }
-                                if (canFixSource) {
-                                    TextButton(onClick = {
-                                        prompt = prompt.replace(sourceName, "{source}")
-                                    }) { Text(stringResource(R.string.settings_prompt_replace_source_format, sourceName)) }
-                                }
-                            }
+                }
+                SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_TRANSLATION_ASSISTANCE) {
+                TranslationAssistanceSettings(
+                    searchTargetRegistry = searchTargetRegistry,
+                    translatorEngine = translatorEngine,
+                    streaming = streaming,
+                    onStreamingChange = { streaming = it },
+                    glossaryEnabled = translationGlossaryEnabled,
+                    onGlossaryEnabledChange = { enabled ->
+                        translationGlossaryEnabled = enabled
+                        scope.launch {
+                            viewModel.saveGlossarySettings(
+                                enabled,
+                                foregroundAppDetectionMode,
+                                sendAppNameToTranslator,
+                            )
                         }
-                    }
-
-                    // 二次确认对话框：自定义 prompt 一旦覆盖无法撤销，避免误点。
-                    var showResetMainPromptDialog by remember { mutableStateOf(false) }
-                    var showResetDictPromptDialog by remember { mutableStateOf(false) }
-                    val defaultPrompt = stringResource(R.string.default_prompt)
-                    TextButton(onClick = { showResetMainPromptDialog = true }) {
-                        Text(stringResource(R.string.settings_prompt_reset))
-                    }
-                    if (showResetMainPromptDialog) {
-                        AlertDialog(
-                            onDismissRequest = { showResetMainPromptDialog = false },
-                            title = { Text(stringResource(R.string.settings_prompt_reset_confirm_title)) },
-                            text = { Text(stringResource(R.string.settings_reset_confirm_message)) },
-                            confirmButton = {
-                                TextButton(onClick = {
-                                    prompt = defaultPrompt
-                                    showResetMainPromptDialog = false
-                                }) { Text(stringResource(R.string.settings_reset_confirm_yes)) }
-                            },
-                            dismissButton = {
-                                TextButton(onClick = { showResetMainPromptDialog = false }) {
-                                    Text(stringResource(R.string.settings_reset_confirm_no))
-                                }
-                            }
-                        )
-                    }
-                    SwitchRow(stringResource(R.string.settings_streaming), streaming) { streaming = it }
-
-                    // 划词翻译词典 Prompt（仅 OpenAI 兼容引擎用，跟主翻译 Prompt 同源所以放一起）
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                    Text(
-                        stringResource(R.string.settings_dictionary_prompt_title),
-                        style = MaterialTheme.typography.labelLarge
-                    )
-                    Text(
-                        stringResource(R.string.settings_dictionary_prompt_desc),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    OutlinedTextField(
-                        value = dictionaryPrompt,
-                        onValueChange = { v ->
-                            dictionaryPrompt = v
-                            scope.launch { viewModel.saveDictionaryPrompt(v) }
+                    },
+                    foregroundAppDetectionMode = foregroundAppDetectionMode,
+                    onForegroundAppDetectionModeChange = { mode ->
+                        foregroundAppDetectionMode = mode
+                        scope.launch {
+                            viewModel.saveGlossarySettings(
+                                translationGlossaryEnabled,
+                                mode,
+                                sendAppNameToTranslator,
+                            )
+                        }
+                    },
+                    sendAppName = sendAppNameToTranslator,
+                    onSendAppNameChange = { enabled ->
+                        sendAppNameToTranslator = enabled
+                        scope.launch {
+                            viewModel.saveGlossarySettings(
+                                translationGlossaryEnabled,
+                                foregroundAppDetectionMode,
+                                enabled,
+                            )
+                        }
+                    },
+                    usageAccessGranted = usageAccessGranted,
+                    onOpenUsageAccess = {
+                        runCatching {
+                            context.startActivity(Intent(AndroidSettings.ACTION_USAGE_ACCESS_SETTINGS))
+                        }.onFailure {
+                            Toast.makeText(
+                                context,
+                                R.string.settings_usage_access_unavailable,
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        }
+                    },
+                    onOpenGlossary = onOpenGlossary,
+                    retryEmptyTranslation = retryEmptyTranslation,
+                    onRetryEmptyTranslationChange = { retryEmptyTranslation = it },
+                )
+                }
+                if (translatorEngine == TranslatorEngine.OPENAI) {
+                    SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_PROMPTS) {
+                    OpenAiPromptSettings(
+                        prompt = prompt,
+                        onPromptChange = { prompt = it },
+                        sourceLang = sourceLang,
+                        targetLang = targetLang,
+                        dictionaryPrompt = dictionaryPrompt,
+                        onDictionaryPromptChange = { value ->
+                            dictionaryPrompt = value
+                            scope.launch { viewModel.saveDictionaryPrompt(value) }
                         },
-                        modifier = Modifier.fillMaxWidth(),
-                        minLines = 3,
-                        maxLines = 12
                     )
-                    val defaultDictPrompt = stringResource(R.string.default_dictionary_prompt)
-                    TextButton(onClick = { showResetDictPromptDialog = true }) {
-                        Text(stringResource(R.string.settings_dictionary_prompt_reset))
-                    }
-                    if (showResetDictPromptDialog) {
-                        AlertDialog(
-                            onDismissRequest = { showResetDictPromptDialog = false },
-                            title = { Text(stringResource(R.string.settings_dictionary_prompt_reset_confirm_title)) },
-                            text = { Text(stringResource(R.string.settings_reset_confirm_message)) },
-                            confirmButton = {
-                                TextButton(onClick = {
-                                    dictionaryPrompt = defaultDictPrompt
-                                    scope.launch { viewModel.saveDictionaryPrompt(defaultDictPrompt) }
-                                    showResetDictPromptDialog = false
-                                }) { Text(stringResource(R.string.settings_reset_confirm_yes)) }
-                            },
-                            dismissButton = {
-                                TextButton(onClick = { showResetDictPromptDialog = false }) {
-                                    Text(stringResource(R.string.settings_reset_confirm_no))
-                                }
-                            }
-                        )
                     }
                 }
             }
@@ -2577,11 +2902,12 @@ fun SettingsScreen(
             // —— OCR 引擎 ——
             // 端到端翻译引擎（有道图翻）会跳过 OCR 阶段，整个 OCR 设置区当前会被无视——
             // 灰显 + 禁用 chip 让用户一眼明白 + 不能误操作。
+            }
+
+            item(key = SectionKeys.OCR) {
             val ocrSectionDisabled = translatorEngine == TranslatorEngine.YOUDAO_PICTRANS
             SectionCard(
                 title = stringResource(R.string.settings_section_ocr),
-                anchorKey = SectionKeys.OCR,
-                onAnchor = onAnchor,
                 helpText = stringResource(R.string.settings_ocr_intro)
             ) {
                 if (ocrSectionDisabled) {
@@ -2591,6 +2917,7 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.error
                     )
                 }
+                SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_OCR_ENGINE) {
                 Column(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.alpha(if (ocrSectionDisabled) 0.5f else 1f)
@@ -2848,8 +3175,11 @@ fun SettingsScreen(
 
                 if (ocrEngine == OcrEngineKind.PADDLE_ONNX) {
                     PaddleSection(
-                        status = paddleStatus,
-                        downloading = paddleDownloading,
+                        status = statusDuringBackgroundDownload(
+                            ModelDownloadSpec.paddle(paddleModelVersion),
+                            paddleStatus,
+                        ),
+                        downloading = paddleDownloading || backgroundModelDownloadActive,
                         modelReady = paddleModelReady,
                         modelVersion = paddleModelVersion,
                         onModelVersionChange = { newVer ->
@@ -2907,8 +3237,11 @@ fun SettingsScreen(
 
                 if (ocrEngine == OcrEngineKind.MANGA_OCR_JA) {
                     MangaOcrSection(
-                        status = mangaOcrStatus,
-                        downloading = mangaOcrDownloading,
+                        status = statusDuringBackgroundDownload(
+                            ModelDownloadSpec.mangaOcr(),
+                            mangaOcrStatus,
+                        ),
+                        downloading = mangaOcrDownloading || backgroundModelDownloadActive,
                         modelReady = mangaOcrModelReady,
                         onDownload = {
                             requestModelDownload(context.getString(R.string.settings_manga_ocr_model_name)) {
@@ -3115,11 +3448,18 @@ fun SettingsScreen(
                 }
                 } // 关闭 OCR section 内的"灰显 Column"（ocrSectionDisabled 控制 alpha）
             }
+            }
 
-            textOrientationSection()
+            }
+
+            item(key = SectionKeys.TEXT_ORIENTATION) {
+                textOrientationSection()
+            }
 
             // —— 图像预处理 ——
-            SectionCard(title = stringResource(R.string.settings_section_preprocess), anchorKey = SectionKeys.PREPROCESS, onAnchor = onAnchor) {
+            item(key = SectionKeys.PREPROCESS) {
+            SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_PREPROCESS) {
+            SectionCard(title = stringResource(R.string.settings_section_preprocess)) {
                 SwitchRow(
                     stringResource(R.string.settings_preprocess_upscale),
                     preUpscale,
@@ -3135,13 +3475,41 @@ fun SettingsScreen(
                 SwitchRow(stringResource(R.string.settings_preprocess_invert), preInvert) { preInvert = it }
                 SwitchRow(stringResource(R.string.settings_preprocess_binarize), preBinarize) { preBinarize = it }
             }
+            }
+            }
 
             // —— 显示 ——
-            // 排列原则：能在预览里看到效果的样式项（配色 / 字号 / 透明度）放在上面，
-            // 紧跟一个译文样式预览；预览下面才是几何项（显示模式 / 位置 / 微调），
-            // 因为它们依赖原文 boundingBox，没有 OCR 上下文无法预览，只能在实际触发翻译时看到。
-            SectionCard(title = stringResource(R.string.settings_section_overlay), anchorKey = SectionKeys.OVERLAY, onAnchor = onAnchor) {
+            // 预览是本 section 第一项；滚过页面顶部后吸附，section 离开时自动解除。
+            item(key = SectionKeys.OVERLAY) {
+            SectionCard(
+                title = stringResource(R.string.settings_section_overlay),
+                onBoundsInWindow = { _, bottom -> overlaySectionBottomInWindow = bottom },
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onGloballyPositioned { coordinates ->
+                            overlayPreviewTopInWindow = coordinates.positionInWindow().y
+                            overlayPreviewHeightPx = coordinates.size.height
+                        }
+                ) {
+                    OverlayPreviewCard(
+                        theme = overlayTheme,
+                        customBg = customBg,
+                        customFg = customFg,
+                        customBorder = customBorder,
+                        customBorderW = customBorderW,
+                        customBorderStyle = customBorderStyle,
+                        textSize = textSize,
+                        alpha = alpha,
+                        overlayTypeface = overlayFontTypeface,
+                        textStyle = overlayTextStyle
+                    )
+                }
+
                 // —— 影响预览的样式项 ——
+                SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_OVERLAY_THEME) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(stringResource(R.string.settings_overlay_theme_label), style = MaterialTheme.typography.labelLarge)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     EngineChip(overlayTheme, OverlayTheme.CLASSIC_DARK, stringResource(R.string.settings_theme_classic_dark)) { overlayTheme = it }
@@ -3188,6 +3556,11 @@ fun SettingsScreen(
                     }
                 }
 
+                }
+                }
+
+                SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_OVERLAY_TEXT) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(stringResource(R.string.settings_textsize_label_format, textSize.toInt()), style = MaterialTheme.typography.labelLarge)
                 Slider(value = textSize, onValueChange = { textSize = it }, valueRange = 10f..28f, steps = 17)
 
@@ -3285,24 +3658,15 @@ fun SettingsScreen(
 
                 Text(stringResource(R.string.settings_alpha_label_format, (alpha * 100).toInt()), style = MaterialTheme.typography.labelLarge)
                 Slider(value = alpha, onValueChange = { alpha = it }, valueRange = 0.3f..1f)
-
-                // —— 译文样式预览 ——
-                // 紧跟在上面 3 个可调样式项之后；只反映 theme / 字号 / 透明度 / 自定义色 / 边框。
-                // 与 OverlayManager 的颜色映射保持一致；改这里时记得同步 [overlayThemeColors]。
-                OverlayPreviewCard(
-                    theme = overlayTheme,
-                    customBg = customBg,
-                    customFg = customFg,
-                    customBorder = customBorder,
-                    customBorderW = customBorderW,
-                    customBorderStyle = customBorderStyle,
-                    textSize = textSize,
-                    alpha = alpha,
-                    overlayTypeface = overlayFontTypeface,
-                    textStyle = overlayTextStyle
-                )
+                }
+                }
 
                 // —— 几何项（预览看不到，只能实际触发翻译时看到效果）——
+                SettingsSearchTarget(
+                    searchTargetRegistry,
+                    *(SEARCH_TARGET_OVERLAY_DISPLAY + SEARCH_TARGET_OVERLAY_WINDOW + SEARCH_TARGET_OVERLAY_LAYOUT),
+                ) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(stringResource(R.string.settings_render_mode_label), style = MaterialTheme.typography.labelLarge)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     EngineChip(renderMode, RenderMode.BLOCKS, stringResource(R.string.settings_render_blocks_chip)) { renderMode = it }
@@ -3347,6 +3711,37 @@ fun SettingsScreen(
                 }
 
                 if (renderMode == RenderMode.BLOCKS) {
+                    Text(
+                        stringResource(R.string.settings_translation_block_interaction_label),
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        EngineChip(
+                            translationBlockInteractionMode,
+                            TranslationBlockInteractionMode.COPY_BUTTON,
+                            stringResource(R.string.settings_translation_block_interaction_copy_button),
+                        ) { translationBlockInteractionMode = it }
+                        EngineChip(
+                            translationBlockInteractionMode,
+                            TranslationBlockInteractionMode.OPEN_COPY_PANEL,
+                            stringResource(R.string.settings_translation_block_interaction_open_panel),
+                        ) { translationBlockInteractionMode = it }
+                    }
+                    Text(
+                        stringResource(
+                            if (translationBlockInteractionMode == TranslationBlockInteractionMode.COPY_BUTTON) {
+                                R.string.settings_translation_block_interaction_copy_button_hint
+                            } else {
+                                R.string.settings_translation_block_interaction_open_panel_hint
+                            },
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+
                     Text(stringResource(R.string.settings_placement_label), style = MaterialTheme.typography.labelLarge)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         EngineChip(placement, OverlayPlacement.BELOW, stringResource(R.string.settings_placement_below_chip)) { placement = it }
@@ -3398,11 +3793,19 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+                }
+                }
 
             }
 
             // —— 悬浮按钮 ——
-            SectionCard(title = stringResource(R.string.settings_section_floating), anchorKey = SectionKeys.FLOATING, onAnchor = onAnchor) {
+            }
+
+            item(key = SectionKeys.FLOATING) {
+            SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_FLOATING) {
+            SectionCard(title = stringResource(R.string.settings_section_floating)) {
+                SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_floating_size) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(stringResource(R.string.settings_floating_size_format, floatingSize.toInt()), style = MaterialTheme.typography.labelLarge)
                 Slider(
                     value = floatingSize,
@@ -3410,14 +3813,22 @@ fun SettingsScreen(
                     valueRange = 32f..96f,
                     steps = (96 - 32) / 4 - 1
                 )
+                }
+                }
 
+                SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_floating_snap) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 SwitchRow(stringResource(R.string.settings_floating_snap_edge_label), floatingSnapEdge) { floatingSnapEdge = it }
                 Text(
                     stringResource(R.string.settings_floating_snap_edge_hint),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                }
+                }
 
+                SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_floating_auto_dock) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 SwitchRow(
                     stringResource(R.string.settings_floating_auto_dock_label),
                     floatingAutoDock,
@@ -3429,7 +3840,11 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.alpha(if (floatingSnapEdge) 1f else 0.4f)
                 )
+                }
+                }
 
+                SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_floating_dock_inset) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
                     stringResource(R.string.settings_floating_dock_inset_format, floatingDockInset.toInt()),
                     style = MaterialTheme.typography.labelLarge,
@@ -3458,13 +3873,19 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.alpha(if (floatingSnapEdge) 1f else 0.4f)
                 )
+                }
+                }
             }
 
             // —— 弧菜单按钮顺序 ——
+            }
+
+            }
+
+            item(key = SectionKeys.ARC_MENU) {
+            SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_ARC_MENU) {
             SectionCard(
                 title = stringResource(R.string.settings_section_arc_menu),
-                anchorKey = SectionKeys.ARC_MENU,
-                onAnchor = onAnchor
             ) {
                 Text(
                     stringResource(R.string.settings_arc_menu_page_size, arcMenuPageSize.toInt()),
@@ -3506,13 +3927,177 @@ fun SettingsScreen(
             }
 
             // —— 触发器 ——
-            SectionCard(title = stringResource(R.string.settings_section_trigger), anchorKey = SectionKeys.TRIGGER, onAnchor = onAnchor) {
-                OutlinedTextField(
-                    value = loopInterval,
-                    onValueChange = { loopInterval = it.filter { c -> c.isDigit() } },
-                    label = { Text(stringResource(R.string.settings_loop_interval_label)) },
-                    modifier = Modifier.fillMaxWidth(), singleLine = true
+            }
+
+            }
+
+            item(key = SectionKeys.TRIGGER) {
+            SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_TRIGGER) {
+            SectionCard(title = stringResource(R.string.settings_section_trigger)) {
+                SettingsSearchTarget(
+                    searchTargetRegistry,
+                    R.string.settings_search_item_loop_trigger_mode,
+                    R.string.settings_search_item_loop_interval,
+                ) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    stringResource(R.string.settings_loop_trigger_mode_label),
+                    style = MaterialTheme.typography.labelLarge,
                 )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    EngineChip(
+                        loopTriggerMode,
+                        LoopTriggerMode.FIXED_INTERVAL,
+                        stringResource(R.string.settings_loop_trigger_fixed),
+                    ) { loopTriggerMode = it }
+                    EngineChip(
+                        loopTriggerMode,
+                        LoopTriggerMode.WAIT_FOR_TEXT_COMPLETE,
+                        stringResource(R.string.settings_loop_trigger_smart),
+                    ) { loopTriggerMode = it }
+                }
+                if (loopTriggerMode == LoopTriggerMode.FIXED_INTERVAL) {
+                    OutlinedTextField(
+                        value = loopInterval,
+                        onValueChange = { loopInterval = it.filter { c -> c.isDigit() } },
+                        label = { Text(stringResource(R.string.settings_loop_interval_label)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
+                } else {
+                    Text(
+                        stringResource(
+                            R.string.settings_loop_text_stable_duration_format,
+                            loopTextStableDurationMs,
+                        ),
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                    Slider(
+                        value = loopTextStableDurationMs.toFloat(),
+                        onValueChange = {
+                            loopTextStableDurationMs =
+                                ((it / 100f).roundToInt() * 100L).coerceIn(
+                                    LoopFrameStabilityPolicy.MIN_STABLE_DURATION_MS,
+                                    LoopFrameStabilityPolicy.MAX_STABLE_DURATION_MS,
+                                )
+                        },
+                        valueRange = LoopFrameStabilityPolicy.MIN_STABLE_DURATION_MS.toFloat()..
+                            LoopFrameStabilityPolicy.MAX_STABLE_DURATION_MS.toFloat(),
+                        steps = 17,
+                    )
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            stringResource(R.string.settings_loop_text_stable_faster),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            stringResource(R.string.settings_loop_text_stable_complete),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Text(
+                        stringResource(R.string.settings_loop_text_stable_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_loop_region) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        stringResource(R.string.settings_loop_text_region_mode_label),
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        EngineChip(
+                            loopTextRegionMode,
+                            LoopTextRegionMode.AUTO,
+                            stringResource(R.string.settings_loop_text_region_auto),
+                        ) { loopTextRegionMode = it }
+                        EngineChip(
+                            loopTextRegionMode,
+                            LoopTextRegionMode.LOWER_SCREEN_FIRST,
+                            stringResource(R.string.settings_loop_text_region_lower),
+                        ) { loopTextRegionMode = it }
+                        EngineChip(
+                            loopTextRegionMode,
+                            LoopTextRegionMode.ANYWHERE,
+                            stringResource(R.string.settings_loop_text_region_anywhere),
+                        ) { loopTextRegionMode = it }
+                    }
+                    Text(
+                        stringResource(R.string.settings_loop_text_region_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    SwitchRow(
+                        label = stringResource(R.string.settings_loop_translate_region_only_label),
+                        checked = loopTranslateRegionOnly,
+                        helpText = stringResource(R.string.settings_loop_translate_region_only_hint),
+                    ) { loopTranslateRegionOnly = it }
+                    }
+                    }
+                }
+                }
+                }
+                SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_loop_similarity) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                SwitchRow(
+                    stringResource(R.string.settings_loop_skip_similar_label),
+                    loopSkipSimilarFrames
+                ) { loopSkipSimilarFrames = it }
+                Text(
+                    stringResource(
+                        R.string.settings_loop_similarity_format,
+                        (loopFrameSimilarityThreshold * 100f).roundToInt()
+                    ),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = if (loopSkipSimilarFrames) {
+                        MaterialTheme.colorScheme.onSurface
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
+                Slider(
+                    value = loopFrameSimilarityThreshold,
+                    onValueChange = {
+                        loopFrameSimilarityThreshold =
+                            ((it * 100f).roundToInt() / 100f).coerceIn(
+                                LoopFrameChangePolicy.MIN_SIMILARITY_THRESHOLD,
+                                LoopFrameChangePolicy.MAX_SIMILARITY_THRESHOLD
+                            )
+                    },
+                    enabled = loopSkipSimilarFrames,
+                    valueRange = LoopFrameChangePolicy.MIN_SIMILARITY_THRESHOLD..
+                        LoopFrameChangePolicy.MAX_SIMILARITY_THRESHOLD,
+                    steps = 48
+                )
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        stringResource(R.string.settings_loop_similarity_resource_saving),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        stringResource(R.string.settings_loop_similarity_sensitive),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Text(
+                    stringResource(R.string.settings_loop_similarity_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                }
+                }
+                SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_a11y_volume) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 SwitchRow(stringResource(R.string.settings_a11y_volume_label), a11yVolume) { a11yVolume = it }
                 Text(
                     stringResource(R.string.settings_a11y_volume_hint),
@@ -3523,10 +4108,69 @@ fun SettingsScreen(
                     onClick = { context.startActivity(Intent(AndroidSettings.ACTION_ACCESSIBILITY_SETTINGS)) },
                     modifier = Modifier.fillMaxWidth()
                 ) { Text(stringResource(R.string.settings_btn_open_a11y)) }
+                }
+                }
+            }
+
+            // —— 开发者诊断 ——
+            }
+
+            }
+
+            item(key = SectionKeys.DEVELOPER) {
+            SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_DEVELOPER) {
+            SectionCard(
+                title = stringResource(R.string.settings_section_developer),
+            ) {
+                SwitchRow(
+                    label = stringResource(R.string.settings_developer_mode_label),
+                    checked = developerOptionsEnabled,
+                    helpText = stringResource(R.string.settings_developer_mode_hint),
+                ) { developerOptionsEnabled = it }
+                if (developerOptionsEnabled) {
+                    Column(
+                        modifier = Modifier.padding(start = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        SwitchRow(
+                            label = stringResource(R.string.settings_ocr_red_box_mode_label),
+                            checked = ocrRedBoxModeEnabled,
+                            helpText = stringResource(R.string.settings_ocr_red_box_mode_hint),
+                        ) { ocrRedBoxModeEnabled = it }
+                        if (ocrRedBoxModeEnabled) {
+                            Column(
+                                modifier = Modifier.padding(start = 16.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                SwitchRow(
+                                    stringResource(R.string.settings_ocr_red_box_source_label),
+                                    ocrRedBoxShowSourceText,
+                                ) { ocrRedBoxShowSourceText = it }
+                                SwitchRow(
+                                    stringResource(R.string.settings_ocr_red_box_translation_label),
+                                    ocrRedBoxShowTranslation,
+                                ) { ocrRedBoxShowTranslation = it }
+                                Text(
+                                    stringResource(R.string.settings_ocr_red_box_translation_hint),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
             }
 
             // —— 网络（全局，跨 OCR / 翻译）——
-            SectionCard(title = stringResource(R.string.settings_section_network), anchorKey = SectionKeys.NETWORK, onAnchor = onAnchor) {
+            }
+
+            }
+
+            item(key = SectionKeys.NETWORK) {
+            SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_NETWORK) {
+            SectionCard(title = stringResource(R.string.settings_section_network)) {
+                SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_api_timeout) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
                     stringResource(R.string.settings_api_timeout_format, apiTimeoutSec.toInt()),
                     style = MaterialTheme.typography.labelLarge
@@ -3542,7 +4186,11 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                }
+                }
 
+                SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_cleartext_hosts) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
                     stringResource(R.string.settings_cleartext_hosts_label),
                     style = MaterialTheme.typography.labelLarge
@@ -3560,6 +4208,8 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error
                 )
+                }
+                }
 
                 // —— 端侧 LLM 下载源 ——
                 // 放在网络 section（而非端侧 LLM section）：
@@ -3567,6 +4217,8 @@ fun SettingsScreen(
                 //   2) 用户切 chip 时不必每次重看 radio 列表，UI 更紧凑。
                 // Radio 切换立即落盘，避免用户切完忘点下载导致丢失；自定义 URL 字段编辑频繁，
                 // 仅在切回别的 radio 或点下载时落盘。
+                SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_llm_mirror) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
                     stringResource(R.string.llm_mirror_section_label),
                     style = MaterialTheme.typography.labelLarge
@@ -3599,16 +4251,71 @@ fun SettingsScreen(
                         modifier = Modifier.fillMaxWidth(), singleLine = true
                     )
                 }
+                }
+                }
             }
 
             // 给 FAB 留出底部空间，避免最后一项被遮挡
-            Box(modifier = Modifier.size(80.dp))
+            }
+
+            }
+
+            item(key = "bottom_spacer") {
+                Box(modifier = Modifier.size(80.dp))
+            }
+            }
+
+            if (overlayPreviewSticky && !searchActive) {
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .zIndex(1f),
+                    color = MaterialTheme.colorScheme.surface,
+                    shadowElevation = 3.dp,
+                ) {
+                    Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                        OverlayPreviewCard(
+                            theme = overlayTheme,
+                            customBg = customBg,
+                            customFg = customFg,
+                            customBorder = customBorder,
+                            customBorderW = customBorderW,
+                            customBorderStyle = customBorderStyle,
+                            textSize = textSize,
+                            alpha = alpha,
+                            overlayTypeface = overlayFontTypeface,
+                            textStyle = overlayTextStyle
+                        )
+                    }
+                }
             }
 
             // 搜索下拉：浮在 Column 之上。匹配项点击后滚到对应 section 顶部并关闭搜索。
             if (searchActive && searchQuery.isNotBlank()) {
-                val matches = remember(searchQuery) {
-                    SETTING_ITEMS.filter { it.matches(context, searchQuery) }.take(20)
+                val searchCurrentValues = mapOf(
+                    settingsSearchEntryId(R.string.settings_search_item_translator_engine) to translatorEngine.name,
+                    settingsSearchEntryId(R.string.settings_search_item_source_lang) to sourceLang,
+                    settingsSearchEntryId(R.string.settings_search_item_target_lang) to targetLang,
+                    settingsSearchEntryId(R.string.settings_search_item_ocr_switch) to ocrEngine.name,
+                    settingsSearchEntryId(R.string.settings_translation_output_layout_label) to
+                        "${translationOutputLayout.name} ${translationOutputDirection.name}",
+                    settingsSearchEntryId(R.string.settings_search_item_render_mode) to renderMode.name,
+                    settingsSearchEntryId(R.string.settings_search_item_placement) to placement.name,
+                    settingsSearchEntryId(R.string.settings_search_item_overlay_theme) to overlayTheme.name,
+                    settingsSearchEntryId(R.string.settings_search_item_loop_trigger_mode) to loopTriggerMode.name,
+                    settingsSearchEntryId(R.string.settings_search_item_loop_region) to loopTextRegionMode.name,
+                    settingsSearchEntryId(R.string.settings_search_item_llm_mirror) to llmMirrorChoice.name,
+                )
+                val matches = remember(searchQuery, searchCurrentValues) {
+                    SETTING_ITEMS.mapNotNull { entry ->
+                        entry.score(context, searchQuery, searchCurrentValues[entry.entryId])
+                            ?.let { score -> entry to score }
+                    }.sortedWith(
+                        compareByDescending<Pair<SearchEntry, Int>> { it.second }
+                            .thenBy { context.getString(it.first.itemLabelRes) }
+                    ).take(20).map { it.first }
                 }
                 Card(
                     modifier = Modifier
@@ -3628,14 +4335,37 @@ fun SettingsScreen(
                             items(matches) { entry ->
                                 ListItem(
                                     headlineContent = { Text(stringResource(entry.itemLabelRes)) },
-                                    supportingContent = { Text(stringResource(entry.sectionLabelRes)) },
+                                    supportingContent = {
+                                        Text(
+                                            listOfNotNull(
+                                                stringResource(entry.sectionLabelRes),
+                                                searchCurrentValues[entry.entryId]?.takeIf(String::isNotBlank),
+                                            ).joinToString(" · ")
+                                        )
+                                    },
                                     colors = ListItemDefaults.colors(
                                         containerColor = MaterialTheme.colorScheme.surface
                                     ),
                                     modifier = Modifier.clickable {
-                                        val y = anchors[entry.sectionKey] ?: 0
-                                        scope.launch { scrollState.animateScrollTo(y) }
                                         closeSearch()
+                                        scope.launch {
+                                            settingsSectionIndex(entry.sectionKey)?.let { index ->
+                                                listState.scrollToItem(index)
+                                                repeat(4) {
+                                                    withFrameNanos { }
+                                                    val requester = searchTargetRegistry.latest(entry.targetId)
+                                                    if (requester != null) {
+                                                        requester.bringIntoView()
+                                                        return@launch
+                                                    }
+                                                }
+                                                if (entry.requiredTranslatorEngine != null) {
+                                                    searchTargetRegistry.latest(
+                                                        R.string.settings_search_item_translator_engine
+                                                    )?.bringIntoView()
+                                                }
+                                            }
+                                        }
                                     }
                                 )
                                 HorizontalDivider()
@@ -3645,6 +4375,293 @@ fun SettingsScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun rememberUsageAccessGranted(context: Context): Boolean {
+    var granted by remember(context) { mutableStateOf(isUsageAccessGranted(context)) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, context) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                granted = isUsageAccessGranted(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    return granted
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun TranslationAssistanceSettings(
+    searchTargetRegistry: SettingsSearchTargetRegistry,
+    translatorEngine: TranslatorEngine,
+    streaming: Boolean,
+    onStreamingChange: (Boolean) -> Unit,
+    glossaryEnabled: Boolean,
+    onGlossaryEnabledChange: (Boolean) -> Unit,
+    foregroundAppDetectionMode: com.gameocr.app.data.ForegroundAppDetectionMode,
+    onForegroundAppDetectionModeChange: (com.gameocr.app.data.ForegroundAppDetectionMode) -> Unit,
+    sendAppName: Boolean,
+    onSendAppNameChange: (Boolean) -> Unit,
+    usageAccessGranted: Boolean,
+    onOpenUsageAccess: () -> Unit,
+    onOpenGlossary: () -> Unit,
+    retryEmptyTranslation: Boolean,
+    onRetryEmptyTranslationChange: (Boolean) -> Unit,
+) {
+    if (translatorEngine == TranslatorEngine.OPENAI) {
+        SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_streaming) {
+        SwitchRow(stringResource(R.string.settings_streaming), streaming, onChange = onStreamingChange)
+        }
+    }
+    SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_empty_translation_retry) {
+    SwitchRow(
+        label = stringResource(R.string.settings_retry_empty_translation_label),
+        checked = retryEmptyTranslation,
+        helpText = stringResource(R.string.settings_retry_empty_translation_hint),
+        onChange = onRetryEmptyTranslationChange,
+    )
+    }
+    if (supportsTranslationPromptContext(translatorEngine)) {
+        SettingsSearchTarget(searchTargetRegistry, R.string.settings_glossary_enabled) {
+        SwitchRow(
+            label = stringResource(R.string.settings_glossary_enabled),
+            checked = glossaryEnabled,
+            helpText = stringResource(R.string.settings_glossary_enabled_summary),
+            onChange = onGlossaryEnabledChange,
+        )
+        }
+        SettingsSearchTarget(searchTargetRegistry, R.string.settings_send_app_name) {
+        SwitchRow(
+            label = stringResource(R.string.settings_send_app_name),
+            checked = sendAppName,
+            helpText = stringResource(R.string.settings_send_app_name_summary),
+            onChange = onSendAppNameChange,
+        )
+        }
+        SettingsSearchTarget(searchTargetRegistry, R.string.settings_foreground_app_detection) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(
+            stringResource(R.string.settings_foreground_app_detection),
+            style = MaterialTheme.typography.labelLarge,
+        )
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            com.gameocr.app.data.ForegroundAppDetectionMode.entries.forEach { mode ->
+                val label = when (mode) {
+                    com.gameocr.app.data.ForegroundAppDetectionMode.AUTO ->
+                        stringResource(R.string.settings_foreground_app_auto)
+                    com.gameocr.app.data.ForegroundAppDetectionMode.ACCESSIBILITY ->
+                        stringResource(R.string.settings_foreground_app_accessibility)
+                    com.gameocr.app.data.ForegroundAppDetectionMode.USAGE_ACCESS ->
+                        stringResource(R.string.settings_foreground_app_usage_access)
+                    com.gameocr.app.data.ForegroundAppDetectionMode.DISABLED ->
+                        stringResource(R.string.settings_foreground_app_disabled)
+                }
+                EngineChip(foregroundAppDetectionMode, mode, label, onSelect = onForegroundAppDetectionModeChange)
+            }
+        }
+        }
+        }
+        SettingsSearchTarget(searchTargetRegistry, R.string.settings_grant_usage_access) {
+        SettingsLinkCell(
+            label = stringResource(R.string.settings_grant_usage_access),
+            status = stringResource(
+                if (usageAccessGranted) R.string.settings_permission_granted
+                else R.string.settings_permission_not_granted
+            ),
+            statusGranted = usageAccessGranted,
+            onClick = onOpenUsageAccess,
+        )
+        }
+        SettingsSearchTarget(searchTargetRegistry, R.string.settings_manage_glossary) {
+        SettingsLinkCell(
+            label = stringResource(R.string.settings_manage_glossary),
+            onClick = onOpenGlossary,
+        )
+        }
+    } else {
+        Text(
+            text = stringResource(R.string.settings_translation_context_unsupported),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        SettingsSearchTarget(searchTargetRegistry, R.string.settings_manage_glossary) {
+        SettingsLinkCell(
+            label = stringResource(R.string.settings_manage_glossary),
+            onClick = onOpenGlossary,
+        )
+        }
+    }
+    HorizontalDivider()
+}
+
+@Composable
+private fun OpenAiPromptSettings(
+    prompt: String,
+    onPromptChange: (String) -> Unit,
+    sourceLang: String,
+    targetLang: String,
+    dictionaryPrompt: String,
+    onDictionaryPromptChange: (String) -> Unit,
+) {
+    val context = LocalContext.current
+    var promptAdvancedExpanded by remember { mutableStateOf(false) }
+    var showResetMainPromptDialog by remember { mutableStateOf(false) }
+    var showResetDictPromptDialog by remember { mutableStateOf(false) }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(role = Role.Button) {
+                promptAdvancedExpanded = !promptAdvancedExpanded
+            }
+            .padding(horizontal = 4.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = stringResource(R.string.settings_prompt_advanced_header),
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Icon(
+            imageVector = Icons.Default.ExpandMore,
+            contentDescription = null,
+            modifier = Modifier.graphicsLayer {
+                rotationZ = if (promptAdvancedExpanded) 180f else 0f
+            },
+            tint = MaterialTheme.colorScheme.primary,
+        )
+    }
+    if (!promptAdvancedExpanded) return
+
+    OutlinedTextField(
+        value = prompt,
+        onValueChange = onPromptChange,
+        label = { Text(stringResource(R.string.settings_prompt_label)) },
+        modifier = Modifier.fillMaxWidth(),
+        minLines = 3,
+        maxLines = 6,
+    )
+
+    val hasTargetPlaceholder = prompt.contains("{target}") || prompt.contains("{target_lang}")
+    val hasSourcePlaceholder = prompt.contains("{source}") || prompt.contains("{source_lang}")
+    val targetName = Languages.nameOf(context, targetLang)
+    val sourceName = Languages.nameOf(context, sourceLang)
+    val autoName = Languages.nameOf(context, Languages.AUTO.code)
+    val canFixTarget = !hasTargetPlaceholder && targetName.isNotBlank() && prompt.contains(targetName)
+    val canFixSource = !hasSourcePlaceholder && sourceName.isNotBlank() &&
+        sourceName != autoName && prompt.contains(sourceName)
+    if (!hasTargetPlaceholder || !hasSourcePlaceholder) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f)
+            ),
+            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        ) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                val missingPart = buildString {
+                    if (!hasTargetPlaceholder) append("{target}")
+                    if (!hasTargetPlaceholder && !hasSourcePlaceholder) append(" / ")
+                    if (!hasSourcePlaceholder) append("{source}")
+                }
+                Text(
+                    stringResource(R.string.settings_prompt_warn_missing_format, missingPart),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                )
+                Text(
+                    stringResource(R.string.settings_prompt_warn_hint_format, targetName),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (canFixTarget) {
+                    TextButton(onClick = { onPromptChange(prompt.replace(targetName, "{target}")) }) {
+                        Text(stringResource(R.string.settings_prompt_replace_target_format, targetName))
+                    }
+                }
+                if (canFixSource) {
+                    TextButton(onClick = { onPromptChange(prompt.replace(sourceName, "{source}")) }) {
+                        Text(stringResource(R.string.settings_prompt_replace_source_format, sourceName))
+                    }
+                }
+            }
+        }
+    }
+
+    val defaultPrompt = stringResource(R.string.default_prompt)
+    TextButton(onClick = { showResetMainPromptDialog = true }) {
+        Text(stringResource(R.string.settings_prompt_reset))
+    }
+    if (showResetMainPromptDialog) {
+        AlertDialog(
+            onDismissRequest = { showResetMainPromptDialog = false },
+            title = { Text(stringResource(R.string.settings_prompt_reset_confirm_title)) },
+            text = { Text(stringResource(R.string.settings_reset_confirm_message)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    onPromptChange(defaultPrompt)
+                    showResetMainPromptDialog = false
+                }) { Text(stringResource(R.string.settings_reset_confirm_yes)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showResetMainPromptDialog = false }) {
+                    Text(stringResource(R.string.settings_reset_confirm_no))
+                }
+            },
+        )
+    }
+
+    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+    Text(
+        stringResource(R.string.settings_dictionary_prompt_title),
+        style = MaterialTheme.typography.labelLarge,
+    )
+    Text(
+        stringResource(R.string.settings_dictionary_prompt_desc),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    OutlinedTextField(
+        value = dictionaryPrompt,
+        onValueChange = onDictionaryPromptChange,
+        modifier = Modifier.fillMaxWidth(),
+        minLines = 3,
+        maxLines = 12,
+    )
+    val defaultDictionaryPrompt = stringResource(R.string.default_dictionary_prompt)
+    TextButton(onClick = { showResetDictPromptDialog = true }) {
+        Text(stringResource(R.string.settings_dictionary_prompt_reset))
+    }
+    if (showResetDictPromptDialog) {
+        AlertDialog(
+            onDismissRequest = { showResetDictPromptDialog = false },
+            title = { Text(stringResource(R.string.settings_dictionary_prompt_reset_confirm_title)) },
+            text = { Text(stringResource(R.string.settings_reset_confirm_message)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    onDictionaryPromptChange(defaultDictionaryPrompt)
+                    showResetDictPromptDialog = false
+                }) { Text(stringResource(R.string.settings_reset_confirm_yes)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showResetDictPromptDialog = false }) {
+                    Text(stringResource(R.string.settings_reset_confirm_no))
+                }
+            },
+        )
     }
 }
 
@@ -4095,10 +5112,174 @@ private object SectionKeys {
     const val FLOATING = "floating"
     const val ARC_MENU = "arc_menu"
     const val TRIGGER = "trigger"
+    const val DEVELOPER = "developer"
     const val NETWORK = "network"
     const val APP_LANG = "app_lang"
     const val THEME_MODE = "theme_mode"
 }
+
+internal val SETTINGS_SECTION_KEYS_IN_ORDER = listOf(
+    SectionKeys.APP_LANG,
+    SectionKeys.THEME_MODE,
+    SectionKeys.PRESETS,
+    SectionKeys.TRANSLATE,
+    SectionKeys.OCR,
+    SectionKeys.TEXT_ORIENTATION,
+    SectionKeys.PREPROCESS,
+    SectionKeys.OVERLAY,
+    SectionKeys.FLOATING,
+    SectionKeys.ARC_MENU,
+    SectionKeys.TRIGGER,
+    SectionKeys.DEVELOPER,
+    SectionKeys.NETWORK,
+)
+
+internal fun settingsSectionIndex(sectionKey: String): Int? =
+    SETTINGS_SECTION_KEYS_IN_ORDER.indexOf(sectionKey).takeIf { it >= 0 }
+
+private val SEARCH_TARGET_APP_LANGUAGE = intArrayOf(R.string.settings_section_app_lang)
+private val SEARCH_TARGET_THEME_MODE = intArrayOf(R.string.settings_section_theme_mode)
+private val SEARCH_TARGET_PRESETS = intArrayOf(
+    R.string.settings_section_translation_presets,
+    R.string.settings_search_item_preset_transfer,
+)
+private val SEARCH_TARGET_TRANSLATOR_ENGINE = intArrayOf(
+    R.string.settings_search_item_translator_engine,
+    R.string.settings_search_item_local_llm_model,
+)
+private val SEARCH_TARGET_TRANSLATOR_PROVIDERS = intArrayOf(
+    R.string.settings_search_item_base_url,
+    R.string.settings_search_item_api_key,
+    R.string.settings_search_item_model_name,
+    R.string.settings_search_item_deepl_api_key,
+    R.string.settings_search_item_deepl_pro,
+    R.string.settings_search_item_deepl_advanced,
+    R.string.settings_search_item_youdao_pictrans,
+    R.string.settings_search_item_google,
+    R.string.settings_search_item_volc,
+    R.string.settings_search_item_baidu_fanyi,
+    R.string.settings_search_item_tencent_translator,
+)
+private val SEARCH_TARGET_SOURCE_LANGUAGE = intArrayOf(R.string.settings_search_item_source_lang)
+private val SEARCH_TARGET_TARGET_LANGUAGE = intArrayOf(R.string.settings_search_item_target_lang)
+private val SEARCH_TARGET_TRANSLATION_ASSISTANCE = intArrayOf(
+    R.string.settings_search_item_streaming,
+    R.string.settings_search_item_empty_translation_retry,
+    R.string.settings_glossary_enabled,
+    R.string.settings_foreground_app_detection,
+    R.string.settings_send_app_name,
+    R.string.settings_grant_usage_access,
+    R.string.settings_manage_glossary,
+)
+private val SEARCH_TARGET_PROMPTS = intArrayOf(
+    R.string.settings_search_item_prompt,
+    R.string.settings_search_item_dictionary_prompt,
+)
+private val SEARCH_TARGET_OCR_ENGINE = intArrayOf(
+    R.string.settings_search_item_ocr_switch,
+    R.string.settings_search_item_paddle_ai_studio,
+    R.string.settings_search_item_paddle_download,
+    R.string.settings_search_item_manga_ocr_download,
+    R.string.settings_search_item_umi_ocr,
+    R.string.settings_search_item_luna_ocr,
+    R.string.settings_search_item_baidu_api_key,
+    R.string.settings_search_item_baidu_endpoint,
+    R.string.settings_search_item_baidu_lang,
+    R.string.settings_search_item_tencent_secret,
+    R.string.settings_search_item_tencent_endpoint,
+    R.string.settings_search_item_tencent_lang,
+    R.string.settings_search_item_tencent_region,
+    R.string.settings_search_item_youdao_ocr,
+    R.string.settings_search_item_dbnet_advanced,
+)
+private val SEARCH_TARGET_ORIENTATION_DETECTION = intArrayOf(
+    R.string.settings_orient_auto_detect_title,
+    R.string.settings_search_item_manual_orientation,
+    R.string.settings_search_item_orientation_model,
+)
+private val SEARCH_TARGET_ORIENTATION_OUTPUT = intArrayOf(
+    R.string.settings_translation_output_follow_title,
+    R.string.settings_translation_output_layout_label,
+)
+private val SEARCH_TARGET_PREPROCESS = intArrayOf(
+    R.string.settings_search_item_upscale,
+    R.string.settings_search_item_invert,
+    R.string.settings_search_item_binarize,
+)
+private val SEARCH_TARGET_OVERLAY_DISPLAY = intArrayOf(
+    R.string.settings_search_item_render_mode,
+    R.string.settings_search_item_translation_block_interaction,
+    R.string.settings_search_item_placement,
+    R.string.settings_search_item_offset,
+)
+private val SEARCH_TARGET_OVERLAY_THEME = intArrayOf(
+    R.string.settings_search_item_overlay_theme,
+    R.string.settings_search_item_custom_theme,
+    R.string.settings_search_item_border_style,
+)
+private val SEARCH_TARGET_OVERLAY_TEXT = intArrayOf(
+    R.string.settings_search_item_text_size,
+    R.string.settings_search_item_text_style,
+    R.string.settings_search_item_overlay_font,
+    R.string.settings_search_item_alpha,
+)
+private val SEARCH_TARGET_OVERLAY_WINDOW = intArrayOf(
+    R.string.settings_search_item_floating_window_content,
+    R.string.settings_search_item_floating_window_locked,
+    R.string.settings_search_item_floating_window_reset,
+)
+private val SEARCH_TARGET_OVERLAY_LAYOUT = intArrayOf(
+    R.string.settings_search_item_allow_wrap,
+    R.string.settings_search_item_avoid_collision,
+    R.string.settings_search_item_merge_adjacent,
+    R.string.settings_search_item_merge_strength,
+)
+private val SEARCH_TARGET_FLOATING = intArrayOf(
+    R.string.settings_search_item_floating_size,
+    R.string.settings_search_item_floating_snap,
+    R.string.settings_search_item_floating_auto_dock,
+    R.string.settings_search_item_floating_dock_inset,
+)
+private val SEARCH_TARGET_ARC_MENU = intArrayOf(R.string.settings_search_item_arc_menu_order)
+private val SEARCH_TARGET_TRIGGER = intArrayOf(
+    R.string.settings_search_item_loop_interval,
+    R.string.settings_search_item_loop_trigger_mode,
+    R.string.settings_search_item_loop_similarity,
+    R.string.settings_search_item_loop_region,
+    R.string.settings_search_item_a11y_volume,
+)
+private val SEARCH_TARGET_DEVELOPER = intArrayOf(R.string.settings_search_item_developer_ocr)
+private val SEARCH_TARGET_NETWORK = intArrayOf(
+    R.string.settings_search_item_api_timeout,
+    R.string.settings_search_item_llm_mirror,
+    R.string.settings_search_item_cleartext_hosts,
+)
+
+internal val SETTINGS_SEARCH_TARGET_RES_IDS: Set<Int> = listOf(
+    SEARCH_TARGET_APP_LANGUAGE,
+    SEARCH_TARGET_THEME_MODE,
+    SEARCH_TARGET_PRESETS,
+    SEARCH_TARGET_TRANSLATOR_ENGINE,
+    SEARCH_TARGET_TRANSLATOR_PROVIDERS,
+    SEARCH_TARGET_SOURCE_LANGUAGE,
+    SEARCH_TARGET_TARGET_LANGUAGE,
+    SEARCH_TARGET_TRANSLATION_ASSISTANCE,
+    SEARCH_TARGET_PROMPTS,
+    SEARCH_TARGET_OCR_ENGINE,
+    SEARCH_TARGET_ORIENTATION_DETECTION,
+    SEARCH_TARGET_ORIENTATION_OUTPUT,
+    SEARCH_TARGET_PREPROCESS,
+    SEARCH_TARGET_OVERLAY_DISPLAY,
+    SEARCH_TARGET_OVERLAY_THEME,
+    SEARCH_TARGET_OVERLAY_TEXT,
+    SEARCH_TARGET_OVERLAY_WINDOW,
+    SEARCH_TARGET_OVERLAY_LAYOUT,
+    SEARCH_TARGET_FLOATING,
+    SEARCH_TARGET_ARC_MENU,
+    SEARCH_TARGET_TRIGGER,
+    SEARCH_TARGET_DEVELOPER,
+    SEARCH_TARGET_NETWORK,
+).flatMap { it.asIterable() }.toSet()
 
 /**
  * 搜索索引条目。sectionLabel/itemLabel 走 res id 跟随系统语言；keywords 同时塞中英文，
@@ -4112,32 +5293,75 @@ private data class SearchEntry(
     val sectionKey: String,
     @androidx.annotation.StringRes val sectionLabelRes: Int,
     @androidx.annotation.StringRes val itemLabelRes: Int,
-    val keywords: List<String> = emptyList()
+    val keywords: List<String> = emptyList(),
+    val entryId: String = settingsSearchEntryId(itemLabelRes),
+    @androidx.annotation.StringRes val targetId: Int = itemLabelRes,
+    val optionLabelResIds: List<Int> = emptyList(),
+    val requiredTranslatorEngine: TranslatorEngine? = null,
 ) {
-    fun matches(context: android.content.Context, q: String): Boolean {
-        return settingsSearchMatches(
+    fun score(context: android.content.Context, q: String, currentValue: String?): Int? {
+        return settingsSearchScore(
             query = q,
-            searchableTexts = listOf(
-                context.getString(itemLabelRes),
-                context.getString(sectionLabelRes),
-            ) + keywords
+            itemLabel = context.getString(itemLabelRes),
+            sectionLabel = context.getString(sectionLabelRes),
+            keywords = keywords,
+            optionLabels = optionLabelResIds.map(context::getString),
+            currentValue = currentValue,
         )
     }
 }
 
 private val SETTINGS_SEARCH_SEPARATOR = Regex("[^\\p{L}\\p{N}]+")
 
-internal fun settingsSearchMatches(query: String, searchableTexts: List<String>): Boolean {
-    fun normalize(value: String): String = value
+private fun normalizeSettingsSearchText(value: String): String = value
         .lowercase(Locale.ROOT)
         .replace(SETTINGS_SEARCH_SEPARATOR, " ")
         .trim()
 
-    val terms = normalize(query).split(' ').filter { it.isNotBlank() }
-    if (terms.isEmpty()) return false
-    val haystack = searchableTexts.joinToString(" ") { normalize(it) }
-    return terms.all(haystack::contains)
+internal fun settingsSearchScore(
+    query: String,
+    itemLabel: String,
+    sectionLabel: String,
+    keywords: List<String> = emptyList(),
+    optionLabels: List<String> = emptyList(),
+    currentValue: String? = null,
+): Int? {
+    val normalizedQuery = normalizeSettingsSearchText(query)
+    val terms = normalizedQuery.split(' ').filter { it.isNotBlank() }
+    if (terms.isEmpty()) return null
+    val normalizedItem = normalizeSettingsSearchText(itemLabel)
+    val normalizedSection = normalizeSettingsSearchText(sectionLabel)
+    val normalizedCurrent = normalizeSettingsSearchText(currentValue.orEmpty())
+    val normalizedOptions = optionLabels.joinToString(" ") { normalizeSettingsSearchText(it) }
+    val normalizedKeywords = keywords.joinToString(" ") { normalizeSettingsSearchText(it) }
+    val haystack = listOf(
+        normalizedItem,
+        normalizedSection,
+        normalizedCurrent,
+        normalizedOptions,
+        normalizedKeywords,
+    ).joinToString(" ")
+    if (!terms.all(haystack::contains)) return null
+    return when {
+        normalizedItem == normalizedQuery -> 1_000
+        normalizedItem.startsWith(normalizedQuery) -> 900
+        terms.all(normalizedItem::contains) -> 800
+        normalizedCurrent == normalizedQuery -> 700
+        normalizedCurrent.contains(normalizedQuery) -> 650
+        normalizedOptions.contains(normalizedQuery) -> 550
+        normalizedKeywords.contains(normalizedQuery) -> 400
+        normalizedSection.contains(normalizedQuery) -> 200
+        else -> 100
+    }
 }
+
+internal fun settingsSearchMatches(query: String, searchableTexts: List<String>): Boolean =
+    settingsSearchScore(
+        query = query,
+        itemLabel = searchableTexts.firstOrNull().orEmpty(),
+        sectionLabel = searchableTexts.getOrNull(1).orEmpty(),
+        keywords = searchableTexts.drop(2),
+    ) != null
 
 /**
  * 设置项可搜索索引。新增设置项时同步加一行；匹配后跳到所在 section 顶部。
@@ -4156,32 +5380,133 @@ internal val SETTINGS_SEARCH_COLOR_KEYWORDS = listOf(
     "透明度", "边框",
 )
 
+internal val SETTINGS_SEARCH_EMPTY_TRANSLATION_RETRY_KEYWORDS = listOf(
+    "empty translation", "blank translation", "empty response", "blank response", "retry",
+    "空译文", "空翻译", "空响应", "自动重试", "重试",
+)
+
+internal val SETTINGS_SEARCH_TRANSLATION_BLOCK_INTERACTION_KEYWORDS = listOf(
+    "translation block", "copy translation", "long press", "selection handles", "select text", "copy panel",
+    "tap translation", "译文块", "复制译文", "长按", "选择把手", "选择文字", "选择复制", "点击译文",
+)
+
+internal val SETTINGS_SEARCH_LOOP_SIMILARITY_KEYWORDS = listOf(
+    "loop", "frame", "image", "hash", "similarity", "threshold", "skip", "duplicate",
+    "循环", "画面", "图片", "相似度", "阈值", "去重", "跳过", "重复翻译",
+)
+
+internal val SETTINGS_SEARCH_LOOP_TRIGGER_KEYWORDS = listOf(
+    "loop trigger", "fixed interval", "wait for text", "text complete", "text stability",
+    "stable duration", "typing", "dialogue", "subtitle", "循环触发", "固定间隔",
+    "智能等待", "文字完成", "文字稳定", "稳定等待", "报幕", "对话", "字幕",
+)
+
+internal val SETTINGS_SEARCH_LOOP_REGION_KEYWORDS = listOf(
+    "dialogue region", "subtitle region", "text region", "lower screen", "anywhere",
+    "region only", "translate all text", "报幕区域", "字幕区域", "文字区域", "下半屏",
+    "全屏自由", "仅翻译报幕区域", "翻译全部文字",
+)
+
+internal val SETTINGS_SEARCH_DEVELOPER_OCR_KEYWORDS = listOf(
+    "developer", "developer mode", "debug", "diagnostic", "ocr box", "red box",
+    "bounding box", "source text", "translation text", "开发者", "开发者模式", "调试",
+    "诊断", "OCR 红框", "红框", "边界框", "原文", "译文",
+)
+
 private val SETTING_ITEMS: List<SearchEntry> = listOf(
+    SearchEntry(
+        SectionKeys.TRANSLATE,
+        R.string.settings_section_translator,
+        R.string.settings_search_item_empty_translation_retry,
+        SETTINGS_SEARCH_EMPTY_TRANSLATION_RETRY_KEYWORDS,
+    ),
     SearchEntry(SectionKeys.PRESETS, R.string.settings_section_translation_presets, R.string.settings_section_translation_presets, listOf("preset", "presets", "profile", "mode", "系统预设方案", "翻译预设", "预设", "模式")),
     SearchEntry(SectionKeys.PRESETS, R.string.settings_section_translation_presets, R.string.settings_search_item_preset_transfer, SETTINGS_SEARCH_TRANSFER_KEYWORDS),
 
     // —— 翻译后端 ——
-    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_translator_engine, listOf("OpenAI", "DeepL", "LLM", "翻译引擎")),
-    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_base_url, listOf("base url")),
-    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_api_key, listOf("api key")),
-    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_model_name, listOf("model", "模型名")),
-    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_deepl_api_key, listOf("deepl")),
-    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_deepl_pro, listOf("deepl pro")),
-    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_deepl_advanced, listOf("deeplx", "bearer", "official", "protocol", "自架", "高级", "协议", "deepl base url")),
-    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_youdao_pictrans, listOf("youdao", "有道", "图片翻译", "pictrans", "ocrtransapi", "端到端")),
-    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_google, listOf("google", "谷歌", "translate")),
-    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_volc, listOf("volc", "volcengine", "火山", "字节", "doubao", "bytedance", "access key", "AK", "SK", "region", "区域")),
-    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_baidu_fanyi, listOf("baidu fanyi", "百度翻译", "fanyi-api", "appid", "开放平台")),
-    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_tencent_translator, listOf("tencent", "腾讯", "tmt", "tmtcloud", "腾讯云翻译")),
+    SearchEntry(
+        SectionKeys.TRANSLATE,
+        R.string.settings_section_translator,
+        R.string.settings_search_item_translator_engine,
+        listOf("OpenAI", "DeepL", "LLM", "翻译引擎"),
+        optionLabelResIds = listOf(
+            R.string.settings_engine_openai_llm,
+            R.string.settings_engine_deepl,
+            R.string.settings_engine_youdao_pictrans,
+            R.string.settings_engine_google,
+            R.string.settings_engine_volc,
+            R.string.settings_engine_baidu_fanyi,
+            R.string.settings_engine_tencent,
+            R.string.settings_engine_local_sakura,
+            R.string.settings_engine_local_hymt2,
+        ),
+    ),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_base_url, listOf("base url"), requiredTranslatorEngine = TranslatorEngine.OPENAI),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_api_key, listOf("api key"), requiredTranslatorEngine = TranslatorEngine.OPENAI),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_model_name, listOf("model", "模型名"), requiredTranslatorEngine = TranslatorEngine.OPENAI),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_deepl_api_key, listOf("deepl"), requiredTranslatorEngine = TranslatorEngine.DEEPL),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_deepl_pro, listOf("deepl pro"), requiredTranslatorEngine = TranslatorEngine.DEEPL),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_deepl_advanced, listOf("deeplx", "bearer", "official", "protocol", "自架", "高级", "协议", "deepl base url"), requiredTranslatorEngine = TranslatorEngine.DEEPL),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_youdao_pictrans, listOf("youdao", "有道", "图片翻译", "pictrans", "ocrtransapi", "端到端"), requiredTranslatorEngine = TranslatorEngine.YOUDAO_PICTRANS),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_google, listOf("google", "谷歌", "translate"), requiredTranslatorEngine = TranslatorEngine.GOOGLE),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_volc, listOf("volc", "volcengine", "火山", "字节", "doubao", "bytedance", "access key", "AK", "SK", "region", "区域"), requiredTranslatorEngine = TranslatorEngine.VOLC),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_baidu_fanyi, listOf("baidu fanyi", "百度翻译", "fanyi-api", "appid", "开放平台"), requiredTranslatorEngine = TranslatorEngine.BAIDU_FANYI),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_tencent_translator, listOf("tencent", "腾讯", "tmt", "tmtcloud", "腾讯云翻译"), requiredTranslatorEngine = TranslatorEngine.TENCENT),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_source_lang, listOf("source", "源语言")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_target_lang, listOf("target", "目标语言")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_prompt, listOf("prompt", "提示词", "system")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_dictionary_prompt, listOf("dictionary", "词典", "划词", "word select", "phonetic", "音标", "释义", "definition", "prompt")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_streaming, listOf("streaming", "流式")),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_glossary_enabled, listOf("name consistency", "term memory", "译名一致性", "人名", "专名")),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_send_app_name, listOf("send app name", "prompt app context", "发送应用名称", "模型应用名称")),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_foreground_app_detection, listOf("app detection", "foreground app", "accessibility", "usage access", "应用识别", "前台应用")),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_grant_usage_access, listOf("usage permission", "usage access", "permission", "使用情况权限", "使用情况访问", "授权")),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_manage_glossary, listOf("glossary", "terminology", "term library", "术语库", "专业名词")),
+    SearchEntry(
+        SectionKeys.TEXT_ORIENTATION,
+        R.string.settings_text_orientation_section_title,
+        R.string.settings_translation_output_follow_title,
+        listOf("follow recognition", "recognized layout", "跟随识别", "识别文字排列"),
+        optionLabelResIds = listOf(R.string.settings_translation_output_follow),
+    ),
+    SearchEntry(
+        SectionKeys.TEXT_ORIENTATION,
+        R.string.settings_text_orientation_section_title,
+        R.string.settings_translation_output_layout_label,
+        listOf("output direction", "translation layout", "writing mode", "译文方向", "译文排列"),
+        optionLabelResIds = listOf(
+            R.string.settings_translation_output_follow_title,
+            R.string.settings_translation_output_follow,
+            R.string.settings_translation_output_horizontal,
+            R.string.settings_translation_output_vertical,
+            R.string.settings_translation_output_ltr,
+            R.string.settings_translation_output_rtl,
+        ),
+    ),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_local_llm_model, listOf("local llm", "gguf", "hy-mt", "sakura", "model download", "model import", "端侧模型", "本地模型", "模型下载", "模型导入")),
 
     // —— OCR 引擎 ——
-    SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_ocr_switch, listOf("ML Kit", "百度", "腾讯", "Paddle", "OCR engine")),
+    SearchEntry(
+        SectionKeys.OCR,
+        R.string.settings_section_ocr,
+        R.string.settings_search_item_ocr_switch,
+        listOf("ML Kit", "百度", "腾讯", "Paddle", "OCR engine"),
+        optionLabelResIds = listOf(
+            R.string.settings_ocr_chip_auto,
+            R.string.settings_ocr_chip_japanese,
+            R.string.settings_ocr_chip_korean,
+            R.string.settings_ocr_chip_chinese,
+            R.string.settings_ocr_chip_latin,
+            R.string.settings_ocr_chip_baidu,
+            R.string.settings_ocr_chip_tencent,
+            R.string.settings_ocr_chip_youdao,
+            R.string.settings_ocr_chip_paddle_ai_studio,
+            R.string.settings_ocr_chip_paddle,
+            R.string.settings_ocr_chip_umi,
+            R.string.settings_ocr_chip_luna,
+            R.string.settings_ocr_chip_manga_ocr_ja,
+        ),
+    ),
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_paddle_ai_studio, listOf("PP-OCRv6 Online", "Paddle AI Studio", "Access Token", "在线 OCR", "云端 OCR")),
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_paddle_download, listOf("ONNX", "v5", "v6", "PP-OCRv6", "模型", "model", "镜像", "mirror", "本地导入", "local import", "import", "导入", "delete", "删除")),
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_manga_ocr_download, listOf("manga", "manga-ocr", "日漫", "漫画", "竖排", "vertical", "ONNX", "模型", "model", "download", "下载", "本地导入", "local import", "import", "导入", "delete", "删除")),
@@ -4206,10 +5531,43 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
     SearchEntry(SectionKeys.PREPROCESS, R.string.settings_section_preprocess, R.string.settings_search_item_binarize, listOf("binarize", "otsu", "二值化")),
 
     // —— 显示 ——
-    SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_render_mode, listOf("紧贴", "横幅", "banner", "render", "display mode", "floating window", "悬浮窗")),
-    SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_placement, listOf("下方", "上方", "覆盖", "below", "above", "overlap", "placement")),
+    SearchEntry(
+        SectionKeys.OVERLAY,
+        R.string.settings_section_overlay,
+        R.string.settings_search_item_render_mode,
+        listOf("紧贴", "横幅", "banner", "render", "display mode", "floating window", "悬浮窗"),
+        optionLabelResIds = listOf(
+            R.string.settings_render_blocks_chip,
+            R.string.settings_render_banner_chip,
+            R.string.settings_render_floating_window_chip,
+        ),
+    ),
+    SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_translation_block_interaction, SETTINGS_SEARCH_TRANSLATION_BLOCK_INTERACTION_KEYWORDS),
+    SearchEntry(
+        SectionKeys.OVERLAY,
+        R.string.settings_section_overlay,
+        R.string.settings_search_item_placement,
+        listOf("下方", "上方", "覆盖", "below", "above", "overlap", "placement"),
+        optionLabelResIds = listOf(
+            R.string.settings_placement_below_chip,
+            R.string.settings_placement_overlap_chip,
+            R.string.settings_placement_above_chip,
+        ),
+    ),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_offset, listOf("offset", "微调")),
-    SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_overlay_theme, listOf("深色", "浅色", "纸张", "霜玻璃", "琥珀", "theme", "dark", "light", "frost", "amber")),
+    SearchEntry(
+        SectionKeys.OVERLAY,
+        R.string.settings_section_overlay,
+        R.string.settings_search_item_overlay_theme,
+        listOf("深色", "浅色", "纸张", "霜玻璃", "琥珀", "theme", "dark", "light", "frost", "amber"),
+        optionLabelResIds = listOf(
+            R.string.settings_theme_classic_dark,
+            R.string.settings_theme_amber_gold,
+            R.string.settings_theme_paper_light,
+            R.string.settings_theme_frost_glass,
+            R.string.settings_theme_custom,
+        ),
+    ),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_custom_theme, SETTINGS_SEARCH_COLOR_KEYWORDS),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_border_style, listOf("solid", "dashed", "dotted", "double", "groove", "实线", "虚线", "点线", "双线", "凹槽", "边框样式")),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_text_size, listOf("font size", "字号", "字体大小")),
@@ -4235,8 +5593,38 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
     SearchEntry(SectionKeys.ARC_MENU, R.string.settings_section_arc_menu, R.string.settings_search_item_arc_menu_order, listOf("arc menu", "弧菜单", "弧形", "顺序", "order", "reorder", "排序", "拖动", "menu", "按钮", "page", "page size", "分页", "每页", "翻页", "loop", "region", "home", "skill", "技能", "划词", "language", "语言", "源语言", "目标语言")),
 
     // —— 触发器 ——
-    SearchEntry(SectionKeys.TRIGGER, R.string.settings_section_trigger, R.string.settings_search_item_loop_interval, listOf("loop", "循环")),
+    SearchEntry(SectionKeys.TRIGGER, R.string.settings_section_trigger, R.string.settings_search_item_loop_interval, listOf("loop", "循环", "interval", "间隔")),
+    SearchEntry(
+        SectionKeys.TRIGGER,
+        R.string.settings_section_trigger,
+        R.string.settings_search_item_loop_trigger_mode,
+        SETTINGS_SEARCH_LOOP_TRIGGER_KEYWORDS,
+        optionLabelResIds = listOf(
+            R.string.settings_loop_trigger_fixed,
+            R.string.settings_loop_trigger_smart,
+        ),
+    ),
+    SearchEntry(SectionKeys.TRIGGER, R.string.settings_section_trigger, R.string.settings_search_item_loop_similarity, SETTINGS_SEARCH_LOOP_SIMILARITY_KEYWORDS),
+    SearchEntry(
+        SectionKeys.TRIGGER,
+        R.string.settings_section_trigger,
+        R.string.settings_search_item_loop_region,
+        SETTINGS_SEARCH_LOOP_REGION_KEYWORDS,
+        optionLabelResIds = listOf(
+            R.string.settings_loop_text_region_auto,
+            R.string.settings_loop_text_region_lower,
+            R.string.settings_loop_text_region_anywhere,
+        ),
+    ),
     SearchEntry(SectionKeys.TRIGGER, R.string.settings_section_trigger, R.string.settings_search_item_a11y_volume, listOf("无障碍", "a11y", "accessibility", "volume", "音量")),
+
+    // —— 开发者诊断 ——
+    SearchEntry(
+        SectionKeys.DEVELOPER,
+        R.string.settings_section_developer,
+        R.string.settings_search_item_developer_ocr,
+        SETTINGS_SEARCH_DEVELOPER_OCR_KEYWORDS,
+    ),
 
     // —— 网络 ——
     SearchEntry(SectionKeys.NETWORK, R.string.settings_section_network, R.string.settings_search_item_api_timeout, listOf("timeout", "超时", "网络", "network")),
@@ -4247,6 +5635,12 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
 
     SearchEntry(SectionKeys.THEME_MODE, R.string.settings_section_theme_mode, R.string.settings_section_theme_mode, listOf("theme", "夜间", "白天", "深色", "浅色", "dark", "light", "night")),
 )
+
+internal fun settingsSearchSectionKeys(): Set<String> = SETTING_ITEMS.mapTo(linkedSetOf()) { it.sectionKey }
+internal fun settingsSearchItemLabelResIds(): Set<Int> = SETTING_ITEMS.mapTo(linkedSetOf()) { it.itemLabelRes }
+internal fun settingsSearchTargetResIds(): Set<Int> = SETTING_ITEMS.mapTo(linkedSetOf()) { it.targetId }
+internal fun settingsSearchEntryIds(): Set<String> = SETTING_ITEMS.mapTo(linkedSetOf()) { it.entryId }
+internal fun settingsSearchEntryCount(): Int = SETTING_ITEMS.size
 
 @Composable
 @OptIn(ExperimentalLayoutApi::class)
@@ -4370,12 +5764,13 @@ private fun TranslationPresetSection(
                 )
             },
             confirmButton = {
-                TextButton(onClick = {
-                    pendingDeletePreset = null
-                    onDelete(preset)
-                }) {
-                    Text(stringResource(R.string.settings_translation_preset_delete))
-                }
+                DestructiveTextButton(
+                    label = stringResource(R.string.settings_translation_preset_delete),
+                    onClick = {
+                        pendingDeletePreset = null
+                        onDelete(preset)
+                    },
+                )
             },
             dismissButton = {
                 TextButton(onClick = { pendingDeletePreset = null }) {
@@ -4437,6 +5832,54 @@ private fun TranslationPresetSection(
         )
     }
 }
+
+@Composable
+private fun ModelDownloadProgressCard(
+    status: String,
+    downloaded: Long,
+    total: Long,
+    onCancel: () -> Unit,
+) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+        ),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                stringResource(R.string.model_download_in_app_title),
+                style = MaterialTheme.typography.titleSmall,
+            )
+            val progress = modelDownloadProgressFraction(downloaded, total)
+            if (progress == null) {
+                androidx.compose.material3.LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            } else {
+                androidx.compose.material3.LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            Text(
+                status,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+            )
+            TextButton(onClick = onCancel) {
+                Text(stringResource(R.string.model_download_cancel))
+            }
+        }
+    }
+}
+
+internal fun modelDownloadProgressFraction(downloaded: Long, total: Long): Float? =
+    total.takeIf { it > 0L }
+        ?.let { (downloaded.toDouble() / it.toDouble()).coerceIn(0.0, 1.0).toFloat() }
 
 @Composable
 private fun TranslationPresetUnsavedSlot(
@@ -4773,17 +6216,18 @@ internal fun overlayFontDeleteTipAckLabel(
 @Composable
 private fun SectionCard(
     title: String,
-    anchorKey: String? = null,
-    onAnchor: ((String, Int) -> Unit)? = null,
+    onBoundsInWindow: ((top: Float, bottom: Float) -> Unit)? = null,
     helpText: String? = null,
     content: @Composable () -> Unit
 ) {
-    val baseModifier = Modifier.fillMaxWidth()
-    val cardModifier = if (anchorKey != null && onAnchor != null) {
-        baseModifier.onGloballyPositioned { coords ->
-            onAnchor(anchorKey, coords.positionInParent().y.toInt())
+    val cardModifier = Modifier
+        .fillMaxWidth()
+        .onGloballyPositioned { coordinates ->
+            onBoundsInWindow?.let { callback ->
+                val top = coordinates.positionInWindow().y
+                callback(top, top + coordinates.size.height)
+            }
         }
-    } else baseModifier
     Card(
         modifier = cardModifier,
         colors = CardDefaults.cardColors(
@@ -5002,7 +6446,7 @@ private fun ThemeModeSelector() {
 }
 
 @Composable
-private fun SwitchRow(
+internal fun SwitchRow(
     label: String,
     checked: Boolean,
     enabled: Boolean = true,
@@ -5038,7 +6482,47 @@ private fun SwitchRow(
 }
 
 @Composable
-private fun <T> EngineChip(
+private fun SettingsLinkCell(
+    label: String,
+    status: String? = null,
+    statusGranted: Boolean? = null,
+    onClick: () -> Unit,
+) {
+    ListItem(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(role = Role.Button, onClick = onClick),
+        headlineContent = {
+            Text(text = label, style = MaterialTheme.typography.bodyLarge)
+        },
+        trailingContent = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                status?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = when (statusGranted) {
+                            true -> MaterialTheme.colorScheme.primary
+                            false -> MaterialTheme.colorScheme.error
+                            null -> MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 8.dp),
+                )
+            }
+        },
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+    )
+}
+
+@Composable
+internal fun <T> EngineChip(
     current: T,
     target: T,
     label: String,
@@ -5815,7 +7299,7 @@ private fun PaddleSection(
                 ))
             }
             OutlinedButton(
-                enabled = !downloading,
+                enabled = downloadableModelImportEnabled(downloading, modelReady),
                 onClick = { importLauncher.launch("*/*") },
                 modifier = Modifier.weight(1f)
             ) { Text(stringResource(R.string.settings_paddle_btn_local_import)) }
@@ -5832,10 +7316,13 @@ private fun PaddleSection(
                 title = { Text(stringResource(R.string.settings_model_delete_confirm_title)) },
                 text = { Text(stringResource(R.string.settings_model_delete_confirm_message)) },
                 confirmButton = {
-                    TextButton(onClick = {
-                        showDeleteConfirm = false
-                        onDelete()
-                    }) { Text(stringResource(R.string.settings_model_delete_confirm_yes)) }
+                    DestructiveTextButton(
+                        label = stringResource(R.string.settings_model_delete_confirm_yes),
+                        onClick = {
+                            showDeleteConfirm = false
+                            onDelete()
+                        },
+                    )
                 },
                 dismissButton = {
                     TextButton(onClick = { showDeleteConfirm = false }) {
@@ -5908,7 +7395,7 @@ private fun MangaOcrSection(
                 ))
             }
             OutlinedButton(
-                enabled = !downloading,
+                enabled = downloadableModelImportEnabled(downloading, modelReady),
                 onClick = { importLauncher.launch("*/*") },
                 modifier = Modifier.weight(1f)
             ) { Text(stringResource(R.string.settings_manga_ocr_btn_local_import)) }
@@ -5925,10 +7412,13 @@ private fun MangaOcrSection(
                 title = { Text(stringResource(R.string.settings_model_delete_confirm_title)) },
                 text = { Text(stringResource(R.string.settings_model_delete_confirm_message)) },
                 confirmButton = {
-                    TextButton(onClick = {
-                        showDeleteConfirm = false
-                        onDelete()
-                    }) { Text(stringResource(R.string.settings_model_delete_confirm_yes)) }
+                    DestructiveTextButton(
+                        label = stringResource(R.string.settings_model_delete_confirm_yes),
+                        onClick = {
+                            showDeleteConfirm = false
+                            onDelete()
+                        },
+                    )
                 },
                 dismissButton = {
                     TextButton(onClick = { showDeleteConfirm = false }) {
@@ -6004,7 +7494,7 @@ private fun OrientationModelSection(
                 )
             }
             OutlinedButton(
-                enabled = !downloading,
+                enabled = downloadableModelImportEnabled(downloading, modelReady),
                 onClick = { importLauncher.launch("*/*") },
                 modifier = Modifier.weight(1f)
             ) { Text(stringResource(R.string.settings_orientation_model_btn_local_import)) }
@@ -6020,10 +7510,13 @@ private fun OrientationModelSection(
                 title = { Text(stringResource(R.string.settings_model_delete_confirm_title)) },
                 text = { Text(stringResource(R.string.settings_model_delete_confirm_message)) },
                 confirmButton = {
-                    TextButton(onClick = {
-                        showDeleteConfirm = false
-                        onDelete()
-                    }) { Text(stringResource(R.string.settings_model_delete_confirm_yes)) }
+                    DestructiveTextButton(
+                        label = stringResource(R.string.settings_model_delete_confirm_yes),
+                        onClick = {
+                            showDeleteConfirm = false
+                            onDelete()
+                        },
+                    )
                 },
                 dismissButton = {
                     TextButton(onClick = { showDeleteConfirm = false }) {
@@ -6143,6 +7636,11 @@ private class PendingModelDownload(
     val onConfirmed: () -> Unit,
 )
 
+internal fun shouldRequestModelDownloadNotificationPermission(
+    sdkInt: Int,
+    permissionGranted: Boolean,
+): Boolean = sdkInt >= Build.VERSION_CODES.TIRAMISU && !permissionGranted
+
 internal fun modelDownloadNetworkWarningMessageRes(
     warning: ModelDownloadNetworkWarning,
 ): Int = when (warning) {
@@ -6153,8 +7651,23 @@ internal fun modelDownloadNetworkWarningMessageRes(
 }
 
 @Composable
-private fun menuItemLabel(id: MenuItemId, currentSkill: com.gameocr.app.data.FloatingSkill): String = when (id) {
-        MenuItemId.LOOP -> stringResource(R.string.settings_arc_menu_item_loop)
+private fun menuItemLabel(id: MenuItemId, currentSkill: FloatingSkill): String = when (id) {
+        MenuItemId.LOOP,
+        MenuItemId.FULL_SCREEN_SKILL -> {
+            val targetSkill = checkNotNull(MenuItemRegistry.targetSkill(id, currentSkill))
+            if (targetSkill == FloatingSkill.LOOP) {
+                stringResource(R.string.settings_arc_menu_item_loop)
+            } else {
+                val targetSkillName = stringResource(
+                    when (targetSkill) {
+                        FloatingSkill.FULL_SCREEN -> R.string.menu_full_screen_skill
+                        FloatingSkill.WORD_SELECT -> R.string.menu_word_select
+                        FloatingSkill.LOOP -> error("Handled above")
+                    }
+                )
+                stringResource(R.string.settings_arc_menu_item_skill_format, targetSkillName)
+            }
+        }
         MenuItemId.REGION -> stringResource(R.string.settings_arc_menu_item_region)
         MenuItemId.LANGUAGE_PAIR -> stringResource(R.string.settings_arc_menu_item_language_pair)
         MenuItemId.PRESET_SWITCH -> stringResource(R.string.settings_arc_menu_item_preset)
@@ -6162,29 +7675,21 @@ private fun menuItemLabel(id: MenuItemId, currentSkill: com.gameocr.app.data.Flo
         MenuItemId.HOME -> stringResource(R.string.settings_arc_menu_item_home)
     // 技能槽：跟弧菜单实际显示一致，文案 = 「切换主球操作 — <切换目标>」。
     // 未来加新 FloatingSkill 值时只需扩展 menuItemIconRes / 这里的 when，无需改文案模板。
-    MenuItemId.FULL_SCREEN_SKILL -> {
-        val nextSkillName = stringResource(
-            when (currentSkill) {
-                com.gameocr.app.data.FloatingSkill.FULL_SCREEN -> R.string.menu_word_select
-                com.gameocr.app.data.FloatingSkill.WORD_SELECT -> R.string.menu_full_screen_skill
-            }
-        )
-        stringResource(R.string.settings_arc_menu_item_skill_format, nextSkillName)
-    }
 }
 
-private fun menuItemIconRes(id: MenuItemId, currentSkill: com.gameocr.app.data.FloatingSkill): Int = when (id) {
-        MenuItemId.LOOP -> R.drawable.ic_menu_loop
+private fun menuItemIconRes(id: MenuItemId, currentSkill: FloatingSkill): Int = when (id) {
+    MenuItemId.LOOP,
+    MenuItemId.FULL_SCREEN_SKILL -> when (checkNotNull(MenuItemRegistry.targetSkill(id, currentSkill))) {
+        FloatingSkill.FULL_SCREEN -> R.drawable.ic_menu_full_screen
+        FloatingSkill.WORD_SELECT -> R.drawable.ic_menu_word_select
+        FloatingSkill.LOOP -> R.drawable.ic_menu_loop
+    }
         MenuItemId.REGION -> R.drawable.ic_menu_region
         MenuItemId.LANGUAGE_PAIR -> R.drawable.ic_menu_language_pair
         MenuItemId.PRESET_SWITCH -> R.drawable.ic_menu_preset
         MenuItemId.SETTINGS -> R.drawable.ic_menu_settings
         MenuItemId.HOME -> R.drawable.ic_menu_home
     // 技能槽预览要跟实际弧形菜单一致：图标表示“点击后切到的技能”。
-    MenuItemId.FULL_SCREEN_SKILL -> when (currentSkill) {
-        com.gameocr.app.data.FloatingSkill.FULL_SCREEN -> R.drawable.ic_menu_word_select
-        com.gameocr.app.data.FloatingSkill.WORD_SELECT -> R.drawable.ic_menu_full_screen
-    }
 }
 
 /**
@@ -6267,7 +7772,7 @@ private fun LocalLlmSection(
                 ))
             }
             OutlinedButton(
-                enabled = !downloading,
+                enabled = downloadableModelImportEnabled(downloading, modelReady),
                 onClick = { importLauncher.launch("*/*") },
                 modifier = Modifier.weight(1f)
             ) { Text(stringResource(R.string.settings_paddle_btn_local_import)) }
@@ -6284,10 +7789,13 @@ private fun LocalLlmSection(
                 title = { Text(stringResource(R.string.settings_model_delete_confirm_title)) },
                 text = { Text(stringResource(R.string.settings_model_delete_confirm_message)) },
                 confirmButton = {
-                    TextButton(onClick = {
-                        showDeleteConfirm = false
-                        onDelete()
-                    }) { Text(stringResource(R.string.settings_model_delete_confirm_yes)) }
+                    DestructiveTextButton(
+                        label = stringResource(R.string.settings_model_delete_confirm_yes),
+                        onClick = {
+                            showDeleteConfirm = false
+                            onDelete()
+                        },
+                    )
                 },
                 dismissButton = {
                     TextButton(onClick = { showDeleteConfirm = false }) {
@@ -6309,6 +7817,11 @@ internal fun localLlmDownloadEnabled(
 ): Boolean = !downloading && deviceCapable && !modelReady
 
 internal fun downloadableModelDownloadEnabled(
+    downloading: Boolean,
+    modelReady: Boolean,
+): Boolean = !downloading && !modelReady
+
+internal fun downloadableModelImportEnabled(
     downloading: Boolean,
     modelReady: Boolean,
 ): Boolean = !downloading && !modelReady

@@ -54,6 +54,62 @@ class TextBlockReadingOrderTest {
         assertEquals(listOf("右上", "右下", "左上", "左下"), sorted)
     }
 
+    @Test
+    fun resolveTextBlockReadingOrientation_andSort_coverUnknownAndExplicitDirections() {
+        data class Case(
+            val name: String,
+            val blocks: List<TextBlock>,
+            val hint: TextOrientation?,
+            val expectedOrientation: TextOrientation,
+            val expectedOrder: List<String>,
+        )
+
+        val portraitBlocks = listOf(
+            block("left", 20, 10, 50, 120),
+            block("right", 100, 10, 130, 120),
+        )
+        val horizontalBlocks = listOf(
+            block("left", 10, 10, 70, 40),
+            block("right", 90, 10, 150, 40),
+        )
+        val cases = listOf(
+            Case(
+                "unknown portrait blocks infer Japanese vertical rtl",
+                portraitBlocks,
+                TextOrientation.UNKNOWN,
+                TextOrientation.VERTICAL_RTL,
+                listOf("right", "left"),
+            ),
+            Case(
+                "explicit horizontal rtl sorts right first",
+                horizontalBlocks,
+                TextOrientation.HORIZONTAL_RTL,
+                TextOrientation.HORIZONTAL_RTL,
+                listOf("right", "left"),
+            ),
+            Case(
+                "explicit horizontal ltr sorts left first",
+                horizontalBlocks,
+                TextOrientation.HORIZONTAL_LTR,
+                TextOrientation.HORIZONTAL_LTR,
+                listOf("left", "right"),
+            ),
+        )
+
+        cases.forEach { case ->
+            assertEquals(
+                case.name,
+                case.expectedOrientation,
+                resolveTextBlockReadingOrientation(case.blocks, case.hint),
+            )
+            assertEquals(
+                case.name,
+                case.expectedOrder,
+                sortTextBlocksForReading(case.blocks, case.hint).map { it.text },
+            )
+        }
+    }
+
     private fun block(
         text: String,
         left: Int,

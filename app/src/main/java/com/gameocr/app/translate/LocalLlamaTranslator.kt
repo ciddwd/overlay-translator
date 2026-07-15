@@ -1,11 +1,14 @@
 package com.gameocr.app.translate
 
+import android.os.SystemClock
 import com.gameocr.app.data.Settings
 import com.gameocr.app.llm.LlamaEngineHolder
 import com.gameocr.app.llm.LlmModelKind
+import com.gameocr.app.util.InferenceTiming
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.sync.withLock
+import timber.log.Timber
 
 /**
  * 端侧 llama.cpp Translator 通用基类。把 [LlamaEngineHolder] 的 token-by-token Flow 拼成
@@ -45,17 +48,51 @@ abstract class LocalLlamaTranslator(
 
     override suspend fun translate(source: String, settings: Settings): String? {
         if (source.isBlank()) return null
-        val userPrompt = buildUserPrompt(source, settings)
+        val userPrompt = runtimePrompt(buildUserPrompt(source, settings), settings)
         val cacheKey = cacheKey(source, settings, userPrompt)
-        cache.get(cacheKey)?.let { return it }
+        cache.get(cacheKey)?.let {
+            Timber.tag(PERF_TAG).i("cache hit kind=%s mode=full inputChars=%d", modelKind.name, source.length)
+            return it
+        }
+        val modelReadyStartedAt = SystemClock.elapsedRealtime()
         val engine = holder.ensureLoaded(modelKind, systemPrompt)
+        val modelReadyMs = InferenceTiming.elapsedMs(modelReadyStartedAt, SystemClock.elapsedRealtime())
         // 推理串行：translateBatch 默认并发触发多个 translate，端侧 LLM engine 一次只能跑一段，
         // 用 holder 的全局 inferenceMutex 排队，避免后段被 binding 丢弃。
+        val queuedAt = SystemClock.elapsedRealtime()
         return holder.inferenceMutex.withLock {
-            cache.get(cacheKey)?.let { return@withLock it }
+            val startedAt = SystemClock.elapsedRealtime()
+            cache.get(cacheKey)?.let {
+                Timber.tag(PERF_TAG).i(
+                    "cache hit kind=%s mode=full afterQueueMs=%d inputChars=%d",
+                    modelKind.name,
+                    InferenceTiming.elapsedMs(queuedAt, startedAt),
+                    source.length,
+                )
+                return@withLock it
+            }
             val sb = StringBuilder()
+            var firstOutputAt: Long? = null
+            var outputPieces = 0
             engine.sendUserPrompt(userPrompt, settings.localLlmMaxNewTokens)
-                .collect { token -> sb.append(token) }
+                .collect { token ->
+                    if (firstOutputAt == null) firstOutputAt = SystemClock.elapsedRealtime()
+                    outputPieces++
+                    sb.append(token)
+                }
+            val finishedAt = SystemClock.elapsedRealtime()
+            logGeneration(
+                mode = "full",
+                source = source,
+                outputChars = sb.length,
+                modelReadyMs = modelReadyMs,
+                queuedAt = queuedAt,
+                startedAt = startedAt,
+                firstOutputAt = firstOutputAt,
+                finishedAt = finishedAt,
+                outputPieces = outputPieces,
+                maxNewTokens = settings.localLlmMaxNewTokens,
+            )
             holder.touch()
             sb.toString().trim().ifBlank { null }?.also { cache.put(cacheKey, it) }
         }
@@ -63,27 +100,91 @@ abstract class LocalLlamaTranslator(
 
     override fun translateStream(source: String, settings: Settings): Flow<String> = flow {
         if (source.isBlank()) return@flow
-        val userPrompt = buildUserPrompt(source, settings)
+        val userPrompt = runtimePrompt(buildUserPrompt(source, settings), settings)
         val cacheKey = cacheKey(source, settings, userPrompt)
         cache.get(cacheKey)?.let { cached ->
+            Timber.tag(PERF_TAG).i("cache hit kind=%s mode=stream inputChars=%d", modelKind.name, source.length)
             emit(cached)
             return@flow
         }
+        val modelReadyStartedAt = SystemClock.elapsedRealtime()
         val engine = holder.ensureLoaded(modelKind, systemPrompt)
+        val modelReadyMs = InferenceTiming.elapsedMs(modelReadyStartedAt, SystemClock.elapsedRealtime())
+        val queuedAt = SystemClock.elapsedRealtime()
         holder.inferenceMutex.withLock {
+            val startedAt = SystemClock.elapsedRealtime()
             cache.get(cacheKey)?.let { cached ->
+                Timber.tag(PERF_TAG).i(
+                    "cache hit kind=%s mode=stream afterQueueMs=%d inputChars=%d",
+                    modelKind.name,
+                    InferenceTiming.elapsedMs(queuedAt, startedAt),
+                    source.length,
+                )
                 emit(cached)
                 return@withLock
             }
             val sb = StringBuilder()
+            var firstOutputAt: Long? = null
+            var outputPieces = 0
             engine.sendUserPrompt(userPrompt, settings.localLlmMaxNewTokens)
                 .collect { token ->
+                    if (firstOutputAt == null) firstOutputAt = SystemClock.elapsedRealtime()
+                    outputPieces++
                     sb.append(token)
                     emit(sb.toString())
                 }
+            val finishedAt = SystemClock.elapsedRealtime()
+            logGeneration(
+                mode = "stream",
+                source = source,
+                outputChars = sb.length,
+                modelReadyMs = modelReadyMs,
+                queuedAt = queuedAt,
+                startedAt = startedAt,
+                firstOutputAt = firstOutputAt,
+                finishedAt = finishedAt,
+                outputPieces = outputPieces,
+                maxNewTokens = settings.localLlmMaxNewTokens,
+            )
             holder.touch()
             sb.toString().trim().takeIf { it.isNotBlank() }?.let { cache.put(cacheKey, it) }
         }
+    }
+
+    private fun logGeneration(
+        mode: String,
+        source: String,
+        outputChars: Int,
+        modelReadyMs: Long,
+        queuedAt: Long,
+        startedAt: Long,
+        firstOutputAt: Long?,
+        finishedAt: Long,
+        outputPieces: Int,
+        maxNewTokens: Int,
+    ) {
+        val timing = InferenceTiming.generation(
+            queuedAtMs = queuedAt,
+            startedAtMs = startedAt,
+            firstOutputAtMs = firstOutputAt,
+            finishedAtMs = finishedAt,
+            outputPieces = outputPieces,
+        )
+        Timber.tag(PERF_TAG).i(
+            "generate kind=%s mode=%s modelReadyMs=%d queueMs=%d firstTokenMs=%d totalMs=%d " +
+                "pieces=%d piecesPerSec=%s inputChars=%d outputChars=%d maxNewTokens=%d",
+            modelKind.name,
+            mode,
+            modelReadyMs,
+            timing.queueMs,
+            timing.firstOutputMs ?: -1L,
+            timing.totalMs,
+            outputPieces,
+            timing.outputPiecesPerSecond?.let { String.format(java.util.Locale.US, "%.2f", it) } ?: "n/a",
+            source.length,
+            outputChars,
+            maxNewTokens,
+        )
     }
 
     private fun cacheKey(source: String, settings: Settings, userPrompt: String): String =
@@ -98,6 +199,13 @@ abstract class LocalLlamaTranslator(
             userPrompt = userPrompt,
         )
 
+    private fun runtimePrompt(basePrompt: String, settings: Settings): String =
+        if (settings.runtimeTranslationContext.isBlank()) {
+            basePrompt
+        } else {
+            settings.runtimeTranslationContext + "\n\n" + basePrompt
+        }
+
     override suspend fun testConnection(settings: Settings): TestResult = runCatching {
         if (!holder.isDeviceCapable()) {
             return@runCatching TestResult(success = false, message = "Android 13+ required")
@@ -106,5 +214,9 @@ abstract class LocalLlamaTranslator(
         TestResult(success = true, message = "Model loaded: ${modelKind.displayName}")
     }.getOrElse { t ->
         TestResult(success = false, message = "${t.javaClass.simpleName}: ${t.message}")
+    }
+
+    companion object {
+        private const val PERF_TAG = "LocalLlmPerf"
     }
 }

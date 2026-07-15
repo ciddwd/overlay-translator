@@ -44,7 +44,12 @@ class OpenAiTranslator @Inject constructor(
         if (trimmed.isEmpty()) return null
         validate(settings)
 
-        val cacheKey = cache.key(trimmed, settings.model, settings.targetLang, settings.promptTemplate)
+        val cacheKey = cache.key(
+            trimmed,
+            settings.model,
+            settings.targetLang,
+            settings.promptTemplate + settings.runtimeTranslationContext,
+        )
         cache.get(cacheKey)?.let { return it }
 
         val request = buildRequest(trimmed, settings, stream = false)
@@ -73,7 +78,12 @@ class OpenAiTranslator @Inject constructor(
         if (trimmed.isEmpty()) return@flow
         validate(settings)
 
-        val cacheKey = cache.key(trimmed, settings.model, settings.targetLang, settings.promptTemplate)
+        val cacheKey = cache.key(
+            trimmed,
+            settings.model,
+            settings.targetLang,
+            settings.promptTemplate + settings.runtimeTranslationContext,
+        )
         cache.get(cacheKey)?.let {
             emit(it)
             return@flow
@@ -221,7 +231,7 @@ class OpenAiTranslator @Inject constructor(
             .replace("{source_lang}", sourceDisplay)
             .replace("{target}", targetDisplay)
             .replace("{target_lang}", targetDisplay)
-            .withDifficultyNotesContract(targetDisplay)
+            .withDifficultyNotesContract(targetDisplay) + settings.runtimeTranslationContext
 
         val reqBody = ChatRequest(
             model = settings.model,
@@ -286,7 +296,10 @@ class OpenAiTranslator @Inject constructor(
         val body = ChatRequest(
             model = settings.model,
             messages = listOf(
-                ChatMessage(role = "system", content = promptResolved + safetyRail),
+                ChatMessage(
+                    role = "system",
+                    content = promptResolved + safetyRail + settings.runtimeTranslationContext,
+                ),
                 ChatMessage(role = "user", content = userMsg)
             ),
             temperature = 0.3,

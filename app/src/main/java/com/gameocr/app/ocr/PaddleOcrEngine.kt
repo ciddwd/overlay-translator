@@ -12,6 +12,7 @@ import android.graphics.Rect
 import com.gameocr.app.R
 import com.gameocr.app.data.OcrEngineKind
 import com.gameocr.app.data.PaddleModelVersion
+import com.gameocr.app.util.CpuThreadPolicy
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -223,6 +224,8 @@ class PaddleOcrEngine @Inject constructor(
     /** 当前已加载的模型版本。版本切换时 invalidate session 强制重新加载。 */
     private var loadedVersion: PaddleModelVersion? = null
     private val runCounter = AtomicLong(0L)
+    private val availableProcessors by lazy { CpuThreadPolicy.availableProcessors() }
+    private val ortThreads by lazy { CpuThreadPolicy.select(availableProcessors) }
 
     override suspend fun recognize(bitmap: Bitmap, kind: OcrEngineKind): List<TextBlock> {
         ensureReady()
@@ -273,8 +276,11 @@ class PaddleOcrEngine @Inject constructor(
             files.keys.length(),
         )
         val e = env ?: OrtEnvironment.getEnvironment().also { env = it }
-        detSession = e.createSession(files.det.absolutePath, OrtSession.SessionOptions())
-        recSession = e.createSession(files.rec.absolutePath, OrtSession.SessionOptions())
+        val sessionOptions = OrtSession.SessionOptions().apply {
+            setIntraOpNumThreads(ortThreads)
+        }
+        detSession = e.createSession(files.det.absolutePath, sessionOptions)
+        recSession = e.createSession(files.rec.absolutePath, sessionOptions)
         // PP-OCRv5: keys.txt 每行一个字符，末尾可能有多余 \r
         // PP-OCRv6: 字典内嵌在 inference.yml 的 character_dict 字段
         keys = if (files.keys.name.endsWith(".yml") || files.keys.name.endsWith(".yaml")) {
@@ -286,12 +292,15 @@ class PaddleOcrEngine @Inject constructor(
         }
         loadedVersion = version
         Timber.i(
-            "PaddleOCR ready version=%s elapsed=%dms det=%dKB rec=%dKB keys=%d firstKey='%s' lastKey='%s'",
+            "PaddleOCR ready version=%s elapsed=%dms det=%dKB rec=%dKB keys=%d " +
+                "availableProcessors=%d ortThreads=%d firstKey='%s' lastKey='%s'",
             version.name,
             System.currentTimeMillis() - initStart,
             files.det.length() / 1024,
             files.rec.length() / 1024,
             keys.size,
+            availableProcessors,
+            ortThreads,
             keys.firstOrNull().orEmpty().forPaddleOcrLog(40),
             keys.lastOrNull().orEmpty().forPaddleOcrLog(40),
         )

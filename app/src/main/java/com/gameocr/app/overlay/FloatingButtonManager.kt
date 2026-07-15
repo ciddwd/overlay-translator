@@ -3,6 +3,7 @@ package com.gameocr.app.overlay
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.os.Build
 import android.view.Gravity
 import android.view.MotionEvent
@@ -37,10 +38,8 @@ internal object ArcMenuGeometry {
 
 /**
  * 悬浮触发按钮。
- * - 单击 → [onSingleTap] 触发一次截屏 → OCR → 翻译。
- * - 长按 → 弹出半圆弧菜单（3 项：循环翻译 / 截图区域 / 返回主应用）。菜单 3 个回调
- *   分别用 [onLongPress]（=「循环翻译」，保留构造名以便外部代码不动）、
- *   [onMenuPickRegion]、[onMenuOpenMainActivity]。
+ * - 单击 → [onSingleTap] 按当前主球模式执行单次、划词或循环启停。
+ * - 长按 → 弹出可分页半圆弧菜单；模式项切换主球图标与后续单击行为。
  *
  * 拖动跟系统拨号一样：手指按住后跟随移动，松开后用 SpringAnimation 弹性吸附到最近的左/右边，
  * 位置写回 [SettingsRepository] 持久化，下次启动 Service 还原。
@@ -48,8 +47,7 @@ internal object ArcMenuGeometry {
 class FloatingButtonManager(
     private val context: Context,
     private val onSingleTap: () -> Unit,
-    /** 菜单第一项「循环翻译」回调。命名沿用「onLongPress」让 0.3.x 旧逻辑不破。 */
-    private val onLongPress: () -> Unit,
+    private val onSwitchToLoop: () -> Unit,
     private val settingsRepository: SettingsRepository,
     private val ioScope: CoroutineScope
 ) {
@@ -181,6 +179,16 @@ class FloatingButtonManager(
 
     fun isShown(): Boolean = view != null
 
+    /** Physical screen bounds occupied by the ball window, masked from loop-frame comparison. */
+    fun captureExclusionRect(): Rect? {
+        val params = layoutParams ?: return null
+        val currentView = view ?: return null
+        val width = currentView.width.takeIf { it > 0 } ?: params.width
+        val height = currentView.height.takeIf { it > 0 } ?: params.height
+        if (width <= 0 || height <= 0) return null
+        return Rect(params.x, params.y, params.x + width, params.y + height)
+    }
+
     @SuppressLint("ClickableViewAccessibility")
     fun show() {
         if (view != null) return
@@ -240,9 +248,18 @@ class FloatingButtonManager(
         }
 
         attachTouchListener(container, params)
+        container.isClickable = true
+        container.isFocusable = true
+        container.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+        container.setOnClickListener { onSingleTap() }
+        container.setOnLongClickListener {
+            showArcMenu()
+            true
+        }
         wm.addView(container, params)
         view = container
         layoutParams = params
+        updateAccessibilityDescription()
 
         // 启动时如果开了吸附但上次保存的位置不在边（用户上次拖到中间没吸边），自动吸一下。
         // post 到下一帧确保 view layout 完成再 snap，否则 SpringAnimation 用错的 start value 跳变。
@@ -565,21 +582,53 @@ class FloatingButtonManager(
         }
     }
 
-    /** 循环模式开关：active=true 时 [LoopProgressView] 按 [intervalMs] 周期匀速转一圈；false 时停。 */
-    fun setLoopActive(active: Boolean, intervalMs: Long) {
+    /** 循环模式开关：固定间隔显示倒计时环，智能等待显示平滑旋转的短弧。 */
+    fun setLoopActive(active: Boolean, intervalMs: Long, indeterminate: Boolean = false) {
         isLooping = active
-        val pv = progressView ?: return
-        if (active) pv.start(intervalMs) else pv.stop()
+        progressView?.let { progress ->
+            when {
+                !active -> progress.stop()
+                indeterminate -> progress.startIndeterminate(intervalMs)
+                else -> progress.start(intervalMs)
+            }
+        }
+        updateAccessibilityDescription()
     }
 
     /** 立即把球的主图标按当前 [skill] 切换。CaptureService 在切技能时 + settings collect 同步时调。 */
     fun applySkillIcon() {
         mainIcon?.setImageResource(skillIconRes())
+        updateAccessibilityDescription()
     }
 
     private fun skillIconRes(): Int = when (skill) {
         FloatingSkill.FULL_SCREEN -> R.drawable.ic_overlay_button
         FloatingSkill.WORD_SELECT -> R.drawable.ic_overlay_button_word
+        FloatingSkill.LOOP -> R.drawable.ic_overlay_button_loop
+    }
+
+    private fun updateAccessibilityDescription() {
+        val state = when (skill) {
+            FloatingSkill.FULL_SCREEN -> context.getString(R.string.a11y_floating_mode_full_screen)
+            FloatingSkill.WORD_SELECT -> context.getString(R.string.a11y_floating_mode_word_select)
+            FloatingSkill.LOOP -> context.getString(
+                if (isLooping) R.string.a11y_floating_mode_loop_running
+                else R.string.a11y_floating_mode_loop_stopped
+            )
+        }
+        val hint = when (skill) {
+            FloatingSkill.FULL_SCREEN -> context.getString(R.string.a11y_floating_hint_full_screen)
+            FloatingSkill.WORD_SELECT -> context.getString(R.string.a11y_floating_hint_word_select)
+            FloatingSkill.LOOP -> context.getString(
+                if (isLooping) R.string.a11y_floating_hint_loop_stop
+                else R.string.a11y_floating_hint_loop_start
+            )
+        }
+        view?.contentDescription = OverlayAccessibilityLabels.actionWithState(
+            action = context.getString(R.string.a11y_floating_ball),
+            state = state,
+            hint = hint,
+        )
     }
 
     private fun arcSpreadFor(itemCount: Int): Double = ArcMenuGeometry.spreadFor(itemCount)
@@ -728,12 +777,10 @@ class FloatingButtonManager(
         }
 
         val allItems = MenuItemRegistry.build(
-            context = context,
             ids = menuItemOrder,
             currentSkill = skill,
-            isLooping = isLooping,
             callbacks = MenuItemRegistry.Callbacks(
-                onLoop = { dismissArcMenu(); onLongPress() },
+                onSwitchToLoop = { dismissArcMenu(); onSwitchToLoop() },
                 onRegion = { dismissArcMenu(); onMenuPickRegion() },
                 onLanguagePair = { dismissArcMenu(); onMenuLanguagePair() },
                 onOpenMain = { dismissArcMenu(); onMenuOpenMainActivity() },

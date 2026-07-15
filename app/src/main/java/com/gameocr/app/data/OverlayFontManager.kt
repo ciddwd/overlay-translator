@@ -14,6 +14,18 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import timber.log.Timber
 
+internal data class StagedOverlayFont(
+    val entry: OverlayFontEntry,
+    val file: File,
+)
+
+internal data class OverlayFontCommit(
+    val entry: OverlayFontEntry,
+    val target: File,
+    val backup: File?,
+    val modified: Boolean,
+)
+
 @Singleton
 class OverlayFontManager @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -208,6 +220,23 @@ class OverlayFontManager @Inject constructor(
         font: SettingsBundleFont,
         input: InputStream,
     ): OverlayFontEntry {
+        val stagingDir = File(context.cacheDir, "settings-font-${System.nanoTime()}")
+        require(stagingDir.mkdirs()) { "Could not create the font staging directory." }
+        return try {
+            val staged = stageTransferredFont(font, input, stagingDir)
+            val commit = commitTransferredFont(staged)
+            finishTransferredFont(commit)
+            commit.entry
+        } finally {
+            stagingDir.deleteRecursively()
+        }
+    }
+
+    internal fun stageTransferredFont(
+        font: SettingsBundleFont,
+        input: InputStream,
+        stagingDir: File,
+    ): StagedOverlayFont {
         val normalizedFileName = requireNotNull(
             OverlayFontPolicy.normalizeStoredFileName(font.fileName),
         ) { "Transferred font has an invalid file name." }
@@ -215,9 +244,10 @@ class OverlayFontManager @Inject constructor(
         require(font.byteCount in 1..OverlayFontPolicy.MAX_FONT_BYTES) {
             "Transferred font has an invalid size."
         }
-        val dir = fontDir
-        require(dir.exists() || dir.mkdirs()) { "Could not create the font directory." }
-        val tmp = File(dir, "transfer-${System.nanoTime()}.tmp")
+        require(stagingDir.isDirectory || stagingDir.mkdirs()) {
+            "Could not create the font staging directory."
+        }
+        val tmp = File(stagingDir, "font-${System.nanoTime()}.tmp")
         val digest = MessageDigest.getInstance("SHA-256")
         var byteCount = 0L
         try {
@@ -239,15 +269,60 @@ class OverlayFontManager @Inject constructor(
                 "Transferred font checksum does not match its file name."
             }
             require(canLoadTypeface(tmp)) { "Transferred font cannot be loaded." }
-            val target = File(dir, normalizedFileName)
-            if (!target.isFile || !canLoadTypeface(target)) {
-                tmp.copyTo(target, overwrite = true)
-            }
-            return OverlayFontEntry(normalizedFileName, displayName)
-        } finally {
+            return StagedOverlayFont(
+                entry = OverlayFontEntry(normalizedFileName, displayName),
+                file = tmp,
+            )
+        } catch (error: Throwable) {
             runCatching { tmp.delete() }
-            invalidateCache()
+            throw error
         }
+    }
+
+    internal fun commitTransferredFont(staged: StagedOverlayFont): OverlayFontCommit {
+        val dir = fontDir
+        require(dir.exists() || dir.mkdirs()) { "Could not create the font directory." }
+        val target = File(dir, staged.entry.fileName)
+        if (target.isFile && canLoadTypeface(target)) {
+            return OverlayFontCommit(staged.entry, target, backup = null, modified = false)
+        }
+
+        val backup = target.takeIf(File::exists)?.let { existing ->
+            File(staged.file.parentFile, "backup-${staged.entry.fileName}").also { backupFile ->
+                existing.copyTo(backupFile, overwrite = true)
+            }
+        }
+        return try {
+            staged.file.copyTo(target, overwrite = true)
+            require(canLoadTypeface(target)) { "Committed font cannot be loaded." }
+            invalidateCache()
+            OverlayFontCommit(staged.entry, target, backup, modified = true)
+        } catch (error: Throwable) {
+            if (backup?.isFile == true) {
+                backup.copyTo(target, overwrite = true)
+            } else {
+                runCatching { target.delete() }
+            }
+            invalidateCache()
+            throw error
+        }
+    }
+
+    internal fun rollbackTransferredFont(commit: OverlayFontCommit) {
+        if (!commit.modified) return
+        if (commit.backup?.isFile == true) {
+            commit.backup.copyTo(commit.target, overwrite = true)
+        } else {
+            require(!commit.target.exists() || commit.target.delete()) {
+                "Could not roll back imported font ${commit.entry.displayName}."
+            }
+        }
+        invalidateCache()
+    }
+
+    internal fun finishTransferredFont(commit: OverlayFontCommit) {
+        runCatching { commit.backup?.delete() }
+        invalidateCache()
     }
 
     private fun queryDisplayName(uri: Uri): String? {
