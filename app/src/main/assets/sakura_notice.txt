@@ -1,16 +1,20 @@
-SakuraLLM Attribution
-=====================
+SakuraLLM Model Notice
+======================
 
-On-device Japanese-to-Chinese translation in this app is powered by
-SakuraLLM (https://github.com/SakuraLLM/SakuraLLM), specifically the
-Sakura-1.5B Qwen2.5 GGUF quantization.
+The optional on-device Japanese-to-Chinese translation model used by this app
+is Sakura-1.5B-Qwen2.5-v1.0, distributed as a GGUF quantization:
+https://github.com/SakuraLLM/SakuraLLM
+https://huggingface.co/shing3232/Sakura-1.5B-Qwen2.5-v1.0-GGUF-IMX
 
-The Sakura model is fine-tuned from Qwen2.5-1.5B and is distributed
-under the original SakuraLLM repository license. The underlying base
-model Qwen2.5 is licensed under the Tongyi Qianwen LICENSE AGREEMENT
-(https://huggingface.co/Qwen/Qwen2.5-1.5B/blob/main/LICENSE).
+The Sakura model is distributed under Creative Commons
+Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0).
+Commercial use is not permitted by that model license:
+https://creativecommons.org/licenses/by-nc-sa/4.0/
 
-This product is not affiliated with or endorsed by the SakuraLLM
-project or Alibaba / Tongyi team. The model weights are downloaded
-on demand from official mirrors at runtime; they are not embedded in
-the APK.
+The underlying Qwen2.5-1.5B base model is licensed under the Apache License,
+Version 2.0:
+https://huggingface.co/Qwen/Qwen2.5-1.5B/blob/main/LICENSE
+
+The model weights are downloaded on demand and are not embedded in the APK.
+This product is not affiliated with or endorsed by the SakuraLLM project or
+Alibaba Cloud / the Qwen team.

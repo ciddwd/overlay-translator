@@ -77,7 +77,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class Route { Main, Settings, Glossary, Logs }
+private enum class Route { Main, Settings, Glossary, Logs, LegalNotices }
 
 @Composable
 private fun AppRoot(routeRequest: State<String?>) {
@@ -99,7 +99,8 @@ private fun AppRoot(routeRequest: State<String?>) {
         when (route) {
             Route.Main -> MainScreen(
                 onOpenSettings = { routeName = Route.Settings.name },
-                onOpenLogs = { routeName = Route.Logs.name }
+                onOpenLogs = { routeName = Route.Logs.name },
+                onOpenLegalNotices = { routeName = Route.LegalNotices.name },
             )
             Route.Settings -> SettingsScreen(
                 onBack = { routeName = Route.Main.name },
@@ -108,6 +109,7 @@ private fun AppRoot(routeRequest: State<String?>) {
             )
             Route.Glossary -> GlossaryScreen(onBack = { routeName = Route.Settings.name })
             Route.Logs -> LogScreen(onBack = { routeName = Route.Main.name })
+            Route.LegalNotices -> LegalNoticesScreen(onBack = { routeName = Route.Main.name })
         }
     }
 }
