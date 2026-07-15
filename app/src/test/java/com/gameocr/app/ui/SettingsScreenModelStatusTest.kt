@@ -977,6 +977,31 @@ class SettingsScreenModelStatusTest {
     }
 
     @Test
+    fun downloadableModelImportEnabled_disablesWhenModelAlreadyReady() {
+        data class Case(
+            val name: String,
+            val downloading: Boolean,
+            val modelReady: Boolean,
+            val expected: Boolean,
+        )
+
+        val cases = listOf(
+            Case("missing idle model can import", false, false, true),
+            Case("ready model disables import", false, true, false),
+            Case("download in progress disables import", true, false, false),
+            Case("ready downloading model stays disabled", true, true, false),
+        )
+
+        cases.forEach { case ->
+            assertEquals(
+                case.name,
+                case.expected,
+                downloadableModelImportEnabled(case.downloading, case.modelReady),
+            )
+        }
+    }
+
+    @Test
     fun modelDownloadNetworkWarning_isTableDriven() {
         data class Case(
             val name: String,
@@ -1049,6 +1074,34 @@ class SettingsScreenModelStatusTest {
                 case.name,
                 case.expectedMessageRes,
                 warning?.let(::modelDownloadNetworkWarningMessageRes),
+            )
+        }
+    }
+
+    @Test
+    fun modelDownloadProgressFraction_isTableDriven() {
+        data class Case(
+            val name: String,
+            val downloaded: Long,
+            val total: Long,
+            val expected: Float?,
+        )
+
+        val cases = listOf(
+            Case("unknown total is indeterminate", 12L, -1L, null),
+            Case("zero total is indeterminate", 0L, 0L, null),
+            Case("download just started", 0L, 100L, 0f),
+            Case("download is halfway", 50L, 100L, 0.5f),
+            Case("download is complete", 100L, 100L, 1f),
+            Case("downloaded bytes are clamped below zero", -5L, 100L, 0f),
+            Case("downloaded bytes are clamped above total", 150L, 100L, 1f),
+        )
+
+        cases.forEach { case ->
+            assertEquals(
+                case.name,
+                case.expected,
+                modelDownloadProgressFraction(case.downloaded, case.total),
             )
         }
     }
@@ -1413,7 +1466,7 @@ class SettingsScreenModelStatusTest {
             issues.first { it.kind == TranslationPresetModelIssueKind.LOCAL_LLM_MISSING }.llmModelKind
         )
         assertEquals(
-            PaddleModelVersion.V6_SMALL,
+            PaddleModelVersion.V5_MOBILE,
             issues.first { it.kind == TranslationPresetModelIssueKind.PADDLE_MISSING }.paddleModelVersion
         )
     }

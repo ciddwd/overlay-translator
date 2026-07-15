@@ -71,6 +71,11 @@ object SettingsBundleTransfer {
     }
 
     fun portableSettings(settings: Settings): Settings {
+        val output = resolveTranslationOutputSettings(
+            settings.translationOutputFollowRecognition,
+            settings.translationOutputLayout,
+            settings.translationOutputDirection,
+        )
         val fonts = OverlayFontPolicy.upsertImportedFont(
             settings.overlayFonts,
             settings.overlayFontFileName,
@@ -98,6 +103,9 @@ object SettingsBundleTransfer {
             volcSecretAccessKey = "",
             baiduFanyiAppId = "",
             baiduFanyiSecretKey = "",
+            translationOutputFollowRecognition = output.followRecognition,
+            translationOutputLayout = output.layout,
+            translationOutputDirection = output.direction,
             overlayFonts = fonts,
             translationPresets = presets,
             activeTranslationPresetId = activeId,

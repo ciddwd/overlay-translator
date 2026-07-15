@@ -1,0 +1,9 @@
+@echo off
+if /I "%~1"=="-E" goto run_cmake
+call "@GAMEOCR_VCVARS64@" >nul 2>&1
+if errorlevel 1 exit /b %errorlevel%
+set "CMAKE_MAKE_PROGRAM=@GAMEOCR_HOST_NINJA@"
+
+:run_cmake
+"@GAMEOCR_REAL_CMAKE@" %*
+exit /b %errorlevel%

@@ -7,6 +7,26 @@ import org.junit.Test
 class SettingsDefaultsTest {
 
     @Test
+    fun paddleModelVersion_defaultsToStableV5AcrossSettingsAndPresets() {
+        data class Case(
+            val source: String,
+            val actual: PaddleModelVersion,
+        )
+
+        val cases = listOf(
+            Case("settings", Settings().paddleModelVersion),
+            Case(
+                "translation preset",
+                TranslationPreset(id = "test", name = "test").paddleModelVersion,
+            ),
+        )
+
+        cases.forEach { case ->
+            assertEquals(case.source, PaddleModelVersion.V5_MOBILE, case.actual)
+        }
+    }
+
+    @Test
     fun dbnetUnclipRatio_defaultsKeepPaddleAndMangaOcrSeparate() {
         val settings = Settings()
 
@@ -34,8 +54,15 @@ class SettingsDefaultsTest {
     fun translationContext_defaults_areConservativeAndFollowRecognition() {
         val settings = Settings()
 
-        assertEquals(TranslationOutputLayout.FOLLOW_RECOGNITION, settings.translationOutputLayout)
-        assertEquals(TranslationOutputDirection.FOLLOW_RECOGNITION, settings.translationOutputDirection)
+        assertEquals(true, settings.translationOutputFollowRecognition)
+        val output = resolveTranslationOutputSettings(
+            settings.translationOutputFollowRecognition,
+            settings.translationOutputLayout,
+            settings.translationOutputDirection,
+        )
+        assertEquals(true, output.followRecognition)
+        assertEquals(TranslationOutputLayout.HORIZONTAL, output.layout)
+        assertEquals(TranslationOutputDirection.LEFT_TO_RIGHT, output.direction)
         assertEquals(true, settings.translationGlossaryEnabled)
         assertEquals(ForegroundAppDetectionMode.AUTO, settings.foregroundAppDetectionMode)
         assertEquals(false, settings.sendAppNameToTranslator)

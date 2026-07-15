@@ -4,10 +4,12 @@ import android.content.Context
 import com.gameocr.app.R
 import com.gameocr.app.data.LlmMirrorChoice
 import com.gameocr.app.data.SettingsRepository
+import com.gameocr.app.util.HttpResumePolicy
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
@@ -98,6 +100,7 @@ class LlmModelInstaller @Inject constructor(
                 send(Progress(kind, mirror, dest.length(), dest.length(), done = true))
                 return@channelFlow
             } catch (t: Throwable) {
+                if (t is CancellationException) throw t
                 lastErr = "${t.javaClass.simpleName}: ${t.message}"
                 Timber.w(t, "LLM 模型镜像失败: $url")
                 send(Progress(kind, mirror, 0, 0, done = false, error = lastErr))
@@ -156,7 +159,7 @@ class LlmModelInstaller @Inject constructor(
         Timber.i("LLM download try url=$url resumeFrom=$resumeFrom")
 
         val req = Request.Builder().url(url).apply {
-            if (resumeFrom > 0) header("Range", "bytes=$resumeFrom-")
+            HttpResumePolicy.rangeHeader(resumeFrom)?.let { header("Range", it) }
         }.build()
 
         var expectedTotal = -1L
@@ -167,17 +170,16 @@ class LlmModelInstaller @Inject constructor(
             val body = r.body ?: throw RuntimeException("empty body")
 
             // 部分 CDN 收到 Range 但仍返回 200 + 完整文件，要从 0 开始写。
-            val isResume = r.code == 206 && resumeFrom > 0
             val contentLen = body.contentLength().takeIf { it > 0 } ?: -1
-            val total = if (isResume && contentLen > 0) resumeFrom + contentLen else contentLen
-            expectedTotal = total
+            val resumePlan = HttpResumePolicy.responsePlan(resumeFrom, r.code, contentLen)
+            expectedTotal = resumePlan.expectedTotal
 
-            downloaded = if (isResume) resumeFrom else 0L
+            downloaded = resumePlan.initialDownloaded
             var lastReported = downloaded
 
             val raf = RandomAccessFile(tmp, "rw")
             try {
-                if (isResume) raf.seek(resumeFrom) else raf.setLength(0)
+                if (resumePlan.append) raf.seek(resumeFrom) else raf.setLength(0)
                 val buf = ByteArray(64 * 1024)
                 body.byteStream().use { input ->
                     while (true) {
@@ -187,7 +189,7 @@ class LlmModelInstaller @Inject constructor(
                         downloaded += n
                         if (downloaded - lastReported >= REPORT_EVERY_BYTES) {
                             lastReported = downloaded
-                            channel.trySend(Progress(kind, mirror, downloaded, total, false))
+                            channel.trySend(Progress(kind, mirror, downloaded, expectedTotal, false))
                         }
                     }
                 }

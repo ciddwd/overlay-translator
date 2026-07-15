@@ -128,6 +128,7 @@ object CrashRecorder {
         )
         line("textOrientationAutoDetect", s.textOrientationAutoDetect)
         line("manualTextOrientation", s.manualTextOrientation?.name ?: "<auto>")
+        line("translationOutputFollowRecognition", s.translationOutputFollowRecognition)
         line("translationOutputLayout", s.translationOutputLayout)
         line("translationOutputDirection", s.translationOutputDirection)
         line("baiduOcrApiKey", mask(s.baiduOcrApiKey))

@@ -5,24 +5,29 @@ internal fun sortTextBlocksForReading(
     orientationHint: TextOrientation? = null
 ): List<TextBlock> {
     if (blocks.size <= 1) return blocks
-    val orientation = when {
-        orientationHint == TextOrientation.VERTICAL_RTL ||
-            orientationHint == TextOrientation.VERTICAL_LTR -> orientationHint
-        dominantLayoutOrientation(blocks.map { it.layoutOrientation }) == TextOrientation.VERTICAL_RTL ->
-            TextOrientation.VERTICAL_RTL
-        dominantLayoutOrientation(blocks.map { it.layoutOrientation }) == TextOrientation.VERTICAL_LTR ->
-            TextOrientation.VERTICAL_LTR
-        inferVerticalByShape(blocks) -> TextOrientation.VERTICAL_RTL
-        else -> TextOrientation.HORIZONTAL_LTR
-    }
-    return if (orientation == TextOrientation.VERTICAL_RTL || orientation == TextOrientation.VERTICAL_LTR) {
-        sortVertical(blocks, leftToRight = orientation == TextOrientation.VERTICAL_LTR)
-    } else {
-        sortHorizontal(blocks)
+    val orientation = resolveTextBlockReadingOrientation(blocks, orientationHint)
+    return when (orientation) {
+        TextOrientation.VERTICAL_RTL -> sortVertical(blocks, leftToRight = false)
+        TextOrientation.VERTICAL_LTR -> sortVertical(blocks, leftToRight = true)
+        TextOrientation.HORIZONTAL_RTL -> sortHorizontal(blocks, leftToRight = false)
+        else -> sortHorizontal(blocks, leftToRight = true)
     }
 }
 
-private fun sortHorizontal(blocks: List<TextBlock>): List<TextBlock> {
+internal fun resolveTextBlockReadingOrientation(
+    blocks: List<TextBlock>,
+    orientationHint: TextOrientation? = null,
+): TextOrientation {
+    val layoutOrientation = dominantLayoutOrientation(blocks.map { it.layoutOrientation })
+    return when {
+        orientationHint != null && orientationHint != TextOrientation.UNKNOWN -> orientationHint
+        layoutOrientation != null -> layoutOrientation
+        inferVerticalByShape(blocks) -> TextOrientation.VERTICAL_RTL
+        else -> TextOrientation.HORIZONTAL_LTR
+    }
+}
+
+private fun sortHorizontal(blocks: List<TextBlock>, leftToRight: Boolean): List<TextBlock> {
     val avgHeight = blocks.map { it.boundingBox.rectHeight().coerceAtLeast(1) }.average().toFloat()
     val sameLineThreshold = (avgHeight * 0.65f).coerceAtLeast(8f)
     val lines = mutableListOf<MutableList<TextBlock>>()
@@ -38,7 +43,10 @@ private fun sortHorizontal(blocks: List<TextBlock>): List<TextBlock> {
     }
     return lines
         .sortedBy { it.minOf { block -> block.boundingBox.top } }
-        .flatMap { line -> line.sortedBy { it.boundingBox.left } }
+        .flatMap { line ->
+            if (leftToRight) line.sortedBy { it.boundingBox.left }
+            else line.sortedByDescending { it.boundingBox.right }
+        }
 }
 
 private fun sortVertical(

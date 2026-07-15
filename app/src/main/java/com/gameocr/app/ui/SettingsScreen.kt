@@ -1,8 +1,11 @@
 package com.gameocr.app.ui
 
+import android.Manifest
 import android.content.Intent
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.provider.Settings as AndroidSettings
 import android.util.TypedValue
 import android.widget.Toast
@@ -115,6 +118,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -144,10 +148,12 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.work.WorkInfo
 import com.gameocr.app.R
 import com.gameocr.app.capture.LoopFrameChangePolicy
 import com.gameocr.app.capture.LoopFrameStabilityPolicy
@@ -168,6 +174,8 @@ import com.gameocr.app.data.OverlayTheme
 import com.gameocr.app.data.OverlayTextAlignment
 import com.gameocr.app.data.OverlayTextStyle
 import com.gameocr.app.data.PaddleModelVersion
+import com.gameocr.app.download.ModelDownloadSpec
+import com.gameocr.app.download.ModelDownloadWorkPolicy
 import com.gameocr.app.data.PreprocessOptions
 import com.gameocr.app.data.RenderMode
 import com.gameocr.app.data.Settings
@@ -179,6 +187,7 @@ import com.gameocr.app.data.TranslationPresetImportPlan
 import com.gameocr.app.data.TranslationBlockInteractionMode
 import com.gameocr.app.data.TranslationPresetTransfer
 import com.gameocr.app.data.TranslatorEngine
+import com.gameocr.app.data.resolveTranslationOutputSettings
 import com.gameocr.app.glossary.supportsTranslationPromptContext
 import com.gameocr.app.llm.LlmModelKind
 import com.gameocr.app.overlay.StyledTranslationTextView
@@ -274,6 +283,33 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val modelDownloadWorkInfos by viewModel.modelDownloadWorkInfos.collectAsState(initial = emptyList())
+    val unfinishedModelDownloads = modelDownloadWorkInfos.filterNot { it.state.isFinished }
+    val activeModelDownloadWork = unfinishedModelDownloads.firstOrNull { it.state == WorkInfo.State.RUNNING }
+        ?: unfinishedModelDownloads.firstOrNull()
+    val backgroundModelDownloadActive = activeModelDownloadWork != null
+    val activeModelDownloadSpec = ModelDownloadSpec.decode(
+        activeModelDownloadWork?.progress?.getString(
+            com.gameocr.app.download.ModelDownloadWorker.KEY_CURRENT_SPEC
+        ).orEmpty()
+    )
+    val backgroundModelDownloadStatus = activeModelDownloadWork?.progress?.getString(
+        com.gameocr.app.download.ModelDownloadWorker.KEY_STATUS
+    ).orEmpty()
+    val backgroundModelDownloadOwnerPresetId = activeModelDownloadWork?.tags
+        ?.let(ModelDownloadWorkPolicy::ownerPresetId)
+    val backgroundModelDownloadDownloaded = activeModelDownloadWork?.progress?.getLong(
+        com.gameocr.app.download.ModelDownloadWorker.KEY_DOWNLOADED,
+        0L,
+    ) ?: 0L
+    val backgroundModelDownloadTotal = activeModelDownloadWork?.progress?.getLong(
+        com.gameocr.app.download.ModelDownloadWorker.KEY_TOTAL,
+        -1L,
+    ) ?: -1L
+    fun statusDuringBackgroundDownload(spec: ModelDownloadSpec, fallback: String): String =
+        backgroundModelDownloadStatus.takeIf {
+            backgroundModelDownloadActive && activeModelDownloadSpec == spec && it.isNotBlank()
+        } ?: fallback
     val usageAccessGranted = rememberUsageAccessGranted(context)
 
     var baseUrl by remember { mutableStateOf("") }
@@ -377,7 +413,7 @@ fun SettingsScreen(
     var tencentRegion by remember { mutableStateOf("ap-guangzhou") }
     var tencentEndpoint by remember { mutableStateOf(com.gameocr.app.data.TencentOcrEndpoint.GENERAL_BASIC) }
     var tencentLanguage by remember { mutableStateOf(com.gameocr.app.data.TencentOcrLanguage.AUTO) }
-    var paddleModelVersion by remember { mutableStateOf(com.gameocr.app.data.PaddleModelVersion.V6_SMALL) }
+    var paddleModelVersion by remember { mutableStateOf(com.gameocr.app.data.PaddleModelVersion.V5_MOBILE) }
     var paddleStatus by remember { mutableStateOf("") }
     var paddleDownloading by remember { mutableStateOf(false) }
     var paddleModelReady by remember { mutableStateOf(false) }
@@ -435,11 +471,12 @@ fun SettingsScreen(
     var dbnetAdvancedExpanded by remember { mutableStateOf(false) }
     var showDbnetResetConfirm by remember { mutableStateOf(false) }
     var manualTextOrient by remember { mutableStateOf<com.gameocr.app.ocr.TextOrientation?>(null) }
+    var translationOutputFollowRecognition by remember { mutableStateOf(true) }
     var translationOutputLayout by remember {
-        mutableStateOf(com.gameocr.app.data.TranslationOutputLayout.FOLLOW_RECOGNITION)
+        mutableStateOf(com.gameocr.app.data.TranslationOutputLayout.HORIZONTAL)
     }
     var translationOutputDirection by remember {
-        mutableStateOf(com.gameocr.app.data.TranslationOutputDirection.FOLLOW_RECOGNITION)
+        mutableStateOf(com.gameocr.app.data.TranslationOutputDirection.LEFT_TO_RIGHT)
     }
     var translationGlossaryEnabled by remember { mutableStateOf(true) }
     var foregroundAppDetectionMode by remember {
@@ -471,13 +508,43 @@ fun SettingsScreen(
     var showUnsavedDialog by remember { mutableStateOf(false) }
     var showSakuraFallbackDialog by remember { mutableStateOf(false) }
     var pendingModelDownload by remember { mutableStateOf<PendingModelDownload?>(null) }
+    var pendingDownloadAfterNotificationPermission by remember {
+        mutableStateOf<(() -> Unit)?>(null)
+    }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) {
+        val pendingDownload = pendingDownloadAfterNotificationPermission
+        pendingDownloadAfterNotificationPermission = null
+        pendingDownload?.invoke()
+    }
+
+    fun continueModelDownloadAfterNotificationPermission(onConfirmed: () -> Unit) {
+        val permissionGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS,
+            ) == PackageManager.PERMISSION_GRANTED
+        if (shouldRequestModelDownloadNotificationPermission(
+                sdkInt = Build.VERSION.SDK_INT,
+                permissionGranted = permissionGranted,
+            )
+        ) {
+            pendingDownloadAfterNotificationPermission = onConfirmed
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            onConfirmed()
+        }
+    }
 
     fun requestModelDownload(modelLabel: String, onConfirmed: () -> Unit) {
         val warning = modelDownloadNetworkWarningFor(currentModelDownloadNetworkKind(context))
         if (warning == null) {
-            onConfirmed()
+            continueModelDownloadAfterNotificationPermission(onConfirmed)
         } else {
-            pendingModelDownload = PendingModelDownload(modelLabel, warning, onConfirmed)
+            pendingModelDownload = PendingModelDownload(modelLabel, warning) {
+                continueModelDownloadAfterNotificationPermission(onConfirmed)
+            }
         }
     }
 
@@ -644,8 +711,15 @@ fun SettingsScreen(
         mergeStrength = s.mergeStrength
         textOrientAutoDetect = s.textOrientationAutoDetect
         manualTextOrient = s.manualTextOrientation
-        translationOutputLayout = s.translationOutputLayout
-        translationOutputDirection = s.translationOutputDirection
+        resolveTranslationOutputSettings(
+            s.translationOutputFollowRecognition,
+            s.translationOutputLayout,
+            s.translationOutputDirection,
+        ).let { output ->
+            translationOutputFollowRecognition = output.followRecognition
+            translationOutputLayout = output.layout
+            translationOutputDirection = output.direction
+        }
         dbnetProb = s.dbnetProbThresh
         dbnetScore = s.dbnetBoxScoreThresh
         dbnetUnclip = s.dbnetUnclipRatio
@@ -956,6 +1030,7 @@ fun SettingsScreen(
         paddleModelVersion = paddleModelVersion,
         textOrientationAutoDetect = textOrientAutoDetect,
         manualTextOrientation = manualTextOrient,
+        translationOutputFollowRecognition = translationOutputFollowRecognition,
         translationOutputLayout = translationOutputLayout,
         translationOutputDirection = translationOutputDirection,
         translationGlossaryEnabled = translationGlossaryEnabled,
@@ -991,78 +1066,36 @@ fun SettingsScreen(
         val llmKinds = issues.mapNotNull { it.llmModelKind }.distinct()
         val paddleVersions = issues.mapNotNull { it.paddleModelVersion }.distinct()
 
-        for (kind in llmKinds) {
-            presetMessage = context.getString(
-                R.string.settings_translation_preset_downloading_model_format,
-                kind.displayName
-            )
-            llmDownloading = true
-            try {
-                viewModel.saveLlmMirror(llmMirrorChoice, llmMirror)
-                viewModel.downloadLlmModel(kind) { msg ->
-                    if (localLlmModelKindFor(translatorEngine) == kind) {
-                        llmModelStatus = msg
-                    }
-                    presetMessage = msg
-                }
-                refreshLlmModelState(kind)
-            } finally {
-                llmDownloading = false
-            }
+        val mangaMissing = issues.any { it.kind == TranslationPresetModelIssueKind.MANGA_OCR_MISSING }
+        val orientationMissing = issues.any { it.kind == TranslationPresetModelIssueKind.ORIENTATION_MISSING }
+        val specs = buildList {
+            llmKinds.forEach { add(ModelDownloadSpec.llm(it)) }
+            paddleVersions.forEach { add(ModelDownloadSpec.paddle(it)) }
+            if (mangaMissing) add(ModelDownloadSpec.mangaOcr())
+            if (orientationMissing) add(ModelDownloadSpec.orientation())
         }
+        if (specs.isEmpty()) return
 
-        for (version in paddleVersions) {
-            val versionLabel = context.getString(version.displayNameRes)
-            presetMessage = context.getString(
-                R.string.settings_translation_preset_downloading_model_format,
-                versionLabel
+        llmDownloading = llmKinds.isNotEmpty()
+        paddleDownloading = paddleVersions.isNotEmpty()
+        mangaOcrDownloading = mangaMissing
+        orientationModelDownloading = orientationMissing
+        try {
+            if (llmKinds.isNotEmpty()) viewModel.saveLlmMirror(llmMirrorChoice, llmMirror)
+            viewModel.downloadModels(
+                specs = specs,
+                onProgress = { msg -> presetMessage = msg },
+                ownerPresetId = preset.id,
             )
-            paddleDownloading = true
-            try {
-                viewModel.downloadPaddleModels(version) { msg ->
-                    if (paddleModelVersion == version) {
-                        paddleStatus = msg
-                    }
-                    presetMessage = msg
-                }
-                refreshPaddleModelState(version)
-            } finally {
-                paddleDownloading = false
-            }
-        }
-
-        if (issues.any { it.kind == TranslationPresetModelIssueKind.MANGA_OCR_MISSING }) {
-            presetMessage = context.getString(
-                R.string.settings_translation_preset_downloading_model_format,
-                context.getString(R.string.settings_manga_ocr_model_name)
-            )
-            mangaOcrDownloading = true
-            try {
-                viewModel.downloadMangaOcrModels { msg ->
-                    mangaOcrStatus = msg
-                    presetMessage = msg
-                }
-                refreshMangaOcrModelState()
-            } finally {
-                mangaOcrDownloading = false
-            }
-        }
-
-        if (issues.any { it.kind == TranslationPresetModelIssueKind.ORIENTATION_MISSING }) {
-            presetMessage = context.getString(
-                R.string.settings_translation_preset_downloading_model_format,
-                context.getString(R.string.settings_orientation_model_name)
-            )
-            orientationModelDownloading = true
-            try {
-                viewModel.downloadOrientationModel { msg ->
-                    orientationModelStatus = msg
-                    presetMessage = msg
-                }
-                refreshOrientationModelState()
-            } finally {
-                orientationModelDownloading = false
-            }
+            llmKinds.forEach { refreshLlmModelState(it) }
+            paddleVersions.forEach { refreshPaddleModelState(it) }
+            if (mangaMissing) refreshMangaOcrModelState()
+            if (orientationMissing) refreshOrientationModelState()
+        } finally {
+            llmDownloading = false
+            paddleDownloading = false
+            mangaOcrDownloading = false
+            orientationModelDownloading = false
         }
 
         refreshPresetModelReadiness()
@@ -1146,6 +1179,8 @@ fun SettingsScreen(
         )
     }
 
+    val modelDownloadBusy = backgroundModelDownloadActive || downloadingPresetId != null ||
+        llmDownloading || paddleDownloading || mangaOcrDownloading || orientationModelDownloading
     val translationPresetSection: @Composable () -> Unit = {
         SectionCard(
             title = stringResource(R.string.settings_section_translation_presets),
@@ -1165,8 +1200,6 @@ fun SettingsScreen(
             } else {
                 null
             }
-            val modelDownloadBusy = downloadingPresetId != null ||
-                llmDownloading || paddleDownloading || mangaOcrDownloading || orientationModelDownloading
             TranslationPresetSection(
                 customPresets = translationPresets,
                 activeId = matchingPresetId,
@@ -1178,7 +1211,7 @@ fun SettingsScreen(
                 mangaOcrModelReady = presetMangaOcrModelReady,
                 orientationModelReady = presetOrientationModelReady,
                 modelDownloading = modelDownloadBusy,
-                downloadingPresetId = downloadingPresetId,
+                downloadingPresetId = downloadingPresetId ?: backgroundModelDownloadOwnerPresetId,
                 onExport = {
                     pendingSettingsExport = buildSettingsTransferSnapshot()
                     presetExportLauncher.launch(SettingsBundleTransfer.DEFAULT_FILE_NAME)
@@ -1324,8 +1357,11 @@ fun SettingsScreen(
                 }
                 HorizontalDivider()
                 OrientationModelSection(
-                    status = orientationModelStatus,
-                    downloading = orientationModelDownloading,
+                    status = statusDuringBackgroundDownload(
+                        ModelDownloadSpec.orientation(),
+                        orientationModelStatus,
+                    ),
+                    downloading = orientationModelDownloading || backgroundModelDownloadActive,
                     modelReady = orientationModelReady,
                     onDownload = {
                         requestModelDownload(context.getString(R.string.settings_orientation_model_name)) {
@@ -1377,6 +1413,15 @@ fun SettingsScreen(
             HorizontalDivider()
             SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_ORIENTATION_OUTPUT) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            SwitchRow(
+                stringResource(R.string.settings_translation_output_follow_title),
+                translationOutputFollowRecognition,
+                helpText = stringResource(R.string.settings_translation_output_follow_summary),
+            ) { enabled ->
+                translationOutputFollowRecognition = enabled
+                scope.launch { viewModel.saveTranslationOutputFollowRecognition(enabled) }
+            }
+            if (!translationOutputFollowRecognition) {
             Text(
                 stringResource(R.string.settings_translation_output_layout_label),
                 style = MaterialTheme.typography.labelLarge,
@@ -1385,14 +1430,15 @@ fun SettingsScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                com.gameocr.app.data.TranslationOutputLayout.entries.forEach { layout ->
+                com.gameocr.app.data.TranslationOutputLayout.entries
+                    .filterNot { it == com.gameocr.app.data.TranslationOutputLayout.FOLLOW_RECOGNITION }
+                    .forEach { layout ->
                     val label = when (layout) {
-                        com.gameocr.app.data.TranslationOutputLayout.FOLLOW_RECOGNITION ->
-                            stringResource(R.string.settings_translation_output_follow)
                         com.gameocr.app.data.TranslationOutputLayout.HORIZONTAL ->
                             stringResource(R.string.settings_translation_output_horizontal)
                         com.gameocr.app.data.TranslationOutputLayout.VERTICAL ->
                             stringResource(R.string.settings_translation_output_vertical)
+                        com.gameocr.app.data.TranslationOutputLayout.FOLLOW_RECOGNITION -> return@forEach
                     }
                     EngineChip(translationOutputLayout, layout, label) {
                         translationOutputLayout = it
@@ -1408,20 +1454,22 @@ fun SettingsScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                com.gameocr.app.data.TranslationOutputDirection.entries.forEach { direction ->
+                com.gameocr.app.data.TranslationOutputDirection.entries
+                    .filterNot { it == com.gameocr.app.data.TranslationOutputDirection.FOLLOW_RECOGNITION }
+                    .forEach { direction ->
                     val label = when (direction) {
-                        com.gameocr.app.data.TranslationOutputDirection.FOLLOW_RECOGNITION ->
-                            stringResource(R.string.settings_translation_output_follow)
                         com.gameocr.app.data.TranslationOutputDirection.LEFT_TO_RIGHT ->
                             stringResource(R.string.settings_translation_output_ltr)
                         com.gameocr.app.data.TranslationOutputDirection.RIGHT_TO_LEFT ->
                             stringResource(R.string.settings_translation_output_rtl)
+                        com.gameocr.app.data.TranslationOutputDirection.FOLLOW_RECOGNITION -> return@forEach
                     }
                     EngineChip(translationOutputDirection, direction, label) {
                         translationOutputDirection = it
                         scope.launch { viewModel.saveTranslationOutputDirection(it) }
                     }
                 }
+            }
             }
             }
             }
@@ -2073,8 +2121,15 @@ fun SettingsScreen(
             mangaOcrDbnetUnclip = s.mangaOcrDbnetUnclipRatio
             dbnetGap = s.bubbleClusterGap
             manualTextOrient = s.manualTextOrientation
-            translationOutputLayout = s.translationOutputLayout
-            translationOutputDirection = s.translationOutputDirection
+            resolveTranslationOutputSettings(
+                s.translationOutputFollowRecognition,
+                s.translationOutputLayout,
+                s.translationOutputDirection,
+            ).let { output ->
+                translationOutputFollowRecognition = output.followRecognition
+                translationOutputLayout = output.layout
+                translationOutputDirection = output.direction
+            }
             translationGlossaryEnabled = s.translationGlossaryEnabled
             foregroundAppDetectionMode = s.foregroundAppDetectionMode
             sendAppNameToTranslator = s.sendAppNameToTranslator
@@ -2087,6 +2142,19 @@ fun SettingsScreen(
 
     // paddleStatus 独立异步加载：file.exists() / file.length() 走 IO 线程，避免阻塞首帧。
     val settingsLoaded = initialSettings != null
+    val modelDownloadStateKey = modelDownloadWorkInfos.map { it.id to it.state }
+    val modelDownloadStageKey = activeModelDownloadSpec to activeModelDownloadWork?.progress?.getInt(
+        com.gameocr.app.download.ModelDownloadWorker.KEY_BATCH_INDEX,
+        0,
+    )
+    LaunchedEffect(settingsLoaded, modelDownloadStateKey, modelDownloadStageKey) {
+        if (!settingsLoaded) return@LaunchedEffect
+        localLlmModelKindFor(translatorEngine)?.let { refreshLlmModelState(it) }
+        refreshPaddleModelState(paddleModelVersion)
+        refreshMangaOcrModelState()
+        refreshOrientationModelState()
+        refreshPresetModelReadiness()
+    }
     LaunchedEffect(settingsLoaded, paddleModelVersion) {
         if (!settingsLoaded) return@LaunchedEffect
         refreshPaddleModelState(paddleModelVersion)
@@ -2113,54 +2181,73 @@ fun SettingsScreen(
     Scaffold(
         modifier = modifier.fillMaxSize(),
         topBar = {
-            TopAppBar(
-                title = {
-                    if (searchActive) {
-                        OutlinedTextField(
-                            value = searchQuery,
-                            onValueChange = { searchQuery = it },
-                            placeholder = { Text(stringResource(R.string.settings_search_placeholder)) },
-                            singleLine = true,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .focusRequester(searchFocusRequester),
-                            colors = TextFieldDefaults.colors(
-                                focusedContainerColor = MaterialTheme.colorScheme.background,
-                                unfocusedContainerColor = MaterialTheme.colorScheme.background,
-                                focusedIndicatorColor = MaterialTheme.colorScheme.primary,
-                                unfocusedIndicatorColor = MaterialTheme.colorScheme.outlineVariant
+            Column {
+                TopAppBar(
+                    title = {
+                        if (searchActive) {
+                            OutlinedTextField(
+                                value = searchQuery,
+                                onValueChange = { searchQuery = it },
+                                placeholder = { Text(stringResource(R.string.settings_search_placeholder)) },
+                                singleLine = true,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .focusRequester(searchFocusRequester),
+                                colors = TextFieldDefaults.colors(
+                                    focusedContainerColor = MaterialTheme.colorScheme.background,
+                                    unfocusedContainerColor = MaterialTheme.colorScheme.background,
+                                    focusedIndicatorColor = MaterialTheme.colorScheme.primary,
+                                    unfocusedIndicatorColor = MaterialTheme.colorScheme.outlineVariant
+                                )
                             )
-                        )
-                        LaunchedEffect(Unit) { searchFocusRequester.requestFocus() }
-                    } else {
-                        Text(stringResource(R.string.settings_title))
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = if (searchActive) closeSearch else tryBack) {
-                        Icon(
-                            if (searchActive) Icons.Default.Close else Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(
-                                if (searchActive) R.string.settings_search_close else R.string.common_back
-                            )
-                        )
-                    }
-                },
-                actions = {
-                    if (!searchActive) {
-                        IconButton(onClick = { searchActive = true }) {
+                            LaunchedEffect(Unit) { searchFocusRequester.requestFocus() }
+                        } else {
+                            Text(stringResource(R.string.settings_title))
+                        }
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = if (searchActive) closeSearch else tryBack) {
                             Icon(
-                                Icons.Default.Search,
-                                contentDescription = stringResource(R.string.settings_search_btn)
+                                if (searchActive) Icons.Default.Close else Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = stringResource(
+                                    if (searchActive) R.string.settings_search_close else R.string.common_back
+                                )
                             )
                         }
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
-                    scrolledContainerColor = MaterialTheme.colorScheme.background
+                    },
+                    actions = {
+                        if (!searchActive) {
+                            IconButton(onClick = { searchActive = true }) {
+                                Icon(
+                                    Icons.Default.Search,
+                                    contentDescription = stringResource(R.string.settings_search_btn)
+                                )
+                            }
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.background,
+                        scrolledContainerColor = MaterialTheme.colorScheme.background
+                    )
                 )
-            )
+                if (modelDownloadBusy) {
+                    Box(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    ) {
+                        ModelDownloadProgressCard(
+                            status = backgroundModelDownloadStatus
+                                .takeIf { backgroundModelDownloadActive }
+                                .orEmpty()
+                                .ifBlank { context.getString(R.string.model_download_waiting) },
+                            downloaded = backgroundModelDownloadDownloaded,
+                            total = backgroundModelDownloadTotal,
+                            onCancel = {
+                                activeModelDownloadWork?.id?.let(viewModel::cancelModelDownload)
+                            },
+                        )
+                    }
+                }
+            }
         },
         floatingActionButton = {
             ExtendedFloatingActionButton(
@@ -2302,8 +2389,11 @@ fun SettingsScreen(
                         currentKindLabel = currentKind.displayName,
                         deviceCapable = localLlmDeviceCapable,
                         modelReady = llmModelReady,
-                        status = llmModelStatus.ifBlank { stringResource(R.string.llm_status_missing) },
-                        downloading = llmDownloading,
+                        status = statusDuringBackgroundDownload(
+                            ModelDownloadSpec.llm(currentKind),
+                            llmModelStatus.ifBlank { stringResource(R.string.llm_status_missing) },
+                        ),
+                        downloading = llmDownloading || backgroundModelDownloadActive,
                         onDownload = {
                             requestModelDownload(currentKind.displayName) {
                                 scope.launch {
@@ -3056,8 +3146,11 @@ fun SettingsScreen(
 
                 if (ocrEngine == OcrEngineKind.PADDLE_ONNX) {
                     PaddleSection(
-                        status = paddleStatus,
-                        downloading = paddleDownloading,
+                        status = statusDuringBackgroundDownload(
+                            ModelDownloadSpec.paddle(paddleModelVersion),
+                            paddleStatus,
+                        ),
+                        downloading = paddleDownloading || backgroundModelDownloadActive,
                         modelReady = paddleModelReady,
                         modelVersion = paddleModelVersion,
                         onModelVersionChange = { newVer ->
@@ -3115,8 +3208,11 @@ fun SettingsScreen(
 
                 if (ocrEngine == OcrEngineKind.MANGA_OCR_JA) {
                     MangaOcrSection(
-                        status = mangaOcrStatus,
-                        downloading = mangaOcrDownloading,
+                        status = statusDuringBackgroundDownload(
+                            ModelDownloadSpec.mangaOcr(),
+                            mangaOcrStatus,
+                        ),
+                        downloading = mangaOcrDownloading || backgroundModelDownloadActive,
                         modelReady = mangaOcrModelReady,
                         onDownload = {
                             requestModelDownload(context.getString(R.string.settings_manga_ocr_model_name)) {
@@ -5041,6 +5137,7 @@ private val SEARCH_TARGET_ORIENTATION_DETECTION = intArrayOf(
     R.string.settings_search_item_orientation_model,
 )
 private val SEARCH_TARGET_ORIENTATION_OUTPUT = intArrayOf(
+    R.string.settings_translation_output_follow_title,
     R.string.settings_translation_output_layout_label,
 )
 private val SEARCH_TARGET_PREPROCESS = intArrayOf(
@@ -5520,6 +5617,54 @@ private fun TranslationPresetSection(
         )
     }
 }
+
+@Composable
+private fun ModelDownloadProgressCard(
+    status: String,
+    downloaded: Long,
+    total: Long,
+    onCancel: () -> Unit,
+) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+        ),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                stringResource(R.string.model_download_in_app_title),
+                style = MaterialTheme.typography.titleSmall,
+            )
+            val progress = modelDownloadProgressFraction(downloaded, total)
+            if (progress == null) {
+                androidx.compose.material3.LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            } else {
+                androidx.compose.material3.LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            Text(
+                status,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+            )
+            TextButton(onClick = onCancel) {
+                Text(stringResource(R.string.model_download_cancel))
+            }
+        }
+    }
+}
+
+internal fun modelDownloadProgressFraction(downloaded: Long, total: Long): Float? =
+    total.takeIf { it > 0L }
+        ?.let { (downloaded.toDouble() / it.toDouble()).coerceIn(0.0, 1.0).toFloat() }
 
 @Composable
 private fun TranslationPresetUnsavedSlot(
@@ -6939,7 +7084,7 @@ private fun PaddleSection(
                 ))
             }
             OutlinedButton(
-                enabled = !downloading,
+                enabled = downloadableModelImportEnabled(downloading, modelReady),
                 onClick = { importLauncher.launch("*/*") },
                 modifier = Modifier.weight(1f)
             ) { Text(stringResource(R.string.settings_paddle_btn_local_import)) }
@@ -7035,7 +7180,7 @@ private fun MangaOcrSection(
                 ))
             }
             OutlinedButton(
-                enabled = !downloading,
+                enabled = downloadableModelImportEnabled(downloading, modelReady),
                 onClick = { importLauncher.launch("*/*") },
                 modifier = Modifier.weight(1f)
             ) { Text(stringResource(R.string.settings_manga_ocr_btn_local_import)) }
@@ -7134,7 +7279,7 @@ private fun OrientationModelSection(
                 )
             }
             OutlinedButton(
-                enabled = !downloading,
+                enabled = downloadableModelImportEnabled(downloading, modelReady),
                 onClick = { importLauncher.launch("*/*") },
                 modifier = Modifier.weight(1f)
             ) { Text(stringResource(R.string.settings_orientation_model_btn_local_import)) }
@@ -7276,6 +7421,11 @@ private class PendingModelDownload(
     val onConfirmed: () -> Unit,
 )
 
+internal fun shouldRequestModelDownloadNotificationPermission(
+    sdkInt: Int,
+    permissionGranted: Boolean,
+): Boolean = sdkInt >= Build.VERSION_CODES.TIRAMISU && !permissionGranted
+
 internal fun modelDownloadNetworkWarningMessageRes(
     warning: ModelDownloadNetworkWarning,
 ): Int = when (warning) {
@@ -7407,7 +7557,7 @@ private fun LocalLlmSection(
                 ))
             }
             OutlinedButton(
-                enabled = !downloading,
+                enabled = downloadableModelImportEnabled(downloading, modelReady),
                 onClick = { importLauncher.launch("*/*") },
                 modifier = Modifier.weight(1f)
             ) { Text(stringResource(R.string.settings_paddle_btn_local_import)) }
@@ -7452,6 +7602,11 @@ internal fun localLlmDownloadEnabled(
 ): Boolean = !downloading && deviceCapable && !modelReady
 
 internal fun downloadableModelDownloadEnabled(
+    downloading: Boolean,
+    modelReady: Boolean,
+): Boolean = !downloading && !modelReady
+
+internal fun downloadableModelImportEnabled(
     downloading: Boolean,
     modelReady: Boolean,
 ): Boolean = !downloading && !modelReady

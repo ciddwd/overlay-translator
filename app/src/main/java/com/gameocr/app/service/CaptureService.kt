@@ -70,9 +70,10 @@ import com.gameocr.app.ocr.TranslationOutputOrientationPolicy
 import com.gameocr.app.ocr.findOcrResultQualityIssue
 import com.gameocr.app.ocr.mapBlocksFromRotated180
 import com.gameocr.app.ocr.orientationHintFromLayout
-import com.gameocr.app.ocr.resolveRenderOrientation
+import com.gameocr.app.ocr.resolveTextBlockReadingOrientation
 import com.gameocr.app.ocr.shouldRerunLowQualityChinesePaddleOcr
 import com.gameocr.app.ocr.sortTextBlocksForReading
+import com.gameocr.app.data.resolveTranslationOutputSettings
 import com.gameocr.app.data.FloatingSkill
 import com.gameocr.app.overlay.FloatingButtonManager
 import com.gameocr.app.overlay.LanguageQuickSwitchOverlay
@@ -1926,7 +1927,22 @@ class CaptureService : Service() {
                     "orientationHint=${orientationHint?.orientation?.name ?: "null"}"
             )
             logVerticalBlocks(diagId, "rawBlocks final", rawBlocks)
-            val orderedRawBlocks = sortTextBlocksForReading(rawBlocks, orientationHint?.orientation)
+            val recognizedReadingOrientation = resolveTextBlockReadingOrientation(
+                rawBlocks,
+                orientationHint?.orientation,
+            )
+            val translationOutput = resolveTranslationOutputSettings(
+                settings.translationOutputFollowRecognition,
+                settings.translationOutputLayout,
+                settings.translationOutputDirection,
+            )
+            val renderOrientation = TranslationOutputOrientationPolicy.resolve(
+                recognized = recognizedReadingOrientation,
+                followRecognition = translationOutput.followRecognition,
+                layout = translationOutput.layout,
+                direction = translationOutput.direction,
+            )
+            val orderedRawBlocks = sortTextBlocksForReading(rawBlocks, renderOrientation)
             logVerticalBlocks(diagId, "orderedRawBlocks final", orderedRawBlocks)
             // 把所有 box 拼成"#1 原文 / #2 原文 / ..."一条日志，避免一次 OCR 写多条。
             // 用 effectiveEngine 而非 settings.ocrEngine——方向自动分流时实际跑的可能是另一个引擎
@@ -1982,15 +1998,6 @@ class CaptureService : Service() {
                 mainScope.launch { overlay?.showErrorHint(message) }
                 return
             }
-            val recognizedRenderOrientation = resolveRenderOrientation(
-                hint = orientationHint?.orientation,
-                blockOrientations = blocks.map { it.layoutOrientation }
-            )
-            val renderOrientation = TranslationOutputOrientationPolicy.resolve(
-                recognized = recognizedRenderOrientation,
-                layout = settings.translationOutputLayout,
-                direction = settings.translationOutputDirection,
-            )
             val shouldSeedLoopRoi = roiOptimizationEnabled &&
                 !forceTextStabilityFallback &&
                 stabilityTrigger == LoopFrameStabilityDecision.PROBE_TEXT_STABILITY &&
@@ -2133,7 +2140,7 @@ class CaptureService : Service() {
             }
             logVerticalDiag(
                 diagId,
-                "render mode=${settings.renderMode.name} recognizedOrientation=$recognizedRenderOrientation " +
+                "render mode=${settings.renderMode.name} recognizedOrientation=$recognizedReadingOrientation " +
                     "renderOrientation=$renderOrientation blocks=${blocks.size}"
             )
             when {
@@ -2173,14 +2180,19 @@ class CaptureService : Service() {
         diagId: Long? = null,
         translationElapsedMs: Long? = null
     ) {
-        val recognizedOrientation = resolveRenderOrientation(
-            hint = null,
-            blockOrientations = items.map { it.first.layoutOrientation },
+        val recognizedOrientation = resolveTextBlockReadingOrientation(
+            items.map { it.first },
+        )
+        val translationOutput = resolveTranslationOutputSettings(
+            settings.translationOutputFollowRecognition,
+            settings.translationOutputLayout,
+            settings.translationOutputDirection,
         )
         val outputOrientation = TranslationOutputOrientationPolicy.resolve(
             recognized = recognizedOrientation,
-            layout = settings.translationOutputLayout,
-            direction = settings.translationOutputDirection,
+            followRecognition = translationOutput.followRecognition,
+            layout = translationOutput.layout,
+            direction = translationOutput.direction,
         )
         diagId?.let { logVerticalTranslatedBlocks(it, "renderTranslatedBlocks", items) }
         items.forEach { (b, dst) ->

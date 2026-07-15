@@ -5,10 +5,12 @@ import com.gameocr.app.R
 import com.gameocr.app.data.LlmMirrorChoice
 import com.gameocr.app.data.PaddleModelVersion
 import com.gameocr.app.data.SettingsRepository
+import com.gameocr.app.util.HttpResumePolicy
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
@@ -19,6 +21,7 @@ import okhttp3.Request
 import timber.log.Timber
 import java.io.File
 import java.io.FileOutputStream
+import java.io.RandomAccessFile
 
 /**
  * PaddleOCR PP-OCRv5 mobile 模型安装器。
@@ -93,6 +96,10 @@ class PaddleModelInstaller @Inject constructor(
         )
 
         for ((name, dest, urls) in plans) {
+            if (dest.exists() && dest.length() > 0) {
+                send(Progress(name, "(already installed)", dest.length(), dest.length(), true))
+                continue
+            }
             var ok = false
             var lastErr: String? = null
             for (url in urls) {
@@ -103,6 +110,7 @@ class PaddleModelInstaller @Inject constructor(
                     send(Progress(name, mirror, dest.length(), dest.length(), true))
                     break
                 } catch (t: Throwable) {
+                    if (t is CancellationException) throw t
                     lastErr = "${t.javaClass.simpleName}: ${t.message}"
                     Timber.w(t, "镜像失败: $url")
                     send(Progress(name, mirror, 0, 0, false, error = lastErr))
@@ -125,15 +133,25 @@ class PaddleModelInstaller @Inject constructor(
         mirror: String
     ) = runInterruptible {
         val tmp = File(dest.parentFile, dest.name + ".tmp")
-        Timber.i("Trying: $url")
-        client.newCall(Request.Builder().url(url).build()).execute().use { r ->
+        val resumeFrom = tmp.length().takeIf { tmp.exists() } ?: 0L
+        Timber.i("Trying: $url resumeFrom=$resumeFrom")
+        val request = Request.Builder().url(url).apply {
+            HttpResumePolicy.rangeHeader(resumeFrom)?.let { header("Range", it) }
+        }.build()
+        var expectedTotal = -1L
+        var downloaded = 0L
+        client.newCall(request).execute().use { r ->
             if (!r.isSuccessful) throw RuntimeException("HTTP ${r.code}")
             val body = r.body ?: throw RuntimeException("empty body")
-            val total = body.contentLength().takeIf { it > 0 } ?: -1
-            var downloaded = 0L
-            var lastReported = 0L
+            val contentLength = body.contentLength().takeIf { it > 0 } ?: -1L
+            val resumePlan = HttpResumePolicy.responsePlan(resumeFrom, r.code, contentLength)
+            expectedTotal = resumePlan.expectedTotal
+            downloaded = resumePlan.initialDownloaded
+            var lastReported = downloaded
+            val output = RandomAccessFile(tmp, "rw")
             body.byteStream().use { input ->
-                FileOutputStream(tmp).use { output ->
+                output.use {
+                    if (resumePlan.append) output.seek(resumeFrom) else output.setLength(0)
                     val buf = ByteArray(64 * 1024)
                     while (true) {
                         val n = input.read(buf)
@@ -143,11 +161,14 @@ class PaddleModelInstaller @Inject constructor(
                         // 节流：每 200KB 报一次，避免 UI 刷新过频
                         if (downloaded - lastReported >= 200 * 1024) {
                             lastReported = downloaded
-                            channel.trySend(Progress(name, mirror, downloaded, total, false))
+                            channel.trySend(Progress(name, mirror, downloaded, expectedTotal, false))
                         }
                     }
                 }
             }
+        }
+        if (expectedTotal > 0 && downloaded != expectedTotal) {
+            throw RuntimeException("download truncated: got $downloaded of $expectedTotal bytes")
         }
         if (dest.exists()) dest.delete()
         if (!tmp.renameTo(dest)) {

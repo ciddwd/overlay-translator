@@ -6,6 +6,7 @@ import ai.onnxruntime.OrtSession
 import android.content.Context
 import android.graphics.Bitmap
 import com.gameocr.app.R
+import com.gameocr.app.util.CpuThreadPolicy
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.nio.FloatBuffer
 import javax.inject.Inject
@@ -91,8 +92,16 @@ class PaddleDocOriClassifier @Inject constructor(
         val files = installer.checkInstalled()
             ?: throw ModelNotReadyException(context.getString(R.string.err_orientation_model_not_ready))
         val e = env ?: OrtEnvironment.getEnvironment().also { env = it }
-        session = e.createSession(files.model.absolutePath, OrtSession.SessionOptions())
-        Timber.i("Paddle doc orientation ready: %dKB", files.model.length() / 1024)
+        val availableProcessors = CpuThreadPolicy.availableProcessors()
+        val threads = CpuThreadPolicy.select(availableProcessors)
+        val options = OrtSession.SessionOptions().apply { setIntraOpNumThreads(threads) }
+        session = e.createSession(files.model.absolutePath, options)
+        Timber.i(
+            "Paddle doc orientation ready: %dKB availableProcessors=%d ortThreads=%d",
+            files.model.length() / 1024,
+            availableProcessors,
+            threads,
+        )
     }
 
     fun close() {

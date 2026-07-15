@@ -16,6 +16,8 @@ import com.gameocr.app.util.VerticalDiagnosticLog
 /** TextView that draws an optional outline before the normal filled translation text. */
 @SuppressLint("AppCompatCustomView") // Platform TextView keeps the framework text-selection ActionMode.
 class StyledTranslationTextView(context: Context) : TextView(context) {
+    var horizontalRightToLeft: Boolean = false
+
     private var outlineWidthPx = 0f
     private var outlineColor = 0
     private var shadowEnabled = false

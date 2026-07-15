@@ -9,33 +9,43 @@ class TranslationOutputOrientationPolicyTest {
     @Test
     fun resolve_cases() {
         data class Case(
+            val name: String,
             val recognized: TextOrientation,
+            val followRecognition: Boolean,
             val layout: TranslationOutputLayout,
             val direction: TranslationOutputDirection,
             val expected: TextOrientation,
         )
 
         val cases = listOf(
-            Case(TextOrientation.VERTICAL_RTL, followLayout, followDirection, TextOrientation.VERTICAL_RTL),
-            Case(TextOrientation.STACKED, followLayout, followDirection, TextOrientation.STACKED),
-            Case(TextOrientation.UNKNOWN, followLayout, followDirection, TextOrientation.HORIZONTAL_LTR),
-            Case(TextOrientation.VERTICAL_RTL, TranslationOutputLayout.HORIZONTAL, followDirection, TextOrientation.HORIZONTAL_RTL),
-            Case(TextOrientation.HORIZONTAL_LTR, TranslationOutputLayout.VERTICAL, followDirection, TextOrientation.VERTICAL_LTR),
-            Case(TextOrientation.HORIZONTAL_RTL, TranslationOutputLayout.VERTICAL, followDirection, TextOrientation.VERTICAL_RTL),
-            Case(TextOrientation.VERTICAL_RTL, followLayout, TranslationOutputDirection.LEFT_TO_RIGHT, TextOrientation.VERTICAL_LTR),
-            Case(TextOrientation.HORIZONTAL_LTR, followLayout, TranslationOutputDirection.RIGHT_TO_LEFT, TextOrientation.HORIZONTAL_RTL),
-            Case(TextOrientation.UNKNOWN, TranslationOutputLayout.VERTICAL, TranslationOutputDirection.RIGHT_TO_LEFT, TextOrientation.VERTICAL_RTL),
+            Case("follow vertical rtl", TextOrientation.VERTICAL_RTL, true, horizontal, ltr, TextOrientation.VERTICAL_RTL),
+            Case("follow stacked", TextOrientation.STACKED, true, vertical, rtl, TextOrientation.STACKED),
+            Case("follow unknown fallback", TextOrientation.UNKNOWN, true, vertical, rtl, TextOrientation.HORIZONTAL_LTR),
+            Case("manual horizontal ltr", TextOrientation.VERTICAL_RTL, false, horizontal, ltr, TextOrientation.HORIZONTAL_LTR),
+            Case("manual horizontal rtl", TextOrientation.VERTICAL_LTR, false, horizontal, rtl, TextOrientation.HORIZONTAL_RTL),
+            Case("manual vertical ltr", TextOrientation.HORIZONTAL_RTL, false, vertical, ltr, TextOrientation.VERTICAL_LTR),
+            Case("manual vertical rtl", TextOrientation.HORIZONTAL_LTR, false, vertical, rtl, TextOrientation.VERTICAL_RTL),
+            Case("manual sanitizes follow enums", TextOrientation.VERTICAL_RTL, false, followLayout, followDirection, TextOrientation.HORIZONTAL_LTR),
         )
 
         cases.forEach { case ->
             assertEquals(
-                case.toString(),
+                case.name,
                 case.expected,
-                TranslationOutputOrientationPolicy.resolve(case.recognized, case.layout, case.direction),
+                TranslationOutputOrientationPolicy.resolve(
+                    case.recognized,
+                    case.followRecognition,
+                    case.layout,
+                    case.direction,
+                ),
             )
         }
     }
 
     private val followLayout = TranslationOutputLayout.FOLLOW_RECOGNITION
+    private val horizontal = TranslationOutputLayout.HORIZONTAL
+    private val vertical = TranslationOutputLayout.VERTICAL
     private val followDirection = TranslationOutputDirection.FOLLOW_RECOGNITION
+    private val ltr = TranslationOutputDirection.LEFT_TO_RIGHT
+    private val rtl = TranslationOutputDirection.RIGHT_TO_LEFT
 }

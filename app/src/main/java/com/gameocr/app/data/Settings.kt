@@ -73,10 +73,9 @@ data class Settings(
      * 通常仅在自动判别频繁误判某帧时由用户临时锁定。
      */
     val manualTextOrientation: com.gameocr.app.ocr.TextOrientation? = null,
-    val translationOutputLayout: TranslationOutputLayout =
-        TranslationOutputLayout.FOLLOW_RECOGNITION,
-    val translationOutputDirection: TranslationOutputDirection =
-        TranslationOutputDirection.FOLLOW_RECOGNITION,
+    val translationOutputFollowRecognition: Boolean = true,
+    val translationOutputLayout: TranslationOutputLayout = TranslationOutputLayout.FOLLOW_RECOGNITION,
+    val translationOutputDirection: TranslationOutputDirection = TranslationOutputDirection.FOLLOW_RECOGNITION,
     val baiduOcrApiKey: String = "",
     val baiduOcrSecretKey: String = "",
     /** 百度 OCR 接口类型。默认含位置标准版，能让译文紧贴原文 boundingBox 渲染。 */
@@ -102,7 +101,7 @@ data class Settings(
      * GeneralAccurateOCR 只支持 auto / zh，RecognizeAgent 不读这个字段（引擎层会跳过）。
      */
     val tencentOcrLanguage: TencentOcrLanguage = TencentOcrLanguage.AUTO,
-    val paddleModelVersion: PaddleModelVersion = PaddleModelVersion.V6_SMALL,
+    val paddleModelVersion: PaddleModelVersion = PaddleModelVersion.V5_MOBILE,
     val paddleModelMirrorUrl: String = "",
     /**
      * manga-ocr 模型下载镜像 URL（可选）。l0wgear/manga-ocr-2025-onnx 没有公开 hf-mirror 代理
@@ -396,16 +395,15 @@ data class TranslationPreset(
     val tencentRegion: String = "ap-guangzhou",
     val tencentOcrEndpoint: TencentOcrEndpoint = TencentOcrEndpoint.GENERAL_BASIC,
     val tencentOcrLanguage: TencentOcrLanguage = TencentOcrLanguage.AUTO,
-    val paddleModelVersion: PaddleModelVersion = PaddleModelVersion.V6_SMALL,
+    val paddleModelVersion: PaddleModelVersion = PaddleModelVersion.V5_MOBILE,
     val apiTimeoutSeconds: Int = 30,
     val mergeAdjacentBlocks: Boolean = false,
     val mergeStrength: MergeStrength = MergeStrength.STANDARD,
     val textOrientationAutoDetect: Boolean = true,
     val manualTextOrientation: com.gameocr.app.ocr.TextOrientation? = null,
-    val translationOutputLayout: TranslationOutputLayout =
-        TranslationOutputLayout.FOLLOW_RECOGNITION,
-    val translationOutputDirection: TranslationOutputDirection =
-        TranslationOutputDirection.FOLLOW_RECOGNITION,
+    val translationOutputFollowRecognition: Boolean = true,
+    val translationOutputLayout: TranslationOutputLayout = TranslationOutputLayout.FOLLOW_RECOGNITION,
+    val translationOutputDirection: TranslationOutputDirection = TranslationOutputDirection.FOLLOW_RECOGNITION,
     val translationGlossaryEnabled: Boolean = true,
     val sendAppNameToTranslator: Boolean = false,
     val localLlmTemperature: Float = 0.7f,
@@ -421,7 +419,13 @@ data class TranslationPreset(
     val bubbleClusterGap: Int = 32,
     val settingsHash: String = ""
 ) {
-    fun applyTo(settings: Settings): Settings = settings.copy(
+    fun applyTo(settings: Settings): Settings {
+        val output = resolveTranslationOutputSettings(
+            translationOutputFollowRecognition,
+            translationOutputLayout,
+            translationOutputDirection,
+        )
+        return settings.copy(
         baseUrl = baseUrl,
         model = model,
         sourceLang = sourceLang,
@@ -468,8 +472,9 @@ data class TranslationPreset(
         mergeStrength = mergeStrength,
         textOrientationAutoDetect = textOrientationAutoDetect,
         manualTextOrientation = manualTextOrientation,
-        translationOutputLayout = translationOutputLayout,
-        translationOutputDirection = translationOutputDirection,
+        translationOutputFollowRecognition = output.followRecognition,
+        translationOutputLayout = output.layout,
+        translationOutputDirection = output.direction,
         translationGlossaryEnabled = translationGlossaryEnabled,
         sendAppNameToTranslator = sendAppNameToTranslator,
         localLlmTemperature = localLlmTemperature,
@@ -483,7 +488,8 @@ data class TranslationPreset(
         dbnetUnclipRatio = dbnetUnclipRatio,
         mangaOcrDbnetUnclipRatio = mangaOcrDbnetUnclipRatio,
         bubbleClusterGap = bubbleClusterGap
-    )
+        )
+    }
 }
 
 object TranslationPresetCatalog {
@@ -519,6 +525,11 @@ object TranslationPresetCatalog {
         shortName: String,
         settings: Settings
     ): TranslationPreset {
+        val output = resolveTranslationOutputSettings(
+            settings.translationOutputFollowRecognition,
+            settings.translationOutputLayout,
+            settings.translationOutputDirection,
+        )
         val preset = TranslationPreset(
             id = id,
             name = name,
@@ -569,8 +580,9 @@ object TranslationPresetCatalog {
             mergeStrength = settings.mergeStrength,
             textOrientationAutoDetect = settings.textOrientationAutoDetect,
             manualTextOrientation = settings.manualTextOrientation,
-            translationOutputLayout = settings.translationOutputLayout,
-            translationOutputDirection = settings.translationOutputDirection,
+            translationOutputFollowRecognition = output.followRecognition,
+            translationOutputLayout = output.layout,
+            translationOutputDirection = output.direction,
             translationGlossaryEnabled = settings.translationGlossaryEnabled,
             sendAppNameToTranslator = settings.sendAppNameToTranslator,
             localLlmTemperature = settings.localLlmTemperature,
@@ -604,6 +616,11 @@ object TranslationPresetCatalog {
 
     private fun settingsHash(preset: TranslationPreset): String {
         val textStyle = preset.overlayTextStyle.normalized()
+        val output = resolveTranslationOutputSettings(
+            preset.translationOutputFollowRecognition,
+            preset.translationOutputLayout,
+            preset.translationOutputDirection,
+        )
         return sha256(
             preset.baseUrl,
             preset.model,
@@ -666,8 +683,9 @@ object TranslationPresetCatalog {
             preset.mergeStrength.name,
             preset.textOrientationAutoDetect,
             preset.manualTextOrientation?.name.orEmpty(),
-            preset.translationOutputLayout.name,
-            preset.translationOutputDirection.name,
+            output.followRecognition,
+            output.layout.name,
+            output.direction.name,
             preset.translationGlossaryEnabled,
             preset.sendAppNameToTranslator,
             preset.localLlmTemperature.toBits(),

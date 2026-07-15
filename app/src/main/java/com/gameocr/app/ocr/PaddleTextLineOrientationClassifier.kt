@@ -7,6 +7,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Rect
 import com.gameocr.app.R
+import com.gameocr.app.util.CpuThreadPolicy
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.nio.FloatBuffer
 import javax.inject.Inject
@@ -66,8 +67,16 @@ class PaddleTextLineOrientationClassifier @Inject constructor(
         val textLineModel = installer.checkInstalled()?.textLine
             ?: throw ModelNotReadyException(context.getString(R.string.err_orientation_model_not_ready))
         val e = env ?: OrtEnvironment.getEnvironment().also { env = it }
-        session = e.createSession(textLineModel.absolutePath, OrtSession.SessionOptions())
-        Timber.i("Paddle text-line orientation ready: %dKB", textLineModel.length() / 1024)
+        val availableProcessors = CpuThreadPolicy.availableProcessors()
+        val threads = CpuThreadPolicy.select(availableProcessors)
+        val options = OrtSession.SessionOptions().apply { setIntraOpNumThreads(threads) }
+        session = e.createSession(textLineModel.absolutePath, options)
+        Timber.i(
+            "Paddle text-line orientation ready: %dKB availableProcessors=%d ortThreads=%d",
+            textLineModel.length() / 1024,
+            availableProcessors,
+            threads,
+        )
     }
 
     fun close() {

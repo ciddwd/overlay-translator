@@ -6,23 +6,22 @@ import com.gameocr.app.data.TranslationOutputLayout
 internal object TranslationOutputOrientationPolicy {
     fun resolve(
         recognized: TextOrientation,
+        followRecognition: Boolean,
         layout: TranslationOutputLayout,
         direction: TranslationOutputDirection,
     ): TextOrientation {
-        if (layout == TranslationOutputLayout.FOLLOW_RECOGNITION &&
-            direction == TranslationOutputDirection.FOLLOW_RECOGNITION &&
-            recognized != TextOrientation.UNKNOWN
-        ) {
-            return recognized
+        if (followRecognition) {
+            return recognized.takeUnless { it == TextOrientation.UNKNOWN }
+                ?: TextOrientation.HORIZONTAL_LTR
         }
 
         val vertical = when (layout) {
-            TranslationOutputLayout.FOLLOW_RECOGNITION -> recognized.isVertical()
+            TranslationOutputLayout.FOLLOW_RECOGNITION -> false
             TranslationOutputLayout.HORIZONTAL -> false
             TranslationOutputLayout.VERTICAL -> true
         }
         val leftToRight = when (direction) {
-            TranslationOutputDirection.FOLLOW_RECOGNITION -> recognized.isLeftToRight()
+            TranslationOutputDirection.FOLLOW_RECOGNITION -> true
             TranslationOutputDirection.LEFT_TO_RIGHT -> true
             TranslationOutputDirection.RIGHT_TO_LEFT -> false
         }
@@ -34,11 +33,4 @@ internal object TranslationOutputOrientationPolicy {
         }
     }
 
-    private fun TextOrientation.isVertical(): Boolean =
-        this == TextOrientation.VERTICAL_LTR || this == TextOrientation.VERTICAL_RTL
-
-    private fun TextOrientation.isLeftToRight(): Boolean = when (this) {
-        TextOrientation.HORIZONTAL_RTL, TextOrientation.VERTICAL_RTL -> false
-        else -> true
-    }
 }

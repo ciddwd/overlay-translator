@@ -27,6 +27,8 @@ import com.gameocr.app.data.TranslationPresetCatalog
 import com.gameocr.app.data.TranslationPresetImportResult
 import com.gameocr.app.data.TranslationPresetTransfer
 import com.gameocr.app.data.TranslatorEngine
+import com.gameocr.app.download.ModelDownloadManager
+import com.gameocr.app.download.ModelDownloadSpec
 import com.gameocr.app.glossary.TranslationGlossaryRepository
 import com.gameocr.app.llm.LlamaEngineHolder
 import com.gameocr.app.llm.LlmModelInstaller
@@ -37,11 +39,12 @@ import com.gameocr.app.ocr.lunaOcrHttpHostOrNull
 import com.gameocr.app.ocr.umiOcrHttpHostOrNull
 import com.gameocr.app.translate.RoutingTranslator
 import com.gameocr.app.translate.TestResult
+import androidx.work.WorkInfo
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 
 @HiltViewModel
@@ -56,7 +59,10 @@ class SettingsViewModel @Inject constructor(
     private val llamaEngineHolder: LlamaEngineHolder,
     private val overlayFontManager: OverlayFontManager,
     private val glossaryRepository: TranslationGlossaryRepository,
+    private val modelDownloadManager: ModelDownloadManager,
 ) : ViewModel() {
+
+    val modelDownloadWorkInfos: Flow<List<WorkInfo>> = modelDownloadManager.workInfos
 
     suspend fun load(): Settings = repo.get()
 
@@ -467,6 +473,10 @@ class SettingsViewModel @Inject constructor(
         repo.update { it.copy(translationOutputLayout = layout) }
     }
 
+    suspend fun saveTranslationOutputFollowRecognition(enabled: Boolean) {
+        repo.update { it.copy(translationOutputFollowRecognition = enabled) }
+    }
+
     suspend fun saveTranslationOutputDirection(direction: com.gameocr.app.data.TranslationOutputDirection) {
         repo.update { it.copy(translationOutputDirection = direction) }
     }
@@ -572,32 +582,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     suspend fun downloadPaddleModels(version: com.gameocr.app.data.PaddleModelVersion, onProgress: (String) -> Unit) {
-        paddleInstaller.downloadAll(version).collect { p ->
-            val mirrorTag = p.mirror.substringAfter("//").substringBefore("/").take(24)
-            val msg = when {
-                p.error != null -> appContext.getString(
-                    R.string.settings_paddle_progress_failed_format,
-                    mirrorTag, p.file, p.error
-                )
-                p.done -> appContext.getString(
-                    R.string.settings_paddle_progress_done_format,
-                    p.file, (p.downloaded / 1024).toInt(), mirrorTag
-                )
-                p.total > 0 -> {
-                    val pct = (p.downloaded * 100 / p.total).toInt()
-                    appContext.getString(
-                        R.string.settings_paddle_progress_format,
-                        mirrorTag, p.file, pct,
-                        (p.downloaded / 1024).toInt(), (p.total / 1024).toInt()
-                    )
-                }
-                else -> appContext.getString(
-                    R.string.settings_paddle_progress_simple_format,
-                    mirrorTag, p.file, (p.downloaded / 1024).toInt()
-                )
-            }
-            onProgress(msg)
-        }
+        downloadModels(listOf(ModelDownloadSpec.paddle(version)), onProgress)
     }
 
     fun deletePaddleModels() {
@@ -646,32 +631,7 @@ class SettingsViewModel @Inject constructor(
     fun mangaOcrModelReady(): Boolean = mangaOcrModelUiState().ready
 
     suspend fun downloadMangaOcrModels(onProgress: (String) -> Unit) {
-        mangaOcrInstaller.downloadAll().collect { p ->
-            val mirrorTag = p.mirror.substringAfter("//").substringBefore("/").take(24)
-            val msg = when {
-                p.error != null -> appContext.getString(
-                    R.string.settings_manga_ocr_progress_failed_format,
-                    mirrorTag, p.file, p.error
-                )
-                p.done -> appContext.getString(
-                    R.string.settings_manga_ocr_progress_done_format,
-                    p.file, (p.downloaded / 1024).toInt(), mirrorTag
-                )
-                p.total > 0 -> {
-                    val pct = (p.downloaded * 100 / p.total).toInt()
-                    appContext.getString(
-                        R.string.settings_manga_ocr_progress_format,
-                        mirrorTag, p.file, pct,
-                        (p.downloaded / 1024).toInt(), (p.total / 1024).toInt()
-                    )
-                }
-                else -> appContext.getString(
-                    R.string.settings_manga_ocr_progress_simple_format,
-                    mirrorTag, p.file, (p.downloaded / 1024).toInt()
-                )
-            }
-            onProgress(msg)
-        }
+        downloadModels(listOf(ModelDownloadSpec.mangaOcr()), onProgress)
     }
 
     fun deleteMangaOcrModels() {
@@ -708,32 +668,7 @@ class SettingsViewModel @Inject constructor(
     fun orientationModelReady(): Boolean = orientationModelUiState().ready
 
     suspend fun downloadOrientationModel(onProgress: (String) -> Unit) {
-        orientationModelInstaller.downloadAll().collect { p ->
-            val mirrorTag = p.mirror.substringAfter("//").substringBefore("/").take(24)
-            val msg = when {
-                p.error != null -> appContext.getString(
-                    R.string.settings_orientation_model_progress_failed_format,
-                    mirrorTag, p.file, p.error
-                )
-                p.done -> appContext.getString(
-                    R.string.settings_orientation_model_progress_done_format,
-                    p.file, (p.downloaded / 1024).toInt(), mirrorTag
-                )
-                p.total > 0 -> {
-                    val pct = (p.downloaded * 100 / p.total).toInt()
-                    appContext.getString(
-                        R.string.settings_orientation_model_progress_format,
-                        mirrorTag, p.file, pct,
-                        (p.downloaded / 1024).toInt(), (p.total / 1024).toInt()
-                    )
-                }
-                else -> appContext.getString(
-                    R.string.settings_orientation_model_progress_simple_format,
-                    mirrorTag, p.file, (p.downloaded / 1024).toInt()
-                )
-            }
-            onProgress(msg)
-        }
+        downloadModels(listOf(ModelDownloadSpec.orientation()), onProgress)
     }
 
     fun deleteOrientationModel() {
@@ -773,22 +708,18 @@ class SettingsViewModel @Inject constructor(
     fun llmModelReady(kind: LlmModelKind): Boolean = llmModelUiState(kind).ready
 
     suspend fun downloadLlmModel(kind: LlmModelKind, onProgress: (String) -> Unit) {
-        llmInstaller.download(kind).collect { p ->
-            val mirrorTag = p.mirror.take(24)
-            val msg = when {
-                p.error != null -> "${kind.displayName} @ $mirrorTag: ${p.error}"
-                p.done -> appContext.getString(R.string.llm_status_ready,
-                    "${kind.displayName} · ${(p.downloaded / 1024 / 1024).toInt()}")
-                else -> appContext.getString(
-                    R.string.llm_status_downloading_format,
-                    mirrorTag,
-                    (p.downloaded / 1024 / 1024).toInt(),
-                    if (p.total > 0) (p.total / 1024 / 1024).toInt() else kind.approxSizeMb
-                )
-            }
-            onProgress(msg)
-        }
+        downloadModels(listOf(ModelDownloadSpec.llm(kind)), onProgress)
     }
+
+    suspend fun downloadModels(
+        specs: List<ModelDownloadSpec>,
+        onProgress: (String) -> Unit,
+        ownerPresetId: String? = null,
+    ) {
+        modelDownloadManager.enqueueAndAwait(specs, onProgress, ownerPresetId)
+    }
+
+    fun cancelModelDownload(workId: java.util.UUID) = modelDownloadManager.cancel(workId)
 
     fun deleteLlmModel(kind: LlmModelKind): Boolean = llmInstaller.delete(kind)
 

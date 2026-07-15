@@ -103,6 +103,7 @@ class SettingsCoverageAuditTest {
             "paddleModelVersion",
             "textOrientationAutoDetect",
             "manualTextOrientation",
+            "translationOutputFollowRecognition",
             "translationOutputLayout",
             "translationOutputDirection",
             "translationGlossaryEnabled",

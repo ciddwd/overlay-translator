@@ -73,8 +73,12 @@ class SettingsLazyLayoutTest {
 
     @Test
     fun settingsUsesLazySectionsAndRouteOwnedScrollState() {
-        val settings = sourceFile("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
-        val main = sourceFile("src/main/java/com/gameocr/app/ui/MainActivity.kt").readText()
+        val settings = sourceFile("src/main/java/com/gameocr/app/ui/SettingsScreen.kt")
+            .readText()
+            .replace("\r\n", "\n")
+        val main = sourceFile("src/main/java/com/gameocr/app/ui/MainActivity.kt")
+            .readText()
+            .replace("\r\n", "\n")
         data class Case(val name: String, val source: String, val marker: String)
 
         val cases = mutableListOf(
@@ -110,6 +114,32 @@ class SettingsLazyLayoutTest {
 
         cases.forEach { case -> assertTrue(case.name, case.source.contains(case.marker)) }
         assertFalse("the main settings page must not eagerly compose a vertical Column", settings.contains("verticalScroll(scrollState)"))
+    }
+
+    @Test
+    fun modelDownloadProgress_isGlobalAndNotOwnedByPresetSection() {
+        val source = sourceFile("src/main/java/com/gameocr/app/ui/SettingsScreen.kt")
+            .readText()
+            .replace("\r\n", "\n")
+        val topBarStart = source.indexOf("topBar = {")
+        val topBarEnd = source.indexOf("floatingActionButton = {", topBarStart)
+        val presetStart = source.indexOf("private fun TranslationPresetSection(")
+        val presetEnd = source.indexOf("private fun ModelDownloadProgressCard(", presetStart)
+        assertTrue("settings top bar block", topBarStart >= 0 && topBarEnd > topBarStart)
+        assertTrue("translation preset block", presetStart >= 0 && presetEnd > presetStart)
+
+        val topBar = source.substring(topBarStart, topBarEnd)
+        val presetSection = source.substring(presetStart, presetEnd)
+        data class Case(val name: String, val source: String, val marker: String, val expected: Boolean)
+        listOf(
+            Case("global area observes download busy state", topBar, "if (modelDownloadBusy)", true),
+            Case("global area renders download progress", topBar, "ModelDownloadProgressCard(", true),
+            Case("global area exposes cancellation", topBar, "viewModel::cancelModelDownload", true),
+            Case("preset section does not render global progress", presetSection, "ModelDownloadProgressCard(", false),
+            Case("preset section does not own progress status", presetSection, "activeDownloadStatus", false),
+        ).forEach { case ->
+            assertEquals(case.name, case.expected, case.source.contains(case.marker))
+        }
     }
 
     private fun sourceFile(path: String): File = listOf(File(path), File("app", path))

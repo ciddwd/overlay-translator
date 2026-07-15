@@ -126,6 +126,8 @@ class SettingsRepository @Inject constructor(
         val TextOrientAutoDetect = booleanPreferencesKey("text_orient_auto_detect")
         val TextOrientAutoDefaultOnMigrated = booleanPreferencesKey("text_orient_auto_default_on_migrated")
         val ManualTextOrient = stringPreferencesKey("manual_text_orient")
+        val TranslationOutputFollowRecognition =
+            booleanPreferencesKey("translation_output_follow_recognition")
         val TranslationOutputLayout = stringPreferencesKey("translation_output_layout")
         val TranslationOutputDirection = stringPreferencesKey("translation_output_direction")
         val TranslationGlossaryEnabled = booleanPreferencesKey("translation_glossary_enabled")
@@ -392,8 +394,14 @@ class SettingsRepository @Inject constructor(
             // 但显式 remove 让 DataStore 文件更干净，未来 grep 无歧义
             next.manualTextOrientation?.let { prefs[Keys.ManualTextOrient] = it.name }
                 ?: prefs.remove(Keys.ManualTextOrient)
-            prefs[Keys.TranslationOutputLayout] = next.translationOutputLayout.name
-            prefs[Keys.TranslationOutputDirection] = next.translationOutputDirection.name
+            val translationOutput = resolveTranslationOutputSettings(
+                next.translationOutputFollowRecognition,
+                next.translationOutputLayout,
+                next.translationOutputDirection,
+            )
+            prefs[Keys.TranslationOutputFollowRecognition] = translationOutput.followRecognition
+            prefs[Keys.TranslationOutputLayout] = translationOutput.layout.name
+            prefs[Keys.TranslationOutputDirection] = translationOutput.direction.name
             prefs.putSecure(Keys.YoudaoAppKey, next.youdaoAppKey)
             prefs.putSecure(Keys.YoudaoAppSecret, next.youdaoAppSecret)
             prefs.putSecure(Keys.VolcAccessKeyId, next.volcAccessKeyId)
@@ -429,6 +437,17 @@ class SettingsRepository @Inject constructor(
 
     private fun Preferences.toSettings(): Settings {
         val default = Settings()
+        val storedTranslationOutputLayout = runCatching {
+            TranslationOutputLayout.valueOf(this[Keys.TranslationOutputLayout] ?: "")
+        }.getOrDefault(default.translationOutputLayout)
+        val storedTranslationOutputDirection = runCatching {
+            TranslationOutputDirection.valueOf(this[Keys.TranslationOutputDirection] ?: "")
+        }.getOrDefault(default.translationOutputDirection)
+        val translationOutput = resolveTranslationOutputSettings(
+            storedFollowRecognition = this[Keys.TranslationOutputFollowRecognition],
+            layout = storedTranslationOutputLayout,
+            direction = storedTranslationOutputDirection,
+        )
         return Settings(
             baseUrl = secureString(Keys.BaseUrl, default.baseUrl),
             apiKey = secureString(Keys.ApiKey, default.apiKey),
@@ -598,12 +617,9 @@ class SettingsRepository @Inject constructor(
                 ?.let { raw ->
                     runCatching { com.gameocr.app.ocr.TextOrientation.valueOf(raw) }.getOrNull()
                 },
-            translationOutputLayout = runCatching {
-                TranslationOutputLayout.valueOf(this[Keys.TranslationOutputLayout] ?: "")
-            }.getOrDefault(default.translationOutputLayout),
-            translationOutputDirection = runCatching {
-                TranslationOutputDirection.valueOf(this[Keys.TranslationOutputDirection] ?: "")
-            }.getOrDefault(default.translationOutputDirection),
+            translationOutputFollowRecognition = translationOutput.followRecognition,
+            translationOutputLayout = translationOutput.layout,
+            translationOutputDirection = translationOutput.direction,
             youdaoAppKey = secureString(Keys.YoudaoAppKey, default.youdaoAppKey),
             youdaoAppSecret = secureString(Keys.YoudaoAppSecret, default.youdaoAppSecret),
             volcAccessKeyId = secureString(Keys.VolcAccessKeyId, default.volcAccessKeyId),

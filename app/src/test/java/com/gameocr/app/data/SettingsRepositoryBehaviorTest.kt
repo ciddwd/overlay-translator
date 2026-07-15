@@ -76,6 +76,7 @@ class SettingsRepositoryBehaviorTest {
             preprocess = PreprocessOptions(upscale2x = true, invert = true, binarize = true),
             textOrientationAutoDetect = false,
             manualTextOrientation = TextOrientation.VERTICAL_RTL,
+            translationOutputFollowRecognition = false,
             translationOutputLayout = TranslationOutputLayout.VERTICAL,
             translationOutputDirection = TranslationOutputDirection.RIGHT_TO_LEFT,
             baiduOcrApiKey = "baidu-key",

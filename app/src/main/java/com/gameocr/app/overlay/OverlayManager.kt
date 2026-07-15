@@ -693,14 +693,17 @@ class OverlayManager(
                     setPadding(verticalTextPaddingHorizontalPx, 4, verticalTextPaddingHorizontalPx, 4)
                 }
             } else {
+                val horizontalRightToLeft = orientation == TextOrientation.HORIZONTAL_RTL
                 StyledTranslationTextView(context).apply {
-                    text = dst
-                    textDirection = if (orientation == TextOrientation.HORIZONTAL_RTL) {
+                    this.horizontalRightToLeft = horizontalRightToLeft
+                    text = if (horizontalRightToLeft) horizontalRtlDisplayText(dst) else dst
+                    // RLO keeps logical paragraph order but lets Android reorder each wrapped line.
+                    textDirection = if (horizontalRightToLeft) {
                         View.TEXT_DIRECTION_RTL
                     } else {
                         View.TEXT_DIRECTION_LTR
                     }
-                    gravity = if (orientation == TextOrientation.HORIZONTAL_RTL) {
+                    gravity = if (horizontalRightToLeft) {
                         Gravity.END
                     } else {
                         Gravity.START
@@ -713,6 +716,10 @@ class OverlayManager(
                         baseTypeface = overlayTypeface,
                         baseLineSpacingMultiplier = 1.05f
                     )
+                    if (horizontalRightToLeft) {
+                        gravity = (gravity and Gravity.VERTICAL_GRAVITY_MASK) or Gravity.END
+                        textAlignment = View.TEXT_ALIGNMENT_GRAVITY
+                    }
                     if (allowWrap) {
                         setSingleLine(false)
                         // maxLines 固定 10 行：showBlocks 时 dst 是占位"…"无法算最终行数；
@@ -1037,7 +1044,11 @@ class OverlayManager(
                     v.text = label
                     v.contentDescription = label.ifBlank { context.getString(R.string.ocr_debug_box_only) }
                 } else {
-                    v.text = text
+                    v.text = if (v is StyledTranslationTextView && v.horizontalRightToLeft) {
+                        horizontalRtlDisplayText(text)
+                    } else {
+                        text
+                    }
                 }
             }
             is VerticalTextView -> v.text = text

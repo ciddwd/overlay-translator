@@ -1084,6 +1084,8 @@
     <string name="err_orientation_model_rename_failed_format">rename %1$s -> %2$s 失败</string>
     <string name="settings_translation_output_layout_label">译文排列</string>
     <string name="settings_translation_output_direction_label">译文顺序</string>
+    <string name="settings_translation_output_follow_title">译文跟随识别排版</string>
+    <string name="settings_translation_output_follow_summary">使用识别出的横排/竖排和阅读顺序；关闭后必须手动选择排列与顺序。</string>
     <string name="settings_translation_output_follow">跟随识别</string>
     <string name="settings_translation_output_horizontal">横排</string>
     <string name="settings_translation_output_vertical">竖排</string>
@@ -1147,4 +1149,15 @@
     <string name="glossary_category_term">术语</string>
     <string name="glossary_case_sensitive">区分大小写</string>
     <string name="glossary_enabled">启用</string>
+    <string name="model_download_channel_name">模型下载</string>
+    <string name="model_download_notification_title">正在下载模型</string>
+    <string name="model_download_starting_format">%1$s · 等待网络（%2$d/%3$d）</string>
+    <string name="model_download_progress_batch_format">%1$s · %2$d%% · %3$s（%4$d/%5$d）</string>
+    <string name="model_download_progress_bytes_batch_format">%1$s · %2$d MB · %3$s（%4$d/%5$d）</string>
+    <string name="model_download_complete">模型下载完成</string>
+    <string name="model_download_failed_format">模型下载失败：%1$s</string>
+    <string name="model_download_retrying_format">下载中断，等待重试：%1$s</string>
+    <string name="model_download_cancel">取消</string>
+    <string name="model_download_in_app_title">后台模型下载</string>
+    <string name="model_download_waiting">正在准备下载…</string>
 </resources>

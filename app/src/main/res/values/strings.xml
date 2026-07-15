@@ -1085,6 +1085,8 @@
     <string name="default_dictionary_prompt">You are a {source}→{target} bilingual dictionary assistant. Treat the user input as a single word or fixed phrase and output ONLY the following JSON — no markdown, no code fence, no explanation.\n{\n  \"phonetic\": \"phonetic / pronunciation in {source}; empty string if unknown\",\n  \"pos\": [\"part of speech in {target}, e.g. n./v./adj.; empty array if unknown\"],\n  \"definitions\": [\"definition 1 in {target}\", \"definition 2 in {target}\"],\n  \"difficulty_notes\": [\"explain in {target} any rare meaning, specialized domain, acronym expansion, cultural reference, or easily confused usage; empty array for ordinary terms\"],\n  \"examples\": [\n    { \"src\": \"{source} example\", \"dst\": \"{target} translation\" }\n  ]\n}\nRules:\n1. Must be valid JSON with exactly these keys;\n2. Use empty string / empty array for missing info;\n3. At most 2 examples;\n4. Rare words, specialized terms, acronyms, culture-specific names, and easily confused usages require concise difficulty notes (at most 3) without repeating the definitions; use an empty array for ordinary terms;\n5. Never translate the whole thing as a sentence — always a dictionary lookup.\n</string>
     <string name="settings_translation_output_layout_label">Translation layout</string>
     <string name="settings_translation_output_direction_label">Translation order</string>
+    <string name="settings_translation_output_follow_title">Follow recognized text layout</string>
+    <string name="settings_translation_output_follow_summary">Use the recognized horizontal or vertical layout and reading order. Turn this off to choose both manually.</string>
     <string name="settings_translation_output_follow">Follow recognition</string>
     <string name="settings_translation_output_horizontal">Horizontal</string>
     <string name="settings_translation_output_vertical">Vertical</string>
@@ -1148,4 +1150,15 @@
     <string name="glossary_category_term">Term</string>
     <string name="glossary_case_sensitive">Case sensitive</string>
     <string name="glossary_enabled">Enabled</string>
+    <string name="model_download_channel_name">Model downloads</string>
+    <string name="model_download_notification_title">Downloading model</string>
+    <string name="model_download_starting_format">%1$s · waiting for network (%2$d/%3$d)</string>
+    <string name="model_download_progress_batch_format">%1$s · %2$d%% · %3$s (%4$d/%5$d)</string>
+    <string name="model_download_progress_bytes_batch_format">%1$s · %2$d MB · %3$s (%4$d/%5$d)</string>
+    <string name="model_download_complete">Model download complete</string>
+    <string name="model_download_failed_format">Model download failed: %1$s</string>
+    <string name="model_download_retrying_format">Download interrupted; waiting to retry: %1$s</string>
+    <string name="model_download_cancel">Cancel</string>
+    <string name="model_download_in_app_title">Background model download</string>
+    <string name="model_download_waiting">Preparing download…</string>
 </resources>

@@ -3,10 +3,13 @@ package com.gameocr.app.llm
 import android.content.Context
 import android.os.Build
 import android.os.SystemClock
+import android.system.Os
 import com.arm.aichat.AiChat
 import com.arm.aichat.InferenceEngine
 import com.arm.aichat.UnsupportedArchitectureException
 import com.gameocr.app.R
+import com.gameocr.app.util.CpuThreadPolicy
+import com.gameocr.app.util.InferenceTiming
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -92,6 +95,7 @@ class LlamaEngineHolder @Inject constructor(
         // "User prompt discarded due to: Error"。
         if (current != null && loadedKind == kind && current.state.value !is InferenceEngine.State.Error) {
             touchInternal()
+            Timber.tag(PERF_TAG).i("model reuse kind=%s state=%s", kind.name, current.state.value.javaClass.simpleName)
             return@withLock current
         }
 
@@ -100,7 +104,40 @@ class LlamaEngineHolder @Inject constructor(
                 context.getString(R.string.err_llm_not_ready, kind.displayName)
             )
 
+        val availableProcessors = CpuThreadPolicy.availableProcessors()
+        val selectedThreads = CpuThreadPolicy.select(availableProcessors)
+        Timber.tag(PERF_TAG).i(
+            "thread policy availableProcessors=%d selected=%d max=%d",
+            availableProcessors,
+            selectedThreads,
+            CpuThreadPolicy.MAX_INFERENCE_THREADS,
+        )
+        val totalStartedAt = SystemClock.elapsedRealtime()
+        val engineStartedAt = SystemClock.elapsedRealtime()
+        val requestedVulkan = LocalLlmAccelerationPolicy.requestsVulkan(kind)
+        val samplingConfig = LocalLlmSamplingPolicy.forModel(kind)
+        runCatching {
+            Os.setenv(
+                LocalLlmAccelerationPolicy.VULKAN_OFFLOAD_ENV,
+                LocalLlmAccelerationPolicy.nativeFlag(kind),
+                true,
+            )
+            LocalLlmSamplingPolicy.nativeEnvironment(kind).forEach { (name, value) ->
+                Os.setenv(name, value, true)
+            }
+        }.onFailure {
+            Timber.tag(PERF_TAG).e(it, "failed to configure native LLM policy kind=%s", kind.name)
+        }
+        Timber.tag(PERF_TAG).i(
+            "native policy kind=%s requestedVulkan=%s temperature=%.2f topP=%.2f frequencyPenalty=%.2f",
+            kind.name,
+            requestedVulkan,
+            samplingConfig.temperature,
+            samplingConfig.topP,
+            samplingConfig.frequencyPenalty,
+        )
         val e = current ?: AiChat.getInferenceEngine(context)
+        val engineAcquireMs = InferenceTiming.elapsedMs(engineStartedAt, SystemClock.elapsedRealtime())
 
         // 状态机救援：上一次 loadModel 失败让 engine 卡在 Error；cleanUp() 把它拉回 Initialized。
         // 切换 kind 时也走 cleanUp 卸掉旧权重（同一 engine 不能并存两份）。
@@ -119,16 +156,34 @@ class LlamaEngineHolder @Inject constructor(
         }
 
         try {
+            val modelStartedAt = SystemClock.elapsedRealtime()
             e.loadModel(modelFile.absolutePath)
+            val modelLoadMs = InferenceTiming.elapsedMs(modelStartedAt, SystemClock.elapsedRealtime())
             // 立即喂 system prompt——binding 的 setSystemPrompt 只接受 loadModel 之后唯一一次窗口。
             // 这里 catch 单独包装，避免 "system prompt set 失败 → 抛出后 engine 仍 ModelReady" 让用户
             // 误以为模型坏了。空 prompt 直接跳过。
+            var systemPromptMs = 0L
             if (!systemPrompt.isNullOrBlank()) {
+                val systemPromptStartedAt = SystemClock.elapsedRealtime()
                 runCatching { e.setSystemPrompt(systemPrompt) }
                     .onFailure {
                         Timber.w(it, "setSystemPrompt failed for kind=$kind; continuing without system prompt")
                     }
+                systemPromptMs = InferenceTiming.elapsedMs(systemPromptStartedAt, SystemClock.elapsedRealtime())
             }
+            Timber.tag(PERF_TAG).i(
+                "model load kind=%s totalMs=%d engineAcquireMs=%d modelLoadMs=%d systemPromptMs=%d " +
+                    "fileMb=%d reusedEngine=%s threads=%d requestedVulkan=%s",
+                kind.name,
+                InferenceTiming.elapsedMs(totalStartedAt, SystemClock.elapsedRealtime()),
+                engineAcquireMs,
+                modelLoadMs,
+                systemPromptMs,
+                modelFile.length() / 1024 / 1024,
+                current != null,
+                selectedThreads,
+                requestedVulkan,
+            )
         } catch (uae: UnsupportedArchitectureException) {
             // binding 把所有 "load 返回非 0" 统统包成 UnsupportedArchitectureException，message 永远是 null。
             // 实际可能原因：GGUF 损坏 / 量化格式 llama.cpp 不识别 / 架构不在白名单 / 内存不够。
@@ -185,6 +240,7 @@ class LlamaEngineHolder @Inject constructor(
     }
 
     companion object {
+        private const val PERF_TAG = "LocalLlmPerf"
         const val IDLE_TIMEOUT_MS = 5 * 60 * 1000L
     }
 }
