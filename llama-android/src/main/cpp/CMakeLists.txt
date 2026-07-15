@@ -101,10 +101,14 @@ file(WRITE "${GAMEOCR_AI_CHAT_CPP}" "${GAMEOCR_AI_CHAT_SOURCE}")
 if(ANDROID AND GGML_VULKAN)
     set(SPIRV_HEADERS_INCLUDE_DIR
             "${ANDROID_NDK}/sources/third_party/shaderc/third_party/spirv-tools/external/spirv-headers/include")
-    set(NDK_GLSLC
-            "${ANDROID_NDK}/shader-tools/${CMAKE_HOST_SYSTEM_NAME}-${CMAKE_HOST_SYSTEM_PROCESSOR}/glslc")
     if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
         set(NDK_GLSLC "${ANDROID_NDK}/shader-tools/windows-x86_64/glslc.exe")
+    elseif(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
+        set(NDK_GLSLC "${ANDROID_NDK}/shader-tools/darwin-x86_64/glslc")
+    elseif(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
+        set(NDK_GLSLC "${ANDROID_NDK}/shader-tools/linux-x86_64/glslc")
+    else()
+        message(FATAL_ERROR "Unsupported Android NDK shader-tools host: ${CMAKE_HOST_SYSTEM_NAME}")
     endif()
 
     if(NOT EXISTS "${SPIRV_HEADERS_INCLUDE_DIR}/spirv/unified1/spirv.hpp")
