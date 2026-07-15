@@ -80,11 +80,17 @@ interface TranslationGlossaryDao {
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(term: GlossaryTermEntity): Long
 
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insertAll(terms: List<GlossaryTermEntity>)
+
     @Update
     suspend fun update(term: GlossaryTermEntity)
 
     @Query("DELETE FROM translation_glossary_terms WHERE id = :id")
     suspend fun delete(id: Long)
+
+    @Query("DELETE FROM translation_glossary_terms")
+    suspend fun deleteAll()
 
     @Transaction
     suspend fun replaceConflict(
@@ -100,6 +106,39 @@ interface TranslationGlossaryDao {
             update(replacement.copy(id = originalId))
             originalId
         }
+    }
+
+    @Transaction
+    suspend fun importTermsAtomically(terms: List<GlossaryTermEntity>): Int {
+        terms.forEach { term ->
+            val now = System.currentTimeMillis()
+            val normalizedSource = normalizeGlossaryTerm(term.sourceTerm, term.caseSensitive)
+            require(normalizedSource.isNotBlank()) { "Source term is empty." }
+            require(term.targetTerm.isNotBlank()) { "Target term is empty." }
+            val existing = findTerm(
+                scopePackage = term.scopePackage,
+                sourceLang = term.sourceLang,
+                targetLang = term.targetLang,
+                normalizedSourceTerm = normalizedSource,
+                caseSensitive = term.caseSensitive,
+            )
+            val normalized = term.copy(
+                id = existing?.id ?: 0,
+                sourceTerm = term.sourceTerm.trim(),
+                normalizedSourceTerm = normalizedSource,
+                targetTerm = term.targetTerm.trim(),
+                createdAtMs = existing?.createdAtMs ?: now,
+                updatedAtMs = now,
+            )
+            if (existing == null) insert(normalized) else update(normalized)
+        }
+        return terms.size
+    }
+
+    @Transaction
+    suspend fun replaceAllAtomically(terms: List<GlossaryTermEntity>) {
+        deleteAll()
+        if (terms.isNotEmpty()) insertAll(terms)
     }
 }
 
@@ -266,11 +305,8 @@ class TranslationGlossaryRepository @Inject constructor(
 
     suspend fun delete(id: Long) = dao.delete(id)
 
-    suspend fun importTerms(terms: List<GlossaryTermEntity>): Int {
-        var imported = 0
-        terms.forEach { term ->
-            runCatching { upsert(term.copy(id = 0)) }.onSuccess { imported += 1 }
-        }
-        return imported
-    }
+    suspend fun importTerms(terms: List<GlossaryTermEntity>): Int =
+        dao.importTermsAtomically(terms.map { it.copy(id = 0) })
+
+    suspend fun restoreTerms(terms: List<GlossaryTermEntity>) = dao.replaceAllAtomically(terms)
 }

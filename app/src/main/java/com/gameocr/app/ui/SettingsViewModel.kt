@@ -8,6 +8,7 @@ import com.gameocr.app.R
 import com.gameocr.app.data.FloatingMenu
 import com.gameocr.app.data.OcrEngineKind
 import com.gameocr.app.data.OverlayFontEntry
+import com.gameocr.app.data.OverlayFontCommit
 import com.gameocr.app.data.OverlayTextStyle
 import com.gameocr.app.data.OverlayFontImportResult
 import com.gameocr.app.data.OverlayFontManager
@@ -21,6 +22,7 @@ import com.gameocr.app.data.SettingsBundleImportResult
 import com.gameocr.app.data.SettingsBundlePreview
 import com.gameocr.app.data.SettingsBundleTransfer
 import com.gameocr.app.data.SettingsRepository
+import com.gameocr.app.data.StagedOverlayFont
 import com.gameocr.app.data.TranslationPreset
 import com.gameocr.app.data.TranslationBlockInteractionMode
 import com.gameocr.app.data.TranslationPresetCatalog
@@ -43,6 +45,7 @@ import androidx.work.WorkInfo
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
+import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
@@ -89,49 +92,78 @@ class SettingsViewModel @Inject constructor(
     }
 
     suspend fun importSettingsBundle(uri: Uri): SettingsBundleImportResult = withContext(Dispatchers.IO) {
-        val installedFonts = mutableListOf<OverlayFontEntry>()
-        val input = appContext.contentResolver.openInputStream(uri)
-            ?: error("Could not open the selected settings file.")
-        val preview = input.use { source ->
-            SettingsBundleTransfer.read(source) { font, fontInput ->
-                installedFonts += overlayFontManager.installTransferredFont(font, fontInput)
+        val stagingDir = File(appContext.cacheDir, "settings-import-${System.nanoTime()}")
+        require(stagingDir.mkdirs()) { "Could not create settings import staging storage." }
+        val stagedFonts = mutableListOf<StagedOverlayFont>()
+        val commits = mutableListOf<OverlayFontCommit>()
+        try {
+            val input = appContext.contentResolver.openInputStream(uri)
+                ?: error("Could not open the selected settings file.")
+            val preview = input.use { source ->
+                SettingsBundleTransfer.read(source) { font, fontInput ->
+                    stagedFonts += overlayFontManager.stageTransferredFont(font, fontInput, stagingDir)
+                }
             }
-        }
-        if (preview.legacyPresetOnly) {
-            val imported = importTranslationPresets(preview.presets)
-            return@withContext SettingsBundleImportResult(
-                settings = repo.get(),
-                importedPresetCount = imported.importedCount,
-                overwrittenPresetNames = imported.overwrittenNames,
-                importedFontCount = 0,
-                importedGlossaryTermCount = 0,
-                legacyPresetOnly = true,
-            )
-        }
+            if (preview.legacyPresetOnly) {
+                val imported = importTranslationPresets(preview.presets)
+                return@withContext SettingsBundleImportResult(
+                    settings = repo.get(),
+                    importedPresetCount = imported.importedCount,
+                    overwrittenPresetNames = imported.overwrittenNames,
+                    importedFontCount = 0,
+                    importedGlossaryTermCount = 0,
+                    legacyPresetOnly = true,
+                    skippedSettingFieldCount = 0,
+                )
+            }
 
-        val importedSettings = requireNotNull(preview.settings)
-        val before = repo.get()
-        val availableFonts = overlayFontManager.existingFontEntries(
-            before.overlayFonts + importedSettings.overlayFonts + installedFonts,
-        )
-        var mergeResult: com.gameocr.app.data.SettingsBundleMergeResult? = null
-        repo.update { current ->
-            SettingsBundleTransfer.mergeImportedSettings(
-                current = current,
-                imported = importedSettings,
-                availableFonts = availableFonts,
-            ).also { mergeResult = it }.settings
+            val importedSettings = requireNotNull(preview.settings)
+            val beforeSettings = repo.get()
+            val beforeGlossary = glossaryRepository.listAll()
+            var glossaryCommitted = false
+            var settingsCommitted = false
+            try {
+                stagedFonts.forEach { commits += overlayFontManager.commitTransferredFont(it) }
+                val installedFonts = commits.map(OverlayFontCommit::entry)
+                val availableFonts = overlayFontManager.existingFontEntries(
+                    beforeSettings.overlayFonts + importedSettings.overlayFonts + installedFonts,
+                )
+                val merged = SettingsBundleTransfer.mergeImportedSettings(
+                    current = beforeSettings,
+                    imported = importedSettings,
+                    availableFonts = availableFonts,
+                )
+                val importedGlossaryCount = glossaryRepository.importTerms(preview.glossaryTerms)
+                glossaryCommitted = true
+                repo.update { merged.settings }
+                settingsCommitted = true
+                commits.forEach(overlayFontManager::finishTransferredFont)
+                SettingsBundleImportResult(
+                    settings = merged.settings,
+                    importedPresetCount = merged.presetResult.importedCount,
+                    overwrittenPresetNames = merged.presetResult.overwrittenNames,
+                    importedFontCount = installedFonts.size,
+                    importedGlossaryTermCount = importedGlossaryCount,
+                    legacyPresetOnly = false,
+                    skippedSettingFieldCount = preview.skippedSettingFields.size,
+                )
+            } catch (error: Throwable) {
+                if (settingsCommitted) {
+                    runCatching { repo.update { beforeSettings } }.exceptionOrNull()?.let(error::addSuppressed)
+                }
+                if (glossaryCommitted) {
+                    runCatching { glossaryRepository.restoreTerms(beforeGlossary) }
+                        .exceptionOrNull()?.let(error::addSuppressed)
+                }
+                commits.asReversed().forEach { commit ->
+                    runCatching { overlayFontManager.rollbackTransferredFont(commit) }
+                        .exceptionOrNull()?.let(error::addSuppressed)
+                }
+                throw error
+            }
+        } finally {
+            stagingDir.deleteRecursively()
         }
-        val merged = requireNotNull(mergeResult)
-        val importedGlossaryCount = glossaryRepository.importTerms(preview.glossaryTerms)
-        SettingsBundleImportResult(
-            settings = merged.settings,
-            importedPresetCount = merged.presetResult.importedCount,
-            overwrittenPresetNames = merged.presetResult.overwrittenNames,
-            importedFontCount = installedFonts.size,
-            importedGlossaryTermCount = importedGlossaryCount,
-            legacyPresetOnly = false,
-        )
     }
 
     suspend fun importOverlayFont(uri: Uri): OverlayFontImportResult =

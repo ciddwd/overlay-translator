@@ -1,5 +1,6 @@
 package com.gameocr.app.ui
 
+import com.gameocr.app.data.SettingsFieldPolicy
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -64,10 +65,64 @@ class SettingsLazyLayoutTest {
         val missing = settingsSearchSectionKeys() - SETTINGS_SECTION_KEYS_IN_ORDER.toSet()
         assertTrue("search entries without a lazy section: $missing", missing.isEmpty())
 
-        val missingChildTargets = settingsSearchItemLabelResIds() - SETTINGS_SEARCH_TARGET_RES_IDS
+        val missingChildTargets = settingsSearchTargetResIds() - SETTINGS_SEARCH_TARGET_RES_IDS
         assertTrue(
             "search entries without a child bring-into-view target: $missingChildTargets",
             missingChildTargets.isEmpty(),
+        )
+        val targetsWithoutEntries = SETTINGS_SEARCH_TARGET_RES_IDS - settingsSearchTargetResIds()
+        assertTrue(
+            "child bring-into-view targets without a search descriptor: $targetsWithoutEntries",
+            targetsWithoutEntries.isEmpty(),
+        )
+        assertEquals(
+            "search entry ids must stay unique",
+            settingsSearchEntryCount(),
+            settingsSearchEntryIds().size,
+        )
+        val policyEntriesWithoutDescriptor = SettingsFieldPolicy.searchEntryIds - settingsSearchEntryIds()
+        assertTrue(
+            "SettingsFieldPolicy search ids without a UI descriptor: $policyEntriesWithoutDescriptor",
+            policyEntriesWithoutDescriptor.isEmpty(),
+        )
+    }
+
+    @Test
+    fun searchRanking_prefersLabelsThenCurrentValuesThenOptionsAndKeywords() {
+        val label = settingsSearchScore(
+            query = "translation layout",
+            itemLabel = "Translation layout",
+            sectionLabel = "Text orientation",
+        )
+        val current = settingsSearchScore(
+            query = "vertical",
+            itemLabel = "Translation layout",
+            sectionLabel = "Text orientation",
+            currentValue = "Vertical",
+        )
+        val option = settingsSearchScore(
+            query = "right to left",
+            itemLabel = "Translation layout",
+            sectionLabel = "Text orientation",
+            optionLabels = listOf("Left to right", "Right to left"),
+        )
+        val keyword = settingsSearchScore(
+            query = "writing mode",
+            itemLabel = "Translation layout",
+            sectionLabel = "Text orientation",
+            keywords = listOf("writing mode"),
+        )
+
+        assertEquals(1_000, label)
+        assertEquals(700, current)
+        assertEquals(550, option)
+        assertEquals(400, keyword)
+        assertNull(
+            settingsSearchScore(
+                query = "missing term",
+                itemLabel = "Translation layout",
+                sectionLabel = "Text orientation",
+            )
         )
     }
 

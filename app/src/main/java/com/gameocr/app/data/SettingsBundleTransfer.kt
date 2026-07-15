@@ -16,6 +16,10 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.jsonObject
 
 data class SettingsBundleFont(
     val fileName: String,
@@ -29,6 +33,9 @@ data class SettingsBundlePreview(
     val fonts: List<SettingsBundleFont>,
     val glossaryTerms: List<GlossaryTermEntity>,
     val legacyPresetOnly: Boolean,
+    val formatVersion: Int = 0,
+    val skippedSettingFields: List<String> = emptyList(),
+    val protectedLocalFieldCount: Int = 0,
 )
 
 data class SettingsBundleExportResult(
@@ -49,6 +56,7 @@ data class SettingsBundleImportResult(
     val importedFontCount: Int,
     val importedGlossaryTermCount: Int = 0,
     val legacyPresetOnly: Boolean,
+    val skippedSettingFieldCount: Int = 0,
 )
 
 /** Cross-device settings package. Authentication credentials are deliberately excluded. */
@@ -60,7 +68,8 @@ object SettingsBundleTransfer {
     const val MAX_GLOSSARY_TERM_COUNT: Int = 5_000
 
     private const val FORMAT = "overlay-translator.settings"
-    private const val VERSION = 1
+    private const val VERSION = 2
+    private const val MIN_SUPPORTED_VERSION = 1
     private const val MANIFEST_ENTRY = "manifest.json"
     private const val FONT_ENTRY_PREFIX = "fonts/"
     private const val MAX_MANIFEST_BYTES = 2 * 1024 * 1024
@@ -68,6 +77,7 @@ object SettingsBundleTransfer {
     private val json = Json {
         ignoreUnknownKeys = true
         explicitNulls = false
+        encodeDefaults = true
     }
 
     fun portableSettings(settings: Settings): Settings {
@@ -83,26 +93,12 @@ object SettingsBundleTransfer {
         )
         val presets = TranslationPresetTransfer.planImport(
             existing = emptyList(),
-            imported = settings.translationPresets,
+            imported = settings.translationPresets.map(::portablePreset),
         ).importedPresets
         val activeId = settings.activeTranslationPresetId.takeIf { id ->
             presets.any { it.id == id }
         }.orEmpty()
-        return settings.copy(
-            apiKey = "",
-            baiduOcrApiKey = "",
-            baiduOcrSecretKey = "",
-            paddleAiStudioToken = "",
-            tencentSecretId = "",
-            tencentSecretKey = "",
-            deeplApiKey = "",
-            deeplCustomToken = "",
-            youdaoAppKey = "",
-            youdaoAppSecret = "",
-            volcAccessKeyId = "",
-            volcSecretAccessKey = "",
-            baiduFanyiAppId = "",
-            baiduFanyiSecretKey = "",
+        val normalized = settings.copy(
             translationOutputFollowRecognition = output.followRecognition,
             translationOutputLayout = output.layout,
             translationOutputDirection = output.direction,
@@ -110,6 +106,9 @@ object SettingsBundleTransfer {
             translationPresets = presets,
             activeTranslationPresetId = activeId,
         )
+        return SettingsFieldPolicy.decodePortable(
+            SettingsFieldPolicy.encodePortable(normalized),
+        ).settings
     }
 
     fun write(
@@ -138,7 +137,10 @@ object SettingsBundleTransfer {
         val manifest = SettingsBundleManifest(
             format = FORMAT,
             version = VERSION,
-            settings = portable,
+            minimumReaderVersion = VERSION,
+            settings = json.encodeToJsonElement(
+                SettingsExportV2(SettingsFieldPolicy.encodePortable(portable)),
+            ).jsonObject,
             fonts = fontSources.map { (font, file) ->
                 SettingsBundleFontManifest(
                     fileName = font.fileName,
@@ -201,21 +203,7 @@ object SettingsBundleTransfer {
             presetResult.presets.any { it.id == currentId }
         }.orEmpty()
 
-        val merged = portable.copy(
-            apiKey = current.apiKey,
-            baiduOcrApiKey = current.baiduOcrApiKey,
-            baiduOcrSecretKey = current.baiduOcrSecretKey,
-            paddleAiStudioToken = current.paddleAiStudioToken,
-            tencentSecretId = current.tencentSecretId,
-            tencentSecretKey = current.tencentSecretKey,
-            deeplApiKey = current.deeplApiKey,
-            deeplCustomToken = current.deeplCustomToken,
-            youdaoAppKey = current.youdaoAppKey,
-            youdaoAppSecret = current.youdaoAppSecret,
-            volcAccessKeyId = current.volcAccessKeyId,
-            volcSecretAccessKey = current.volcSecretAccessKey,
-            baiduFanyiAppId = current.baiduFanyiAppId,
-            baiduFanyiSecretKey = current.baiduFanyiSecretKey,
+        val merged = SettingsFieldPolicy.applyPortable(current, portable).copy(
             overlayFontFileName = selectedFont?.fileName.orEmpty(),
             overlayFontDisplayName = selectedFont?.displayName.orEmpty(),
             overlayFonts = mergedFonts,
@@ -244,6 +232,7 @@ object SettingsBundleTransfer {
                 fonts = emptyList(),
                 glossaryTerms = emptyList(),
                 legacyPresetOnly = true,
+                formatVersion = 0,
             )
         }
 
@@ -258,15 +247,19 @@ object SettingsBundleTransfer {
                 json.decodeFromString<SettingsBundleManifest>(manifestText)
             }.getOrElse { throw IllegalArgumentException("Invalid settings package manifest.", it) }
             validateManifest(manifest)
+            val decodedSettings = decodeManifestSettings(manifest)
             val fonts = manifest.fonts.map {
                 SettingsBundleFont(it.fileName, it.displayName, it.byteCount)
             }
             val preview = SettingsBundlePreview(
-                settings = portableSettings(manifest.settings),
-                presets = portableSettings(manifest.settings).translationPresets,
+                settings = decodedSettings.settings,
+                presets = decodedSettings.settings.translationPresets,
                 fonts = fonts,
                 glossaryTerms = portableGlossaryTerms(manifest.glossaryTerms),
                 legacyPresetOnly = false,
+                formatVersion = manifest.version,
+                skippedSettingFields = decodedSettings.skippedFields,
+                protectedLocalFieldCount = SettingsFieldPolicy.protectedFieldNames.size,
             )
             if (!consumeFonts) return preview
 
@@ -297,7 +290,12 @@ object SettingsBundleTransfer {
 
     private fun validateManifest(manifest: SettingsBundleManifest) {
         require(manifest.format == FORMAT) { "Unsupported settings package format." }
-        require(manifest.version == VERSION) { "Unsupported settings package version." }
+        require(manifest.version in MIN_SUPPORTED_VERSION..VERSION) {
+            "Unsupported settings package version: ${manifest.version}."
+        }
+        require(manifest.minimumReaderVersion <= VERSION) {
+            "Settings package requires reader version ${manifest.minimumReaderVersion}."
+        }
         require(manifest.fonts.size <= MAX_FONT_COUNT) { "Settings package has too many fonts." }
         require(manifest.fonts.map { it.fileName }.distinct().size == manifest.fonts.size) {
             "Settings package contains duplicate fonts."
@@ -317,6 +315,17 @@ object SettingsBundleTransfer {
             "Settings package has too many glossary terms."
         }
         portableGlossaryTerms(manifest.glossaryTerms)
+    }
+
+    private fun decodeManifestSettings(manifest: SettingsBundleManifest): SettingsFieldDecodeResult {
+        val values = when (manifest.version) {
+            1 -> manifest.settings
+            2 -> runCatching {
+                json.decodeFromJsonElement<SettingsExportV2>(manifest.settings).values
+            }.getOrElse { throw IllegalArgumentException("Invalid V2 settings payload.", it) }
+            else -> error("Unsupported settings package version: ${manifest.version}")
+        }
+        return SettingsFieldPolicy.decodePortable(values)
     }
 
     fun portableGlossaryTerms(terms: List<GlossaryTermEntity>): List<GlossaryTermEntity> {
@@ -342,6 +351,16 @@ object SettingsBundleTransfer {
         }
     }
 
+    private fun portablePreset(preset: TranslationPreset): TranslationPreset {
+        val defaults = Settings()
+        return preset.copy(
+            baseUrl = defaults.baseUrl,
+            deeplBaseUrl = defaults.deeplBaseUrl,
+            umiOcrBaseUrl = defaults.umiOcrBaseUrl,
+            lunaOcrBaseUrl = defaults.lunaOcrBaseUrl,
+        )
+    }
+
     private fun readEntryUtf8Limited(input: InputStream, maxBytes: Int): String {
         val output = ByteArrayOutputStream(minOf(maxBytes, 32 * 1024))
         val buffer = ByteArray(8 * 1024)
@@ -363,9 +382,15 @@ object SettingsBundleTransfer {
 private data class SettingsBundleManifest(
     val format: String,
     val version: Int,
-    val settings: Settings,
+    val minimumReaderVersion: Int = 1,
+    val settings: JsonObject,
     val fonts: List<SettingsBundleFontManifest>,
     val glossaryTerms: List<GlossaryTermEntity> = emptyList(),
+)
+
+@Serializable
+private data class SettingsExportV2(
+    val values: JsonObject,
 )
 
 @Serializable

@@ -25,6 +25,8 @@ class CrashRecorderSettingsCoverageTest {
         val formatted = CrashRecorder.formatSettings(
             Settings(
                 baseUrl = "https://private.example/v1/",
+                umiOcrBaseUrl = "http://192.168.1.20:1224/api/ocr",
+                cleartextAllowedHosts = listOf("192.168.1.20"),
                 apiKey = "openai-secret",
                 baiduOcrApiKey = "baidu-key",
                 baiduOcrSecretKey = "baidu-secret",
@@ -46,6 +48,8 @@ class CrashRecorderSettingsCoverageTest {
 
         listOf(
             "https://private.example/v1/",
+            "http://192.168.1.20:1224/api/ocr",
+            "192.168.1.20",
             "openai-secret",
             "baidu-key",
             "baidu-secret",
@@ -64,7 +68,10 @@ class CrashRecorderSettingsCoverageTest {
             assertFalse("secret leaked: $secret", formatted.contains(secret))
         }
         assertTrue(formatted.contains("  apiKey: <set>"))
-        assertTrue(formatted.contains("  promptTemplate: first line second line"))
-        assertTrue(formatted.contains("  dictionaryPrompt: dictionary line second line"))
+        assertTrue(formatted.contains("  baseUrl: <configured;"))
+        assertTrue(formatted.contains("  promptTemplate: <configured;"))
+        assertTrue(formatted.contains("  dictionaryPrompt: <configured;"))
+        assertFalse(formatted.contains("first line"))
+        assertFalse(formatted.contains("dictionary line"))
     }
 }

@@ -6,6 +6,11 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.security.MessageDigest
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -14,7 +19,7 @@ import org.junit.Test
 class SettingsBundleTransferTest {
 
     @Test
-    fun portableSettings_excludesEveryCredentialAndKeepsPortableValues() {
+    fun portableSettings_excludesCredentialsPrivateConnectionsAndDeviceState() {
         val original = sampleSettings()
         val portable = SettingsBundleTransfer.portableSettings(original)
 
@@ -42,7 +47,6 @@ class SettingsBundleTransferTest {
 
         data class PortableCase(val name: String, val expected: Any?, val actual: Any?)
         val portableCases = listOf(
-            PortableCase("base URL", original.baseUrl, portable.baseUrl),
             PortableCase("prompt", original.promptTemplate, portable.promptTemplate),
             PortableCase("loop interval", original.captureLoopIntervalMs, portable.captureLoopIntervalMs),
             PortableCase("loop trigger mode", original.loopTriggerMode, portable.loopTriggerMode),
@@ -61,15 +65,21 @@ class SettingsBundleTransferTest {
             PortableCase("OCR debug source", original.ocrRedBoxShowSourceText, portable.ocrRedBoxShowSourceText),
             PortableCase("OCR debug translation", original.ocrRedBoxShowTranslation, portable.ocrRedBoxShowTranslation),
             PortableCase("overlay style", original.overlayTextStyle, portable.overlayTextStyle),
-            PortableCase("floating geometry", original.floatingWindowWidthDp, portable.floatingWindowWidthDp),
             PortableCase("pinned languages", original.pinnedLanguages, portable.pinnedLanguages),
-            PortableCase("cleartext hosts", original.cleartextAllowedHosts, portable.cleartextAllowedHosts),
             PortableCase("menu order", original.floatingMenuItemOrder, portable.floatingMenuItemOrder),
-            PortableCase("LLM mirror URL", original.localLlmMirrorUrl, portable.localLlmMirrorUrl),
+            PortableCase("LLM temperature", original.localLlmTemperature, portable.localLlmTemperature),
             PortableCase("font list", original.overlayFonts, portable.overlayFonts),
-            PortableCase("preset list", original.translationPresets, portable.translationPresets),
+            PortableCase("preset count", original.translationPresets.size, portable.translationPresets.size),
+            PortableCase("active preset", original.activeTranslationPresetId, portable.activeTranslationPresetId),
         )
         portableCases.forEach { case -> assertEquals(case.name, case.expected, case.actual) }
+
+        assertEquals("private base URL", Settings().baseUrl, portable.baseUrl)
+        assertEquals("private cleartext hosts", emptyList<String>(), portable.cleartextAllowedHosts)
+        assertEquals("private LLM mirror URL", "", portable.localLlmMirrorUrl)
+        assertEquals("device floating geometry", Settings().floatingWindowWidthDp, portable.floatingWindowWidthDp)
+        assertEquals("preset private base URL", Settings().baseUrl, portable.translationPresets.single().baseUrl)
+        assertEquals("preset portable model", original.model, portable.translationPresets.single().model)
     }
 
     @Test
@@ -101,6 +111,39 @@ class SettingsBundleTransferTest {
         assertFalse(decoded.legacyPresetOnly)
         assertEquals(SettingsBundleTransfer.portableSettings(settings), decoded.settings)
         assertTrue(fontBytes.contentEquals(importedFontBytes.getValue(fontName)))
+    }
+
+    @Test
+    fun v2Manifest_containsOnlyAllowlistedPortableValues() {
+        val settings = sampleSettings().copy(
+            overlayFontFileName = "",
+            overlayFontDisplayName = "",
+            overlayFonts = emptyList(),
+            baseUrl = "https://private.example/v1/?token=query-secret",
+            umiOcrBaseUrl = "http://192.168.1.20:1224/api/ocr",
+            cleartextAllowedHosts = listOf("192.168.1.20"),
+            localLlmMirrorUrl = "https://private-cdn.example/models/",
+        )
+        val output = ByteArrayOutputStream()
+
+        SettingsBundleTransfer.write(output, settings, resolveFontFile = { null })
+        val manifest = ZipInputStream(ByteArrayInputStream(output.toByteArray())).use { zip ->
+            assertEquals("manifest.json", zip.nextEntry.name)
+            zip.readBytes().toString(Charsets.UTF_8)
+        }
+
+        assertTrue(manifest.contains("\"version\":2"))
+        assertTrue(manifest.contains("\"values\""))
+        listOf(
+            "private.example",
+            "query-secret",
+            "192.168.1.20",
+            "private-cdn.example",
+            "openai-secret",
+            "deepl-key",
+        ).forEach { protectedValue ->
+            assertFalse("protected value leaked: $protectedValue", manifest.contains(protectedValue))
+        }
     }
 
     @Test
@@ -162,9 +205,13 @@ class SettingsBundleTransferTest {
     @Test
     fun mergeImportedSettings_keepsLocalCredentialsAndAppliesPortableSettings() {
         val current = Settings(
+            baseUrl = "https://local-device.example/v1/",
             apiKey = "local-openai-key",
             deeplApiKey = "local-deepl-key",
             paddleAiStudioToken = "local-paddle-token",
+            umiOcrBaseUrl = "http://192.168.1.10:1224/api/ocr",
+            cleartextAllowedHosts = listOf("192.168.1.10"),
+            floatingWindowWidthDp = 777,
             overlayFonts = listOf(OverlayFontEntry(storedName("old".toByteArray()), "Old.ttf")),
         )
         val imported = sampleSettings()
@@ -177,7 +224,10 @@ class SettingsBundleTransferTest {
         assertEquals("local-openai-key", result.settings.apiKey)
         assertEquals("local-deepl-key", result.settings.deeplApiKey)
         assertEquals("local-paddle-token", result.settings.paddleAiStudioToken)
-        assertEquals(imported.baseUrl, result.settings.baseUrl)
+        assertEquals(current.baseUrl, result.settings.baseUrl)
+        assertEquals(current.umiOcrBaseUrl, result.settings.umiOcrBaseUrl)
+        assertEquals(current.cleartextAllowedHosts, result.settings.cleartextAllowedHosts)
+        assertEquals(current.floatingWindowWidthDp, result.settings.floatingWindowWidthDp)
         assertEquals(imported.captureLoopIntervalMs, result.settings.captureLoopIntervalMs)
         assertEquals(imported.loopTriggerMode, result.settings.loopTriggerMode)
         assertEquals(imported.loopTextStableDurationMs, result.settings.loopTextStableDurationMs)
@@ -210,6 +260,34 @@ class SettingsBundleTransferTest {
         assertEquals(listOf(legacyPreset), preview.presets)
         assertTrue(preview.fonts.isEmpty())
         assertTrue(preview.glossaryTerms.isEmpty())
+    }
+
+    @Test
+    fun settingsBundleReader_migratesLegacyV1SettingsAndProtectsLocalConnections() {
+        val legacySettings = sampleSettings().copy(
+            overlayFontFileName = "",
+            overlayFontDisplayName = "",
+            overlayFonts = emptyList(),
+            baseUrl = "https://legacy-private.example/v1/",
+            cleartextAllowedHosts = listOf("legacy-private.example"),
+            targetLang = "zh-TW",
+        )
+        val manifest = """{"format":"overlay-translator.settings","version":1,"settings":${Json.encodeToString(legacySettings)},"fonts":[]}"""
+        val bytes = ByteArrayOutputStream().also { output ->
+            ZipOutputStream(output).use { zip ->
+                zip.putNextEntry(ZipEntry("manifest.json"))
+                zip.write(manifest.toByteArray(Charsets.UTF_8))
+                zip.closeEntry()
+            }
+        }.toByteArray()
+
+        val preview = SettingsBundleTransfer.readPreview(ByteArrayInputStream(bytes))
+
+        assertEquals(1, preview.formatVersion)
+        assertEquals(Settings().baseUrl, preview.settings?.baseUrl)
+        assertEquals(emptyList<String>(), preview.settings?.cleartextAllowedHosts)
+        assertEquals("zh-TW", preview.settings?.targetLang)
+        assertTrue(preview.skippedSettingFields.isEmpty())
     }
 
     private fun sampleSettings(): Settings {
@@ -267,6 +345,12 @@ class SettingsBundleTransferTest {
             arcMenuPageSize = 5,
             floatingButtonSkill = FloatingSkill.LOOP,
             dictionaryPrompt = "portable dictionary prompt",
+            localLlmTemperature = 0.42f,
+            localLlmTopP = 0.73f,
+            localLlmTopK = 37,
+            localLlmRepetitionPenalty = 1.11f,
+            localLlmContextSize = 3072,
+            localLlmMaxNewTokens = 384,
             localLlmMirror = LlmMirrorChoice.CUSTOM,
             localLlmMirrorUrl = "https://portable.example/models/",
             dbnetProbThresh = 0.31f,

@@ -849,7 +849,7 @@ class SettingsScreenModelStatusTest {
             Case(
                 name = "settings snapshot includes full imported font list",
                 source = settingsScreen,
-                expectedPattern = Regex("""fun buildSnapshot\(\): Settings = Settings\(\)\.copy\([\s\S]*?overlayFonts = overlayFontEntries"""),
+                expectedPattern = Regex("""fun buildSnapshot\(\): Settings = \(initialSettings \?: Settings\(\)\)\.copy\([\s\S]*?overlayFonts = overlayFontEntries"""),
             ),
             Case(
                 name = "settings save call passes full imported font list",

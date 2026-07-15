@@ -131,12 +131,20 @@ class TranslationGlossaryRepositoryConflictTest {
             return id
         }
 
+        override suspend fun insertAll(terms: List<GlossaryTermEntity>) {
+            terms.forEach { insert(it) }
+        }
+
         override suspend fun update(term: GlossaryTermEntity) {
             state.value = state.value.map { if (it.id == term.id) term else it }
         }
 
         override suspend fun delete(id: Long) {
             state.value = state.value.filterNot { it.id == id }
+        }
+
+        override suspend fun deleteAll() {
+            state.value = emptyList()
         }
     }
 }

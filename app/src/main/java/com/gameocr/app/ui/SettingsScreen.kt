@@ -188,6 +188,7 @@ import com.gameocr.app.data.TranslationBlockInteractionMode
 import com.gameocr.app.data.TranslationPresetTransfer
 import com.gameocr.app.data.TranslatorEngine
 import com.gameocr.app.data.resolveTranslationOutputSettings
+import com.gameocr.app.data.settingsSearchEntryId
 import com.gameocr.app.glossary.supportsTranslationPromptContext
 import com.gameocr.app.llm.LlmModelKind
 import com.gameocr.app.overlay.StyledTranslationTextView
@@ -868,6 +869,9 @@ fun SettingsScreen(
                             plan.importedCount,
                             overwritten,
                             importPreview.fonts.size,
+                            importPreview.glossaryTerms.size,
+                            importPreview.skippedSettingFields.size,
+                            importPreview.protectedLocalFieldCount,
                         )
                     }
                 )
@@ -891,6 +895,7 @@ fun SettingsScreen(
                                     result.overwrittenPresetNames.size,
                                     result.importedFontCount,
                                     result.importedGlossaryTermCount,
+                                    result.skippedSettingFieldCount,
                                 )
                             }
                             .onFailure { error ->
@@ -937,13 +942,10 @@ fun SettingsScreen(
     val searchFocusRequester = remember { FocusRequester() }
     val searchTargetRegistry = remember { SettingsSearchTargetRegistry() }
 
-    // 从当前所有 state 构造一份 Settings 实例。`Settings()` 默认值起手，`.copy(...)` 覆盖设置页
-    // 能改的字段；不在设置页改的字段（captureRegion / preferShizukuCapture / tencentRegion /
-    // pinnedLanguages）保留 Settings 默认占位——initial 和 current 都用同一默认值，equals 时这些
-    // 字段始终相等，dirty 只反映用户在本页的实际改动。
-    //
+    // 从完整持久化快照起步，再覆盖本页尚未保存的草稿值。不能从 Settings() 默认值起步，否则
+    // 导出会把预设、固定语言、悬浮窗状态和本地 LLM 参数等非当前表单字段静默重置。
     // 类型转换跟 doSave 保持一致（textSize.toInt() / loopInterval.toLongOrNull() 等）。
-    fun buildSnapshot(): Settings = Settings().copy(
+    fun buildSnapshot(): Settings = (initialSettings ?: Settings()).copy(
         baseUrl = baseUrl,
         apiKey = apiKey,
         model = model,
@@ -1411,7 +1413,7 @@ fun SettingsScreen(
             }
             }
             HorizontalDivider()
-            SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_ORIENTATION_OUTPUT) {
+            SettingsSearchTarget(searchTargetRegistry, R.string.settings_translation_output_follow_title) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             SwitchRow(
                 stringResource(R.string.settings_translation_output_follow_title),
@@ -1422,6 +1424,7 @@ fun SettingsScreen(
                 scope.launch { viewModel.saveTranslationOutputFollowRecognition(enabled) }
             }
             if (!translationOutputFollowRecognition) {
+            SettingsSearchTarget(searchTargetRegistry, R.string.settings_translation_output_layout_label) {
             Text(
                 stringResource(R.string.settings_translation_output_layout_label),
                 style = MaterialTheme.typography.labelLarge,
@@ -1469,6 +1472,7 @@ fun SettingsScreen(
                         scope.launch { viewModel.saveTranslationOutputDirection(it) }
                     }
                 }
+            }
             }
             }
             }
@@ -2134,9 +2138,10 @@ fun SettingsScreen(
             foregroundAppDetectionMode = s.foregroundAppDetectionMode
             sendAppNameToTranslator = s.sendAppNameToTranslator
             cleartextHostsText = s.cleartextAllowedHosts.joinToString("\n")
-            // 同一个 snapshot 内 capture 初始 Settings——既走 buildSnapshot() 单源路径，
-            // 又跟所有 state 在同一原子 apply 里，不会被中间帧看到。
-            initialSettings = buildSnapshot()
+            // Keep the complete repository value as the baseline. Rebuilding it while
+            // initialSettings is still null would start from Settings defaults and lose fields
+            // owned by services or other screens before the first export.
+            initialSettings = s
         }
     }
 
@@ -2435,6 +2440,12 @@ fun SettingsScreen(
                 }
 
                 if (translatorEngine == TranslatorEngine.OPENAI) {
+                    SettingsSearchTarget(
+                        searchTargetRegistry,
+                        R.string.settings_search_item_base_url,
+                        R.string.settings_search_item_api_key,
+                        R.string.settings_search_item_model_name,
+                    ) {
                     OutlinedTextField(
                         value = baseUrl, onValueChange = { baseUrl = it },
                         label = { Text(stringResource(R.string.settings_base_url)) },
@@ -2486,7 +2497,14 @@ fun SettingsScreen(
                             }
                         }
                     }
+                    }
                 } else if (translatorEngine == TranslatorEngine.DEEPL) {
+                    SettingsSearchTarget(
+                        searchTargetRegistry,
+                        R.string.settings_search_item_deepl_api_key,
+                        R.string.settings_search_item_deepl_pro,
+                        R.string.settings_search_item_deepl_advanced,
+                    ) {
                     SecretTextField(
                         value = deeplKey, onValueChange = { deeplKey = it },
                         label = stringResource(R.string.settings_deepl_api_key),
@@ -2583,7 +2601,9 @@ fun SettingsScreen(
                             )
                         )
                     }
+                    }
                 } else if (translatorEngine == TranslatorEngine.YOUDAO_PICTRANS) {
+                    SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_youdao_pictrans) {
                     // YOUDAO_PICTRANS：端到端引擎，OCR + 翻译一起出，会绕过 ocrEngine 设置
                     SecretTextField(
                         value = youdaoAppKey, onValueChange = { youdaoAppKey = it },
@@ -2602,7 +2622,9 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    }
                 } else if (translatorEngine == TranslatorEngine.VOLC) {
+                    SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_volc) {
                     // 火山引擎机器翻译：AK + SK + region；SignV4 鉴权
                     SecretTextField(
                         value = volcAk, onValueChange = { volcAk = it },
@@ -2628,7 +2650,9 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    }
                 } else if (translatorEngine == TranslatorEngine.BAIDU_FANYI) {
+                    SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_baidu_fanyi) {
                     // 百度翻译开放平台（fanyi-api.baidu.com）—— 与百度智能云 OCR 不是一回事
                     OutlinedTextField(
                         value = baiduFanyiAppId, onValueChange = { baiduFanyiAppId = it },
@@ -2648,7 +2672,9 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    }
                 } else if (translatorEngine == TranslatorEngine.TENCENT) {
+                    SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_tencent_translator) {
                     // 腾讯云翻译：与 OCR 共用同一套 SecretId/Key/Region（state 双向绑定，
                     // 在这里改和在 OCR 区改完全等价）。region 默认 ap-guangzhou，TMT 各地域通用。
                     OutlinedTextField(
@@ -2672,7 +2698,9 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    }
                 } else if (translatorEngine == TranslatorEngine.GOOGLE) {
+                    SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_google) {
                     // GOOGLE：无 key，仅提示风险。改 else if 明确匹配——避免后续新增枚举（如 LOCAL_*）
                     // 落入 else 兜底，错误显示 Google 文案。
                     Text(
@@ -2680,6 +2708,7 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error
                     )
+                    }
                 }
 
                 // —— 测试连接 ——
@@ -4265,8 +4294,28 @@ fun SettingsScreen(
 
             // 搜索下拉：浮在 Column 之上。匹配项点击后滚到对应 section 顶部并关闭搜索。
             if (searchActive && searchQuery.isNotBlank()) {
-                val matches = remember(searchQuery) {
-                    SETTING_ITEMS.filter { it.matches(context, searchQuery) }.take(20)
+                val searchCurrentValues = mapOf(
+                    settingsSearchEntryId(R.string.settings_search_item_translator_engine) to translatorEngine.name,
+                    settingsSearchEntryId(R.string.settings_search_item_source_lang) to sourceLang,
+                    settingsSearchEntryId(R.string.settings_search_item_target_lang) to targetLang,
+                    settingsSearchEntryId(R.string.settings_search_item_ocr_switch) to ocrEngine.name,
+                    settingsSearchEntryId(R.string.settings_translation_output_layout_label) to
+                        "${translationOutputLayout.name} ${translationOutputDirection.name}",
+                    settingsSearchEntryId(R.string.settings_search_item_render_mode) to renderMode.name,
+                    settingsSearchEntryId(R.string.settings_search_item_placement) to placement.name,
+                    settingsSearchEntryId(R.string.settings_search_item_overlay_theme) to overlayTheme.name,
+                    settingsSearchEntryId(R.string.settings_search_item_loop_trigger_mode) to loopTriggerMode.name,
+                    settingsSearchEntryId(R.string.settings_search_item_loop_region) to loopTextRegionMode.name,
+                    settingsSearchEntryId(R.string.settings_search_item_llm_mirror) to llmMirrorChoice.name,
+                )
+                val matches = remember(searchQuery, searchCurrentValues) {
+                    SETTING_ITEMS.mapNotNull { entry ->
+                        entry.score(context, searchQuery, searchCurrentValues[entry.entryId])
+                            ?.let { score -> entry to score }
+                    }.sortedWith(
+                        compareByDescending<Pair<SearchEntry, Int>> { it.second }
+                            .thenBy { context.getString(it.first.itemLabelRes) }
+                    ).take(20).map { it.first }
                 }
                 Card(
                     modifier = Modifier
@@ -4286,7 +4335,14 @@ fun SettingsScreen(
                             items(matches) { entry ->
                                 ListItem(
                                     headlineContent = { Text(stringResource(entry.itemLabelRes)) },
-                                    supportingContent = { Text(stringResource(entry.sectionLabelRes)) },
+                                    supportingContent = {
+                                        Text(
+                                            listOfNotNull(
+                                                stringResource(entry.sectionLabelRes),
+                                                searchCurrentValues[entry.entryId]?.takeIf(String::isNotBlank),
+                                            ).joinToString(" · ")
+                                        )
+                                    },
                                     colors = ListItemDefaults.colors(
                                         containerColor = MaterialTheme.colorScheme.surface
                                     ),
@@ -4297,11 +4353,16 @@ fun SettingsScreen(
                                                 listState.scrollToItem(index)
                                                 repeat(4) {
                                                     withFrameNanos { }
-                                                    val requester = searchTargetRegistry.latest(entry.itemLabelRes)
+                                                    val requester = searchTargetRegistry.latest(entry.targetId)
                                                     if (requester != null) {
                                                         requester.bringIntoView()
                                                         return@launch
                                                     }
+                                                }
+                                                if (entry.requiredTranslatorEngine != null) {
+                                                    searchTargetRegistry.latest(
+                                                        R.string.settings_search_item_translator_engine
+                                                    )?.bringIntoView()
                                                 }
                                             }
                                         }
@@ -5084,6 +5145,9 @@ private val SEARCH_TARGET_PRESETS = intArrayOf(
 )
 private val SEARCH_TARGET_TRANSLATOR_ENGINE = intArrayOf(
     R.string.settings_search_item_translator_engine,
+    R.string.settings_search_item_local_llm_model,
+)
+private val SEARCH_TARGET_TRANSLATOR_PROVIDERS = intArrayOf(
     R.string.settings_search_item_base_url,
     R.string.settings_search_item_api_key,
     R.string.settings_search_item_model_name,
@@ -5095,9 +5159,6 @@ private val SEARCH_TARGET_TRANSLATOR_ENGINE = intArrayOf(
     R.string.settings_search_item_volc,
     R.string.settings_search_item_baidu_fanyi,
     R.string.settings_search_item_tencent_translator,
-    R.string.settings_search_item_local_llm_model,
-    R.string.settings_search_item_prompt,
-    R.string.settings_search_item_dictionary_prompt,
 )
 private val SEARCH_TARGET_SOURCE_LANGUAGE = intArrayOf(R.string.settings_search_item_source_lang)
 private val SEARCH_TARGET_TARGET_LANGUAGE = intArrayOf(R.string.settings_search_item_target_lang)
@@ -5199,6 +5260,7 @@ internal val SETTINGS_SEARCH_TARGET_RES_IDS: Set<Int> = listOf(
     SEARCH_TARGET_THEME_MODE,
     SEARCH_TARGET_PRESETS,
     SEARCH_TARGET_TRANSLATOR_ENGINE,
+    SEARCH_TARGET_TRANSLATOR_PROVIDERS,
     SEARCH_TARGET_SOURCE_LANGUAGE,
     SEARCH_TARGET_TARGET_LANGUAGE,
     SEARCH_TARGET_TRANSLATION_ASSISTANCE,
@@ -5231,32 +5293,75 @@ private data class SearchEntry(
     val sectionKey: String,
     @androidx.annotation.StringRes val sectionLabelRes: Int,
     @androidx.annotation.StringRes val itemLabelRes: Int,
-    val keywords: List<String> = emptyList()
+    val keywords: List<String> = emptyList(),
+    val entryId: String = settingsSearchEntryId(itemLabelRes),
+    @androidx.annotation.StringRes val targetId: Int = itemLabelRes,
+    val optionLabelResIds: List<Int> = emptyList(),
+    val requiredTranslatorEngine: TranslatorEngine? = null,
 ) {
-    fun matches(context: android.content.Context, q: String): Boolean {
-        return settingsSearchMatches(
+    fun score(context: android.content.Context, q: String, currentValue: String?): Int? {
+        return settingsSearchScore(
             query = q,
-            searchableTexts = listOf(
-                context.getString(itemLabelRes),
-                context.getString(sectionLabelRes),
-            ) + keywords
+            itemLabel = context.getString(itemLabelRes),
+            sectionLabel = context.getString(sectionLabelRes),
+            keywords = keywords,
+            optionLabels = optionLabelResIds.map(context::getString),
+            currentValue = currentValue,
         )
     }
 }
 
 private val SETTINGS_SEARCH_SEPARATOR = Regex("[^\\p{L}\\p{N}]+")
 
-internal fun settingsSearchMatches(query: String, searchableTexts: List<String>): Boolean {
-    fun normalize(value: String): String = value
+private fun normalizeSettingsSearchText(value: String): String = value
         .lowercase(Locale.ROOT)
         .replace(SETTINGS_SEARCH_SEPARATOR, " ")
         .trim()
 
-    val terms = normalize(query).split(' ').filter { it.isNotBlank() }
-    if (terms.isEmpty()) return false
-    val haystack = searchableTexts.joinToString(" ") { normalize(it) }
-    return terms.all(haystack::contains)
+internal fun settingsSearchScore(
+    query: String,
+    itemLabel: String,
+    sectionLabel: String,
+    keywords: List<String> = emptyList(),
+    optionLabels: List<String> = emptyList(),
+    currentValue: String? = null,
+): Int? {
+    val normalizedQuery = normalizeSettingsSearchText(query)
+    val terms = normalizedQuery.split(' ').filter { it.isNotBlank() }
+    if (terms.isEmpty()) return null
+    val normalizedItem = normalizeSettingsSearchText(itemLabel)
+    val normalizedSection = normalizeSettingsSearchText(sectionLabel)
+    val normalizedCurrent = normalizeSettingsSearchText(currentValue.orEmpty())
+    val normalizedOptions = optionLabels.joinToString(" ") { normalizeSettingsSearchText(it) }
+    val normalizedKeywords = keywords.joinToString(" ") { normalizeSettingsSearchText(it) }
+    val haystack = listOf(
+        normalizedItem,
+        normalizedSection,
+        normalizedCurrent,
+        normalizedOptions,
+        normalizedKeywords,
+    ).joinToString(" ")
+    if (!terms.all(haystack::contains)) return null
+    return when {
+        normalizedItem == normalizedQuery -> 1_000
+        normalizedItem.startsWith(normalizedQuery) -> 900
+        terms.all(normalizedItem::contains) -> 800
+        normalizedCurrent == normalizedQuery -> 700
+        normalizedCurrent.contains(normalizedQuery) -> 650
+        normalizedOptions.contains(normalizedQuery) -> 550
+        normalizedKeywords.contains(normalizedQuery) -> 400
+        normalizedSection.contains(normalizedQuery) -> 200
+        else -> 100
+    }
 }
+
+internal fun settingsSearchMatches(query: String, searchableTexts: List<String>): Boolean =
+    settingsSearchScore(
+        query = query,
+        itemLabel = searchableTexts.firstOrNull().orEmpty(),
+        sectionLabel = searchableTexts.getOrNull(1).orEmpty(),
+        keywords = searchableTexts.drop(2),
+    ) != null
 
 /**
  * 设置项可搜索索引。新增设置项时同步加一行；匹配后跳到所在 section 顶部。
@@ -5319,18 +5424,34 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
     SearchEntry(SectionKeys.PRESETS, R.string.settings_section_translation_presets, R.string.settings_search_item_preset_transfer, SETTINGS_SEARCH_TRANSFER_KEYWORDS),
 
     // —— 翻译后端 ——
-    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_translator_engine, listOf("OpenAI", "DeepL", "LLM", "翻译引擎")),
-    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_base_url, listOf("base url")),
-    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_api_key, listOf("api key")),
-    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_model_name, listOf("model", "模型名")),
-    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_deepl_api_key, listOf("deepl")),
-    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_deepl_pro, listOf("deepl pro")),
-    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_deepl_advanced, listOf("deeplx", "bearer", "official", "protocol", "自架", "高级", "协议", "deepl base url")),
-    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_youdao_pictrans, listOf("youdao", "有道", "图片翻译", "pictrans", "ocrtransapi", "端到端")),
-    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_google, listOf("google", "谷歌", "translate")),
-    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_volc, listOf("volc", "volcengine", "火山", "字节", "doubao", "bytedance", "access key", "AK", "SK", "region", "区域")),
-    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_baidu_fanyi, listOf("baidu fanyi", "百度翻译", "fanyi-api", "appid", "开放平台")),
-    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_tencent_translator, listOf("tencent", "腾讯", "tmt", "tmtcloud", "腾讯云翻译")),
+    SearchEntry(
+        SectionKeys.TRANSLATE,
+        R.string.settings_section_translator,
+        R.string.settings_search_item_translator_engine,
+        listOf("OpenAI", "DeepL", "LLM", "翻译引擎"),
+        optionLabelResIds = listOf(
+            R.string.settings_engine_openai_llm,
+            R.string.settings_engine_deepl,
+            R.string.settings_engine_youdao_pictrans,
+            R.string.settings_engine_google,
+            R.string.settings_engine_volc,
+            R.string.settings_engine_baidu_fanyi,
+            R.string.settings_engine_tencent,
+            R.string.settings_engine_local_sakura,
+            R.string.settings_engine_local_hymt2,
+        ),
+    ),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_base_url, listOf("base url"), requiredTranslatorEngine = TranslatorEngine.OPENAI),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_api_key, listOf("api key"), requiredTranslatorEngine = TranslatorEngine.OPENAI),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_model_name, listOf("model", "模型名"), requiredTranslatorEngine = TranslatorEngine.OPENAI),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_deepl_api_key, listOf("deepl"), requiredTranslatorEngine = TranslatorEngine.DEEPL),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_deepl_pro, listOf("deepl pro"), requiredTranslatorEngine = TranslatorEngine.DEEPL),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_deepl_advanced, listOf("deeplx", "bearer", "official", "protocol", "自架", "高级", "协议", "deepl base url"), requiredTranslatorEngine = TranslatorEngine.DEEPL),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_youdao_pictrans, listOf("youdao", "有道", "图片翻译", "pictrans", "ocrtransapi", "端到端"), requiredTranslatorEngine = TranslatorEngine.YOUDAO_PICTRANS),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_google, listOf("google", "谷歌", "translate"), requiredTranslatorEngine = TranslatorEngine.GOOGLE),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_volc, listOf("volc", "volcengine", "火山", "字节", "doubao", "bytedance", "access key", "AK", "SK", "region", "区域"), requiredTranslatorEngine = TranslatorEngine.VOLC),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_baidu_fanyi, listOf("baidu fanyi", "百度翻译", "fanyi-api", "appid", "开放平台"), requiredTranslatorEngine = TranslatorEngine.BAIDU_FANYI),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_tencent_translator, listOf("tencent", "腾讯", "tmt", "tmtcloud", "腾讯云翻译"), requiredTranslatorEngine = TranslatorEngine.TENCENT),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_source_lang, listOf("source", "源语言")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_target_lang, listOf("target", "目标语言")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_prompt, listOf("prompt", "提示词", "system")),
@@ -5341,11 +5462,51 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_foreground_app_detection, listOf("app detection", "foreground app", "accessibility", "usage access", "应用识别", "前台应用")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_grant_usage_access, listOf("usage permission", "usage access", "permission", "使用情况权限", "使用情况访问", "授权")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_manage_glossary, listOf("glossary", "terminology", "term library", "术语库", "专业名词")),
-    SearchEntry(SectionKeys.TEXT_ORIENTATION, R.string.settings_text_orientation_section_title, R.string.settings_translation_output_layout_label, listOf("output direction", "translation layout", "writing mode", "译文方向", "译文排列", "横排", "竖排", "从左到右", "从右到左")),
+    SearchEntry(
+        SectionKeys.TEXT_ORIENTATION,
+        R.string.settings_text_orientation_section_title,
+        R.string.settings_translation_output_follow_title,
+        listOf("follow recognition", "recognized layout", "跟随识别", "识别文字排列"),
+        optionLabelResIds = listOf(R.string.settings_translation_output_follow),
+    ),
+    SearchEntry(
+        SectionKeys.TEXT_ORIENTATION,
+        R.string.settings_text_orientation_section_title,
+        R.string.settings_translation_output_layout_label,
+        listOf("output direction", "translation layout", "writing mode", "译文方向", "译文排列"),
+        optionLabelResIds = listOf(
+            R.string.settings_translation_output_follow_title,
+            R.string.settings_translation_output_follow,
+            R.string.settings_translation_output_horizontal,
+            R.string.settings_translation_output_vertical,
+            R.string.settings_translation_output_ltr,
+            R.string.settings_translation_output_rtl,
+        ),
+    ),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_local_llm_model, listOf("local llm", "gguf", "hy-mt", "sakura", "model download", "model import", "端侧模型", "本地模型", "模型下载", "模型导入")),
 
     // —— OCR 引擎 ——
-    SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_ocr_switch, listOf("ML Kit", "百度", "腾讯", "Paddle", "OCR engine")),
+    SearchEntry(
+        SectionKeys.OCR,
+        R.string.settings_section_ocr,
+        R.string.settings_search_item_ocr_switch,
+        listOf("ML Kit", "百度", "腾讯", "Paddle", "OCR engine"),
+        optionLabelResIds = listOf(
+            R.string.settings_ocr_chip_auto,
+            R.string.settings_ocr_chip_japanese,
+            R.string.settings_ocr_chip_korean,
+            R.string.settings_ocr_chip_chinese,
+            R.string.settings_ocr_chip_latin,
+            R.string.settings_ocr_chip_baidu,
+            R.string.settings_ocr_chip_tencent,
+            R.string.settings_ocr_chip_youdao,
+            R.string.settings_ocr_chip_paddle_ai_studio,
+            R.string.settings_ocr_chip_paddle,
+            R.string.settings_ocr_chip_umi,
+            R.string.settings_ocr_chip_luna,
+            R.string.settings_ocr_chip_manga_ocr_ja,
+        ),
+    ),
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_paddle_ai_studio, listOf("PP-OCRv6 Online", "Paddle AI Studio", "Access Token", "在线 OCR", "云端 OCR")),
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_paddle_download, listOf("ONNX", "v5", "v6", "PP-OCRv6", "模型", "model", "镜像", "mirror", "本地导入", "local import", "import", "导入", "delete", "删除")),
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_manga_ocr_download, listOf("manga", "manga-ocr", "日漫", "漫画", "竖排", "vertical", "ONNX", "模型", "model", "download", "下载", "本地导入", "local import", "import", "导入", "delete", "删除")),
@@ -5370,11 +5531,43 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
     SearchEntry(SectionKeys.PREPROCESS, R.string.settings_section_preprocess, R.string.settings_search_item_binarize, listOf("binarize", "otsu", "二值化")),
 
     // —— 显示 ——
-    SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_render_mode, listOf("紧贴", "横幅", "banner", "render", "display mode", "floating window", "悬浮窗")),
+    SearchEntry(
+        SectionKeys.OVERLAY,
+        R.string.settings_section_overlay,
+        R.string.settings_search_item_render_mode,
+        listOf("紧贴", "横幅", "banner", "render", "display mode", "floating window", "悬浮窗"),
+        optionLabelResIds = listOf(
+            R.string.settings_render_blocks_chip,
+            R.string.settings_render_banner_chip,
+            R.string.settings_render_floating_window_chip,
+        ),
+    ),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_translation_block_interaction, SETTINGS_SEARCH_TRANSLATION_BLOCK_INTERACTION_KEYWORDS),
-    SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_placement, listOf("下方", "上方", "覆盖", "below", "above", "overlap", "placement")),
+    SearchEntry(
+        SectionKeys.OVERLAY,
+        R.string.settings_section_overlay,
+        R.string.settings_search_item_placement,
+        listOf("下方", "上方", "覆盖", "below", "above", "overlap", "placement"),
+        optionLabelResIds = listOf(
+            R.string.settings_placement_below_chip,
+            R.string.settings_placement_overlap_chip,
+            R.string.settings_placement_above_chip,
+        ),
+    ),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_offset, listOf("offset", "微调")),
-    SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_overlay_theme, listOf("深色", "浅色", "纸张", "霜玻璃", "琥珀", "theme", "dark", "light", "frost", "amber")),
+    SearchEntry(
+        SectionKeys.OVERLAY,
+        R.string.settings_section_overlay,
+        R.string.settings_search_item_overlay_theme,
+        listOf("深色", "浅色", "纸张", "霜玻璃", "琥珀", "theme", "dark", "light", "frost", "amber"),
+        optionLabelResIds = listOf(
+            R.string.settings_theme_classic_dark,
+            R.string.settings_theme_amber_gold,
+            R.string.settings_theme_paper_light,
+            R.string.settings_theme_frost_glass,
+            R.string.settings_theme_custom,
+        ),
+    ),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_custom_theme, SETTINGS_SEARCH_COLOR_KEYWORDS),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_border_style, listOf("solid", "dashed", "dotted", "double", "groove", "实线", "虚线", "点线", "双线", "凹槽", "边框样式")),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_text_size, listOf("font size", "字号", "字体大小")),
@@ -5401,9 +5594,28 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
 
     // —— 触发器 ——
     SearchEntry(SectionKeys.TRIGGER, R.string.settings_section_trigger, R.string.settings_search_item_loop_interval, listOf("loop", "循环", "interval", "间隔")),
-    SearchEntry(SectionKeys.TRIGGER, R.string.settings_section_trigger, R.string.settings_search_item_loop_trigger_mode, SETTINGS_SEARCH_LOOP_TRIGGER_KEYWORDS),
+    SearchEntry(
+        SectionKeys.TRIGGER,
+        R.string.settings_section_trigger,
+        R.string.settings_search_item_loop_trigger_mode,
+        SETTINGS_SEARCH_LOOP_TRIGGER_KEYWORDS,
+        optionLabelResIds = listOf(
+            R.string.settings_loop_trigger_fixed,
+            R.string.settings_loop_trigger_smart,
+        ),
+    ),
     SearchEntry(SectionKeys.TRIGGER, R.string.settings_section_trigger, R.string.settings_search_item_loop_similarity, SETTINGS_SEARCH_LOOP_SIMILARITY_KEYWORDS),
-    SearchEntry(SectionKeys.TRIGGER, R.string.settings_section_trigger, R.string.settings_search_item_loop_region, SETTINGS_SEARCH_LOOP_REGION_KEYWORDS),
+    SearchEntry(
+        SectionKeys.TRIGGER,
+        R.string.settings_section_trigger,
+        R.string.settings_search_item_loop_region,
+        SETTINGS_SEARCH_LOOP_REGION_KEYWORDS,
+        optionLabelResIds = listOf(
+            R.string.settings_loop_text_region_auto,
+            R.string.settings_loop_text_region_lower,
+            R.string.settings_loop_text_region_anywhere,
+        ),
+    ),
     SearchEntry(SectionKeys.TRIGGER, R.string.settings_section_trigger, R.string.settings_search_item_a11y_volume, listOf("无障碍", "a11y", "accessibility", "volume", "音量")),
 
     // —— 开发者诊断 ——
@@ -5426,6 +5638,9 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
 
 internal fun settingsSearchSectionKeys(): Set<String> = SETTING_ITEMS.mapTo(linkedSetOf()) { it.sectionKey }
 internal fun settingsSearchItemLabelResIds(): Set<Int> = SETTING_ITEMS.mapTo(linkedSetOf()) { it.itemLabelRes }
+internal fun settingsSearchTargetResIds(): Set<Int> = SETTING_ITEMS.mapTo(linkedSetOf()) { it.targetId }
+internal fun settingsSearchEntryIds(): Set<String> = SETTING_ITEMS.mapTo(linkedSetOf()) { it.entryId }
+internal fun settingsSearchEntryCount(): Int = SETTING_ITEMS.size
 
 @Composable
 @OptIn(ExperimentalLayoutApi::class)
