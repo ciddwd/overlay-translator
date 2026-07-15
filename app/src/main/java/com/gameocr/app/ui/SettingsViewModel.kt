@@ -22,10 +22,12 @@ import com.gameocr.app.data.SettingsBundlePreview
 import com.gameocr.app.data.SettingsBundleTransfer
 import com.gameocr.app.data.SettingsRepository
 import com.gameocr.app.data.TranslationPreset
+import com.gameocr.app.data.TranslationBlockInteractionMode
 import com.gameocr.app.data.TranslationPresetCatalog
 import com.gameocr.app.data.TranslationPresetImportResult
 import com.gameocr.app.data.TranslationPresetTransfer
 import com.gameocr.app.data.TranslatorEngine
+import com.gameocr.app.glossary.TranslationGlossaryRepository
 import com.gameocr.app.llm.LlamaEngineHolder
 import com.gameocr.app.llm.LlmModelInstaller
 import com.gameocr.app.llm.LlmModelKind
@@ -52,7 +54,8 @@ class SettingsViewModel @Inject constructor(
     private val routingTranslator: RoutingTranslator,
     private val llmInstaller: LlmModelInstaller,
     private val llamaEngineHolder: LlamaEngineHolder,
-    private val overlayFontManager: OverlayFontManager
+    private val overlayFontManager: OverlayFontManager,
+    private val glossaryRepository: TranslationGlossaryRepository,
 ) : ViewModel() {
 
     suspend fun load(): Settings = repo.get()
@@ -64,7 +67,12 @@ class SettingsViewModel @Inject constructor(
         val output = appContext.contentResolver.openOutputStream(uri, "w")
             ?: error("Could not open the selected export file.")
         output.use {
-            SettingsBundleTransfer.write(it, settings, overlayFontManager::transferFileFor)
+            SettingsBundleTransfer.write(
+                output = it,
+                settings = settings,
+                resolveFontFile = overlayFontManager::transferFileFor,
+                glossaryTerms = glossaryRepository.listAll(),
+            )
         }
     }
 
@@ -90,6 +98,7 @@ class SettingsViewModel @Inject constructor(
                 importedPresetCount = imported.importedCount,
                 overwrittenPresetNames = imported.overwrittenNames,
                 importedFontCount = 0,
+                importedGlossaryTermCount = 0,
                 legacyPresetOnly = true,
             )
         }
@@ -108,11 +117,13 @@ class SettingsViewModel @Inject constructor(
             ).also { mergeResult = it }.settings
         }
         val merged = requireNotNull(mergeResult)
+        val importedGlossaryCount = glossaryRepository.importTerms(preview.glossaryTerms)
         SettingsBundleImportResult(
             settings = merged.settings,
             importedPresetCount = merged.presetResult.importedCount,
             overwrittenPresetNames = merged.presetResult.overwrittenNames,
             importedFontCount = installedFonts.size,
+            importedGlossaryTermCount = importedGlossaryCount,
             legacyPresetOnly = false,
         )
     }
@@ -145,8 +156,20 @@ class SettingsViewModel @Inject constructor(
         overlayTextStyle: OverlayTextStyle,
         alpha: Float,
         loopMs: Long,
+        loopTriggerMode: com.gameocr.app.data.LoopTriggerMode,
+        loopTextStableDurationMs: Long,
+        loopSkipSimilarFrames: Boolean,
+        loopFrameSimilarityThreshold: Float,
+        loopTextRegionMode: com.gameocr.app.data.LoopTextRegionMode,
+        loopTranslateRegionOnly: Boolean,
+        developerOptionsEnabled: Boolean,
+        ocrRedBoxModeEnabled: Boolean,
+        ocrRedBoxShowSourceText: Boolean,
+        ocrRedBoxShowTranslation: Boolean,
         streaming: Boolean,
+        retryEmptyTranslation: Boolean,
         renderMode: RenderMode,
+        translationBlockInteractionMode: TranslationBlockInteractionMode,
         placement: OverlayPlacement,
         overlayTheme: OverlayTheme,
         customBg: Int,
@@ -209,8 +232,20 @@ class SettingsViewModel @Inject constructor(
                 overlayTextStyle = overlayTextStyle.normalized(),
                 overlayAlpha = alpha.coerceIn(0.3f, 1f),
                 captureLoopIntervalMs = loopMs.coerceAtLeast(200),
+                loopTriggerMode = loopTriggerMode,
+                loopTextStableDurationMs = loopTextStableDurationMs.coerceIn(200L, 2000L),
+                loopSkipSimilarFrames = loopSkipSimilarFrames,
+                loopFrameSimilarityThreshold = loopFrameSimilarityThreshold.coerceIn(0.50f, 0.99f),
+                loopTextRegionMode = loopTextRegionMode,
+                loopTranslateRegionOnly = loopTranslateRegionOnly,
+                developerOptionsEnabled = developerOptionsEnabled,
+                ocrRedBoxModeEnabled = ocrRedBoxModeEnabled,
+                ocrRedBoxShowSourceText = ocrRedBoxShowSourceText,
+                ocrRedBoxShowTranslation = ocrRedBoxShowTranslation,
                 streamingTranslate = streaming,
+                retryEmptyTranslation = retryEmptyTranslation,
                 renderMode = renderMode,
+                translationBlockInteractionMode = translationBlockInteractionMode,
                 overlayPlacement = placement,
                 overlayTheme = overlayTheme,
                 customBgColor = customBg,
@@ -426,6 +461,28 @@ class SettingsViewModel @Inject constructor(
     /** 手动锁定文本方向（null = 解除锁定，走自动判别）。 */
     suspend fun saveManualTextOrientation(orient: com.gameocr.app.ocr.TextOrientation?) {
         repo.update { it.copy(manualTextOrientation = orient) }
+    }
+
+    suspend fun saveTranslationOutputLayout(layout: com.gameocr.app.data.TranslationOutputLayout) {
+        repo.update { it.copy(translationOutputLayout = layout) }
+    }
+
+    suspend fun saveTranslationOutputDirection(direction: com.gameocr.app.data.TranslationOutputDirection) {
+        repo.update { it.copy(translationOutputDirection = direction) }
+    }
+
+    suspend fun saveGlossarySettings(
+        enabled: Boolean,
+        detectionMode: com.gameocr.app.data.ForegroundAppDetectionMode,
+        sendAppName: Boolean,
+    ) {
+        repo.update {
+            it.copy(
+                translationGlossaryEnabled = enabled,
+                foregroundAppDetectionMode = detectionMode,
+                sendAppNameToTranslator = sendAppName,
+            )
+        }
     }
 
     /** 重置悬浮窗口位置 / 大小到默认（X=Y=-1 居中，W/H 回默认）。 */

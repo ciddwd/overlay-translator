@@ -18,6 +18,16 @@ data class Settings(
     val promptTemplate: String = DEFAULT_PROMPT,
     val ocrEngine: OcrEngineKind = OcrEngineKind.ML_KIT_AUTO,
     val captureLoopIntervalMs: Long = 2000L,
+    val loopTriggerMode: LoopTriggerMode = LoopTriggerMode.WAIT_FOR_TEXT_COMPLETE,
+    val loopTextStableDurationMs: Long = DEFAULT_LOOP_TEXT_STABLE_DURATION_MS,
+    val loopSkipSimilarFrames: Boolean = true,
+    val loopFrameSimilarityThreshold: Float = 0.95f,
+    val loopTextRegionMode: LoopTextRegionMode = LoopTextRegionMode.AUTO,
+    val loopTranslateRegionOnly: Boolean = true,
+    val developerOptionsEnabled: Boolean = false,
+    val ocrRedBoxModeEnabled: Boolean = false,
+    val ocrRedBoxShowSourceText: Boolean = true,
+    val ocrRedBoxShowTranslation: Boolean = false,
     val captureRegion: CaptureRegion? = null,
     /**
      * 保存 [captureRegion] 时的屏幕物理尺寸（px）。用于读取 region 时按当前屏幕尺寸自动 rescale，
@@ -32,7 +42,10 @@ data class Settings(
     val overlayFontDisplayName: String = "",
     val overlayFonts: List<OverlayFontEntry> = emptyList(),
     val streamingTranslate: Boolean = true,
+    val retryEmptyTranslation: Boolean = false,
     val renderMode: RenderMode = RenderMode.BLOCKS,
+    val translationBlockInteractionMode: TranslationBlockInteractionMode =
+        TranslationBlockInteractionMode.COPY_BUTTON,
     val overlayPlacement: OverlayPlacement = OverlayPlacement.OVERLAP,
     val overlayTheme: OverlayTheme = OverlayTheme.CLASSIC_DARK,
     /** CUSTOM 主题用：ARGB int，比如 0xE6000000.toInt() 半透明黑。 */
@@ -60,6 +73,10 @@ data class Settings(
      * 通常仅在自动判别频繁误判某帧时由用户临时锁定。
      */
     val manualTextOrientation: com.gameocr.app.ocr.TextOrientation? = null,
+    val translationOutputLayout: TranslationOutputLayout =
+        TranslationOutputLayout.FOLLOW_RECOGNITION,
+    val translationOutputDirection: TranslationOutputDirection =
+        TranslationOutputDirection.FOLLOW_RECOGNITION,
     val baiduOcrApiKey: String = "",
     val baiduOcrSecretKey: String = "",
     /** 百度 OCR 接口类型。默认含位置标准版，能让译文紧贴原文 boundingBox 渲染。 */
@@ -97,6 +114,9 @@ data class Settings(
     val preferShizukuCapture: Boolean = false,
     val a11yVolumeTrigger: Boolean = false,
     val translatorEngine: TranslatorEngine = TranslatorEngine.OPENAI,
+    val translationGlossaryEnabled: Boolean = true,
+    val foregroundAppDetectionMode: ForegroundAppDetectionMode = ForegroundAppDetectionMode.AUTO,
+    val sendAppNameToTranslator: Boolean = false,
     val deeplApiKey: String = "",
     val deeplPro: Boolean = false,
     /**
@@ -207,15 +227,14 @@ data class Settings(
      * 自动在每页末位插入「下一组」翻页项，最后一页循环回第一页。新装用户 / 未自定义的旧默认顺序迁移到
      * [FloatingMenu.DEFAULT_ORDER]。
      *
-     * `FULL_SCREEN_SKILL` / `WORD_SELECT` 在 registry 里互斥——展开菜单时只显示「与当前
-     * [floatingButtonSkill] 相反」的那一个，点击切 skill。所以 order 里只用一个 slot 表示
-     * 「技能切换槽」，约定写 `FULL_SCREEN_SKILL`。
+     * `LOOP` 与 `FULL_SCREEN_SKILL` 共同构成两个稳定的模式切换槽；展开菜单时分别显示
+     * 另外两种主球模式。order 无需迁移到三个新 ID，旧配置仍可直接读取。
      */
     val floatingMenuItemOrder: List<MenuItemId> = FloatingMenu.DEFAULT_ORDER,
     val arcMenuPageSize: Int = FloatingMenu.DEFAULT_PAGE_SIZE,
     /**
-     * 主球单击触发的「技能」。FULL_SCREEN 走全屏 OCR+翻译；WORD_SELECT 进入划词框选 overlay。
-     * 长按菜单里的「技能槽」按钮显示当前对立项，点了切换 + 球图标互换。
+     * 主球单击触发的「技能」。FULL_SCREEN 走全屏 OCR+翻译；WORD_SELECT 进入划词框选；
+     * LOOP 切换循环任务的启动/停止。模式会持久化，循环运行状态不会跨 Service 重启恢复。
      */
     val floatingButtonSkill: FloatingSkill = FloatingSkill.FULL_SCREEN,
     /**
@@ -278,9 +297,13 @@ data class Settings(
      */
     val localLlmMirrorUrl: String = "",
     val translationPresets: List<TranslationPreset> = emptyList(),
-    val activeTranslationPresetId: String = ""
+    val activeTranslationPresetId: String = "",
+    @kotlinx.serialization.Transient
+    val runtimeTranslationContext: String = ""
 ) {
     companion object {
+        const val DEFAULT_LOOP_TEXT_STABLE_DURATION_MS: Long = 500L
+
         /**
          * 默认 prompt 用占位符 `{source}` / `{target}`，运行时替换为当前 source/target 语言名称。
          * 这样用户在设置里改语言 chip 后无需重写 prompt。
@@ -341,6 +364,8 @@ data class TranslationPreset(
     val ocrEngine: OcrEngineKind = OcrEngineKind.ML_KIT_AUTO,
     val preprocess: PreprocessOptions = PreprocessOptions(),
     val renderMode: RenderMode = RenderMode.BLOCKS,
+    val translationBlockInteractionMode: TranslationBlockInteractionMode =
+        TranslationBlockInteractionMode.COPY_BUTTON,
     val overlayPlacement: OverlayPlacement = OverlayPlacement.OVERLAP,
     val overlayTheme: OverlayTheme = OverlayTheme.CLASSIC_DARK,
     val customBgColor: Int = 0xE6000000.toInt(),
@@ -358,6 +383,7 @@ data class TranslationPreset(
     val overlayAllowWrap: Boolean = true,
     val overlayAvoidCollision: Boolean = true,
     val streamingTranslate: Boolean = true,
+    val retryEmptyTranslation: Boolean = false,
     val translatorEngine: TranslatorEngine = TranslatorEngine.OPENAI,
     val deeplPro: Boolean = false,
     val deeplProtocol: DeeplProtocol = DeeplProtocol.OFFICIAL,
@@ -376,6 +402,12 @@ data class TranslationPreset(
     val mergeStrength: MergeStrength = MergeStrength.STANDARD,
     val textOrientationAutoDetect: Boolean = true,
     val manualTextOrientation: com.gameocr.app.ocr.TextOrientation? = null,
+    val translationOutputLayout: TranslationOutputLayout =
+        TranslationOutputLayout.FOLLOW_RECOGNITION,
+    val translationOutputDirection: TranslationOutputDirection =
+        TranslationOutputDirection.FOLLOW_RECOGNITION,
+    val translationGlossaryEnabled: Boolean = true,
+    val sendAppNameToTranslator: Boolean = false,
     val localLlmTemperature: Float = 0.7f,
     val localLlmTopP: Float = 0.6f,
     val localLlmTopK: Int = 20,
@@ -399,6 +431,7 @@ data class TranslationPreset(
         ocrEngine = ocrEngine,
         preprocess = preprocess,
         renderMode = renderMode,
+        translationBlockInteractionMode = translationBlockInteractionMode,
         overlayPlacement = overlayPlacement,
         overlayTheme = overlayTheme,
         customBgColor = customBgColor,
@@ -416,6 +449,7 @@ data class TranslationPreset(
         overlayAllowWrap = overlayAllowWrap,
         overlayAvoidCollision = overlayAvoidCollision,
         streamingTranslate = streamingTranslate,
+        retryEmptyTranslation = retryEmptyTranslation,
         translatorEngine = translatorEngine,
         deeplPro = deeplPro,
         deeplProtocol = deeplProtocol,
@@ -434,6 +468,10 @@ data class TranslationPreset(
         mergeStrength = mergeStrength,
         textOrientationAutoDetect = textOrientationAutoDetect,
         manualTextOrientation = manualTextOrientation,
+        translationOutputLayout = translationOutputLayout,
+        translationOutputDirection = translationOutputDirection,
+        translationGlossaryEnabled = translationGlossaryEnabled,
+        sendAppNameToTranslator = sendAppNameToTranslator,
         localLlmTemperature = localLlmTemperature,
         localLlmTopP = localLlmTopP,
         localLlmTopK = localLlmTopK,
@@ -494,6 +532,7 @@ object TranslationPresetCatalog {
             ocrEngine = settings.ocrEngine,
             preprocess = settings.preprocess,
             renderMode = settings.renderMode,
+            translationBlockInteractionMode = settings.translationBlockInteractionMode,
             overlayPlacement = settings.overlayPlacement,
             overlayTheme = settings.overlayTheme,
             customBgColor = settings.customBgColor,
@@ -511,6 +550,7 @@ object TranslationPresetCatalog {
             overlayAllowWrap = settings.overlayAllowWrap,
             overlayAvoidCollision = settings.overlayAvoidCollision,
             streamingTranslate = settings.streamingTranslate,
+            retryEmptyTranslation = settings.retryEmptyTranslation,
             translatorEngine = settings.translatorEngine,
             deeplPro = settings.deeplPro,
             deeplProtocol = settings.deeplProtocol,
@@ -529,6 +569,10 @@ object TranslationPresetCatalog {
             mergeStrength = settings.mergeStrength,
             textOrientationAutoDetect = settings.textOrientationAutoDetect,
             manualTextOrientation = settings.manualTextOrientation,
+            translationOutputLayout = settings.translationOutputLayout,
+            translationOutputDirection = settings.translationOutputDirection,
+            translationGlossaryEnabled = settings.translationGlossaryEnabled,
+            sendAppNameToTranslator = settings.sendAppNameToTranslator,
             localLlmTemperature = settings.localLlmTemperature,
             localLlmTopP = settings.localLlmTopP,
             localLlmTopK = settings.localLlmTopK,
@@ -572,6 +616,7 @@ object TranslationPresetCatalog {
             preset.preprocess.invert,
             preset.preprocess.binarize,
             preset.renderMode.name,
+            preset.translationBlockInteractionMode.name,
             preset.overlayPlacement.name,
             preset.overlayTheme.name,
             preset.customBgColor,
@@ -602,6 +647,7 @@ object TranslationPresetCatalog {
             preset.overlayAllowWrap,
             preset.overlayAvoidCollision,
             preset.streamingTranslate,
+            preset.retryEmptyTranslation,
             preset.translatorEngine.name,
             preset.deeplPro,
             preset.deeplProtocol.name,
@@ -620,6 +666,10 @@ object TranslationPresetCatalog {
             preset.mergeStrength.name,
             preset.textOrientationAutoDetect,
             preset.manualTextOrientation?.name.orEmpty(),
+            preset.translationOutputLayout.name,
+            preset.translationOutputDirection.name,
+            preset.translationGlossaryEnabled,
+            preset.sendAppNameToTranslator,
             preset.localLlmTemperature.toBits(),
             preset.localLlmTopP.toBits(),
             preset.localLlmTopK,
@@ -675,15 +725,15 @@ object TranslationPresetCatalog {
 @Serializable
 enum class FloatingSkill {
     FULL_SCREEN,
-    WORD_SELECT
+    WORD_SELECT,
+    LOOP,
 }
 
 /**
  * 悬浮球弧菜单按钮 ID。在 `overlay/MenuItemRegistry.kt` 集中绑定到图标 / 文案 / 回调。
  *
- * `FULL_SCREEN_SKILL` 是「技能槽」占位 ID：在 menu 里它代表「与当前 [FloatingSkill] 相反」
- * 的那一项 —— 当前 skill = FULL_SCREEN 时显示 WORD_SELECT 入口图标，反之亦然。
- * 这样 [Settings.floatingMenuItemOrder] 只需要一个 slot，不会产生「同时显示两个互斥按钮」的奇怪状态。
+ * `LOOP` 与 `FULL_SCREEN_SKILL` 是两个稳定的模式槽位。registry 根据当前 [FloatingSkill]
+ * 将它们映射为另外两种模式；这样旧版菜单顺序无需迁移到三个新 ID。
  */
 @Serializable
 enum class MenuItemId {
@@ -1092,6 +1142,19 @@ enum class OcrEngineKind {
     MANGA_OCR_JA      // l0wgear/manga-ocr-2025-onnx 日漫专用（端侧；复用 PaddleOCR DBNet 检测；~140MB 按需下载，需开代理）
 }
 
+@Serializable
+enum class LoopTriggerMode {
+    FIXED_INTERVAL,
+    WAIT_FOR_TEXT_COMPLETE,
+}
+
+@Serializable
+enum class LoopTextRegionMode {
+    AUTO,
+    LOWER_SCREEN_FIRST,
+    ANYWHERE,
+}
+
 /**
  * 此引擎是否要求 [CaptureService] 跳过 [PreprocessOptions.invert] / [PreprocessOptions.binarize]
  * 预处理，传入接近原图的 bitmap。MANGA_OCR_JA 训练时见的是漫画原图（含网点、灰阶），
@@ -1121,6 +1184,37 @@ enum class RenderMode {
     BLOCKS,
     /** 可拖拽 / 可缩放的悬浮窗口，列出所有原文 → 译文。0.3.x 之前叫 BANNER（屏幕底部整条横幅）。 */
     FLOATING_WINDOW
+}
+
+@Serializable
+enum class TranslationOutputLayout {
+    FOLLOW_RECOGNITION,
+    HORIZONTAL,
+    VERTICAL,
+}
+
+@Serializable
+enum class TranslationOutputDirection {
+    FOLLOW_RECOGNITION,
+    LEFT_TO_RIGHT,
+    RIGHT_TO_LEFT,
+}
+
+@Serializable
+enum class ForegroundAppDetectionMode {
+    AUTO,
+    ACCESSIBILITY,
+    USAGE_ACCESS,
+    DISABLED,
+}
+
+/** [RenderMode.BLOCKS] 下译文块提供复制能力的交互方式。 */
+@Serializable
+enum class TranslationBlockInteractionMode {
+    /** 长按译文块使用 Android 原生文本选择。 */
+    COPY_BUTTON,
+    /** 点击译文块打开可选择局部文字、也可整段复制的结果浮层。 */
+    OPEN_COPY_PANEL,
 }
 
 /** 悬浮窗口（[RenderMode.FLOATING_WINDOW]）的内容形态。 */

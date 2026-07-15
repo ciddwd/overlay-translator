@@ -42,3 +42,8 @@ internal fun translationCardLayoutSpec(
         maxHeightFraction = if (isLandscape) 0.88f else 0.72f,
     )
 }
+
+internal fun translationCardAdaptiveHeightPx(
+    naturalHeightPx: Int,
+    maxHeightPx: Int,
+): Int = naturalHeightPx.coerceAtLeast(1).coerceAtMost(maxHeightPx.coerceAtLeast(1))

@@ -184,10 +184,18 @@ class TranslationPresetTest {
                 "overlay text style",
                 base.copy(overlayTextStyle = OverlayTextStyle(bold = true, strokeEnabled = true))
             ),
+            Case(
+                "translation block interaction",
+                base.copy(translationBlockInteractionMode = TranslationBlockInteractionMode.OPEN_COPY_PANEL),
+            ),
             Case("OCR engine", base.copy(ocrEngine = OcrEngineKind.PADDLE_ONNX)),
             Case("translator engine", base.copy(translatorEngine = TranslatorEngine.LOCAL_HY_MT2)),
             Case("merge strength", base.copy(mergeStrength = MergeStrength.STANDARD)),
             Case("orientation auto detect", base.copy(textOrientationAutoDetect = false)),
+            Case("translation output layout", base.copy(translationOutputLayout = TranslationOutputLayout.VERTICAL)),
+            Case("translation output direction", base.copy(translationOutputDirection = TranslationOutputDirection.RIGHT_TO_LEFT)),
+            Case("translation glossary", base.copy(translationGlossaryEnabled = false)),
+            Case("application context", base.copy(sendAppNameToTranslator = true)),
             Case("DBNet threshold", base.copy(dbnetProbThresh = 0.25f))
         )
 
@@ -269,6 +277,7 @@ class TranslationPresetTest {
             ocrEngine = OcrEngineKind.PADDLE_ONNX,
             preprocess = PreprocessOptions(upscale2x = true, invert = true, binarize = true),
             renderMode = RenderMode.FLOATING_WINDOW,
+            translationBlockInteractionMode = TranslationBlockInteractionMode.OPEN_COPY_PANEL,
             overlayPlacement = OverlayPlacement.BELOW,
             overlayTheme = OverlayTheme.CUSTOM,
             customBgColor = 0xAA102030.toInt(),
@@ -301,6 +310,7 @@ class TranslationPresetTest {
             overlayAllowWrap = false,
             overlayAvoidCollision = false,
             streamingTranslate = false,
+            retryEmptyTranslation = true,
             translatorEngine = TranslatorEngine.DEEPL,
             deeplPro = true,
             deeplProtocol = DeeplProtocol.DEEPLX,
@@ -319,6 +329,10 @@ class TranslationPresetTest {
             mergeStrength = MergeStrength.CONSERVATIVE,
             textOrientationAutoDetect = false,
             manualTextOrientation = com.gameocr.app.ocr.TextOrientation.VERTICAL_RTL,
+            translationOutputLayout = TranslationOutputLayout.VERTICAL,
+            translationOutputDirection = TranslationOutputDirection.RIGHT_TO_LEFT,
+            translationGlossaryEnabled = false,
+            sendAppNameToTranslator = true,
             localLlmTemperature = 0.31f,
             localLlmTopP = 0.42f,
             localLlmTopK = 17,

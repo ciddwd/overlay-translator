@@ -11,28 +11,44 @@ class CaptureChromeOrderingTest {
     fun capturePipelines_tableDriven_restoreLoadingOnlyAfterScreenshotFrame() {
         data class Case(
             val name: String,
-            val signature: String
+            val signature: String,
+            val expectedRestore: String,
+            val allowsLoading: Boolean,
         )
 
         val source = captureServiceSource()
         val cases = listOf(
-            Case("full screen capture", "private suspend fun captureOnce("),
-            Case("word select capture", "private suspend fun runWordSelectPipeline(")
+            Case(
+                "full screen capture",
+                "private suspend fun captureOnce(",
+                "restoreCaptureChromeOnce(showLoading = showLoadingAfterScreenshot)",
+                allowsLoading = true,
+            ),
+            Case(
+                "word select capture",
+                "private suspend fun runWordSelectPipeline(",
+                "restoreCaptureChromeOnce(showLoading = false)",
+                allowsLoading = false,
+            ),
         )
 
         cases.forEach { case ->
             val snippet = functionSnippet(source, case.signature)
             val captureIndex = snippet.indexOf("val full = shotter.capture()")
-            val restoreIndex = snippet.indexOf(
-                "restoreCaptureChromeOnce(showLoading = showLoadingAfterScreenshot)"
-            )
+            val restoreIndex = snippet.indexOf(case.expectedRestore, captureIndex)
 
             assertTrue("${case.name} should capture before restoring loading", captureIndex >= 0)
-            assertTrue("${case.name} should restore loading after capture", restoreIndex > captureIndex)
+            assertTrue("${case.name} should restore capture chrome after capture", restoreIndex > captureIndex)
             assertFalse(
                 "${case.name} must not show loading before MediaProjection capture",
                 "showLoadingHint()" in snippet.substring(0, captureIndex)
             )
+            if (!case.allowsLoading) {
+                assertFalse(
+                    "${case.name} must not expose the global rotating loading indicator",
+                    "showLoadingAfterScreenshot" in snippet,
+                )
+            }
         }
     }
 

@@ -1,6 +1,5 @@
 package com.gameocr.app.overlay
 
-import android.content.Context
 import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
 import com.gameocr.app.R
@@ -17,6 +16,20 @@ data class MenuItem(
 
 object MenuItemRegistry {
 
+    fun targetSkill(id: MenuItemId, currentSkill: FloatingSkill): FloatingSkill? = when (id) {
+        MenuItemId.LOOP -> if (currentSkill == FloatingSkill.LOOP) {
+            FloatingSkill.FULL_SCREEN
+        } else {
+            FloatingSkill.LOOP
+        }
+        MenuItemId.FULL_SCREEN_SKILL -> when (currentSkill) {
+            FloatingSkill.FULL_SCREEN -> FloatingSkill.WORD_SELECT
+            FloatingSkill.WORD_SELECT -> FloatingSkill.FULL_SCREEN
+            FloatingSkill.LOOP -> FloatingSkill.WORD_SELECT
+        }
+        else -> null
+    }
+
     fun buildNextPageItem(onTap: () -> Unit): MenuItem = MenuItem(
         iconRes = R.drawable.ic_menu_next_page,
         bgRes = R.drawable.bg_arc_menu_item,
@@ -25,66 +38,73 @@ object MenuItemRegistry {
     )
 
     fun build(
-        @Suppress("UNUSED_PARAMETER") context: Context,
         ids: List<MenuItemId>,
         currentSkill: FloatingSkill,
-        isLooping: Boolean,
         callbacks: Callbacks
-    ): List<MenuItem> = ids.mapNotNull { id ->
+    ): List<MenuItem> = ids.flatMap { id ->
         when (id) {
-            MenuItemId.LOOP -> MenuItem(
-                iconRes = R.drawable.ic_menu_loop,
-                bgRes = if (isLooping) R.drawable.bg_arc_menu_item_active
-                else R.drawable.bg_arc_menu_item,
-                labelRes = if (isLooping) R.string.menu_loop_translate_active
-                else R.string.menu_loop_translate,
-                onTap = callbacks.onLoop
+            MenuItemId.LOOP,
+            MenuItemId.FULL_SCREEN_SKILL -> listOf(
+                buildSkillItem(
+                    targetSkill = checkNotNull(targetSkill(id, currentSkill)),
+                    callbacks = callbacks,
+                )
             )
-            MenuItemId.REGION -> MenuItem(
+            MenuItemId.REGION -> listOf(MenuItem(
                 iconRes = R.drawable.ic_menu_region,
                 bgRes = R.drawable.bg_arc_menu_item,
                 labelRes = R.string.menu_pick_region,
                 onTap = callbacks.onRegion
-            )
-            MenuItemId.LANGUAGE_PAIR -> MenuItem(
+            ))
+            MenuItemId.LANGUAGE_PAIR -> listOf(MenuItem(
                 iconRes = R.drawable.ic_menu_language_pair,
                 bgRes = R.drawable.bg_arc_menu_item,
                 labelRes = R.string.menu_language_pair,
                 onTap = callbacks.onLanguagePair
-            )
-            MenuItemId.PRESET_SWITCH -> MenuItem(
+            ))
+            MenuItemId.PRESET_SWITCH -> listOf(MenuItem(
                 iconRes = R.drawable.ic_menu_preset,
                 bgRes = R.drawable.bg_arc_menu_item,
                 labelRes = R.string.menu_preset_switch,
                 onTap = callbacks.onPresetSwitch
-            )
-            MenuItemId.SETTINGS -> MenuItem(
+            ))
+            MenuItemId.SETTINGS -> listOf(MenuItem(
                 iconRes = R.drawable.ic_menu_settings,
                 bgRes = R.drawable.bg_arc_menu_item,
                 labelRes = R.string.menu_open_settings,
                 onTap = callbacks.onOpenSettings
-            )
-            MenuItemId.HOME -> MenuItem(
+            ))
+            MenuItemId.HOME -> listOf(MenuItem(
                 iconRes = R.drawable.ic_menu_home,
                 bgRes = R.drawable.bg_arc_menu_item,
                 labelRes = R.string.menu_open_main,
                 onTap = callbacks.onOpenMain
-            )
-            MenuItemId.FULL_SCREEN_SKILL -> when (currentSkill) {
-                FloatingSkill.FULL_SCREEN -> MenuItem(
-                    iconRes = R.drawable.ic_menu_word_select,
-                    bgRes = R.drawable.bg_arc_menu_item,
-                    labelRes = R.string.menu_word_select,
-                    onTap = callbacks.onSwitchToWordSelect
-                )
-                FloatingSkill.WORD_SELECT -> MenuItem(
-                    iconRes = R.drawable.ic_menu_full_screen,
-                    bgRes = R.drawable.bg_arc_menu_item,
-                    labelRes = R.string.menu_full_screen_skill,
-                    onTap = callbacks.onSwitchToFullScreen
-                )
-            }
+            ))
         }
+    }
+
+    private fun buildSkillItem(
+        targetSkill: FloatingSkill,
+        callbacks: Callbacks,
+    ): MenuItem = when (targetSkill) {
+        FloatingSkill.FULL_SCREEN -> MenuItem(
+            iconRes = R.drawable.ic_menu_full_screen,
+            bgRes = R.drawable.bg_arc_menu_item,
+            labelRes = R.string.menu_full_screen_skill,
+            onTap = callbacks.onSwitchToFullScreen,
+        )
+        FloatingSkill.WORD_SELECT -> MenuItem(
+            iconRes = R.drawable.ic_menu_word_select,
+            bgRes = R.drawable.bg_arc_menu_item,
+            labelRes = R.string.menu_word_select,
+            onTap = callbacks.onSwitchToWordSelect,
+        )
+        FloatingSkill.LOOP -> MenuItem(
+            iconRes = R.drawable.ic_menu_loop,
+            bgRes = R.drawable.bg_arc_menu_item,
+            labelRes = R.string.menu_loop_translate,
+            onTap = callbacks.onSwitchToLoop,
+        )
     }
 
     /**
@@ -115,7 +135,7 @@ object MenuItemRegistry {
     }
 
     data class Callbacks(
-        val onLoop: () -> Unit,
+        val onSwitchToLoop: () -> Unit,
         val onRegion: () -> Unit,
         val onLanguagePair: () -> Unit,
         val onOpenMain: () -> Unit,

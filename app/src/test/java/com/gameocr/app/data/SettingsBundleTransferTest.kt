@@ -1,5 +1,7 @@
 package com.gameocr.app.data
 
+import com.gameocr.app.glossary.GlossaryTermCategory
+import com.gameocr.app.glossary.GlossaryTermEntity
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -43,6 +45,20 @@ class SettingsBundleTransferTest {
             PortableCase("base URL", original.baseUrl, portable.baseUrl),
             PortableCase("prompt", original.promptTemplate, portable.promptTemplate),
             PortableCase("loop interval", original.captureLoopIntervalMs, portable.captureLoopIntervalMs),
+            PortableCase("loop trigger mode", original.loopTriggerMode, portable.loopTriggerMode),
+            PortableCase("text stability wait", original.loopTextStableDurationMs, portable.loopTextStableDurationMs),
+            PortableCase("dialogue region mode", original.loopTextRegionMode, portable.loopTextRegionMode),
+            PortableCase("translate region only", original.loopTranslateRegionOnly, portable.loopTranslateRegionOnly),
+            PortableCase("empty translation retry", original.retryEmptyTranslation, portable.retryEmptyTranslation),
+            PortableCase("translation output layout", original.translationOutputLayout, portable.translationOutputLayout),
+            PortableCase("translation output direction", original.translationOutputDirection, portable.translationOutputDirection),
+            PortableCase("glossary enabled", original.translationGlossaryEnabled, portable.translationGlossaryEnabled),
+            PortableCase("foreground application detection", original.foregroundAppDetectionMode, portable.foregroundAppDetectionMode),
+            PortableCase("send application name", original.sendAppNameToTranslator, portable.sendAppNameToTranslator),
+            PortableCase("developer mode", original.developerOptionsEnabled, portable.developerOptionsEnabled),
+            PortableCase("OCR red boxes", original.ocrRedBoxModeEnabled, portable.ocrRedBoxModeEnabled),
+            PortableCase("OCR debug source", original.ocrRedBoxShowSourceText, portable.ocrRedBoxShowSourceText),
+            PortableCase("OCR debug translation", original.ocrRedBoxShowTranslation, portable.ocrRedBoxShowTranslation),
             PortableCase("overlay style", original.overlayTextStyle, portable.overlayTextStyle),
             PortableCase("floating geometry", original.floatingWindowWidthDp, portable.floatingWindowWidthDp),
             PortableCase("pinned languages", original.pinnedLanguages, portable.pinnedLanguages),
@@ -87,6 +103,62 @@ class SettingsBundleTransferTest {
     }
 
     @Test
+    fun settingsBundle_roundTripsPortableGlossaryTerms() {
+        data class GlossaryCase(val name: String, val term: GlossaryTermEntity)
+        val cases = listOf(
+            GlossaryCase(
+                name = "global person",
+                term = GlossaryTermEntity(
+                    id = 91,
+                    sourceLang = "ja",
+                    targetLang = "zh-CN",
+                    sourceTerm = "アリス",
+                    targetTerm = "爱丽丝",
+                    category = GlossaryTermCategory.PERSON,
+                ),
+            ),
+            GlossaryCase(
+                name = "application term",
+                term = GlossaryTermEntity(
+                    id = 92,
+                    scopePackage = "com.example.game",
+                    appLabel = "Example Game",
+                    sourceLang = "en",
+                    targetLang = "zh-CN",
+                    sourceTerm = "Mana",
+                    targetTerm = "法力",
+                    category = GlossaryTermCategory.TERM,
+                    caseSensitive = true,
+                ),
+            ),
+        )
+        val output = ByteArrayOutputStream()
+
+        val result = SettingsBundleTransfer.write(
+            output = output,
+            settings = sampleSettings().copy(
+                overlayFontFileName = "",
+                overlayFontDisplayName = "",
+                overlayFonts = emptyList(),
+            ),
+            resolveFontFile = { null },
+            glossaryTerms = cases.map(GlossaryCase::term),
+        )
+        val preview = SettingsBundleTransfer.readPreview(ByteArrayInputStream(output.toByteArray()))
+
+        assertEquals(cases.size, result.glossaryTermCount)
+        assertEquals(cases.size, preview.glossaryTerms.size)
+        cases.zip(preview.glossaryTerms).forEach { (case, actual) ->
+            assertEquals(case.name, 0L, actual.id)
+            assertEquals(case.name, case.term.scopePackage, actual.scopePackage)
+            assertEquals(case.name, case.term.sourceTerm, actual.sourceTerm)
+            assertEquals(case.name, case.term.targetTerm, actual.targetTerm)
+            assertEquals(case.name, case.term.category, actual.category)
+            assertEquals(case.name, case.term.caseSensitive, actual.caseSensitive)
+        }
+    }
+
+    @Test
     fun mergeImportedSettings_keepsLocalCredentialsAndAppliesPortableSettings() {
         val current = Settings(
             apiKey = "local-openai-key",
@@ -106,6 +178,17 @@ class SettingsBundleTransferTest {
         assertEquals("local-paddle-token", result.settings.paddleAiStudioToken)
         assertEquals(imported.baseUrl, result.settings.baseUrl)
         assertEquals(imported.captureLoopIntervalMs, result.settings.captureLoopIntervalMs)
+        assertEquals(imported.loopTriggerMode, result.settings.loopTriggerMode)
+        assertEquals(imported.loopTextStableDurationMs, result.settings.loopTextStableDurationMs)
+        assertEquals(imported.loopSkipSimilarFrames, result.settings.loopSkipSimilarFrames)
+        assertEquals(imported.loopFrameSimilarityThreshold, result.settings.loopFrameSimilarityThreshold)
+        assertEquals(imported.loopTextRegionMode, result.settings.loopTextRegionMode)
+        assertEquals(imported.loopTranslateRegionOnly, result.settings.loopTranslateRegionOnly)
+        assertEquals(imported.retryEmptyTranslation, result.settings.retryEmptyTranslation)
+        assertEquals(imported.developerOptionsEnabled, result.settings.developerOptionsEnabled)
+        assertEquals(imported.ocrRedBoxModeEnabled, result.settings.ocrRedBoxModeEnabled)
+        assertEquals(imported.ocrRedBoxShowSourceText, result.settings.ocrRedBoxShowSourceText)
+        assertEquals(imported.ocrRedBoxShowTranslation, result.settings.ocrRedBoxShowTranslation)
         assertEquals(imported.floatingMenuItemOrder, result.settings.floatingMenuItemOrder)
         assertEquals(imported.overlayFontFileName, result.settings.overlayFontFileName)
         assertTrue(result.settings.overlayFonts.containsAll(current.overlayFonts))
@@ -125,6 +208,7 @@ class SettingsBundleTransferTest {
         assertEquals(null, preview.settings)
         assertEquals(listOf(legacyPreset), preview.presets)
         assertTrue(preview.fonts.isEmpty())
+        assertTrue(preview.glossaryTerms.isEmpty())
     }
 
     private fun sampleSettings(): Settings {
@@ -137,6 +221,22 @@ class SettingsBundleTransferTest {
             targetLang = "zh-TW",
             promptTemplate = "portable prompt",
             captureLoopIntervalMs = 3456L,
+            loopTriggerMode = LoopTriggerMode.FIXED_INTERVAL,
+            loopTextStableDurationMs = 1400L,
+            loopSkipSimilarFrames = false,
+            loopFrameSimilarityThreshold = 0.87f,
+            loopTextRegionMode = LoopTextRegionMode.LOWER_SCREEN_FIRST,
+            loopTranslateRegionOnly = false,
+            retryEmptyTranslation = true,
+            translationOutputLayout = TranslationOutputLayout.VERTICAL,
+            translationOutputDirection = TranslationOutputDirection.LEFT_TO_RIGHT,
+            translationGlossaryEnabled = false,
+            foregroundAppDetectionMode = ForegroundAppDetectionMode.USAGE_ACCESS,
+            sendAppNameToTranslator = true,
+            developerOptionsEnabled = true,
+            ocrRedBoxModeEnabled = true,
+            ocrRedBoxShowSourceText = false,
+            ocrRedBoxShowTranslation = true,
             overlayTextSizeSp = 21,
             overlayTextStyle = OverlayTextStyle(bold = true, italic = true, underline = true),
             overlayAlpha = 0.61f,
@@ -163,7 +263,7 @@ class SettingsBundleTransferTest {
             cleartextAllowedHosts = listOf("192.168.0.2"),
             floatingMenuItemOrder = FloatingMenu.DEFAULT_ORDER.reversed(),
             arcMenuPageSize = 5,
-            floatingButtonSkill = FloatingSkill.WORD_SELECT,
+            floatingButtonSkill = FloatingSkill.LOOP,
             dictionaryPrompt = "portable dictionary prompt",
             localLlmMirror = LlmMirrorChoice.CUSTOM,
             localLlmMirrorUrl = "https://portable.example/models/",

@@ -1,8 +1,12 @@
 package com.gameocr.app.di
 
+import android.content.Context
+import androidx.room.Room
 import com.gameocr.app.BuildConfig
 import com.gameocr.app.data.AndroidKeystoreSettingsSecretCipher
 import com.gameocr.app.data.SettingsSecretCipher
+import com.gameocr.app.glossary.TranslationGlossaryDao
+import com.gameocr.app.glossary.TranslationGlossaryDatabase
 import com.gameocr.app.ocr.OcrEngine
 import com.gameocr.app.ocr.RoutingOcrEngine
 import com.gameocr.app.translate.RoutingTranslator
@@ -13,6 +17,7 @@ import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Singleton
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
@@ -56,6 +61,21 @@ object AppModule {
     @Provides
     @Singleton
     fun provideTranslationCache(): TranslationCache = TranslationCache(capacity = 256)
+
+    @Provides
+    @Singleton
+    fun provideTranslationGlossaryDatabase(
+        @ApplicationContext context: Context,
+    ): TranslationGlossaryDatabase = Room.databaseBuilder(
+        context,
+        TranslationGlossaryDatabase::class.java,
+        "translation-glossary.db",
+    ).build()
+
+    @Provides
+    fun provideTranslationGlossaryDao(
+        database: TranslationGlossaryDatabase,
+    ): TranslationGlossaryDao = database.glossaryDao()
 }
 
 @Module

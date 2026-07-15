@@ -45,7 +45,7 @@ abstract class LocalLlamaTranslator(
 
     override suspend fun translate(source: String, settings: Settings): String? {
         if (source.isBlank()) return null
-        val userPrompt = buildUserPrompt(source, settings)
+        val userPrompt = runtimePrompt(buildUserPrompt(source, settings), settings)
         val cacheKey = cacheKey(source, settings, userPrompt)
         cache.get(cacheKey)?.let { return it }
         val engine = holder.ensureLoaded(modelKind, systemPrompt)
@@ -63,7 +63,7 @@ abstract class LocalLlamaTranslator(
 
     override fun translateStream(source: String, settings: Settings): Flow<String> = flow {
         if (source.isBlank()) return@flow
-        val userPrompt = buildUserPrompt(source, settings)
+        val userPrompt = runtimePrompt(buildUserPrompt(source, settings), settings)
         val cacheKey = cacheKey(source, settings, userPrompt)
         cache.get(cacheKey)?.let { cached ->
             emit(cached)
@@ -97,6 +97,13 @@ abstract class LocalLlamaTranslator(
             systemPrompt = systemPrompt,
             userPrompt = userPrompt,
         )
+
+    private fun runtimePrompt(basePrompt: String, settings: Settings): String =
+        if (settings.runtimeTranslationContext.isBlank()) {
+            basePrompt
+        } else {
+            settings.runtimeTranslationContext + "\n\n" + basePrompt
+        }
 
     override suspend fun testConnection(settings: Settings): TestResult = runCatching {
         if (!holder.isDeviceCapable()) {

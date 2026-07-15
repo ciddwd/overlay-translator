@@ -1,14 +1,22 @@
 package com.gameocr.app.overlay
 
+import android.app.Dialog
 import android.content.Context
 import android.graphics.Color
-import android.graphics.PixelFormat
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.LayerDrawable
 import android.os.Build
+import android.text.SpannableStringBuilder
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
+import android.text.style.RelativeSizeSpan
+import android.text.style.StyleSpan
+import android.text.style.TypefaceSpan
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
+import android.view.Window
 import android.view.WindowInsets
 import android.view.WindowManager
 import android.widget.FrameLayout
@@ -23,6 +31,7 @@ import com.gameocr.app.data.OverlayTheme
 import com.gameocr.app.data.OverlayFontPolicy
 import com.gameocr.app.data.Settings
 import com.gameocr.app.translate.WordResult
+import com.gameocr.app.util.VerticalDiagnosticLog
 
 private data class TranslationCardWindowArea(
     val widthPx: Int,
@@ -57,14 +66,41 @@ class TranslationCardOverlay(private val context: Context) {
     }
 
     private val wm by lazy { context.getSystemService(Context.WINDOW_SERVICE) as WindowManager }
+    private var dialog: Dialog? = null
     private var rootView: View? = null
+    private var translationView: StyledTranslationTextView? = null
+    private var copyTranslationButton: TextView? = null
+    private var currentTranslation: String = ""
+    private var renderWordResult: ((WordResult?) -> Unit)? = null
 
     fun isShown(): Boolean = rootView != null
 
     /** 立即关闭已显示的卡片。 */
     fun dismiss() {
-        rootView?.let { runCatching { wm.removeView(it) } }
+        val currentDialog = dialog
+        dialog = null
+        if (currentDialog != null) {
+            runCatching { currentDialog.dismiss() }
+        }
         rootView = null
+        translationView = null
+        copyTranslationButton = null
+        currentTranslation = ""
+        renderWordResult = null
+    }
+
+    fun updateTranslation(translation: String?) {
+        val normalized = translation.orEmpty()
+        currentTranslation = normalized
+        translationView?.apply {
+            text = normalized
+            visibility = if (normalized.isBlank()) View.GONE else View.VISIBLE
+        }
+        copyTranslationButton?.visibility = if (normalized.isBlank()) View.GONE else View.VISIBLE
+    }
+
+    fun updateWordResult(wordResult: WordResult?) {
+        renderWordResult?.invoke(wordResult)
     }
 
     /**
@@ -80,7 +116,8 @@ class TranslationCardOverlay(private val context: Context) {
         sourceText: String,
         translation: String?,
         wordResult: WordResult?,
-        settings: Settings
+        settings: Settings,
+        loading: Boolean = false,
     ) {
         dismiss()
         val density = context.resources.displayMetrics.density
@@ -102,12 +139,32 @@ class TranslationCardOverlay(private val context: Context) {
 
         // 内层 card 只承担"内容容器"角色，不带背景 / padding——
         // 背景 + 边框 + padding 在外壳 shell 上，让滚动时只有文字动、外壳保持不动。
+        var scrollForMeasurement: ScrollView? = null
         val card = object : LinearLayout(context) {
             override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
                 val maxHeight = layoutSpec.cardHeightPx(shellVerticalPaddingPx = padV * 2)
+                val scrollView = scrollForMeasurement
+                val scrollParams = scrollView?.layoutParams as? LinearLayout.LayoutParams
+                if (scrollView == null || scrollParams == null) {
+                    super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+                    return
+                }
+
+                scrollParams.height = LinearLayout.LayoutParams.WRAP_CONTENT
+                scrollParams.weight = 0f
                 super.onMeasure(
                     widthMeasureSpec,
-                    View.MeasureSpec.makeMeasureSpec(maxHeight, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+                )
+                val naturalHeight = measuredHeight
+                val targetHeight = translationCardAdaptiveHeightPx(naturalHeight, maxHeight)
+                if (naturalHeight > targetHeight) {
+                    scrollParams.height = 0
+                    scrollParams.weight = 1f
+                }
+                super.onMeasure(
+                    widthMeasureSpec,
+                    View.MeasureSpec.makeMeasureSpec(targetHeight, View.MeasureSpec.EXACTLY),
                 )
             }
         }.apply {
@@ -128,10 +185,7 @@ class TranslationCardOverlay(private val context: Context) {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
             maxLines = 2
             ellipsize = android.text.TextUtils.TruncateAt.END
-            setOnLongClickListener {
-                copyToClipboard(sourceText)
-                true
-            }
+            setTextIsSelectable(true)
         }
         val closeBtn = TextView(context).apply {
             text = "✕"
@@ -149,106 +203,48 @@ class TranslationCardOverlay(private val context: Context) {
         topRow.addView(closeBtn)
         card.addView(topRow)
 
-        // 主区：译文（大字）
-        if (!translation.isNullOrBlank()) {
-            val translationTv = StyledTranslationTextView(context).apply {
-                text = translation
-                setTextColor(fgColor)
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
-                applyOverlayTextStyle(settings.overlayTextStyle, settingsTypeface(settings))
-                val mt = (10 * density).toInt()
-                val mb = if (wordResult == null) 0 else (8 * density).toInt()
-                setPadding(0, mt, 0, mb)
-                setLineSpacing(2f, 1.1f)
-                setOnLongClickListener {
-                    copyToClipboard(translation)
-                    true
-                }
-            }
-            scrollContent.addView(translationTv)
+        // 主区始终创建一次，流式分片只更新文字，不重建 Dialog。
+        currentTranslation = translation.orEmpty()
+        val translationTv = StyledTranslationTextView(context).apply {
+            text = translation ?: if (loading) context.getString(R.string.word_card_loading) else ""
+            visibility = if (text.isBlank()) View.GONE else View.VISIBLE
+            setTextColor(fgColor)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+            applyOverlayTextStyle(settings.overlayTextStyle, settingsTypeface(settings))
+            val mt = (10 * density).toInt()
+            setPadding(0, mt, 0, (8 * density).toInt())
+            setLineSpacing(2f, 1.1f)
+            setTextIsSelectable(true)
         }
+        translationView = translationTv
+        scrollContent.addView(translationTv)
 
-        // 字典区
-        if (wordResult != null && !wordResult.isEmpty()) {
-            scrollContent.addView(buildDivider(density, mutedColor))
-            if (wordResult.phonetic.isNotBlank()) {
-                scrollContent.addView(buildLabeledLine(
-                    context.getString(R.string.word_card_label_phonetic),
-                    wordResult.phonetic,
-                    density,
-                    labelColor = accentColor,
-                    valueColor = fgColor,
-                    monospace = true
-                ))
-            }
-            if (wordResult.pos.isNotEmpty()) {
-                scrollContent.addView(buildLabeledLine(
-                    context.getString(R.string.word_card_label_pos),
-                    wordResult.pos.joinToString(" / "),
-                    density,
-                    labelColor = accentColor,
-                    valueColor = fgColor
-                ))
-            }
-            if (wordResult.definitions.isNotEmpty()) {
-                scrollContent.addView(buildLabel(
-                    context.getString(R.string.word_card_label_definitions),
-                    density,
-                    accentColor
-                ))
-                wordResult.definitions.forEachIndexed { idx, d ->
-                    scrollContent.addView(TextView(context).apply {
-                        text = "${idx + 1}. $d"
-                        setTextColor(fgColor)
-                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-                        val pad = (2 * density).toInt()
-                        setPadding(0, pad, 0, pad)
-                    })
-                }
-            }
-            if (wordResult.difficultyNotes.isNotEmpty()) {
-                scrollContent.addView(buildLabel(
-                    context.getString(R.string.word_card_label_difficulty_notes),
-                    density,
-                    accentColor
-                ))
-                wordResult.difficultyNotes.forEach { note ->
-                    scrollContent.addView(TextView(context).apply {
-                        text = "・$note"
-                        setTextColor(fgColor)
-                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-                        val pad = (2 * density).toInt()
-                        setPadding(0, pad, 0, pad)
-                    })
-                }
-            }
-            if (wordResult.examples.isNotEmpty()) {
-                scrollContent.addView(buildLabel(
-                    context.getString(R.string.word_card_label_examples),
-                    density,
-                    accentColor
-                ))
-                wordResult.examples.forEach { ex ->
-                    val srcTv = TextView(context).apply {
-                        text = "・${ex.src}"
-                        setTextColor(mutedColor)
-                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-                    }
-                    val dstTv = TextView(context).apply {
-                        text = "  ${ex.dst}"
-                        setTextColor(fgColor)
-                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-                        val mb = (6 * density).toInt()
-                        setPadding(0, 0, 0, mb)
-                    }
-                    scrollContent.addView(srcTv)
-                    scrollContent.addView(dstTv)
+        val dictionarySection = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        renderWordResult = { result ->
+            val hasDictionaryContent = result != null && !result.isEmpty()
+            dictionarySection.visibility = if (hasDictionaryContent) View.VISIBLE else View.GONE
+            populateWordResult(dictionarySection, result, density, fgColor, mutedColor, accentColor)
+            dictionarySection.requestLayout()
+            scrollContent.requestLayout()
+            card.requestLayout()
+            if (hasDictionaryContent) {
+                card.post {
+                    rootView?.requestLayout()
+                    VerticalDiagnosticLog.i(
+                        "translationCard dictionary rendered children=${dictionarySection.childCount} " +
+                            "section=${dictionarySection.width}x${dictionarySection.height} " +
+                            "contentHeight=${scrollContent.height} cardHeight=${card.height}"
+                    )
                 }
             }
         }
+        renderWordResult?.invoke(wordResult)
+        scrollContent.addView(dictionarySection)
 
         // 动作行：复制原文 / 复制译文（仅在对应文本非空时）。
-        // 显式按钮主要解决「用户不知道能复制」；长按 srcLabel/translationTv 的快捷方式保留。
+        // 显式按钮负责整段复制；正文 TextView 保留系统选择菜单，支持只复制其中一部分。
         val scroll = ScrollView(context).apply {
             isFillViewport = false
             addView(
@@ -259,6 +255,7 @@ class TranslationCardOverlay(private val context: Context) {
                 ),
             )
         }
+        scrollForMeasurement = scroll
         card.addView(
             scroll,
             LinearLayout.LayoutParams(
@@ -281,18 +278,19 @@ class TranslationCardOverlay(private val context: Context) {
             flashCopied(copySrcBtn, copySrcLabel)
         }
         actionRow.addView(copySrcBtn)
-        if (!translation.isNullOrBlank()) {
-            actionRow.addView(View(context).apply {
-                layoutParams = LinearLayout.LayoutParams((8 * density).toInt(), 1)
-            })
-            val copyDstLabel = context.getString(R.string.word_card_btn_copy_translation)
-            val copyDstBtn = buildPillButton(copyDstLabel, accentColor, density)
-            copyDstBtn.setOnClickListener {
-                copyToClipboard(translation)
-                flashCopied(copyDstBtn, copyDstLabel)
-            }
-            actionRow.addView(copyDstBtn)
+        actionRow.addView(View(context).apply {
+            layoutParams = LinearLayout.LayoutParams((8 * density).toInt(), 1)
+        })
+        val copyDstLabel = context.getString(R.string.word_card_btn_copy_translation)
+        val copyDstBtn = buildPillButton(copyDstLabel, accentColor, density).apply {
+            visibility = if (currentTranslation.isBlank()) View.GONE else View.VISIBLE
         }
+        copyDstBtn.setOnClickListener {
+            currentTranslation.takeIf { it.isNotBlank() }?.let(::copyToClipboard)
+            flashCopied(copyDstBtn, copyDstLabel)
+        }
+        copyTranslationButton = copyDstBtn
+        actionRow.addView(copyDstBtn)
         card.addView(actionRow)
 
         // 内层 ScrollView：滚动 viewport。重写 onMeasure 把高度限制为屏幕高 * 0.6 —
@@ -368,23 +366,57 @@ class TranslationCardOverlay(private val context: Context) {
         shell.setOnClickListener { /* swallow */ }
         shell.isClickable = true
 
-        val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
-            overlayType,
-            // 卡片要可点击关闭 + 长按复制 → 必须 focusable / touch modal
-            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                layoutInDisplayCutoutMode =
-                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+        var pendingDialog: Dialog? = null
+        runCatching {
+            val cardDialog = Dialog(context, R.style.Theme_GameOcr_Transparent)
+                .also { pendingDialog = it }
+            cardDialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+            cardDialog.setCancelable(false)
+            cardDialog.setCanceledOnTouchOutside(false)
+            cardDialog.setContentView(backdrop)
+
+            val window = requireNotNull(cardDialog.window) {
+                "Translation card overlay window is unavailable"
             }
+            window.setType(overlayType)
+            // 卡片要可点击关闭 + 长按复制 → 必须 focusable / touch modal
+            window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            window.setDimAmount(0f)
+            window.clearFlags(
+                WindowManager.LayoutParams.FLAG_DIM_BEHIND or
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+            )
+            window.addFlags(
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+            )
+            window.attributes = window.attributes.apply {
+                width = WindowManager.LayoutParams.MATCH_PARENT
+                height = WindowManager.LayoutParams.MATCH_PARENT
+                gravity = Gravity.TOP or Gravity.START
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    layoutInDisplayCutoutMode =
+                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    fitInsetsTypes = 0
+                    fitInsetsSides = 0
+                }
+            }
+            window.decorView.setBackgroundColor(Color.TRANSPARENT)
+
+            cardDialog.show()
+            window.setLayout(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
+            )
+            dialog = cardDialog
+            rootView = backdrop
+            ViewCompat.requestApplyInsets(backdrop)
+        }.onFailure {
+            runCatching { pendingDialog?.dismiss() }
+            VerticalDiagnosticLog.w(it, "Failed to show translation card overlay dialog")
         }
-        runCatching { wm.addView(backdrop, params) }
-        ViewCompat.requestApplyInsets(backdrop)
-        rootView = backdrop
     }
 
     private fun currentWindowArea(): TranslationCardWindowArea {
@@ -414,43 +446,68 @@ class TranslationCardOverlay(private val context: Context) {
         )
     }
 
-    private fun buildLabel(text: String, density: Float, color: Int): TextView = TextView(context).apply {
-        this.text = text
-        setTextColor(color)
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-        val mt = (8 * density).toInt()
-        setPadding(0, mt, 0, 0)
+    private fun populateWordResult(
+        container: LinearLayout,
+        wordResult: WordResult?,
+        density: Float,
+        fgColor: Int,
+        mutedColor: Int,
+        accentColor: Int,
+    ) {
+        container.removeAllViews()
+        if (wordResult == null || wordResult.isEmpty()) return
+        container.addView(buildDivider(density, mutedColor))
+        container.addView(TextView(context).apply {
+            text = buildSelectableDictionaryText(wordResult, fgColor, mutedColor, accentColor)
+            setTextColor(fgColor)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            val pad = (4 * density).toInt()
+            setPadding(0, pad, 0, pad)
+            setLineSpacing(2f, 1.08f)
+            setTextIsSelectable(true)
+        })
+        container.requestLayout()
     }
 
-    private fun buildLabeledLine(
-        label: String,
-        value: String,
-        density: Float,
-        labelColor: Int,
-        valueColor: Int,
-        monospace: Boolean = false
-    ): View {
-        val row = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            val mt = (4 * density).toInt()
-            setPadding(0, mt, 0, 0)
-        }
-        val labelTv = TextView(context).apply {
-            text = "$label  "
-            setTextColor(labelColor)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-        }
-        val valueTv = TextView(context).apply {
-            text = value
-            setTextColor(valueColor)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-            if (monospace) {
-                typeface = android.graphics.Typeface.MONOSPACE
+    private fun buildSelectableDictionaryText(
+        wordResult: WordResult,
+        fgColor: Int,
+        mutedColor: Int,
+        accentColor: Int,
+    ): CharSequence {
+        val labels = DictionaryTextLabels(
+            phonetic = context.getString(R.string.word_card_label_phonetic),
+            partOfSpeech = context.getString(R.string.word_card_label_pos),
+            definitions = context.getString(R.string.word_card_label_definitions),
+            difficultyNotes = context.getString(R.string.word_card_label_difficulty_notes),
+            examples = context.getString(R.string.word_card_label_examples),
+        )
+        return SpannableStringBuilder().apply {
+            dictionaryTextSegments(wordResult, labels).forEach { segment ->
+                val start = length
+                append(segment.text)
+                val end = length
+                val spans = when (segment.role) {
+                    DictionaryTextRole.LABEL -> listOf(
+                        ForegroundColorSpan(accentColor),
+                        RelativeSizeSpan(0.86f),
+                        StyleSpan(android.graphics.Typeface.BOLD),
+                    )
+                    DictionaryTextRole.BODY -> listOf(ForegroundColorSpan(fgColor))
+                    DictionaryTextRole.MUTED -> listOf(
+                        ForegroundColorSpan(mutedColor),
+                        RelativeSizeSpan(0.93f),
+                    )
+                    DictionaryTextRole.MONOSPACE -> listOf(
+                        ForegroundColorSpan(fgColor),
+                        TypefaceSpan("monospace"),
+                    )
+                }
+                spans.forEach { span ->
+                    setSpan(span, start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                }
             }
         }
-        row.addView(labelTv)
-        row.addView(valueTv)
-        return row
     }
 
     private fun buildDivider(density: Float, color: Int): View = View(context).apply {

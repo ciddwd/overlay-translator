@@ -23,6 +23,11 @@ import kotlinx.serialization.json.Json
 
 private val Context.dataStore by preferencesDataStore("game_ocr_settings")
 
+private fun normalizeLoopFrameSimilarity(value: Float): Float =
+    if (value.isFinite()) value.coerceIn(0.50f, 0.99f) else 0.95f
+
+private fun normalizeLoopTextStableDuration(value: Long): Long = value.coerceIn(200L, 2000L)
+
 @Singleton
 class SettingsRepository @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -37,6 +42,16 @@ class SettingsRepository @Inject constructor(
         val Prompt = stringPreferencesKey("prompt")
         val OcrEngine = stringPreferencesKey("ocr_engine")
         val LoopInterval = longPreferencesKey("loop_interval_ms")
+        val LoopTriggerMode = stringPreferencesKey("loop_trigger_mode")
+        val LoopTextStableDuration = longPreferencesKey("loop_text_stable_duration_ms")
+        val LoopSkipSimilarFrames = booleanPreferencesKey("loop_skip_similar_frames")
+        val LoopFrameSimilarityThreshold = floatPreferencesKey("loop_frame_similarity_threshold")
+        val LoopTextRegionMode = stringPreferencesKey("loop_text_region_mode")
+        val LoopTranslateRegionOnly = booleanPreferencesKey("loop_translate_region_only")
+        val DeveloperOptionsEnabled = booleanPreferencesKey("developer_options_enabled")
+        val OcrRedBoxModeEnabled = booleanPreferencesKey("ocr_red_box_mode_enabled")
+        val OcrRedBoxShowSourceText = booleanPreferencesKey("ocr_red_box_show_source_text")
+        val OcrRedBoxShowTranslation = booleanPreferencesKey("ocr_red_box_show_translation")
         val TextSize = intPreferencesKey("overlay_text_size")
         val OverlayTextStyle = stringPreferencesKey("overlay_text_style_json")
         val Alpha = floatPreferencesKey("overlay_alpha")
@@ -47,7 +62,9 @@ class SettingsRepository @Inject constructor(
         val RegionSavedW = intPreferencesKey("capture_region_saved_screen_w")
         val RegionSavedH = intPreferencesKey("capture_region_saved_screen_h")
         val Streaming = booleanPreferencesKey("streaming_translate")
+        val RetryEmptyTranslation = booleanPreferencesKey("retry_empty_translation")
         val RenderModeKey = stringPreferencesKey("render_mode")
+        val TranslationBlockInteractionMode = stringPreferencesKey("translation_block_interaction_mode")
         val Upscale = booleanPreferencesKey("pre_upscale")
         val Invert = booleanPreferencesKey("pre_invert")
         val Binarize = booleanPreferencesKey("pre_binarize")
@@ -109,6 +126,11 @@ class SettingsRepository @Inject constructor(
         val TextOrientAutoDetect = booleanPreferencesKey("text_orient_auto_detect")
         val TextOrientAutoDefaultOnMigrated = booleanPreferencesKey("text_orient_auto_default_on_migrated")
         val ManualTextOrient = stringPreferencesKey("manual_text_orient")
+        val TranslationOutputLayout = stringPreferencesKey("translation_output_layout")
+        val TranslationOutputDirection = stringPreferencesKey("translation_output_direction")
+        val TranslationGlossaryEnabled = booleanPreferencesKey("translation_glossary_enabled")
+        val ForegroundAppDetectionMode = stringPreferencesKey("foreground_app_detection_mode")
+        val SendAppNameToTranslator = booleanPreferencesKey("send_app_name_to_translator")
         val YoudaoAppKey = stringPreferencesKey("youdao_app_key")
         val YoudaoAppSecret = stringPreferencesKey("youdao_app_secret")
         val VolcAccessKeyId = stringPreferencesKey("volc_access_key_id")
@@ -280,6 +302,18 @@ class SettingsRepository @Inject constructor(
             prefs.putSecure(Keys.Prompt, next.promptTemplate)
             prefs[Keys.OcrEngine] = next.ocrEngine.name
             prefs[Keys.LoopInterval] = next.captureLoopIntervalMs
+            prefs[Keys.LoopTriggerMode] = next.loopTriggerMode.name
+            prefs[Keys.LoopTextStableDuration] =
+                normalizeLoopTextStableDuration(next.loopTextStableDurationMs)
+            prefs[Keys.LoopSkipSimilarFrames] = next.loopSkipSimilarFrames
+            prefs[Keys.LoopFrameSimilarityThreshold] =
+                normalizeLoopFrameSimilarity(next.loopFrameSimilarityThreshold)
+            prefs[Keys.LoopTextRegionMode] = next.loopTextRegionMode.name
+            prefs[Keys.LoopTranslateRegionOnly] = next.loopTranslateRegionOnly
+            prefs[Keys.DeveloperOptionsEnabled] = next.developerOptionsEnabled
+            prefs[Keys.OcrRedBoxModeEnabled] = next.ocrRedBoxModeEnabled
+            prefs[Keys.OcrRedBoxShowSourceText] = next.ocrRedBoxShowSourceText
+            prefs[Keys.OcrRedBoxShowTranslation] = next.ocrRedBoxShowTranslation
             prefs[Keys.TextSize] = next.overlayTextSizeSp
             prefs[Keys.OverlayTextStyle] = json.encodeToString(next.overlayTextStyle.normalized())
             prefs[Keys.Alpha] = next.overlayAlpha
@@ -292,7 +326,9 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.RegionSavedW] = next.captureRegionSavedScreenW
             prefs[Keys.RegionSavedH] = next.captureRegionSavedScreenH
             prefs[Keys.Streaming] = next.streamingTranslate
+            prefs[Keys.RetryEmptyTranslation] = next.retryEmptyTranslation
             prefs[Keys.RenderModeKey] = next.renderMode.name
+            prefs[Keys.TranslationBlockInteractionMode] = next.translationBlockInteractionMode.name
             prefs[Keys.Upscale] = next.preprocess.upscale2x
             prefs[Keys.Invert] = next.preprocess.invert
             prefs[Keys.Binarize] = next.preprocess.binarize
@@ -316,6 +352,9 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.CustomBorder] = next.customBorderColor
             prefs[Keys.CustomBorderW] = next.customBorderWidth
             prefs[Keys.TranslatorEng] = next.translatorEngine.name
+            prefs[Keys.TranslationGlossaryEnabled] = next.translationGlossaryEnabled
+            prefs[Keys.ForegroundAppDetectionMode] = next.foregroundAppDetectionMode.name
+            prefs[Keys.SendAppNameToTranslator] = next.sendAppNameToTranslator
             prefs.putSecure(Keys.DeeplKey, next.deeplApiKey)
             prefs[Keys.DeeplPro] = next.deeplPro
             prefs[Keys.DeeplProtocol] = next.deeplProtocol.name
@@ -353,6 +392,8 @@ class SettingsRepository @Inject constructor(
             // 但显式 remove 让 DataStore 文件更干净，未来 grep 无歧义
             next.manualTextOrientation?.let { prefs[Keys.ManualTextOrient] = it.name }
                 ?: prefs.remove(Keys.ManualTextOrient)
+            prefs[Keys.TranslationOutputLayout] = next.translationOutputLayout.name
+            prefs[Keys.TranslationOutputDirection] = next.translationOutputDirection.name
             prefs.putSecure(Keys.YoudaoAppKey, next.youdaoAppKey)
             prefs.putSecure(Keys.YoudaoAppSecret, next.youdaoAppSecret)
             prefs.putSecure(Keys.VolcAccessKeyId, next.volcAccessKeyId)
@@ -408,6 +449,29 @@ class SettingsRepository @Inject constructor(
             ocrEngine = runCatching { OcrEngineKind.valueOf(this[Keys.OcrEngine] ?: "") }
                 .getOrDefault(default.ocrEngine),
             captureLoopIntervalMs = this[Keys.LoopInterval] ?: default.captureLoopIntervalMs,
+            loopTriggerMode = this[Keys.LoopTriggerMode]
+                ?.let { runCatching { LoopTriggerMode.valueOf(it) }.getOrNull() }
+                ?: default.loopTriggerMode,
+            loopTextStableDurationMs = normalizeLoopTextStableDuration(
+                this[Keys.LoopTextStableDuration] ?: default.loopTextStableDurationMs
+            ),
+            loopSkipSimilarFrames = this[Keys.LoopSkipSimilarFrames] ?: default.loopSkipSimilarFrames,
+            loopFrameSimilarityThreshold = normalizeLoopFrameSimilarity(
+                this[Keys.LoopFrameSimilarityThreshold] ?: default.loopFrameSimilarityThreshold
+            ),
+            loopTextRegionMode = this[Keys.LoopTextRegionMode]
+                ?.let { runCatching { LoopTextRegionMode.valueOf(it) }.getOrNull() }
+                ?: default.loopTextRegionMode,
+            loopTranslateRegionOnly = this[Keys.LoopTranslateRegionOnly]
+                ?: default.loopTranslateRegionOnly,
+            developerOptionsEnabled = this[Keys.DeveloperOptionsEnabled]
+                ?: default.developerOptionsEnabled,
+            ocrRedBoxModeEnabled = this[Keys.OcrRedBoxModeEnabled]
+                ?: default.ocrRedBoxModeEnabled,
+            ocrRedBoxShowSourceText = this[Keys.OcrRedBoxShowSourceText]
+                ?: default.ocrRedBoxShowSourceText,
+            ocrRedBoxShowTranslation = this[Keys.OcrRedBoxShowTranslation]
+                ?: default.ocrRedBoxShowTranslation,
             overlayTextSizeSp = this[Keys.TextSize] ?: default.overlayTextSizeSp,
             overlayTextStyle = this[Keys.OverlayTextStyle]
                 ?.takeIf { it.isNotBlank() }
@@ -434,12 +498,16 @@ class SettingsRepository @Inject constructor(
             captureRegionSavedScreenW = this[Keys.RegionSavedW] ?: default.captureRegionSavedScreenW,
             captureRegionSavedScreenH = this[Keys.RegionSavedH] ?: default.captureRegionSavedScreenH,
             streamingTranslate = this[Keys.Streaming] ?: default.streamingTranslate,
+            retryEmptyTranslation = this[Keys.RetryEmptyTranslation] ?: default.retryEmptyTranslation,
             // 0.3.x 之前 RenderMode 叫 BANNER，0.4 改名为 FLOATING_WINDOW。silent migrate 老值。
             renderMode = (this[Keys.RenderModeKey] ?: "").let { raw ->
                 runCatching { RenderMode.valueOf(raw) }.getOrElse {
                     if (raw == "BANNER") RenderMode.FLOATING_WINDOW else default.renderMode
                 }
             },
+            translationBlockInteractionMode = runCatching {
+                TranslationBlockInteractionMode.valueOf(this[Keys.TranslationBlockInteractionMode] ?: "")
+            }.getOrDefault(default.translationBlockInteractionMode),
             preprocess = PreprocessOptions(
                 upscale2x = this[Keys.Upscale] ?: default.preprocess.upscale2x,
                 invert = this[Keys.Invert] ?: default.preprocess.invert,
@@ -472,6 +540,13 @@ class SettingsRepository @Inject constructor(
             customBorderWidth = this[Keys.CustomBorderW] ?: default.customBorderWidth,
             translatorEngine = runCatching { TranslatorEngine.valueOf(this[Keys.TranslatorEng] ?: "") }
                 .getOrDefault(default.translatorEngine),
+            translationGlossaryEnabled = this[Keys.TranslationGlossaryEnabled]
+                ?: default.translationGlossaryEnabled,
+            foregroundAppDetectionMode = runCatching {
+                ForegroundAppDetectionMode.valueOf(this[Keys.ForegroundAppDetectionMode] ?: "")
+            }.getOrDefault(default.foregroundAppDetectionMode),
+            sendAppNameToTranslator = this[Keys.SendAppNameToTranslator]
+                ?: default.sendAppNameToTranslator,
             deeplApiKey = secureString(Keys.DeeplKey, default.deeplApiKey),
             deeplPro = this[Keys.DeeplPro] ?: default.deeplPro,
             deeplProtocol = runCatching { DeeplProtocol.valueOf(this[Keys.DeeplProtocol] ?: "") }
@@ -523,6 +598,12 @@ class SettingsRepository @Inject constructor(
                 ?.let { raw ->
                     runCatching { com.gameocr.app.ocr.TextOrientation.valueOf(raw) }.getOrNull()
                 },
+            translationOutputLayout = runCatching {
+                TranslationOutputLayout.valueOf(this[Keys.TranslationOutputLayout] ?: "")
+            }.getOrDefault(default.translationOutputLayout),
+            translationOutputDirection = runCatching {
+                TranslationOutputDirection.valueOf(this[Keys.TranslationOutputDirection] ?: "")
+            }.getOrDefault(default.translationOutputDirection),
             youdaoAppKey = secureString(Keys.YoudaoAppKey, default.youdaoAppKey),
             youdaoAppSecret = secureString(Keys.YoudaoAppSecret, default.youdaoAppSecret),
             volcAccessKeyId = secureString(Keys.VolcAccessKeyId, default.volcAccessKeyId),
@@ -595,6 +676,7 @@ class SettingsRepository @Inject constructor(
             mangaOcrDbnetUnclipRatio = this[Keys.MangaOcrDbnetUnclipRatio]
                 ?: default.mangaOcrDbnetUnclipRatio,
             bubbleClusterGap = this[Keys.BubbleClusterGap] ?: default.bubbleClusterGap
+            // runtimeTranslationContext is request-scoped and deliberately never persisted.
         )
     }
 }

@@ -15,3 +15,13 @@ various other open-source contributors. Most upstream dependencies are
 distributed under the Apache License 2.0; some are under MIT, BSD, or other
 permissive licenses. See the project's Gradle dependency tree (libs.versions.toml)
 for the authoritative list.
+
+This product includes PaddleOCR orientation ONNX models by PaddlePaddle:
+- PP-LCNet_x1_0_doc_ori_onnx / inference.onnx, bundled as doc_ori.onnx
+- PP-LCNet_x0_25_textline_ori_onnx / inference.onnx, bundled as textline_ori.onnx
+
+These models are distributed under the Apache License 2.0.
+Copyright (c) PaddlePaddle Authors.
+Source:
+https://huggingface.co/PaddlePaddle/PP-LCNet_x1_0_doc_ori_onnx
+https://huggingface.co/PaddlePaddle/PP-LCNet_x0_25_textline_ori_onnx

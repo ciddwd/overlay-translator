@@ -18,6 +18,42 @@ import javax.xml.parsers.DocumentBuilderFactory
 class SettingsScreenModelStatusTest {
 
     @Test
+    fun translatorSection_placesLanguageAndContextControlsAfterEngineConfiguration() {
+        val source = File("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
+        val sectionStart = source.indexOf(
+            "SectionCard(title = stringResource(R.string.settings_section_translator)"
+        )
+        val sectionEnd = source.indexOf(
+            "title = stringResource(R.string.settings_section_ocr),",
+            startIndex = sectionStart,
+        )
+        assertTrue("translator section start", sectionStart >= 0)
+        assertTrue("translator section end", sectionEnd > sectionStart)
+        val section = source.substring(sectionStart, sectionEnd)
+
+        data class Case(
+            val name: String,
+            val earlier: String,
+            val later: String,
+        )
+
+        listOf(
+            Case("engine before source language", "R.string.settings_label_translator_engine", "R.string.settings_source_lang"),
+            Case("model before source language", "R.string.settings_model)", "R.string.settings_source_lang"),
+            Case("connection test before source language", "R.string.settings_test_connection", "R.string.settings_source_lang"),
+            Case("source language before target language", "R.string.settings_source_lang", "R.string.settings_target_lang"),
+            Case("target language before translation assistance", "R.string.settings_target_lang", "TranslationAssistanceSettings("),
+            Case("translation assistance before prompt", "TranslationAssistanceSettings(", "OpenAiPromptSettings("),
+        ).forEach { case ->
+            val earlierIndex = section.indexOf(case.earlier)
+            val laterIndex = section.indexOf(case.later)
+            assertTrue("${case.name}: missing earlier marker", earlierIndex >= 0)
+            assertTrue("${case.name}: missing later marker", laterIndex >= 0)
+            assertTrue(case.name, earlierIndex < laterIndex)
+        }
+    }
+
+    @Test
     fun settingsSearchMatches_normalizesMultipleTermsAndPunctuation() {
         data class Case(
             val name: String,
@@ -60,6 +96,30 @@ class SettingsScreenModelStatusTest {
             Case("Chinese saturation alias", "饱和度", SETTINGS_SEARCH_COLOR_KEYWORDS),
             Case("English brightness", "brightness", SETTINGS_SEARCH_COLOR_KEYWORDS),
             Case("English opacity", "opacity", SETTINGS_SEARCH_COLOR_KEYWORDS),
+            Case("Chinese loop similarity", "循环 相似度", SETTINGS_SEARCH_LOOP_SIMILARITY_KEYWORDS),
+            Case("Chinese duplicate skip", "去重 跳过", SETTINGS_SEARCH_LOOP_SIMILARITY_KEYWORDS),
+            Case("English frame hash", "frame hash", SETTINGS_SEARCH_LOOP_SIMILARITY_KEYWORDS),
+            Case("English similarity threshold", "similarity threshold", SETTINGS_SEARCH_LOOP_SIMILARITY_KEYWORDS),
+            Case("Chinese smart wait", "智能等待 文字完成", SETTINGS_SEARCH_LOOP_TRIGGER_KEYWORDS),
+            Case("Chinese dialogue stability", "对话 文字稳定", SETTINGS_SEARCH_LOOP_TRIGGER_KEYWORDS),
+            Case("English fixed interval", "fixed interval", SETTINGS_SEARCH_LOOP_TRIGGER_KEYWORDS),
+            Case("English text stability", "text stability", SETTINGS_SEARCH_LOOP_TRIGGER_KEYWORDS),
+            Case("Chinese lower dialogue region", "报幕区域 下半屏", SETTINGS_SEARCH_LOOP_REGION_KEYWORDS),
+            Case("Chinese translate region only", "仅翻译 报幕区域", SETTINGS_SEARCH_LOOP_REGION_KEYWORDS),
+            Case("English unrestricted region", "dialogue region anywhere", SETTINGS_SEARCH_LOOP_REGION_KEYWORDS),
+            Case("English translate all text", "translate all text", SETTINGS_SEARCH_LOOP_REGION_KEYWORDS),
+            Case("Chinese empty translation retry", "空译文 自动重试", SETTINGS_SEARCH_EMPTY_TRANSLATION_RETRY_KEYWORDS),
+            Case("Chinese empty response", "空响应", SETTINGS_SEARCH_EMPTY_TRANSLATION_RETRY_KEYWORDS),
+            Case("English blank response retry", "blank response retry", SETTINGS_SEARCH_EMPTY_TRANSLATION_RETRY_KEYWORDS),
+            Case("English empty translation", "empty translation", SETTINGS_SEARCH_EMPTY_TRANSLATION_RETRY_KEYWORDS),
+            Case("Chinese long-press selection", "译文块 长按 选择把手", SETTINGS_SEARCH_TRANSLATION_BLOCK_INTERACTION_KEYWORDS),
+            Case("Chinese selectable copy panel", "选择文字 复制", SETTINGS_SEARCH_TRANSLATION_BLOCK_INTERACTION_KEYWORDS),
+            Case("English long-press selection", "translation block long press selection handles", SETTINGS_SEARCH_TRANSLATION_BLOCK_INTERACTION_KEYWORDS),
+            Case("English selectable copy panel", "select text copy panel", SETTINGS_SEARCH_TRANSLATION_BLOCK_INTERACTION_KEYWORDS),
+            Case("Chinese OCR red box", "OCR 红框", SETTINGS_SEARCH_DEVELOPER_OCR_KEYWORDS),
+            Case("Chinese developer diagnostics", "开发者 诊断", SETTINGS_SEARCH_DEVELOPER_OCR_KEYWORDS),
+            Case("English bounding box", "bounding box", SETTINGS_SEARCH_DEVELOPER_OCR_KEYWORDS),
+            Case("English source text", "source text", SETTINGS_SEARCH_DEVELOPER_OCR_KEYWORDS),
         )
 
         cases.forEach { case ->
@@ -68,6 +128,25 @@ class SettingsScreenModelStatusTest {
                 settingsSearchMatches(case.query, case.searchableTexts),
             )
         }
+    }
+
+    @Test
+    fun translationDisplayPreview_isFirstAndStickyOnlyInsideItsSection() {
+        val source = File("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
+        data class Case(val name: String, val expected: Boolean)
+
+        val sectionStart = source.indexOf("title = stringResource(R.string.settings_section_overlay)")
+        val preview = source.indexOf("OverlayPreviewCard(", startIndex = sectionStart)
+        val colors = source.indexOf("R.string.settings_overlay_theme_label", startIndex = sectionStart)
+        val cases = listOf(
+            Case("translation display section exists", sectionStart >= 0),
+            Case("preview exists inside section", preview > sectionStart),
+            Case("preview precedes color controls", preview in (sectionStart + 1)..<colors),
+            Case("section reports window bounds", source.contains("onBoundsInWindow = { _, bottom -> overlaySectionBottomInWindow = bottom }")),
+            Case("sticky state uses section-aware policy", source.contains("StickyOverlayPreviewPolicy.shouldStick(")),
+        )
+
+        cases.forEach { case -> assertTrue(case.name, case.expected) }
     }
 
     @Test

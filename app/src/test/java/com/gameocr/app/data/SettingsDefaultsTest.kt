@@ -1,5 +1,6 @@
 package com.gameocr.app.data
 
+import com.gameocr.app.capture.LoopFrameStabilityPolicy
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -27,6 +28,31 @@ class SettingsDefaultsTest {
         val settings = Settings()
 
         assertEquals(true, settings.textOrientationAutoDetect)
+    }
+
+    @Test
+    fun translationContext_defaults_areConservativeAndFollowRecognition() {
+        val settings = Settings()
+
+        assertEquals(TranslationOutputLayout.FOLLOW_RECOGNITION, settings.translationOutputLayout)
+        assertEquals(TranslationOutputDirection.FOLLOW_RECOGNITION, settings.translationOutputDirection)
+        assertEquals(true, settings.translationGlossaryEnabled)
+        assertEquals(ForegroundAppDetectionMode.AUTO, settings.foregroundAppDetectionMode)
+        assertEquals(false, settings.sendAppNameToTranslator)
+    }
+
+    @Test
+    fun translationBlocks_defaultToVisibleCopyButtons() {
+        assertEquals(
+            TranslationBlockInteractionMode.COPY_BUTTON,
+            Settings().translationBlockInteractionMode,
+        )
+    }
+
+    @Test
+    fun loopTextStableDuration_defaultsTo500MillisecondsAcrossSettingsAndRuntimePolicy() {
+        assertEquals(500L, Settings().loopTextStableDurationMs)
+        assertEquals(500L, LoopFrameStabilityPolicy.DEFAULT_STABLE_DURATION_MS)
     }
 
     @Test

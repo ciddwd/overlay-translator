@@ -7,6 +7,7 @@ import android.os.Looper
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import com.gameocr.app.data.SettingsRepository
+import com.gameocr.app.appcontext.ForegroundAppResolver
 import com.gameocr.app.service.CaptureService
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
@@ -21,6 +22,7 @@ import timber.log.Timber
 class GameOcrAccessibilityService : AccessibilityService() {
 
     @Inject lateinit var settingsRepository: SettingsRepository
+    @Inject lateinit var foregroundAppResolver: ForegroundAppResolver
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -48,6 +50,9 @@ class GameOcrAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            foregroundAppResolver.recordAccessibilityPackage(event.packageName)
+        }
     }
 
     override fun onInterrupt() {

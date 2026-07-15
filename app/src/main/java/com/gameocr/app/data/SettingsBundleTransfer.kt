@@ -10,6 +10,8 @@ import java.util.Locale
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
+import com.gameocr.app.glossary.GlossaryTermEntity
+import com.gameocr.app.glossary.normalizeGlossaryTerm
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -25,12 +27,14 @@ data class SettingsBundlePreview(
     val settings: Settings?,
     val presets: List<TranslationPreset>,
     val fonts: List<SettingsBundleFont>,
+    val glossaryTerms: List<GlossaryTermEntity>,
     val legacyPresetOnly: Boolean,
 )
 
 data class SettingsBundleExportResult(
     val presetCount: Int,
     val fontCount: Int,
+    val glossaryTermCount: Int = 0,
 )
 
 data class SettingsBundleMergeResult(
@@ -43,6 +47,7 @@ data class SettingsBundleImportResult(
     val importedPresetCount: Int,
     val overwrittenPresetNames: List<String>,
     val importedFontCount: Int,
+    val importedGlossaryTermCount: Int = 0,
     val legacyPresetOnly: Boolean,
 )
 
@@ -52,6 +57,7 @@ object SettingsBundleTransfer {
     const val MIME_TYPE: String = "application/zip"
     const val MAX_FONT_COUNT: Int = 32
     const val MAX_TOTAL_FONT_BYTES: Long = 200L * 1024L * 1024L
+    const val MAX_GLOSSARY_TERM_COUNT: Int = 5_000
 
     private const val FORMAT = "overlay-translator.settings"
     private const val VERSION = 1
@@ -101,9 +107,11 @@ object SettingsBundleTransfer {
     fun write(
         output: OutputStream,
         settings: Settings,
+        glossaryTerms: List<GlossaryTermEntity> = emptyList(),
         resolveFontFile: (String) -> File?,
     ): SettingsBundleExportResult {
         val portable = portableSettings(settings)
+        val portableGlossary = portableGlossaryTerms(glossaryTerms)
         require(portable.overlayFonts.size <= MAX_FONT_COUNT) {
             "Settings export exceeds the $MAX_FONT_COUNT font limit."
         }
@@ -130,6 +138,7 @@ object SettingsBundleTransfer {
                     byteCount = file.length(),
                 )
             },
+            glossaryTerms = portableGlossary,
         )
 
         ZipOutputStream(output.buffered()).use { zip ->
@@ -145,6 +154,7 @@ object SettingsBundleTransfer {
         return SettingsBundleExportResult(
             presetCount = portable.translationPresets.size,
             fontCount = fontSources.size,
+            glossaryTermCount = portableGlossary.size,
         )
     }
 
@@ -224,6 +234,7 @@ object SettingsBundleTransfer {
                 settings = null,
                 presets = presets,
                 fonts = emptyList(),
+                glossaryTerms = emptyList(),
                 legacyPresetOnly = true,
             )
         }
@@ -246,6 +257,7 @@ object SettingsBundleTransfer {
                 settings = portableSettings(manifest.settings),
                 presets = portableSettings(manifest.settings).translationPresets,
                 fonts = fonts,
+                glossaryTerms = portableGlossaryTerms(manifest.glossaryTerms),
                 legacyPresetOnly = false,
             )
             if (!consumeFonts) return preview
@@ -293,6 +305,33 @@ object SettingsBundleTransfer {
         require(manifest.fonts.sumOf { it.byteCount } <= MAX_TOTAL_FONT_BYTES) {
             "Settings package fonts are too large."
         }
+        require(manifest.glossaryTerms.size <= MAX_GLOSSARY_TERM_COUNT) {
+            "Settings package has too many glossary terms."
+        }
+        portableGlossaryTerms(manifest.glossaryTerms)
+    }
+
+    fun portableGlossaryTerms(terms: List<GlossaryTermEntity>): List<GlossaryTermEntity> {
+        require(terms.size <= MAX_GLOSSARY_TERM_COUNT) {
+            "Settings package has too many glossary terms."
+        }
+        return terms.map { term ->
+            require(term.sourceTerm.length in 1..200) { "Glossary source term has an invalid length." }
+            require(term.targetTerm.length in 1..500) { "Glossary target term has an invalid length." }
+            require(term.scopePackage.length <= 255 && term.appLabel.length <= 200) {
+                "Glossary application scope is invalid."
+            }
+            term.copy(
+                id = 0,
+                scopePackage = term.scopePackage.trim(),
+                appLabel = term.appLabel.trim(),
+                sourceLang = term.sourceLang.trim(),
+                targetLang = term.targetLang.trim(),
+                sourceTerm = term.sourceTerm.trim(),
+                normalizedSourceTerm = normalizeGlossaryTerm(term.sourceTerm, term.caseSensitive),
+                targetTerm = term.targetTerm.trim(),
+            )
+        }
     }
 
     private fun readEntryUtf8Limited(input: InputStream, maxBytes: Int): String {
@@ -318,6 +357,7 @@ private data class SettingsBundleManifest(
     val version: Int,
     val settings: Settings,
     val fonts: List<SettingsBundleFontManifest>,
+    val glossaryTerms: List<GlossaryTermEntity> = emptyList(),
 )
 
 @Serializable

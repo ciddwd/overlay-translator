@@ -103,6 +103,10 @@ class SettingsCoverageAuditTest {
             "paddleModelVersion",
             "textOrientationAutoDetect",
             "manualTextOrientation",
+            "translationOutputLayout",
+            "translationOutputDirection",
+            "translationGlossaryEnabled",
+            "sendAppNameToTranslator",
             "dbnetProbThresh",
             "dbnetBoxScoreThresh",
             "dbnetUnclipRatio",
@@ -114,6 +118,31 @@ class SettingsCoverageAuditTest {
             Regex("""\b${Regex.escape(field)}\s=""").containsMatchIn(snapshotSource)
         }
         assertTrue("buildTranslationPresetSnapshot missing fields: $missing", missing.isEmpty())
+    }
+
+    @Test
+    fun settingsScreenTransferSnapshot_includesImmediatePortableSettings() {
+        val settingsScreenSource = sourceFile("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
+        val snapshotSource = slice(
+            settingsScreenSource,
+            startMarker = "fun buildSettingsTransferSnapshot()",
+            endMarker = "fun currentTranslationPresetHash()",
+        )
+        val exportSource = slice(
+            settingsScreenSource,
+            startMarker = "onExport = {",
+            endMarker = "onImport = {",
+        )
+
+        val fields = listOf("foregroundAppDetectionMode")
+        val missing = fields.filterNot { field ->
+            Regex("""\b${Regex.escape(field)}\s*=""").containsMatchIn(snapshotSource)
+        }
+        assertTrue("buildSettingsTransferSnapshot missing fields: $missing", missing.isEmpty())
+        assertTrue(
+            "Settings export must use buildSettingsTransferSnapshot",
+            exportSource.contains("pendingSettingsExport = buildSettingsTransferSnapshot()"),
+        )
     }
 
     private fun sourceFile(path: String): File =
