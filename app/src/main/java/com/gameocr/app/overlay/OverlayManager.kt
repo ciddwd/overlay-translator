@@ -7,6 +7,7 @@ import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.util.TypedValue
@@ -22,6 +23,7 @@ import com.gameocr.app.R
 import com.gameocr.app.data.BorderStyle
 import com.gameocr.app.data.FloatingWindowContentMode
 import com.gameocr.app.data.OverlayPlacement
+import com.gameocr.app.data.OverlayStyleMode
 import com.gameocr.app.data.OverlayTextStyle
 import com.gameocr.app.data.OverlayTheme
 import com.gameocr.app.data.Settings
@@ -50,6 +52,7 @@ class OverlayManager(
     @Volatile var alpha: Float = 0.85f,
     @Volatile var regionOffset: android.graphics.Point = android.graphics.Point(0, 0),
     @Volatile var placement: OverlayPlacement = OverlayPlacement.BELOW,
+    @Volatile var overlayStyleMode: OverlayStyleMode = OverlayStyleMode.FIXED,
     @Volatile var offsetX: Int = 0,
     @Volatile var offsetY: Int = 0,
     @Volatile var theme: OverlayTheme = OverlayTheme.CLASSIC_DARK,
@@ -538,7 +541,9 @@ class OverlayManager(
     fun showBlocks(
         blocks: List<Pair<TextBlock, String>>,
         orientation: TextOrientation = TextOrientation.HORIZONTAL_LTR,
-        diagnosticId: Long? = null
+        diagnosticId: Long? = null,
+        adaptiveStyles: List<AdaptiveOverlayStyle> = emptyList(),
+        followBlockOrientations: Boolean = false,
     ) {
         clearLoading()
         clear()
@@ -550,20 +555,23 @@ class OverlayManager(
         }
         val diagPrefix = diagnosticId.toDiagPrefix()
 
-        val root = FrameLayout(context).apply { this.alpha = this@OverlayManager.alpha }
+        val root = FrameLayout(context).apply {
+            this.alpha = if (overlayStyleMode == OverlayStyleMode.ADAPTIVE) 1f else this@OverlayManager.alpha
+        }
         val dm = context.resources.displayMetrics
         val screenW = dm.widthPixels
         val screenH = dm.heightPixels
         val interactionPlan = translationBlockInteractionPlan(translationBlockInteractionMode)
-        val isVertical = orientation == TextOrientation.VERTICAL_RTL ||
+        val defaultIsVertical = orientation == TextOrientation.VERTICAL_RTL ||
             orientation == TextOrientation.VERTICAL_LTR
-        val leftToRight = orientation == TextOrientation.VERTICAL_LTR
+        val defaultLeftToRight = orientation == TextOrientation.VERTICAL_LTR
         VerticalDiagnosticLog.i(
-            "${diagPrefix}overlay showBlocks count=${blocks.size} orientation=$orientation vertical=$isVertical " +
-                "leftToRight=$leftToRight screen=${screenW}x${screenH} textSizeSp=$textSizeSp " +
+            "${diagPrefix}overlay showBlocks count=${blocks.size} orientation=$orientation vertical=$defaultIsVertical " +
+                "leftToRight=$defaultLeftToRight followBlockOrientations=$followBlockOrientations " +
+                "screen=${screenW}x${screenH} textSizeSp=$textSizeSp " +
                 "alpha=$alpha placement=$placement offset=(${offsetX},${offsetY}) " +
                 "regionOffset=(${regionOffset.x},${regionOffset.y}) allowWrap=$allowWrap " +
-                "avoidCollision=$avoidCollision theme=$theme"
+                "avoidCollision=$avoidCollision theme=$theme styleMode=$overlayStyleMode"
         )
         // 估算每行像素高度（行间距系数 1.3，跟 setLineSpacing 一致）
         val lineHeightPx = (
@@ -593,15 +601,44 @@ class OverlayManager(
 
         blocks.forEachIndexed { idx, (block, dst) ->
             val b: Rect = block.boundingBox
+            val blockOrientation = resolveOverlayBlockOrientation(
+                pageOrientation = orientation,
+                blockOrientation = block.layoutOrientation,
+                followRecognition = followBlockOrientations,
+            )
+            val isVertical = blockOrientation == TextOrientation.VERTICAL_RTL ||
+                blockOrientation == TextOrientation.VERTICAL_LTR
+            val leftToRight = blockOrientation == TextOrientation.VERTICAL_LTR
+            val adaptiveStyle = if (overlayStyleMode == OverlayStyleMode.ADAPTIVE) {
+                adaptiveStyles.getOrNull(idx)
+            } else {
+                null
+            }
+            val blockTextSizeSp = adaptiveStyle?.maxTextSizeSp ?: textSizeSp.toFloat()
+            val blockTextStyle = if (adaptiveStyle != null) OverlayTextStyle() else overlayTextStyle
+            val blockBackground = adaptiveStyle?.let { adaptiveBg(it, block) } ?: themeBg()
+            val blockForeground = adaptiveStyle?.foregroundColor ?: themeFgColor()
             blockContents[idx] = TranslationBlockContent(block.text, dst)
             val baseLeft = (b.left + regionOffset.x + offsetX).coerceAtLeast(0)
             val overlayRect = allOverlayRects[idx]
             val origW = (b.right - b.left).coerceAtLeast(0)
             val origH = (b.bottom - b.top).coerceAtLeast(0)
+            val adaptiveSize = adaptiveStyle?.let { adaptiveOverlaySize(origW, origH) }
             VerticalDiagnosticLog.i(
-                "${diagPrefix}overlay block#${idx + 1} orientation=$orientation box=${b.toDiagString()} " +
+                "${diagPrefix}overlay block#${idx + 1} pageOrientation=$orientation " +
+                    "blockOrientation=$blockOrientation box=${b.toDiagString()} " +
                     "screenBox=${overlayRect.toDiagString()} orig=${origW}x${origH} " +
-                    "src=${block.text.toDiagText()} dst=${dst.toDiagText()}"
+                    "src=${block.text.toDiagText()} dst=${dst.toDiagText()} " +
+                    (adaptiveStyle?.let {
+                        "adaptiveBg=#${it.backgroundColor.toUInt().toString(16)} " +
+                            "adaptiveFg=#${it.foregroundColor.toUInt().toString(16)} " +
+                            "adaptiveMaxSp=${String.format(java.util.Locale.US, "%.1f", it.maxTextSizeSp)} " +
+                            "sourceBoxes=${block.sourceBoxes.size} " +
+                            "eraseMode=${if (block.sourceBoxes.isEmpty()) "full" else "source_boxes"} " +
+                            "exactSize=${adaptiveSize?.width}x${adaptiveSize?.height} " +
+                            "confidence=${String.format(java.util.Locale.US, "%.2f", it.confidence)} " +
+                            "fallback=${it.fallbackReason.name}"
+                    } ?: "adaptive=none")
             )
 
             // 四方向碰撞检测：用矩形相交判断"水平重叠"，比"中心距离 < origW"准得多
@@ -631,6 +668,7 @@ class OverlayManager(
                 OverlayPlacement.OVERLAP -> b.top + regionOffset.y + offsetY
                 OverlayPlacement.ABOVE -> b.top + regionOffset.y - (textSizeSp * 3).toInt() - 4 + offsetY
             }
+            val resolvedBaseTop = adaptiveSize?.let { b.top + regionOffset.y + offsetY } ?: baseTop
 
             // 下邻：水平有矩形相交 + top 在本块下方。比"中心距离"准。
             val belowNeighborTop = if (avoidCollision) {
@@ -645,7 +683,11 @@ class OverlayManager(
             var verticalSlotForLayout: VerticalOverlaySlot? = null
             var verticalHeightForLayout = FrameLayout.LayoutParams.WRAP_CONTENT
             val view: View = if (isVertical) {
-                val slot = verticalOverlaySlot(
+                val slot = adaptiveSize?.let {
+                    val left = overlayRect.left.coerceIn(0, screenW - 1)
+                    val right = overlayRect.right.coerceIn(left + 1, screenW)
+                    VerticalOverlaySlot(left = left, right = right)
+                } ?: verticalOverlaySlot(
                     rect = overlayRect,
                     allRects = allOverlayRects,
                     screenWidth = screenW,
@@ -653,7 +695,7 @@ class OverlayManager(
                     minGapPx = (8 * dm.density).toInt().coerceAtLeast(8),
                     minReadableWidthPx = verticalMinReadableSlotWidthPx
                 )
-                val verticalHeightPx = origH
+                val verticalHeightPx = adaptiveSize?.height ?: origH
                     .coerceAtLeast(lineHeightPx * 2 + 8)
                     .coerceAtLeast(1)
                 verticalSlotForLayout = slot
@@ -684,16 +726,24 @@ class OverlayManager(
                     this.text = dst
                     this.leftToRight = leftToRight
                     this.typeface = overlayTypeface
-                    applyTextStyle(overlayTextStyle)
-                    this.background = themeBg()
-                    setTextColor(themeFgColor())
-                    setTextSizeSp(textSizeSp.toFloat())
+                    applyTextStyle(blockTextStyle)
+                    this.background = blockBackground
+                    setTextColor(blockForeground)
+                    setTextSizeSp(blockTextSizeSp)
+                    if (adaptiveStyle != null) {
+                        minimumReadableTextSizeSp = ADAPTIVE_MIN_TEXT_SIZE_SP.toFloat()
+                        minimumReadableTextSizeRatio = 0f
+                    }
                     // 竖排高度由 LayoutParams 固定到原文 box；Drawer 会按 boundsH 自动换列。
                     minimumHeight = verticalHeightPx
-                    setPadding(verticalTextPaddingHorizontalPx, 4, verticalTextPaddingHorizontalPx, 4)
+                    if (adaptiveStyle != null) {
+                        setPadding(0, 0, 0, 0)
+                    } else {
+                        setPadding(verticalTextPaddingHorizontalPx, 4, verticalTextPaddingHorizontalPx, 4)
+                    }
                 }
             } else {
-                val horizontalRightToLeft = orientation == TextOrientation.HORIZONTAL_RTL
+                val horizontalRightToLeft = blockOrientation == TextOrientation.HORIZONTAL_RTL
                 StyledTranslationTextView(context).apply {
                     this.horizontalRightToLeft = horizontalRightToLeft
                     text = if (horizontalRightToLeft) horizontalRtlDisplayText(dst) else dst
@@ -708,14 +758,24 @@ class OverlayManager(
                     } else {
                         Gravity.START
                     }
-                    background = themeBg()
-                    setTextColor(themeFgColor())
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, textSizeSp.toFloat())
+                    background = blockBackground
+                    setTextColor(blockForeground)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, blockTextSizeSp)
                     applyOverlayTextStyle(
-                        style = overlayTextStyle,
+                        style = blockTextStyle,
                         baseTypeface = overlayTypeface,
                         baseLineSpacingMultiplier = 1.05f
                     )
+                    if (adaptiveStyle != null && allowWrap) {
+                        adaptiveAutoSizeMaxSp(adaptiveStyle.maxTextSizeSp)?.let { maxSizeSp ->
+                            setAutoSizeTextTypeUniformWithConfiguration(
+                                ADAPTIVE_MIN_TEXT_SIZE_SP,
+                                maxSizeSp,
+                                1,
+                                TypedValue.COMPLEX_UNIT_SP,
+                            )
+                        }
+                    }
                     if (horizontalRightToLeft) {
                         gravity = (gravity and Gravity.VERTICAL_GRAVITY_MASK) or Gravity.END
                         textAlignment = View.TEXT_ALIGNMENT_GRAVITY
@@ -745,7 +805,9 @@ class OverlayManager(
                     // 智能 maxWidth：受 (相邻块左边界, 屏幕右边) 双重约束
                     maxWidth = minOf(collisionMaxW, screenW - baseLeft - 8)
                         .coerceAtLeast(120)
-                    if (placement == OverlayPlacement.OVERLAP) {
+                    if (adaptiveStyle != null) {
+                        setPadding(0, 0, 0, 0)
+                    } else if (placement == OverlayPlacement.OVERLAP) {
                         minWidth = origW
                         minHeight = origH
                         setPadding(8, 4, 8, 4)
@@ -765,15 +827,19 @@ class OverlayManager(
             } else {
                 finalLeft = baseLeft
                 finalRight = 0
-                finalTop = baseTop.coerceAtLeast(0)
+                finalTop = resolvedBaseTop.coerceAtLeast(0)
             }
             val lp = FrameLayout.LayoutParams(
-                if (isVertical) {
+                if (adaptiveSize != null) {
+                    adaptiveSize.width
+                } else if (isVertical) {
                     verticalSlotForLayout?.width ?: FrameLayout.LayoutParams.WRAP_CONTENT
                 } else {
                     FrameLayout.LayoutParams.WRAP_CONTENT
                 },
-                if (isVertical) {
+                if (adaptiveSize != null) {
+                    adaptiveSize.height
+                } else if (isVertical) {
                     verticalHeightForLayout.coerceAtLeast(1)
                 } else {
                     FrameLayout.LayoutParams.WRAP_CONTENT
@@ -792,7 +858,8 @@ class OverlayManager(
             VerticalDiagnosticLog.i(
                 "${diagPrefix}overlay layout block#${idx + 1} left=${lp.leftMargin} top=${lp.topMargin} " +
                     "rightMargin=${lp.rightMargin} width=${lp.width} height=${lp.height} gravity=${lp.gravity} " +
-                    "baseTop=$baseTop finalMaxW=$finalMaxW belowNeighborTop=$belowNeighborTop"
+                    "baseTop=$baseTop resolvedBaseTop=$resolvedBaseTop " +
+                    "finalMaxW=$finalMaxW belowNeighborTop=$belowNeighborTop"
             )
             root.addView(view, lp)
             blockViews[idx] = view
@@ -1061,8 +1128,8 @@ class OverlayManager(
     fun hasActiveResult(): Boolean =
         (blocksView != null && blockViews.isNotEmpty()) || floatingWindow.isShown()
 
-    fun clear(keepLoading: Boolean = false) {
-        if (!keepLoading) clearLoading()
+    fun clear() {
+        clearLoading()
         dismissError()
         floatingWindow.hide()
         floatingDstViews = null
@@ -1170,6 +1237,17 @@ class OverlayManager(
             }
             else -> { /* CLASSIC_DARK: 无边 */ }
         }
+    }
+
+    private fun adaptiveBg(style: AdaptiveOverlayStyle, block: TextBlock): Drawable {
+        val bounds = block.boundingBox
+        val eraseRects = adaptiveEraseRects(
+            block = OverlayIntRect(bounds.left, bounds.top, bounds.right, bounds.bottom),
+            sourceBoxes = block.sourceBoxes.map { source ->
+                OverlayIntRect(source.left, source.top, source.right, source.bottom)
+            },
+        )
+        return AdaptiveEraseDrawable(style.backgroundColor, eraseRects)
     }
 }
 

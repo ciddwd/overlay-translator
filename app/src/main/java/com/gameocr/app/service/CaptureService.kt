@@ -50,6 +50,9 @@ import com.gameocr.app.data.LoopTriggerMode
 import com.gameocr.app.data.LoopTextRegionMode
 import com.gameocr.app.data.OcrEngineKind
 import com.gameocr.app.data.OverlayFontManager
+import com.gameocr.app.data.OverlayStyleMode
+import com.gameocr.app.data.adaptiveOverlayActive
+import com.gameocr.app.data.effectiveOverlayRenderSettings
 import com.gameocr.app.data.RenderMode
 import com.gameocr.app.data.Settings
 import com.gameocr.app.data.SettingsRepository
@@ -76,6 +79,8 @@ import com.gameocr.app.ocr.sortTextBlocksForReading
 import com.gameocr.app.data.resolveTranslationOutputSettings
 import com.gameocr.app.data.FloatingSkill
 import com.gameocr.app.overlay.FloatingButtonManager
+import com.gameocr.app.overlay.AdaptiveOverlayStyle
+import com.gameocr.app.overlay.AdaptiveOverlayStyleAnalyzer
 import com.gameocr.app.overlay.LanguageQuickSwitchOverlay
 import com.gameocr.app.overlay.OverlayManager
 import com.gameocr.app.overlay.PresetQuickSwitchOverlay
@@ -399,15 +404,18 @@ class CaptureService : Service() {
     }
 
     private suspend fun prepareCleanCaptureFrame(
-        hideFloatingButton: Boolean,
-        keepLoading: Boolean = false
+        hideFloatingButton: Boolean
     ) {
         mainScope.launch {
-            overlay?.clear(keepLoading = keepLoading)
+            overlay?.clear()
             translationCard?.dismiss()
             translationBlockCopyOverlay?.dismiss()
             if (hideFloatingButton) floatingButton?.hide()
         }.join()
+        Timber.d(
+            "Capture chrome hidden before screenshot loadingHidden=true floatingButtonHidden=%s",
+            hideFloatingButton,
+        )
         delay(CAPTURE_CHROME_SETTLE_MS)
     }
 
@@ -415,6 +423,11 @@ class CaptureService : Service() {
         mainScope.launch {
             if (restoreFloatingButton) floatingButton?.show()
             if (showLoading) overlay?.showLoadingHint()
+            Timber.d(
+                "Capture chrome restored after screenshot loading=%s floatingButton=%s",
+                showLoading,
+                restoreFloatingButton,
+            )
         }
     }
 
@@ -470,13 +483,14 @@ class CaptureService : Service() {
             Timber.i("Skip manual trigger because capture is already running")
             return
         }
-        // MediaProjection captures the app's own overlay; capture a clean frame first,
-        // then restore the floating button and loading indicator.
+        // Give immediate feedback, but remove every app overlay before MediaProjection
+        // captures the frame. The floating button and loading indicator return only
+        // after the screenshot bitmap has been acquired.
         scope.launch {
-            val loadingShown = mainScope.async { overlay?.showLoadingHint() == true }.await()
-            prepareCleanCaptureFrame(hideFloatingButton = true, keepLoading = loadingShown)
+            mainScope.async { overlay?.showLoadingHint() }.await()
+            prepareCleanCaptureFrame(hideFloatingButton = true)
             captureOnce(
-                showLoadingAfterScreenshot = !loadingShown,
+                showLoadingAfterScreenshot = true,
                 restoreFloatingButtonAfterScreenshot = true
             )
         }
@@ -1071,19 +1085,17 @@ class CaptureService : Service() {
         return try {
             val raw = ocrEngine.recognize(preprocessed, pending.effectiveEngine)
             val mapped = raw.map { block ->
-                val box = block.boundingBox
-                val mappedBox = LoopRoiCoordinatePolicy.mapFromRoi(
-                    block = LoopTextRect(box.left, box.top, box.right, box.bottom),
-                    roi = roi,
-                    upscale2x = preprocess.upscale2x,
-                )
-                block.copy(
-                    boundingBox = Rect(
-                        mappedBox.left,
-                        mappedBox.top,
-                        mappedBox.right,
-                        mappedBox.bottom,
+                fun mapBox(box: Rect): Rect {
+                    val mappedBox = LoopRoiCoordinatePolicy.mapFromRoi(
+                        block = LoopTextRect(box.left, box.top, box.right, box.bottom),
+                        roi = roi,
+                        upscale2x = preprocess.upscale2x,
                     )
+                    return Rect(mappedBox.left, mappedBox.top, mappedBox.right, mappedBox.bottom)
+                }
+                block.copy(
+                    boundingBox = mapBox(block.boundingBox),
+                    sourceBoxes = block.sourceBoxes.map(::mapBox),
                 )
             }
             sortTextBlocksForReading(mapped, pending.renderOrientation)
@@ -1102,6 +1114,7 @@ class CaptureService : Service() {
         currentFingerprint: LoopFrameFingerprint?,
         ocrElapsedMs: Long,
         source: String,
+        adaptiveStyles: List<AdaptiveOverlayStyle> = emptyList(),
     ) {
         val normalizedText = LoopFrameChangePolicy.normalizeOcrText(blocks.map { it.text })
         if (blocks.isEmpty() || normalizedText.isEmpty()) {
@@ -1172,8 +1185,9 @@ class CaptureService : Service() {
             return
         }
         when {
-            redBoxActive -> renderBlocks(blocks, settings, renderOrientation, diagId)
-            settings.renderMode == RenderMode.BLOCKS -> renderBlocks(blocks, settings, renderOrientation, diagId)
+            redBoxActive -> renderBlocks(blocks, settings, renderOrientation, diagId, adaptiveStyles)
+            settings.renderMode == RenderMode.BLOCKS ->
+                renderBlocks(blocks, settings, renderOrientation, diagId, adaptiveStyles)
             else -> renderFloatingWindow(blocks, settings, diagId)
         }
     }
@@ -1419,6 +1433,12 @@ class CaptureService : Service() {
                             LoopRoiStabilityDecision.TRANSLATE_CACHED -> {
                                 pendingLoopRoiResult = null
                                 val fingerprint = createLoopFrameFingerprint(workBitmap, settings)
+                                val adaptiveStyles = analyzeAdaptiveOverlayStyles(
+                                    workBitmap,
+                                    pending.blocks,
+                                    settings,
+                                    diagId,
+                                )
                                 workBitmap.recycle()
                                 deliverStableLoopBlocks(
                                     diagId = diagId,
@@ -1429,6 +1449,7 @@ class CaptureService : Service() {
                                     currentFingerprint = fingerprint,
                                     ocrElapsedMs = pending.initialOcrElapsedMs,
                                     source = "roi_cached",
+                                    adaptiveStyles = adaptiveStyles,
                                 )
                                 return
                             }
@@ -1449,6 +1470,12 @@ class CaptureService : Service() {
                                     ?.let(::findOcrResultQualityIssue)
                                 if (finalBlocks.isNotEmpty() && finalQualityIssue == null) {
                                     val fingerprint = createLoopFrameFingerprint(workBitmap, settings)
+                                    val adaptiveStyles = analyzeAdaptiveOverlayStyles(
+                                        workBitmap,
+                                        finalBlocks,
+                                        settings,
+                                        diagId,
+                                    )
                                     workBitmap.recycle()
                                     deliverStableLoopBlocks(
                                         diagId = diagId,
@@ -1459,6 +1486,7 @@ class CaptureService : Service() {
                                         currentFingerprint = fingerprint,
                                         ocrElapsedMs = elapsedSince(roiOcrStartedAt),
                                         source = "roi_final_ocr",
+                                        adaptiveStyles = adaptiveStyles,
                                     )
                                     return
                                 }
@@ -1583,6 +1611,12 @@ class CaptureService : Service() {
                     workBitmap.recycle()
                     return
                 }
+                val adaptiveStyles = analyzeAdaptiveOverlayStyles(
+                    workBitmap,
+                    translatedBlocks.map { it.first },
+                    settings,
+                    diagId,
+                )
                 workBitmap.recycle()
                 val normalizedEndToEndText = LoopFrameChangePolicy.normalizeOcrText(
                     translatedBlocks.map { (block, _) -> block.text }
@@ -1624,7 +1658,8 @@ class CaptureService : Service() {
                     translatedBlocks,
                     settings,
                     diagId,
-                    translationElapsedMs = elapsedSince(ocrStartedAt)
+                    translationElapsedMs = elapsedSince(ocrStartedAt),
+                    adaptiveStyles = adaptiveStyles,
                 )
                 return
             }
@@ -1952,7 +1987,12 @@ class CaptureService : Service() {
             val blocks = if (settings.preprocess.upscale2x) {
                 orderedRawBlocks.map { tb ->
                     val r = tb.boundingBox
-                    tb.copy(boundingBox = android.graphics.Rect(r.left / 2, r.top / 2, r.right / 2, r.bottom / 2))
+                    tb.copy(
+                        boundingBox = android.graphics.Rect(r.left / 2, r.top / 2, r.right / 2, r.bottom / 2),
+                        sourceBoxes = tb.sourceBoxes.map { box ->
+                            android.graphics.Rect(box.left / 2, box.top / 2, box.right / 2, box.bottom / 2)
+                        },
+                    )
                 }
             } else orderedRawBlocks
             if (settings.preprocess.upscale2x) {
@@ -2025,7 +2065,10 @@ class CaptureService : Service() {
                         val cachedBlocks = if (settings.loopTranslateRegionOnly) roiBlocks else blocks
                         pendingLoopRoiResult = PendingLoopRoiResult(
                             blocks = cachedBlocks.map { block ->
-                                block.copy(boundingBox = Rect(block.boundingBox))
+                                block.copy(
+                                    boundingBox = Rect(block.boundingBox),
+                                    sourceBoxes = block.sourceBoxes.map(::Rect),
+                                )
                             },
                             renderOrientation = renderOrientation,
                             effectiveEngine = effectiveEngine,
@@ -2053,6 +2096,7 @@ class CaptureService : Service() {
                 )
                 logVerticalDiag(diagId, "first OCR produced no usable ROI; fallback to OCR text stability")
             }
+            val adaptiveStyles = analyzeAdaptiveOverlayStyles(workBitmap, blocks, settings, diagId)
             workBitmap.recycle()
             val postOcrStability = LoopFrameStabilityPolicy.afterOcr(
                 state = loopFrameStabilityState,
@@ -2144,8 +2188,9 @@ class CaptureService : Service() {
                     "renderOrientation=$renderOrientation blocks=${blocks.size}"
             )
             when {
-                redBoxActive -> renderBlocks(blocks, settings, renderOrientation, diagId)
-                settings.renderMode == RenderMode.BLOCKS -> renderBlocks(blocks, settings, renderOrientation, diagId)
+                redBoxActive -> renderBlocks(blocks, settings, renderOrientation, diagId, adaptiveStyles)
+                settings.renderMode == RenderMode.BLOCKS ->
+                    renderBlocks(blocks, settings, renderOrientation, diagId, adaptiveStyles)
                 else -> renderFloatingWindow(blocks, settings, diagId)
             }
         } finally {
@@ -2170,6 +2215,38 @@ class CaptureService : Service() {
         return Bitmap.createBitmap(src, l, t, r - l, b - t)
     }
 
+    private fun analyzeAdaptiveOverlayStyles(
+        bitmap: Bitmap,
+        blocks: List<TextBlock>,
+        settings: Settings,
+        diagId: Long?,
+    ): List<AdaptiveOverlayStyle> {
+        if (!adaptiveOverlayActive(settings.overlayStyleMode, settings.renderMode) ||
+            blocks.isEmpty()
+        ) return emptyList()
+
+        val startedAt = SystemClock.elapsedRealtimeNanos()
+        val styles = runCatching {
+            AdaptiveOverlayStyleAnalyzer.analyze(
+                bitmap = bitmap,
+                blocks = blocks,
+                scaledDensity = resources.displayMetrics.density * resources.configuration.fontScale,
+            )
+        }.getOrElse { error ->
+            Timber.tag("AdaptiveStyle").w(error, "Adaptive style analysis failed; use safe overlay fallback")
+            diagId?.let {
+                logVerticalDiag(error, it, "adaptive style analysis failed; use safe overlay fallback")
+            }
+            emptyList()
+        }
+        val elapsedMs = (SystemClock.elapsedRealtimeNanos() - startedAt) / 1_000_000.0
+        val fallbackCount = styles.count { it.usedFallback }
+        val summary = "adaptive style analyzed blocks=${styles.size} fallbacks=$fallbackCount " +
+            "elapsedMs=${String.format(Locale.US, "%.2f", elapsedMs)}"
+        if (diagId != null) logVerticalDiag(diagId, summary) else Timber.tag("AdaptiveStyle").i(summary)
+        return styles
+    }
+
     /**
      * 端到端引擎（有道图片翻译）专用渲染：bitmap → 已经带译文的 box 列表，无需再调翻译。
      * 直接按 renderMode 一次性吐到 overlay。每段原文/译文写一条 LogRepository pair。
@@ -2178,7 +2255,8 @@ class CaptureService : Service() {
         items: List<Pair<TextBlock, String>>,
         settings: Settings,
         diagId: Long? = null,
-        translationElapsedMs: Long? = null
+        translationElapsedMs: Long? = null,
+        adaptiveStyles: List<AdaptiveOverlayStyle> = emptyList(),
     ) {
         val recognizedOrientation = resolveTextBlockReadingOrientation(
             items.map { it.first },
@@ -2208,10 +2286,21 @@ class CaptureService : Service() {
                 settings.developerOptionsEnabled,
                 settings.ocrRedBoxModeEnabled,
             ) -> withContext(Dispatchers.Main) {
-                overlay?.showBlocks(items, outputOrientation, diagnosticId = diagId)
+                overlay?.showBlocks(
+                    items,
+                    outputOrientation,
+                    diagnosticId = diagId,
+                    followBlockOrientations = translationOutput.followRecognition,
+                )
             }
             settings.renderMode == RenderMode.BLOCKS -> withContext(Dispatchers.Main) {
-                overlay?.showBlocks(items, outputOrientation, diagnosticId = diagId)
+                overlay?.showBlocks(
+                    items,
+                    outputOrientation,
+                    diagnosticId = diagId,
+                    adaptiveStyles = adaptiveStyles,
+                    followBlockOrientations = translationOutput.followRecognition,
+                )
             }
             else -> withContext(Dispatchers.Main) {
                 overlay?.showFullScreen(items.map { (b, dst) -> b.text to dst })
@@ -2224,17 +2313,30 @@ class CaptureService : Service() {
         blocks: List<TextBlock>,
         settings: Settings,
         orientation: TextOrientation = TextOrientation.HORIZONTAL_LTR,
-        diagId: Long? = null
+        diagId: Long? = null,
+        adaptiveStyles: List<AdaptiveOverlayStyle> = emptyList(),
     ) {
+        val followBlockOrientations = resolveTranslationOutputSettings(
+            settings.translationOutputFollowRecognition,
+            settings.translationOutputLayout,
+            settings.translationOutputDirection,
+        ).followRecognition
         diagId?.let {
             logVerticalDiag(
                 it,
-                "renderBlocks show placeholders orientation=$orientation count=${blocks.size}"
+                "renderBlocks show placeholders orientation=$orientation count=${blocks.size} " +
+                    "followBlockOrientations=$followBlockOrientations"
             )
         }
         // 先把所有原文块以占位"…"显示在原文下方。orientation 决定用 TextView 还是 VerticalTextView
         withContext(Dispatchers.Main) {
-            overlay?.showBlocks(blocks.map { it to "…" }, orientation, diagnosticId = diagId)
+            overlay?.showBlocks(
+                blocks.map { it to "…" },
+                orientation,
+                diagnosticId = diagId,
+                adaptiveStyles = adaptiveStyles,
+                followBlockOrientations = followBlockOrientations,
+            )
         }
         // 引擎支持批处理（如 DeepL）→ 一次 HTTP 译多段，避免限频。否则保留逐段流式
         // 调用 translateOne（OpenAI 兼容 LLM 用户依赖逐 token 流式更新体验）。
@@ -2863,33 +2965,41 @@ class CaptureService : Service() {
     private suspend fun applyOverlayConfig(settings: Settings) {
         val typeface = overlayFontManager.typefaceFor(settings)
         val dockEdgeInsetPx = (settings.floatingButtonDockInsetDp * resources.displayMetrics.density).toInt()
+        val adaptiveBlocksEnabled =
+            adaptiveOverlayActive(settings.overlayStyleMode, settings.renderMode)
+        val effectiveOverlaySettings = settings.effectiveOverlayRenderSettings()
         withContext(Dispatchers.Main) {
             overlay?.apply {
-                textSizeSp = settings.overlayTextSizeSp
-                alpha = settings.overlayAlpha
+                overlayStyleMode = if (adaptiveBlocksEnabled) {
+                    OverlayStyleMode.ADAPTIVE
+                } else {
+                    OverlayStyleMode.FIXED
+                }
+                textSizeSp = effectiveOverlaySettings.overlayTextSizeSp
+                alpha = effectiveOverlaySettings.overlayAlpha
                 regionOffset = settings.captureRegion?.let { Point(it.left, it.top) } ?: Point(0, 0)
-                placement = settings.overlayPlacement
-                offsetX = settings.overlayOffsetX
-                offsetY = settings.overlayOffsetY
-                theme = settings.overlayTheme
+                placement = effectiveOverlaySettings.overlayPlacement
+                offsetX = effectiveOverlaySettings.overlayOffsetX
+                offsetY = effectiveOverlaySettings.overlayOffsetY
+                theme = effectiveOverlaySettings.overlayTheme
                 customBg = settings.customBgColor
                 customFg = settings.customFgColor
                 customBorder = settings.customBorderColor
                 customBorderWidthDp = settings.customBorderWidth
-                allowWrap = settings.overlayAllowWrap
-                avoidCollision = settings.overlayAvoidCollision
+                allowWrap = effectiveOverlaySettings.overlayAllowWrap
+                avoidCollision = effectiveOverlaySettings.overlayAvoidCollision
                 translationBlockInteractionMode = settings.translationBlockInteractionMode
                 floatingWindowContentMode = settings.floatingWindowContentMode
                 customBorderStyle = settings.customBorderStyle
                 overlayTypeface = typeface
-                overlayTextStyle = settings.overlayTextStyle.normalized()
+                overlayTextStyle = effectiveOverlaySettings.overlayTextStyle.normalized()
                 ocrDebugRedBoxActive = DeveloperOcrDebugPolicy.redBoxActive(
                     settings.developerOptionsEnabled,
                     settings.ocrRedBoxModeEnabled,
                 )
                 ocrDebugShowSourceText = settings.ocrRedBoxShowSourceText
                 ocrDebugShowTranslation = settings.ocrRedBoxShowTranslation
-                syncFloatingWindowFromSettings(settings)
+                syncFloatingWindowFromSettings(effectiveOverlaySettings)
             }
             // Overlay / floating button both own Android Views; keep every visible update on main.
             floatingButton?.let {

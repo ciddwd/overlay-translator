@@ -192,6 +192,31 @@ Open the app and tap **Settings**. The top of the settings page lets you switch 
 | **Cloud** Tencent OCR | Same | Needs SecretId + SecretKey; 3 endpoints: GeneralBasic / GeneralAccurate / **RecognizeAgent** (LLM agent, integrated with ParagNo paragraph grouping) |
 | **Cloud** Youdao OCR | Simple one-tap | Needs App ID (API Key) + App Secret; `langType` auto-derived from source language, no separate picker |
 
+<details>
+<summary><strong>On-device OCR benchmark (Speed priority)</strong></summary>
+
+Test conditions:
+
+- Device: Qualcomm Snapdragon 8 Gen 3 with 16 GB RAM
+- Detection profile: Speed priority
+- Test image: the same Japanese manga screenshot for every model
+- Note: these are measurements from one device and one image. They compare models within this project and are not universal performance estimates.
+
+| OCR model | Time per run | Result on this test image |
+|---|---:|---|
+| PP-OCRv5 Mobile | 1.15 s | Reasonable speed, but produced more recognition errors |
+| PP-OCRv6 Tiny | 0.66 s | Fastest, but Japanese recognition was largely unusable on this image |
+| PP-OCRv6 Small | 1.07 s | Best overall PaddleOCR result, but missed one speech bubble |
+| PP-OCRv6 Medium | 3.02 s | Recovered some content, but still had recognition and reading-order errors |
+| Manga OCR | 3.10 s; 3.48 s for the complete OCR pipeline | Most accurate result for this Japanese manga image |
+
+Planned additions:
+
+- **On-device translation**: Sakura / Hy-MT2 initialization, prefill, decode, tokens/s, and total time
+- **On-device OCR Accuracy priority**: compare speed, missed text, and recognition output on the same image
+
+</details>
+
 **PaddleOCR models**: Settings → "Download PaddleOCR model" installs the selected model tier under `<filesDir>/models/paddle/<version>/`. PaddleOCR models do not ship inside the APK, so first use requires a download or local import; the default tier is v6 small, and you can switch between v5 mobile / v6 tiny / small / medium with HuggingFace, hf-mirror, or a custom mirror.
 
 **PP-OCRv6 Online**: select "PP-OCRv6 Online" under OCR engines and enter an AI Studio Access Token. This cloud path encodes the screenshot as JPEG, submits a PaddleOCR AI Studio asynchronous `PP-OCRv6` job, and polls its result; it does not use the on-device model files described above.

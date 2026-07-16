@@ -5,6 +5,7 @@ import android.graphics.Rect
 import com.gameocr.app.data.MergeStrength
 import com.gameocr.app.data.OcrEngineKind
 import com.gameocr.app.data.SettingsRepository
+import com.gameocr.app.ocr.BubbleClusterer.IntRect
 import javax.inject.Inject
 import javax.inject.Singleton
 import timber.log.Timber
@@ -230,11 +231,36 @@ class RoutingOcrEngine @Inject constructor(
     }
 
     private fun List<TextBlock>.withLayoutOrientation(orientation: Orientation): List<TextBlock> {
-        val textOrientation = when (orientation) {
+        val pageOrientation = when (orientation) {
             Orientation.HORIZONTAL -> TextOrientation.HORIZONTAL_LTR
             Orientation.VERTICAL -> TextOrientation.VERTICAL_RTL
         }
-        return map { it.copy(layoutOrientation = textOrientation) }
+        return map { block ->
+            if (block.layoutOrientation != null &&
+                block.layoutOrientation != TextOrientation.UNKNOWN
+            ) {
+                block
+            } else {
+                val blockOrientation = inferSourceLayoutOrientation(
+                    sourceBoxes = block.sourceBoxesOrBoundingBox().map { box ->
+                        IntRect(box.left, box.top, box.right, box.bottom)
+                    },
+                    blockBounds = block.boundingBox.let { box ->
+                        IntRect(box.left, box.top, box.right, box.bottom)
+                    },
+                    ambiguousFallback = pageOrientation,
+                )
+                Timber.tag("OcrMerge").i(
+                    "[layout] page=%s block=%s box=%s sourceBoxes=%d text=%s",
+                    pageOrientation,
+                    blockOrientation,
+                    block.boundingBox.toMergeDebugRect().toLogString(),
+                    block.sourceBoxes.size,
+                    previewForLog(block.text),
+                )
+                block.copy(layoutOrientation = blockOrientation)
+            }
+        }
     }
 
     /**
@@ -315,7 +341,8 @@ class RoutingOcrEngine @Inject constructor(
                 b.text.isBlank() -> a.text
                 else -> a.text + separator + b.text
             },
-            boundingBox = unionBox
+            boundingBox = unionBox,
+            sourceBoxes = mergeSourceBoxes(a, b),
         )
     }
 

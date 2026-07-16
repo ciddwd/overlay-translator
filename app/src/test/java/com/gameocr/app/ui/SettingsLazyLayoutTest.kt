@@ -187,9 +187,12 @@ class SettingsLazyLayoutTest {
         val presetSection = source.substring(presetStart, presetEnd)
         data class Case(val name: String, val source: String, val marker: String, val expected: Boolean)
         listOf(
-            Case("global area observes download busy state", topBar, "if (modelDownloadBusy)", true),
+            Case("global area observes every active or failed download state", topBar, "if (activeModelDownloads.isNotEmpty() || unresolvedModelDownloadFailure != null)", true),
+            Case("global area renders every active download", topBar, "activeModelDownloads.forEach { download ->", true),
             Case("global area renders download progress", topBar, "ModelDownloadProgressCard(", true),
-            Case("global area exposes cancellation", topBar, "viewModel::cancelModelDownload", true),
+            Case("global area retains terminal failure", topBar, "ModelDownloadFailureCard(", true),
+            Case("terminal failure exposes retry", topBar, "viewModel.downloadModelsIndependently(", true),
+            Case("each active download exposes its own cancellation", topBar, "viewModel.cancelModelDownload(download.id)", true),
             Case("preset section does not render global progress", presetSection, "ModelDownloadProgressCard(", false),
             Case("preset section does not own progress status", presetSection, "activeDownloadStatus", false),
         ).forEach { case ->

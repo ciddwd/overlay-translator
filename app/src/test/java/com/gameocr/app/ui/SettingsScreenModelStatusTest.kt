@@ -138,10 +138,16 @@ class SettingsScreenModelStatusTest {
         val sectionStart = source.indexOf("title = stringResource(R.string.settings_section_overlay)")
         val preview = source.indexOf("OverlayPreviewCard(", startIndex = sectionStart)
         val colors = source.indexOf("R.string.settings_overlay_theme_label", startIndex = sectionStart)
+        val adaptive = source.indexOf("R.string.settings_overlay_style_adaptive", startIndex = sectionStart)
+        val displayMode = source.indexOf("R.string.settings_render_mode_label", startIndex = sectionStart)
         val cases = listOf(
             Case("translation display section exists", sectionStart >= 0),
             Case("preview exists inside section", preview > sectionStart),
             Case("preview precedes color controls", preview in (sectionStart + 1)..<colors),
+            Case("adaptive switch is placed immediately before display settings", adaptive in (colors + 1)..<displayMode),
+            Case("adaptive switch only appears for block display", source.contains("if (renderMode == RenderMode.BLOCKS)")),
+            Case("translation style mode label is removed", !source.contains("R.string.settings_overlay_style_mode_label")),
+            Case("style controls are not dimmed by adaptive mode", !source.contains("manualStyleEnabled")),
             Case("section reports window bounds", source.contains("onBoundsInWindow = { _, bottom -> overlaySectionBottomInWindow = bottom }")),
             Case("sticky state uses section-aware policy", source.contains("StickyOverlayPreviewPolicy.shouldStick(")),
         )
@@ -1573,6 +1579,47 @@ class SettingsScreenModelStatusTest {
                 case.expected,
                 cleartextHostsWithLocalOcrUrls(case.hosts, case.umiUrl, case.lunaUrl)
             )
+        }
+    }
+
+    @Test
+    fun mangaBubbleClusterGap_acceptsZeroAcrossUiPersistenceAndRuntime() {
+        data class Case(
+            val name: String,
+            val sourcePath: String,
+            val marker: String,
+        )
+
+        val cases = listOf(
+            Case(
+                "settings slider starts at zero",
+                "src/main/java/com/gameocr/app/ui/SettingsScreen.kt",
+                "valueRange = 0f..60f",
+            ),
+            Case(
+                "settings slider exposes every integer value",
+                "src/main/java/com/gameocr/app/ui/SettingsScreen.kt",
+                "steps = 59",
+            ),
+            Case(
+                "saved setting keeps zero",
+                "src/main/java/com/gameocr/app/ui/SettingsViewModel.kt",
+                "bubbleClusterGap = gap.coerceIn(0, 80)",
+            ),
+            Case(
+                "Manga OCR runtime keeps zero",
+                "src/main/java/com/gameocr/app/ocr/MangaOcrEngine.kt",
+                "gap = settings.bubbleClusterGap.coerceIn(0, 60)",
+            ),
+        )
+
+        cases.forEach { case ->
+            val source = listOf(
+                File(case.sourcePath),
+                File("app", case.sourcePath),
+            ).firstOrNull(File::isFile)?.readText()
+                ?: error("Source file not found: ${case.sourcePath}")
+            assertTrue(case.name, source.contains(case.marker))
         }
     }
 

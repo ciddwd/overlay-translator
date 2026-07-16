@@ -209,6 +209,7 @@ class SettingsViewModel @Inject constructor(
         renderMode: RenderMode,
         translationBlockInteractionMode: TranslationBlockInteractionMode,
         placement: OverlayPlacement,
+        overlayStyleMode: com.gameocr.app.data.OverlayStyleMode,
         overlayTheme: OverlayTheme,
         customBg: Int,
         customFg: Int,
@@ -285,6 +286,7 @@ class SettingsViewModel @Inject constructor(
                 renderMode = renderMode,
                 translationBlockInteractionMode = translationBlockInteractionMode,
                 overlayPlacement = placement,
+                overlayStyleMode = overlayStyleMode,
                 overlayTheme = overlayTheme,
                 customBgColor = customBg,
                 customFgColor = customFg,
@@ -751,12 +753,24 @@ class SettingsViewModel @Inject constructor(
         modelDownloadManager.enqueueAndAwait(specs, onProgress, ownerPresetId)
     }
 
+    suspend fun downloadModelsIndependently(
+        specs: List<ModelDownloadSpec>,
+        onProgress: (String) -> Unit,
+        ownerPresetId: String? = null,
+    ) {
+        modelDownloadManager.enqueueIndependentlyAndAwait(specs, onProgress, ownerPresetId)
+    }
+
     fun cancelModelDownload(workId: java.util.UUID) = modelDownloadManager.cancel(workId)
 
     fun deleteLlmModel(kind: LlmModelKind): Boolean = llmInstaller.delete(kind)
 
     suspend fun saveLlmMirror(choice: com.gameocr.app.data.LlmMirrorChoice, customUrl: String) {
         repo.update { it.copy(localLlmMirror = choice, localLlmMirrorUrl = customUrl.trim()) }
+    }
+
+    suspend fun savePaddleDetectionProfile(profile: com.gameocr.app.data.PaddleDetectionProfile) {
+        repo.update { it.copy(paddleDetectionProfile = profile) }
     }
 
     /** DBNet/聚类阈值即时落盘；prob/score/gap 共用，unclip 按 Paddle/MangaOCR 分开。 */
@@ -766,6 +780,7 @@ class SettingsViewModel @Inject constructor(
         score: Float,
         unclip: Float,
         gap: Int,
+        mangaCropPaddingPx: Int,
     ) {
         repo.update {
             val clampedUnclip = unclip.coerceIn(1.2f, 2.6f)
@@ -782,7 +797,8 @@ class SettingsViewModel @Inject constructor(
                 } else {
                     it.mangaOcrDbnetUnclipRatio
                 },
-                bubbleClusterGap = gap.coerceIn(8, 80),
+                bubbleClusterGap = gap.coerceIn(0, 80),
+                mangaOcrCropPaddingPx = mangaCropPaddingPx.coerceIn(0, 64),
             )
         }
     }

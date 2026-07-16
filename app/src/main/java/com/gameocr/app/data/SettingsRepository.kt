@@ -52,6 +52,7 @@ class SettingsRepository @Inject constructor(
         val OcrRedBoxModeEnabled = booleanPreferencesKey("ocr_red_box_mode_enabled")
         val OcrRedBoxShowSourceText = booleanPreferencesKey("ocr_red_box_show_source_text")
         val OcrRedBoxShowTranslation = booleanPreferencesKey("ocr_red_box_show_translation")
+        val OverlayStyleMode = stringPreferencesKey("overlay_style_mode")
         val TextSize = intPreferencesKey("overlay_text_size")
         val OverlayTextStyle = stringPreferencesKey("overlay_text_style_json")
         val Alpha = floatPreferencesKey("overlay_alpha")
@@ -77,6 +78,7 @@ class SettingsRepository @Inject constructor(
         val PreferShizuku = booleanPreferencesKey("prefer_shizuku")
         val Placement = stringPreferencesKey("overlay_placement")
         val PaddleVersion = stringPreferencesKey("paddle_model_version")
+        val PaddleDetectionProfile = stringPreferencesKey("paddle_detection_profile")
         val PaddleMirror = stringPreferencesKey("paddle_mirror_url")
         val MangaOcrMirror = stringPreferencesKey("manga_ocr_mirror_url")
         val OrientationModelMirror = stringPreferencesKey("orientation_model_mirror_url")
@@ -166,6 +168,7 @@ class SettingsRepository @Inject constructor(
         val DbnetUnclipRatio = floatPreferencesKey("dbnet_unclip_ratio")
         val MangaOcrDbnetUnclipRatio = floatPreferencesKey("manga_ocr_dbnet_unclip_ratio")
         val BubbleClusterGap = intPreferencesKey("bubble_cluster_gap")
+        val MangaOcrCropPaddingPx = intPreferencesKey("manga_ocr_crop_padding_px")
     }
 
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
@@ -316,6 +319,7 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.OcrRedBoxModeEnabled] = next.ocrRedBoxModeEnabled
             prefs[Keys.OcrRedBoxShowSourceText] = next.ocrRedBoxShowSourceText
             prefs[Keys.OcrRedBoxShowTranslation] = next.ocrRedBoxShowTranslation
+            prefs[Keys.OverlayStyleMode] = next.overlayStyleMode.name
             prefs[Keys.TextSize] = next.overlayTextSizeSp
             prefs[Keys.OverlayTextStyle] = json.encodeToString(next.overlayTextStyle.normalized())
             prefs[Keys.Alpha] = next.overlayAlpha
@@ -343,6 +347,7 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.PreferShizuku] = next.preferShizukuCapture
             prefs[Keys.Placement] = next.overlayPlacement.name
             prefs[Keys.PaddleVersion] = next.paddleModelVersion.name
+            prefs[Keys.PaddleDetectionProfile] = next.paddleDetectionProfile.name
             prefs.putSecure(Keys.PaddleMirror, next.paddleModelMirrorUrl)
             prefs.putSecure(Keys.MangaOcrMirror, next.mangaOcrModelMirrorUrl)
             prefs.putSecure(Keys.OrientationModelMirror, next.orientationModelMirrorUrl)
@@ -432,6 +437,7 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.DbnetUnclipRatio] = next.dbnetUnclipRatio
             prefs[Keys.MangaOcrDbnetUnclipRatio] = next.mangaOcrDbnetUnclipRatio
             prefs[Keys.BubbleClusterGap] = next.bubbleClusterGap
+            prefs[Keys.MangaOcrCropPaddingPx] = next.mangaOcrCropPaddingPx
         }
     }
 
@@ -491,6 +497,9 @@ class SettingsRepository @Inject constructor(
                 ?: default.ocrRedBoxShowSourceText,
             ocrRedBoxShowTranslation = this[Keys.OcrRedBoxShowTranslation]
                 ?: default.ocrRedBoxShowTranslation,
+            overlayStyleMode = runCatching {
+                OverlayStyleMode.valueOf(this[Keys.OverlayStyleMode] ?: "")
+            }.getOrDefault(default.overlayStyleMode),
             overlayTextSizeSp = this[Keys.TextSize] ?: default.overlayTextSizeSp,
             overlayTextStyle = this[Keys.OverlayTextStyle]
                 ?.takeIf { it.isNotBlank() }
@@ -543,6 +552,9 @@ class SettingsRepository @Inject constructor(
                 .getOrDefault(default.overlayPlacement),
             paddleModelVersion = runCatching { PaddleModelVersion.valueOf(this[Keys.PaddleVersion] ?: "") }
                 .getOrDefault(default.paddleModelVersion),
+            paddleDetectionProfile = runCatching {
+                PaddleDetectionProfile.valueOf(this[Keys.PaddleDetectionProfile] ?: "")
+            }.getOrDefault(default.paddleDetectionProfile),
             paddleModelMirrorUrl = secureString(Keys.PaddleMirror, default.paddleModelMirrorUrl),
             mangaOcrModelMirrorUrl = secureString(Keys.MangaOcrMirror, default.mangaOcrModelMirrorUrl),
             orientationModelMirrorUrl = secureString(
@@ -691,7 +703,9 @@ class SettingsRepository @Inject constructor(
             dbnetUnclipRatio = this[Keys.DbnetUnclipRatio] ?: default.dbnetUnclipRatio,
             mangaOcrDbnetUnclipRatio = this[Keys.MangaOcrDbnetUnclipRatio]
                 ?: default.mangaOcrDbnetUnclipRatio,
-            bubbleClusterGap = this[Keys.BubbleClusterGap] ?: default.bubbleClusterGap
+            bubbleClusterGap = this[Keys.BubbleClusterGap] ?: default.bubbleClusterGap,
+            mangaOcrCropPaddingPx = this[Keys.MangaOcrCropPaddingPx]
+                ?: default.mangaOcrCropPaddingPx
             // runtimeTranslationContext is request-scoped and deliberately never persisted.
         )
     }

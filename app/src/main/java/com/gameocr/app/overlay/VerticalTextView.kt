@@ -32,6 +32,8 @@ class VerticalTextView(context: Context) : View(context) {
     }
     private var textColor: Int = Color.WHITE
     private var textStyle: OverlayTextStyle = OverlayTextStyle()
+    internal var minimumReadableTextSizeSp: Float = 12f
+    internal var minimumReadableTextSizeRatio: Float = 0.86f
 
     /**
      * 当前文本。setter 会触发 [requestLayout]（重算尺寸）+ [invalidate]（重绘）。
@@ -210,9 +212,10 @@ class VerticalTextView(context: Context) : View(context) {
         if (layoutText.isEmpty()) return
         val minTextSize = verticalTextReadableMinSizePx(
             originalTextSizePx = originalTextSize,
-            minReadableTextSizePx = sp2px(12f)
+            minReadableTextSizePx = sp2px(minimumReadableTextSizeSp),
+            minimumOriginalSizeRatio = minimumReadableTextSizeRatio,
         )
-        repeat(4) {
+        repeat(8) {
             val requiredW = VerticalTextDrawer.measure(
                 layoutText,
                 paint,
@@ -221,7 +224,7 @@ class VerticalTextView(context: Context) : View(context) {
                 lineSpacingMultiplier = textStyle.lineSpacingMultiplier
             ).first
             if (requiredW <= contentW || paint.textSize <= minTextSize) return
-            val ratio = (contentW / requiredW).coerceIn(0.86f, 0.97f)
+            val ratio = (contentW / requiredW).coerceIn(0.65f, 0.97f)
             paint.textSize = (paint.textSize * ratio).coerceAtLeast(minTextSize)
         }
     }

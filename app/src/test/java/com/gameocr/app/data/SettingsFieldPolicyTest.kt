@@ -72,4 +72,5 @@ class SettingsFieldPolicyTest {
         assertEquals(Settings().translatorEngine, decoded.settings.translatorEngine)
         assertEquals("zh-TW", decoded.settings.targetLang)
     }
+
 }

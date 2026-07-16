@@ -3,6 +3,7 @@ package com.gameocr.app.ocr
 import com.gameocr.app.data.BaiduOcrEndpoint
 import com.gameocr.app.data.BaiduOcrLanguage
 import com.gameocr.app.data.OcrEngineKind
+import com.gameocr.app.data.PaddleModelVersion
 import com.gameocr.app.data.Settings
 import com.gameocr.app.data.TencentOcrEndpoint
 import com.gameocr.app.data.TencentOcrLanguage
@@ -31,8 +32,19 @@ object OcrLanguageCapability {
     /** PaddleOCR PP-OCRv5 mobile rec 字典涵盖的语言（中英日融合）。韩 / 拉丁系扩展暂未打包。 */
     private val PADDLE_V5_LANGS = setOf("zh", "zh-CN", "zh-TW", "en", "ja")
 
-    /** PP-OCRv6 medium/small covers Chinese, English, Japanese, and Latin-script languages. */
-    private val PADDLE_V6_AI_STUDIO_LANGS = ML_KIT_LATIN_LANGS + setOf("zh", "zh-CN", "zh-TW", "ja")
+    /** PP-OCRv6 medium/small includes these 46 Latin-script languages in one unified model. */
+    private val PADDLE_V6_LATIN_LANGS = setOf(
+        "fr", "de", "it", "es", "pt", "nl", "pl", "ro", "cs", "sv", "no", "da",
+        "fi", "hu", "tr", "vi", "id", "ms", "az", "af", "bs", "hr", "cy", "et",
+        "ga", "is", "ku", "lt", "lv", "mt", "mi", "oc", "sk", "sl", "sq", "sw",
+        "tl", "uz", "la", "sr", "ca", "eu", "gl", "lb", "rm", "qu"
+    )
+
+    private val PADDLE_V6_BASE_LANGS =
+        PADDLE_V6_LATIN_LANGS + setOf("zh", "zh-CN", "zh-TW", "en")
+
+    /** AI Studio v6 uses the full medium/small language set, including Japanese. */
+    private val PADDLE_V6_AI_STUDIO_LANGS = PADDLE_V6_BASE_LANGS + "ja"
 
     /** 有道智云 OCR (ocrapi) 支持的 langType 对应 BCP-47 集合。 */
     private val YOUDAO_LANGS = setOf("zh", "zh-CN", "zh-TW", "en", "ja", "ko", "fr", "de", "es", "ru", "pt", "it")
@@ -49,7 +61,8 @@ object OcrLanguageCapability {
         baiduEndpoint = settings.baiduOcrEndpoint,
         tencentEndpoint = settings.tencentOcrEndpoint,
         baiduLanguage = settings.baiduOcrLanguage,
-        tencentLanguage = settings.tencentOcrLanguage
+        tencentLanguage = settings.tencentOcrLanguage,
+        paddleModelVersion = settings.paddleModelVersion,
     )
 
     /**
@@ -64,7 +77,8 @@ object OcrLanguageCapability {
         baiduEndpoint: BaiduOcrEndpoint = BaiduOcrEndpoint.GENERAL,
         tencentEndpoint: TencentOcrEndpoint = TencentOcrEndpoint.GENERAL_BASIC,
         baiduLanguage: BaiduOcrLanguage = BaiduOcrLanguage.CHN_ENG,
-        tencentLanguage: TencentOcrLanguage = TencentOcrLanguage.AUTO
+        tencentLanguage: TencentOcrLanguage = TencentOcrLanguage.AUTO,
+        paddleModelVersion: PaddleModelVersion = PaddleModelVersion.V5_MOBILE,
     ): Boolean {
         val code = normalize(sourceCode)
         if (code.isEmpty()) return true
@@ -78,7 +92,12 @@ object OcrLanguageCapability {
             OcrEngineKind.ML_KIT_JAPANESE -> code == "ja"
             OcrEngineKind.ML_KIT_KOREAN -> code == "ko"
             OcrEngineKind.ML_KIT_CHINESE -> code.startsWith("zh")
-            OcrEngineKind.PADDLE_ONNX -> code in PADDLE_V5_LANGS
+            OcrEngineKind.PADDLE_ONNX -> when (paddleModelVersion) {
+                PaddleModelVersion.V5_MOBILE -> code in PADDLE_V5_LANGS
+                PaddleModelVersion.V6_TINY -> code in PADDLE_V6_BASE_LANGS
+                PaddleModelVersion.V6_SMALL,
+                PaddleModelVersion.V6_MEDIUM -> code in PADDLE_V6_AI_STUDIO_LANGS
+            }
             OcrEngineKind.PADDLE_AI_STUDIO -> code in PADDLE_V6_AI_STUDIO_LANGS
             OcrEngineKind.BAIDU -> baiduSupports(baiduEndpoint, baiduLanguage, code)
             OcrEngineKind.TENCENT -> tencentSupports(tencentEndpoint, tencentLanguage, code)

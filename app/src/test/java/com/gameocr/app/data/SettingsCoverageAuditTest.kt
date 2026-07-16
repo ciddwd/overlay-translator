@@ -82,6 +82,7 @@ class SettingsCoverageAuditTest {
             "overlayFontDisplayName",
             "dictionaryPrompt",
             "paddleModelVersion",
+            "paddleDetectionProfile",
             "textOrientationAutoDetect",
             "manualTextOrientation",
             "translationOutputFollowRecognition",
@@ -94,6 +95,7 @@ class SettingsCoverageAuditTest {
             "dbnetUnclipRatio",
             "mangaOcrDbnetUnclipRatio",
             "bubbleClusterGap",
+            "mangaOcrCropPaddingPx",
         )
 
         val missing = fields.filterNot { field ->

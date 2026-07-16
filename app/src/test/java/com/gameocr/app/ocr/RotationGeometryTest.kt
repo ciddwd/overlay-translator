@@ -58,6 +58,10 @@ class RotationGeometryTest {
             confidence = 0.8f,
             recognizedLanguage = "en",
             layoutOrientation = TextOrientation.HORIZONTAL_LTR,
+            sourceBoxes = listOf(
+                Rect(10, 20, 20, 50),
+                Rect(20, 20, 30, 50),
+            ),
         )
 
         val mapped = mapBlocksFromRotated180(listOf(block), imageW = 100, imageH = 80).single()
@@ -67,6 +71,9 @@ class RotationGeometryTest {
         assertEquals(0.8f, mapped.confidence, 0.0001f)
         assertEquals("en", mapped.recognizedLanguage)
         assertEquals(TextOrientation.HORIZONTAL_LTR, mapped.layoutOrientation)
+        assertEquals(2, mapped.sourceBoxes.size)
+        assertRectEquals(Rect(80, 30, 90, 60), mapped.sourceBoxes[0])
+        assertRectEquals(Rect(70, 30, 80, 60), mapped.sourceBoxes[1])
     }
 
     private fun assertRectEquals(expected: Rect, actual: Rect) {

@@ -35,6 +35,14 @@ class SettingsDefaultsTest {
     }
 
     @Test
+    fun paddleDetectionAndMangaCropPadding_defaultsAreStable() {
+        val settings = Settings()
+
+        assertEquals(PaddleDetectionProfile.FAST, settings.paddleDetectionProfile)
+        assertEquals(0, settings.mangaOcrCropPaddingPx)
+    }
+
+    @Test
     fun overlayFont_defaultsToSystemFont() {
         val settings = Settings()
 

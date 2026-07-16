@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings as AndroidSettings
+import android.text.format.Formatter
 import android.util.TypedValue
 import android.widget.Toast
 import timber.log.Timber
@@ -170,12 +171,16 @@ import com.gameocr.app.data.OverlayFontImportResult
 import com.gameocr.app.data.OverlayFontPolicy
 import com.gameocr.app.data.OverlayFontEntry
 import com.gameocr.app.data.OverlayPlacement
+import com.gameocr.app.data.OverlayStyleMode
 import com.gameocr.app.data.OverlayTheme
 import com.gameocr.app.data.OverlayTextAlignment
 import com.gameocr.app.data.OverlayTextStyle
 import com.gameocr.app.data.PaddleModelVersion
 import com.gameocr.app.download.ModelDownloadSpec
+import com.gameocr.app.download.ModelDownloadTerminalRecord
+import com.gameocr.app.download.ModelDownloadType
 import com.gameocr.app.download.ModelDownloadWorkPolicy
+import com.gameocr.app.download.latestUnresolvedModelDownloadFailure
 import com.gameocr.app.data.PreprocessOptions
 import com.gameocr.app.data.RenderMode
 import com.gameocr.app.data.Settings
@@ -188,6 +193,7 @@ import com.gameocr.app.data.TranslationBlockInteractionMode
 import com.gameocr.app.data.TranslationPresetTransfer
 import com.gameocr.app.data.TranslatorEngine
 import com.gameocr.app.data.resolveTranslationOutputSettings
+import com.gameocr.app.data.manualOverlayLayoutControlsEnabled
 import com.gameocr.app.data.settingsSearchEntryId
 import com.gameocr.app.glossary.supportsTranslationPromptContext
 import com.gameocr.app.llm.LlmModelKind
@@ -286,31 +292,87 @@ fun SettingsScreen(
     val scope = rememberCoroutineScope()
     val modelDownloadWorkInfos by viewModel.modelDownloadWorkInfos.collectAsState(initial = emptyList())
     val unfinishedModelDownloads = modelDownloadWorkInfos.filterNot { it.state.isFinished }
-    val activeModelDownloadWork = unfinishedModelDownloads.firstOrNull { it.state == WorkInfo.State.RUNNING }
-        ?: unfinishedModelDownloads.firstOrNull()
-    val backgroundModelDownloadActive = activeModelDownloadWork != null
-    val activeModelDownloadSpec = ModelDownloadSpec.decode(
-        activeModelDownloadWork?.progress?.getString(
-            com.gameocr.app.download.ModelDownloadWorker.KEY_CURRENT_SPEC
-        ).orEmpty()
-    )
-    val backgroundModelDownloadStatus = activeModelDownloadWork?.progress?.getString(
-        com.gameocr.app.download.ModelDownloadWorker.KEY_STATUS
-    ).orEmpty()
-    val backgroundModelDownloadOwnerPresetId = activeModelDownloadWork?.tags
-        ?.let(ModelDownloadWorkPolicy::ownerPresetId)
-    val backgroundModelDownloadDownloaded = activeModelDownloadWork?.progress?.getLong(
-        com.gameocr.app.download.ModelDownloadWorker.KEY_DOWNLOADED,
-        0L,
-    ) ?: 0L
-    val backgroundModelDownloadTotal = activeModelDownloadWork?.progress?.getLong(
-        com.gameocr.app.download.ModelDownloadWorker.KEY_TOTAL,
-        -1L,
-    ) ?: -1L
+    val activeModelDownloads = unfinishedModelDownloads
+        .sortedByDescending { it.state == WorkInfo.State.RUNNING }
+        .map { info ->
+            ActiveModelDownloadUi(
+                id = info.id,
+                spec = ModelDownloadSpec.decode(
+                    info.progress.getString(
+                        com.gameocr.app.download.ModelDownloadWorker.KEY_CURRENT_SPEC
+                    ).orEmpty()
+                ),
+                status = info.progress.getString(
+                    com.gameocr.app.download.ModelDownloadWorker.KEY_STATUS
+                ).orEmpty(),
+                downloaded = info.progress.getLong(
+                    com.gameocr.app.download.ModelDownloadWorker.KEY_DOWNLOADED,
+                    0L,
+                ),
+                total = info.progress.getLong(
+                    com.gameocr.app.download.ModelDownloadWorker.KEY_TOTAL,
+                    -1L,
+                ),
+                ownerPresetId = ModelDownloadWorkPolicy.ownerPresetId(info.tags),
+            )
+        }
+    val backgroundModelDownloadActive = activeModelDownloads.isNotEmpty()
+    val activeModelDownloadBySpec = activeModelDownloads
+        .mapNotNull { item -> item.spec?.let { it to item } }
+        .toMap()
+    val backgroundModelDownloadOwnerPresetId = activeModelDownloads
+        .mapNotNull { it.ownerPresetId }
+        .distinct()
+        .singleOrNull()
+    val activeModelDownloadRequestKeys = activeModelDownloads
+        .mapNotNull { it.spec }
+        .map { ModelDownloadWorkPolicy.requestKey(listOf(it)) }
+        .toSet()
+    val terminalModelDownloads = modelDownloadWorkInfos.mapNotNull { info ->
+        val succeeded = when (info.state) {
+            WorkInfo.State.SUCCEEDED -> true
+            WorkInfo.State.FAILED -> false
+            else -> return@mapNotNull null
+        }
+        val specs = ModelDownloadSpec.decodeAll(
+            info.outputData.getStringArray(
+                com.gameocr.app.download.ModelDownloadWorker.KEY_SPECS
+            ).orEmpty()
+        ) ?: return@mapNotNull null
+        ModelDownloadTerminalRecord(
+            specs = specs,
+            succeeded = succeeded,
+            status = info.outputData.getString(
+                com.gameocr.app.download.ModelDownloadWorker.KEY_STATUS
+            ).orEmpty(),
+            error = info.outputData.getString(
+                com.gameocr.app.download.ModelDownloadWorker.KEY_ERROR
+            ).orEmpty(),
+            file = info.outputData.getString(
+                com.gameocr.app.download.ModelDownloadWorker.KEY_FILE
+            ).orEmpty(),
+            downloaded = info.outputData.getLong(
+                com.gameocr.app.download.ModelDownloadWorker.KEY_DOWNLOADED,
+                0L,
+            ),
+            total = info.outputData.getLong(
+                com.gameocr.app.download.ModelDownloadWorker.KEY_TOTAL,
+                -1L,
+            ),
+            finishedAt = info.outputData.getLong(
+                com.gameocr.app.download.ModelDownloadWorker.KEY_FINISHED_AT,
+                0L,
+            ),
+            ownerPresetId = ModelDownloadWorkPolicy.ownerPresetId(info.tags),
+        )
+    }
+    val unresolvedModelDownloadFailure =
+        latestUnresolvedModelDownloadFailure(
+            records = terminalModelDownloads,
+            activeRequestKeys = activeModelDownloadRequestKeys,
+        )
     fun statusDuringBackgroundDownload(spec: ModelDownloadSpec, fallback: String): String =
-        backgroundModelDownloadStatus.takeIf {
-            backgroundModelDownloadActive && activeModelDownloadSpec == spec && it.isNotBlank()
-        } ?: fallback
+        activeModelDownloadBySpec[spec]?.status?.takeIf { it.isNotBlank() } ?: fallback
     val usageAccessGranted = rememberUsageAccessGranted(context)
 
     var baseUrl by remember { mutableStateOf("") }
@@ -392,6 +454,7 @@ fun SettingsScreen(
         mutableStateOf(com.gameocr.app.data.BorderStyle.SOLID)
     }
     var placement by remember { mutableStateOf(OverlayPlacement.BELOW) }
+    var overlayStyleMode by remember { mutableStateOf(OverlayStyleMode.FIXED) }
     var overlayTheme by remember { mutableStateOf(OverlayTheme.CLASSIC_DARK) }
     var customBg by remember { mutableStateOf(0xE6000000.toInt()) }
     var customFg by remember { mutableStateOf(0xFFFFFFFF.toInt()) }
@@ -468,7 +531,11 @@ fun SettingsScreen(
     var dbnetScore by remember { mutableStateOf(0.5f) }
     var dbnetUnclip by remember { mutableStateOf(1.55f) }
     var mangaOcrDbnetUnclip by remember { mutableStateOf(1.65f) }
+    var paddleDetectionProfile by remember {
+        mutableStateOf(com.gameocr.app.data.PaddleDetectionProfile.FAST)
+    }
     var dbnetGap by remember { mutableStateOf(32) }
+    var mangaOcrCropPaddingPx by remember { mutableStateOf(0) }
     var dbnetAdvancedExpanded by remember { mutableStateOf(false) }
     var showDbnetResetConfirm by remember { mutableStateOf(false) }
     var manualTextOrient by remember { mutableStateOf<com.gameocr.app.ocr.TextOrientation?>(null) }
@@ -670,6 +737,7 @@ fun SettingsScreen(
         floatingWindowContentMode = s.floatingWindowContentMode
         floatingWindowLocked = s.floatingWindowLocked
         placement = s.overlayPlacement
+        overlayStyleMode = s.overlayStyleMode
         overlayTheme = s.overlayTheme
         customBg = s.customBgColor
         customFg = s.customFgColor
@@ -725,7 +793,9 @@ fun SettingsScreen(
         dbnetScore = s.dbnetBoxScoreThresh
         dbnetUnclip = s.dbnetUnclipRatio
         mangaOcrDbnetUnclip = s.mangaOcrDbnetUnclipRatio
+        paddleDetectionProfile = s.paddleDetectionProfile
         dbnetGap = s.bubbleClusterGap
+        mangaOcrCropPaddingPx = s.mangaOcrCropPaddingPx
         translationPresets = s.translationPresets
         activeTranslationPresetId = s.activeTranslationPresetId
         pinnedLanguages = s.pinnedLanguages
@@ -973,6 +1043,7 @@ fun SettingsScreen(
         renderMode = renderMode,
         translationBlockInteractionMode = translationBlockInteractionMode,
         overlayPlacement = placement,
+        overlayStyleMode = overlayStyleMode,
         overlayTheme = overlayTheme,
         customBgColor = customBg,
         customFgColor = customFg,
@@ -1030,6 +1101,7 @@ fun SettingsScreen(
         overlayFontDisplayName = overlayFontDisplayName,
         dictionaryPrompt = dictionaryPrompt,
         paddleModelVersion = paddleModelVersion,
+        paddleDetectionProfile = paddleDetectionProfile,
         textOrientationAutoDetect = textOrientAutoDetect,
         manualTextOrientation = manualTextOrient,
         translationOutputFollowRecognition = translationOutputFollowRecognition,
@@ -1041,7 +1113,8 @@ fun SettingsScreen(
         dbnetBoxScoreThresh = dbnetScore,
         dbnetUnclipRatio = dbnetUnclip,
         mangaOcrDbnetUnclipRatio = mangaOcrDbnetUnclip,
-        bubbleClusterGap = dbnetGap
+        bubbleClusterGap = dbnetGap,
+        mangaOcrCropPaddingPx = mangaOcrCropPaddingPx
     )
 
     fun buildSettingsTransferSnapshot(): Settings = buildTranslationPresetSnapshot().copy(
@@ -1084,7 +1157,7 @@ fun SettingsScreen(
         orientationModelDownloading = orientationMissing
         try {
             if (llmKinds.isNotEmpty()) viewModel.saveLlmMirror(llmMirrorChoice, llmMirror)
-            viewModel.downloadModels(
+            viewModel.downloadModelsIndependently(
                 specs = specs,
                 onProgress = { msg -> presetMessage = msg },
                 ownerPresetId = preset.id,
@@ -1137,6 +1210,7 @@ fun SettingsScreen(
             renderMode = renderMode,
             translationBlockInteractionMode = translationBlockInteractionMode,
             placement = placement,
+            overlayStyleMode = overlayStyleMode,
             overlayTheme = overlayTheme,
             customBg = customBg, customFg = customFg,
             customBorder = customBorder, customBorderW = customBorderW.toInt(),
@@ -2069,6 +2143,7 @@ fun SettingsScreen(
             floatingWindowLocked = s.floatingWindowLocked
             customBorderStyle = s.customBorderStyle
             placement = s.overlayPlacement
+            overlayStyleMode = s.overlayStyleMode
             overlayTheme = s.overlayTheme
             customBg = s.customBgColor
             customFg = s.customFgColor
@@ -2123,7 +2198,9 @@ fun SettingsScreen(
             dbnetScore = s.dbnetBoxScoreThresh
             dbnetUnclip = s.dbnetUnclipRatio
             mangaOcrDbnetUnclip = s.mangaOcrDbnetUnclipRatio
+            paddleDetectionProfile = s.paddleDetectionProfile
             dbnetGap = s.bubbleClusterGap
+            mangaOcrCropPaddingPx = s.mangaOcrCropPaddingPx
             manualTextOrient = s.manualTextOrientation
             resolveTranslationOutputSettings(
                 s.translationOutputFollowRecognition,
@@ -2148,10 +2225,16 @@ fun SettingsScreen(
     // paddleStatus 独立异步加载：file.exists() / file.length() 走 IO 线程，避免阻塞首帧。
     val settingsLoaded = initialSettings != null
     val modelDownloadStateKey = modelDownloadWorkInfos.map { it.id to it.state }
-    val modelDownloadStageKey = activeModelDownloadSpec to activeModelDownloadWork?.progress?.getInt(
-        com.gameocr.app.download.ModelDownloadWorker.KEY_BATCH_INDEX,
-        0,
-    )
+    val modelDownloadStageKey = unfinishedModelDownloads.map { info ->
+        ModelDownloadSpec.decode(
+            info.progress.getString(
+                com.gameocr.app.download.ModelDownloadWorker.KEY_CURRENT_SPEC
+            ).orEmpty()
+        ) to info.progress.getInt(
+            com.gameocr.app.download.ModelDownloadWorker.KEY_BATCH_INDEX,
+            0,
+        )
+    }
     LaunchedEffect(settingsLoaded, modelDownloadStateKey, modelDownloadStageKey) {
         if (!settingsLoaded) return@LaunchedEffect
         localLlmModelKindFor(translatorEngine)?.let { refreshLlmModelState(it) }
@@ -2235,21 +2318,45 @@ fun SettingsScreen(
                         scrolledContainerColor = MaterialTheme.colorScheme.background
                     )
                 )
-                if (modelDownloadBusy) {
-                    Box(
+                if (activeModelDownloads.isNotEmpty() || unresolvedModelDownloadFailure != null) {
+                    Column(
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        ModelDownloadProgressCard(
-                            status = backgroundModelDownloadStatus
-                                .takeIf { backgroundModelDownloadActive }
-                                .orEmpty()
-                                .ifBlank { context.getString(R.string.model_download_waiting) },
-                            downloaded = backgroundModelDownloadDownloaded,
-                            total = backgroundModelDownloadTotal,
-                            onCancel = {
-                                activeModelDownloadWork?.id?.let(viewModel::cancelModelDownload)
-                            },
-                        )
+                        activeModelDownloads.forEach { download ->
+                            ModelDownloadProgressCard(
+                                status = download.status
+                                    .ifBlank { context.getString(R.string.model_download_waiting) },
+                                downloaded = download.downloaded,
+                                total = download.total,
+                                onCancel = {
+                                    viewModel.cancelModelDownload(download.id)
+                                },
+                            )
+                        }
+                        unresolvedModelDownloadFailure?.let { failure ->
+                            ModelDownloadFailureCard(
+                                failure = failure,
+                                onRetry = {
+                                    val modelLabel = failure.specs.joinToString(", ") {
+                                        modelDownloadSpecDisplayName(context, it)
+                                    }
+                                    requestModelDownload(modelLabel) {
+                                        scope.launch {
+                                            try {
+                                                viewModel.downloadModelsIndependently(
+                                                    specs = failure.specs,
+                                                    onProgress = {},
+                                                    ownerPresetId = failure.ownerPresetId,
+                                                )
+                                            } catch (t: Throwable) {
+                                                Timber.w(t, "Retry model download failed")
+                                            }
+                                        }
+                                    }
+                                },
+                            )
+                        }
                     }
                 }
             }
@@ -3324,7 +3431,8 @@ fun SettingsScreen(
                                 dbnetProb,
                                 dbnetScore,
                                 unclipToSave,
-                                dbnetGap
+                                dbnetGap,
+                                mangaOcrCropPaddingPx,
                             )
                         }
                     }
@@ -3337,17 +3445,44 @@ fun SettingsScreen(
                             dbnetUnclip = defaultSettings.dbnetUnclipRatio
                         }
                         dbnetGap = defaultSettings.bubbleClusterGap
+                        mangaOcrCropPaddingPx = defaultSettings.mangaOcrCropPaddingPx
                         scope.launch {
                             viewModel.saveDbnetThresholds(
                                 ocrEngine,
                                 defaultSettings.dbnetProbThresh,
                                 defaultSettings.dbnetBoxScoreThresh,
                                 defaultDbnetUnclip,
-                                defaultSettings.bubbleClusterGap
+                                defaultSettings.bubbleClusterGap,
+                                defaultSettings.mangaOcrCropPaddingPx,
                             )
                         }
                     }
                     HorizontalDivider()
+                    Text(
+                        stringResource(R.string.settings_paddle_detection_profile),
+                        style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        com.gameocr.app.data.PaddleDetectionProfile.entries.forEach { profile ->
+                            EngineChip(
+                                current = paddleDetectionProfile,
+                                target = profile,
+                                label = stringResource(profile.labelRes),
+                            ) { selected ->
+                                paddleDetectionProfile = selected
+                                scope.launch { viewModel.savePaddleDetectionProfile(selected) }
+                            }
+                        }
+                    }
+                    Text(
+                        stringResource(paddleDetectionProfile.descRes),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -3409,15 +3544,29 @@ fun SettingsScreen(
                             valueRange = 1.2f..2.5f,
                             steps = 25
                         )
-                        DbnetAdvancedSliderSection(
-                            title = stringResource(R.string.settings_dbnet_gap_label, dbnetGap),
-                            description = stringResource(R.string.settings_dbnet_gap_desc),
-                            value = dbnetGap.toFloat(),
-                            onValueChange = { dbnetGap = it.toInt() },
-                            onValueChangeFinished = saveDbnetNow,
-                            valueRange = 8f..60f,
-                            steps = 51
-                        )
+                        if (isMangaOcrDbnet) {
+                            DbnetAdvancedSliderSection(
+                                title = stringResource(R.string.settings_dbnet_gap_label, dbnetGap),
+                                description = stringResource(R.string.settings_dbnet_gap_desc),
+                                value = dbnetGap.toFloat(),
+                                onValueChange = { dbnetGap = it.toInt() },
+                                onValueChangeFinished = saveDbnetNow,
+                                valueRange = 0f..60f,
+                                steps = 59
+                            )
+                            DbnetAdvancedSliderSection(
+                                title = stringResource(
+                                    R.string.settings_manga_crop_padding_label,
+                                    mangaOcrCropPaddingPx,
+                                ),
+                                description = stringResource(R.string.settings_manga_crop_padding_desc),
+                                value = mangaOcrCropPaddingPx.toFloat(),
+                                onValueChange = { mangaOcrCropPaddingPx = it.toInt() },
+                                onValueChangeFinished = saveDbnetNow,
+                                valueRange = 0f..32f,
+                                steps = 31,
+                            )
+                        }
                     }
                     if (showDbnetResetConfirm) {
                         AlertDialog(
@@ -3667,10 +3816,37 @@ fun SettingsScreen(
                     *(SEARCH_TARGET_OVERLAY_DISPLAY + SEARCH_TARGET_OVERLAY_WINDOW + SEARCH_TARGET_OVERLAY_LAYOUT),
                 ) {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                val layoutControlsEnabled =
+                    manualOverlayLayoutControlsEnabled(overlayStyleMode, renderMode)
+                if (renderMode == RenderMode.BLOCKS) {
+                    SwitchRow(
+                        label = stringResource(R.string.settings_overlay_style_adaptive),
+                        checked = overlayStyleMode == OverlayStyleMode.ADAPTIVE,
+                        helpText = stringResource(R.string.settings_overlay_style_adaptive_desc),
+                    ) { enabled ->
+                        overlayStyleMode = if (enabled) {
+                            OverlayStyleMode.ADAPTIVE
+                        } else {
+                            OverlayStyleMode.FIXED
+                        }
+                    }
+                    if (!layoutControlsEnabled) {
+                        Text(
+                            stringResource(R.string.settings_overlay_adaptive_layout_locked),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
                 Text(stringResource(R.string.settings_render_mode_label), style = MaterialTheme.typography.labelLarge)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     EngineChip(renderMode, RenderMode.BLOCKS, stringResource(R.string.settings_render_blocks_chip)) { renderMode = it }
-                    EngineChip(renderMode, RenderMode.FLOATING_WINDOW, stringResource(R.string.settings_render_floating_window_chip)) { renderMode = it }
+                    EngineChip(
+                        renderMode,
+                        RenderMode.FLOATING_WINDOW,
+                        stringResource(R.string.settings_render_floating_window_chip),
+                        enabled = layoutControlsEnabled,
+                    ) { renderMode = it }
                 }
 
                 if (renderMode == RenderMode.FLOATING_WINDOW) {
@@ -3742,25 +3918,60 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
 
-                    Text(stringResource(R.string.settings_placement_label), style = MaterialTheme.typography.labelLarge)
+                    val effectivePlacement =
+                        if (layoutControlsEnabled) placement else OverlayPlacement.OVERLAP
+                    val effectiveOffsetX = if (layoutControlsEnabled) offsetX else 0f
+                    val effectiveOffsetY = if (layoutControlsEnabled) offsetY else 0f
+                    Text(
+                        stringResource(R.string.settings_placement_label),
+                        style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier.alpha(if (layoutControlsEnabled) 1f else 0.4f),
+                    )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        EngineChip(placement, OverlayPlacement.BELOW, stringResource(R.string.settings_placement_below_chip)) { placement = it }
-                        EngineChip(placement, OverlayPlacement.OVERLAP, stringResource(R.string.settings_placement_overlap_chip)) { placement = it }
-                        EngineChip(placement, OverlayPlacement.ABOVE, stringResource(R.string.settings_placement_above_chip)) { placement = it }
+                        EngineChip(effectivePlacement, OverlayPlacement.BELOW, stringResource(R.string.settings_placement_below_chip), enabled = layoutControlsEnabled) { placement = it }
+                        EngineChip(effectivePlacement, OverlayPlacement.OVERLAP, stringResource(R.string.settings_placement_overlap_chip), enabled = layoutControlsEnabled) { placement = it }
+                        EngineChip(effectivePlacement, OverlayPlacement.ABOVE, stringResource(R.string.settings_placement_above_chip), enabled = layoutControlsEnabled) { placement = it }
                     }
 
-                    Text(stringResource(R.string.settings_offset_x_format, offsetX.toInt()), style = MaterialTheme.typography.labelLarge)
-                    Slider(value = offsetX, onValueChange = { offsetX = it }, valueRange = -200f..200f)
+                    Text(
+                        stringResource(R.string.settings_offset_x_format, effectiveOffsetX.toInt()),
+                        style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier.alpha(if (layoutControlsEnabled) 1f else 0.4f),
+                    )
+                    Slider(
+                        value = effectiveOffsetX,
+                        onValueChange = { offsetX = it },
+                        valueRange = -200f..200f,
+                        enabled = layoutControlsEnabled,
+                    )
 
-                    Text(stringResource(R.string.settings_offset_y_format, offsetY.toInt()), style = MaterialTheme.typography.labelLarge)
-                    Slider(value = offsetY, onValueChange = { offsetY = it }, valueRange = -100f..100f)
+                    Text(
+                        stringResource(R.string.settings_offset_y_format, effectiveOffsetY.toInt()),
+                        style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier.alpha(if (layoutControlsEnabled) 1f else 0.4f),
+                    )
+                    Slider(
+                        value = effectiveOffsetY,
+                        onValueChange = { offsetY = it },
+                        valueRange = -100f..100f,
+                        enabled = layoutControlsEnabled,
+                    )
 
-                    SwitchRow(stringResource(R.string.settings_allow_wrap), allowWrap) { allowWrap = it }
-                    SwitchRow(stringResource(R.string.settings_avoid_collision), avoidCollision) { avoidCollision = it }
+                    SwitchRow(
+                        stringResource(R.string.settings_allow_wrap),
+                        checked = if (layoutControlsEnabled) allowWrap else true,
+                        enabled = layoutControlsEnabled,
+                    ) { allowWrap = it }
+                    SwitchRow(
+                        stringResource(R.string.settings_avoid_collision),
+                        checked = if (layoutControlsEnabled) avoidCollision else false,
+                        enabled = layoutControlsEnabled,
+                    ) { avoidCollision = it }
                     Text(
                         stringResource(R.string.settings_avoid_collision_hint),
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.alpha(if (layoutControlsEnabled) 1f else 0.4f),
                     )
 
                     SwitchRow(stringResource(R.string.settings_merge_adjacent), mergeAdjacent) { mergeAdjacent = it }
@@ -5877,6 +6088,86 @@ private fun ModelDownloadProgressCard(
     }
 }
 
+@Composable
+private fun ModelDownloadFailureCard(
+    failure: ModelDownloadTerminalRecord,
+    onRetry: () -> Unit,
+) {
+    val context = LocalContext.current
+    val modelLabel = failure.specs.joinToString(", ") {
+        modelDownloadSpecDisplayName(context, it)
+    }
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer,
+        ),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                stringResource(R.string.model_download_failure_card_title),
+                style = MaterialTheme.typography.titleSmall,
+            )
+            Text(
+                stringResource(R.string.model_download_failure_model_format, modelLabel),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+            )
+            Text(
+                failure.status.ifBlank { failure.error },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+            )
+            Text(
+                modelDownloadByteSummary(context, failure.downloaded, failure.total),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+            )
+            TextButton(onClick = onRetry) {
+                Text(stringResource(R.string.model_download_retry))
+            }
+        }
+    }
+}
+
+private fun modelDownloadSpecDisplayName(
+    context: Context,
+    spec: ModelDownloadSpec,
+): String = runCatching {
+    when (spec.type) {
+        ModelDownloadType.LLM -> LlmModelKind.valueOf(spec.variant).displayName
+        ModelDownloadType.PADDLE ->
+            context.getString(PaddleModelVersion.valueOf(spec.variant).displayNameRes)
+        ModelDownloadType.MANGA_OCR ->
+            context.getString(R.string.settings_manga_ocr_model_name)
+        ModelDownloadType.ORIENTATION ->
+            context.getString(R.string.settings_orientation_model_name)
+    }
+}.getOrDefault(spec.encode())
+
+private fun modelDownloadByteSummary(
+    context: Context,
+    downloaded: Long,
+    total: Long,
+): String {
+    val downloadedLabel = Formatter.formatFileSize(context, downloaded.coerceAtLeast(0L))
+    return if (total > 0L) {
+        context.getString(
+            R.string.model_download_failure_downloaded_total_format,
+            downloadedLabel,
+            Formatter.formatFileSize(context, total),
+        )
+    } else {
+        context.getString(
+            R.string.model_download_failure_downloaded_format,
+            downloadedLabel,
+        )
+    }
+}
+
 internal fun modelDownloadProgressFraction(downloaded: Long, total: Long): Float? =
     total.takeIf { it > 0L }
         ?.let { (downloaded.toDouble() / it.toDouble()).coerceIn(0.0, 1.0).toFloat() }
@@ -6783,6 +7074,15 @@ internal enum class TranslationPresetModelDownloadState {
     BLOCKED_BY_OTHER_DOWNLOAD,
 }
 
+private data class ActiveModelDownloadUi(
+    val id: java.util.UUID,
+    val spec: ModelDownloadSpec?,
+    val status: String,
+    val downloaded: Long,
+    val total: Long,
+    val ownerPresetId: String?,
+)
+
 internal fun translationPresetModelDownloadState(
     presetId: String,
     activePresetDownloadId: String?,
@@ -7211,6 +7511,7 @@ private fun PaddleSection(
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         // 模型版本下拉选择
         var versionExpanded by remember { mutableStateOf(false) }
+        var showSupportedLanguages by remember(modelVersion) { mutableStateOf(false) }
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth()
@@ -7264,12 +7565,33 @@ private fun PaddleSection(
                 }
             }
         }
-        Text(
-            stringResource(R.string.settings_paddle_desc),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
+        TextButton(onClick = { showSupportedLanguages = true }) {
+            Text(
+                stringResource(
+                    R.string.settings_paddle_supported_languages_button,
+                    modelVersion.languageCount,
+                )
+            )
+        }
+        if (showSupportedLanguages) {
+            AlertDialog(
+                onDismissRequest = { showSupportedLanguages = false },
+                title = {
+                    Text(
+                        stringResource(
+                            R.string.settings_paddle_supported_languages_title,
+                            stringResource(modelVersion.displayNameRes),
+                        )
+                    )
+                },
+                text = { Text(stringResource(modelVersion.supportedLanguagesRes)) },
+                confirmButton = {
+                    TextButton(onClick = { showSupportedLanguages = false }) {
+                        Text(stringResource(R.string.common_close))
+                    }
+                },
+            )
+        }
         // 状态行
         Row(
             verticalAlignment = Alignment.CenterVertically,

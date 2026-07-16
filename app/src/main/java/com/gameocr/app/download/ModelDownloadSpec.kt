@@ -39,6 +39,52 @@ data class ModelDownloadSpec(
     }
 }
 
+data class ModelDownloadTerminalRecord(
+    val specs: List<ModelDownloadSpec>,
+    val succeeded: Boolean,
+    val status: String,
+    val error: String,
+    val file: String,
+    val downloaded: Long,
+    val total: Long,
+    val finishedAt: Long,
+    val ownerPresetId: String?,
+)
+
+internal fun splitModelDownloadRequests(
+    specs: List<ModelDownloadSpec>,
+): List<List<ModelDownloadSpec>> =
+    specs.distinct().map(::listOf)
+
+internal fun latestUnresolvedModelDownloadFailure(
+    records: List<ModelDownloadTerminalRecord>,
+    activeRequestKeys: Set<String> = emptySet(),
+): ModelDownloadTerminalRecord? {
+    val latestSuccessAt = records.asSequence()
+        .filter { it.succeeded }
+        .flatMap { record -> record.specs.asSequence().map { spec -> spec to record.finishedAt } }
+        .groupBy({ it.first }, { it.second })
+        .mapValues { (_, finishedTimes) -> finishedTimes.maxOrNull() ?: Long.MIN_VALUE }
+    val activeSpecs = activeRequestKeys.asSequence()
+        .mapNotNull { requestKey ->
+            requestKey
+                .takeIf { ',' !in it }
+                ?.let(ModelDownloadSpec::decode)
+        }
+        .toSet()
+
+    return records.asSequence()
+        .filterNot { it.succeeded }
+        .mapNotNull { failure ->
+            val unresolvedSpecs = failure.specs.distinct().filter { spec ->
+                spec !in activeSpecs &&
+                    (latestSuccessAt[spec] ?: Long.MIN_VALUE) <= failure.finishedAt
+            }
+            failure.copy(specs = unresolvedSpecs).takeIf { unresolvedSpecs.isNotEmpty() }
+        }
+        .maxByOrNull { it.finishedAt }
+}
+
 object ModelDownloadWorkPolicy {
     const val WORK_TAG = "model-download"
     const val MAX_ATTEMPTS = 3
@@ -46,6 +92,9 @@ object ModelDownloadWorkPolicy {
 
     fun uniqueWorkName(specs: List<ModelDownloadSpec>): String =
         "$WORK_TAG:${specs.joinToString(",") { it.encode() }}"
+
+    fun requestKey(specs: List<ModelDownloadSpec>): String =
+        specs.joinToString(",") { it.encode() }
 
     fun ownerTag(presetId: String): String = "$OWNER_TAG_PREFIX$presetId"
 

@@ -192,6 +192,31 @@
 | **云端** 腾讯 OCR | 同上 | 需 SecretId + SecretKey；3 个 endpoint：GeneralBasic / GeneralAccurate / **RecognizeAgent**（LLM 智能体，已对接 ParagNo 段落分组合并） |
 | **云端** 有道云 OCR | 简单一键 | 需 应用 ID（API Key）+ 应用密钥；langType 跟随源语言自动映射，无需独立选择 |
 
+<details>
+<summary><strong>端侧 OCR 基准测试（速度优先）</strong></summary>
+
+测试条件：
+
+- 设备：高通骁龙 8 Gen 3，16 GB 内存
+- 检测配置：速度优先
+- 测试画面：同一张日文漫画截图
+- 说明：以下是单台设备、单张画面的实测记录，用于比较本项目内不同模型，不代表所有设备和图片的固定表现
+
+| OCR 模型 | 单次耗时 | 本次画面识别情况 |
+|---|---:|---|
+| PP-OCRv5 Mobile | 1.15 秒 | 速度尚可，但错字较多 |
+| PP-OCRv6 Tiny | 0.66 秒 | 最快，但本次日文识别基本不可用 |
+| PP-OCRv6 Small | 1.07 秒 | PaddleOCR 中综合表现最好，但漏掉一个气泡 |
+| PP-OCRv6 Medium | 3.02 秒 | 找回部分内容，但仍有错字和语句顺序问题 |
+| Manga OCR | 3.10 秒；完整 OCR 流程 3.48 秒 | 本次日文漫画准确度最好 |
+
+后续会继续补充：
+
+- **端侧翻译**：记录 Sakura / Hy-MT2 的初始化、Prefill、Decode、Token/s 和总耗时
+- **端侧 OCR 精度优先模式**：使用相同测试画面对比速度、漏检和识别结果
+
+</details>
+
 **PaddleOCR 模型**：设置 → "下载 PaddleOCR 模型" 会按当前版本选择拉取模型到 `<filesDir>/models/paddle/<version>/`。PaddleOCR 模型不随 APK 内置，首次使用需要下载或本地导入；默认版本是 v6 small，也可在设置里切换 v5 mobile / v6 tiny / small / medium，并使用 HuggingFace / hf-mirror / 自定义镜像。
 
 **PP-OCRv6 在线**：在 OCR 引擎中选择「PP-OCRv6 在线」，填写 AI Studio Access Token。该路径把截图编码为 JPEG 后提交到 PaddleOCR AI Studio 的 `PP-OCRv6` 异步任务，并轮询识别结果；它是云端 OCR，不使用上面的端侧模型文件。

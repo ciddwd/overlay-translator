@@ -1,5 +1,6 @@
 package com.gameocr.app.ocr
 
+import com.gameocr.app.data.PaddleDetectionProfile
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -108,5 +109,31 @@ class MangaOcrTilingTest {
         assertFalse(MangaOcrTiling.shouldUseTiles(1440, 1700))
         assertTrue(MangaOcrTiling.shouldUseTiles(1440, 3200))
         assertTrue(MangaOcrTiling.shouldUseTiles(3200, 1440))
+    }
+
+    @Test
+    fun profile_controls_tiling_for_table_driven_cases() {
+        data class Case(
+            val name: String,
+            val width: Int,
+            val height: Int,
+            val profile: PaddleDetectionProfile,
+            val expected: Boolean,
+        )
+
+        val cases = listOf(
+            Case("fast-large", 1440, 3200, PaddleDetectionProfile.FAST, false),
+            Case("accurate-small", 1440, 1700, PaddleDetectionProfile.ACCURATE, false),
+            Case("accurate-portrait", 1440, 3200, PaddleDetectionProfile.ACCURATE, true),
+            Case("accurate-landscape", 3200, 1440, PaddleDetectionProfile.ACCURATE, true),
+        )
+
+        cases.forEach { case ->
+            assertEquals(
+                case.name,
+                case.expected,
+                MangaOcrTiling.shouldUseTiles(case.width, case.height, case.profile),
+            )
+        }
     }
 }

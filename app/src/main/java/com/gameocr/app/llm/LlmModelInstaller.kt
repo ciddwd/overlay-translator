@@ -103,7 +103,16 @@ class LlmModelInstaller @Inject constructor(
                 if (t is CancellationException) throw t
                 lastErr = "${t.javaClass.simpleName}: ${t.message}"
                 Timber.w(t, "LLM 模型镜像失败: $url")
-                send(Progress(kind, mirror, 0, 0, done = false, error = lastErr))
+                send(
+                    Progress(
+                        kind = kind,
+                        mirror = mirror,
+                        downloaded = tmp.length().takeIf { tmp.exists() } ?: 0L,
+                        total = 0,
+                        done = false,
+                        error = lastErr,
+                    )
+                )
             }
         }
         throw RuntimeException(

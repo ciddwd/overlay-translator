@@ -67,7 +67,7 @@ class CaptureChromeOrderingTest {
                 "full screen trigger",
                 "private fun triggerOnce()",
                 "captureOnce(",
-                "prepareCleanCaptureFrame(hideFloatingButton = true, keepLoading = loadingShown)"
+                "prepareCleanCaptureFrame(hideFloatingButton = true)"
             ),
             Case(
                 "word select trigger",
@@ -88,37 +88,75 @@ class CaptureChromeOrderingTest {
     }
 
     @Test
-    fun fullScreenTrigger_showsImmediateLoadingAndKeepsItWhileHidingButton() {
+    fun fullScreenTrigger_showsImmediateLoading_thenHidesAndRestoresItAroundScreenshot() {
         val snippet = functionSnippet(captureServiceSource(), "private fun triggerOnce()")
 
-        val loadingIndex = snippet.indexOf("overlay?.showLoadingHint() == true")
-        val prepareIndex = snippet.indexOf("prepareCleanCaptureFrame(hideFloatingButton = true, keepLoading = loadingShown)")
+        val loadingIndex = snippet.indexOf("overlay?.showLoadingHint()")
+        val prepareIndex = snippet.indexOf("prepareCleanCaptureFrame(hideFloatingButton = true)")
         val captureIndex = snippet.indexOf("captureOnce(", prepareIndex)
 
         assertTrue("full screen trigger should show loading immediately", loadingIndex >= 0)
         assertTrue("loading should be shown before hiding capture chrome", loadingIndex < prepareIndex)
-        assertTrue("trigger should preserve already-shown loading while clearing overlays", prepareIndex >= 0)
+        assertTrue("trigger should clear every overlay before capture", prepareIndex >= 0)
         assertTrue("trigger should start capture after clean-frame preparation", captureIndex > prepareIndex)
         assertTrue(
-            "captureOnce should not show a duplicate loading if immediate loading was visible",
-            "showLoadingAfterScreenshot = !loadingShown" in snippet
+            "captureOnce should restore loading only after acquiring the screenshot",
+            "showLoadingAfterScreenshot = true" in snippet
         )
+        assertFalse("clean capture must not preserve loading", "keepLoading" in snippet)
     }
 
     @Test
-    fun overlayClear_supportsKeepingImmediateLoadingDuringCleanCapture() {
+    fun overlayClear_alwaysRemovesLoadingAndOtherCaptureChrome() {
         val snippet = functionSnippet(
             File("src/main/java/com/gameocr/app/overlay/OverlayManager.kt").readText(),
-            "fun clear(keepLoading: Boolean = false)"
+            "fun clear()"
         )
 
-        assertTrue(
-            "clear should only dismiss loading when keepLoading is false",
-            "if (!keepLoading) clearLoading()" in snippet
-        )
+        assertTrue("clear should dismiss loading", "clearLoading()" in snippet)
         assertTrue("clear should still dismiss stale errors", "dismissError()" in snippet)
         assertTrue("clear should still hide floating translation window", "floatingWindow.hide()" in snippet)
         assertTrue("clear should still remove block overlays", "blocksView?.let" in snippet)
+    }
+
+    @Test
+    fun fullScreenCapture_tableDriven_restoresChromeForSuccessFailureAndCancellation() {
+        data class Case(
+            val name: String,
+            val marker: String,
+            val expectedRestore: String,
+        )
+
+        val snippet = functionSnippet(captureServiceSource(), "private suspend fun captureOnce(")
+        val cases = listOf(
+            Case(
+                name = "screenshot success",
+                marker = "val full = shotter.capture()",
+                expectedRestore = "restoreCaptureChromeOnce(showLoading = showLoadingAfterScreenshot)",
+            ),
+            Case(
+                name = "missing screenshotter",
+                marker = "val shotter = screenshotter ?: run",
+                expectedRestore = "restoreCaptureChromeOnce(showLoading = false)",
+            ),
+            Case(
+                name = "null screenshot",
+                marker = "if (full == null)",
+                expectedRestore = "restoreCaptureChromeOnce(showLoading = false)",
+            ),
+            Case(
+                name = "exception or cancellation fallback",
+                marker = "finally {",
+                expectedRestore = "restoreCaptureChromeOnce(showLoading = false)",
+            ),
+        )
+
+        cases.forEach { case ->
+            val markerIndex = snippet.indexOf(case.marker)
+            val restoreIndex = snippet.indexOf(case.expectedRestore, markerIndex)
+            assertTrue("${case.name} marker should exist", markerIndex >= 0)
+            assertTrue("${case.name} should restore capture chrome", restoreIndex > markerIndex)
+        }
     }
 
     @Test
@@ -133,7 +171,10 @@ class CaptureChromeOrderingTest {
         val mainSnippet = snippet.substring(mainIndex.coerceAtLeast(0))
         val cases = listOf(
             Case("overlay properties", "overlay?.apply"),
-            Case("floating window resync", "syncFloatingWindowFromSettings(settings)"),
+            Case(
+                "floating window resync uses the resolved fixed/adaptive style",
+                "syncFloatingWindowFromSettings(effectiveOverlaySettings)",
+            ),
             Case("floating button resize", "it.applyResize()"),
             Case("floating button snap animation", "it.applySnapPreference(settings.floatingButtonSnapToEdge)"),
             Case("floating button skill icon", "it.applySkillIcon()")

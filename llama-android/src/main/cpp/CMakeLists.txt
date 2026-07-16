@@ -46,6 +46,10 @@ set(GAMEOCR_USER_RESET_ORIGINAL [=[
     // Obtain and tokenize user prompt
 ]=])
 set(GAMEOCR_USER_RESET_PATCHED [=[
+    gameocr_request_started_us = ggml_time_us();
+    gameocr_request_init_ms = 0.0;
+    gameocr_perf_logged = false;
+
     // Each OCR block is an independent translation request. Keep the system prompt,
     // but discard all previous user/assistant tokens and sampler state.
     reset_short_term_states();
@@ -89,6 +93,154 @@ endif()
 string(REPLACE
         "${GAMEOCR_STOP_POSITION_ORIGINAL}"
         "${GAMEOCR_STOP_POSITION_PATCHED}"
+        GAMEOCR_AI_CHAT_SOURCE
+        "${GAMEOCR_AI_CHAT_SOURCE}")
+
+set(GAMEOCR_PERF_STATE_ORIGINAL [=[
+static llama_pos stop_generation_position;
+static std::string cached_token_chars;
+static std::ostringstream assistant_ss;
+]=])
+set(GAMEOCR_PERF_STATE_PATCHED [=[
+static llama_pos stop_generation_position;
+static std::string cached_token_chars;
+static std::ostringstream assistant_ss;
+static int64_t gameocr_request_started_us = 0;
+static double gameocr_request_init_ms = 0.0;
+static bool gameocr_perf_logged = false;
+
+static void gameocr_log_request_stats(const char *reason) {
+    if (gameocr_perf_logged || g_context == nullptr || gameocr_request_started_us == 0) {
+        return;
+    }
+    gameocr_perf_logged = true;
+    const auto perf = llama_perf_context(g_context);
+    const double prefill_tps = perf.t_p_eval_ms > 0.0
+            ? 1000.0 * perf.n_p_eval / perf.t_p_eval_ms
+            : 0.0;
+    const double decode_tps = perf.t_eval_ms > 0.0
+            ? 1000.0 * perf.n_eval / perf.t_eval_ms
+            : 0.0;
+    const double total_ms = (ggml_time_us() - gameocr_request_started_us) / 1000.0;
+    LOGi("STATS reason=%s Init: %.1f ms Prefill: %.1f ms (%d tok, %.1f tok/s) "
+         "Decode: %.1f ms (%d tok, %.1f tok/s) Total: %.1f ms",
+         reason,
+         gameocr_request_init_ms,
+         perf.t_p_eval_ms,
+         perf.n_p_eval,
+         prefill_tps,
+         perf.t_eval_ms,
+         perf.n_eval,
+         decode_tps,
+         total_ms);
+}
+]=])
+string(FIND "${GAMEOCR_AI_CHAT_SOURCE}" "${GAMEOCR_PERF_STATE_ORIGINAL}" GAMEOCR_PERF_STATE_INDEX)
+if(GAMEOCR_PERF_STATE_INDEX EQUAL -1)
+    message(FATAL_ERROR "GameOCR ai_chat performance state patch no longer matches upstream")
+endif()
+string(REPLACE
+        "${GAMEOCR_PERF_STATE_ORIGINAL}"
+        "${GAMEOCR_PERF_STATE_PATCHED}"
+        GAMEOCR_AI_CHAT_SOURCE
+        "${GAMEOCR_AI_CHAT_SOURCE}")
+
+set(GAMEOCR_PREFILL_PERF_ORIGINAL [=[
+    // Decode user tokens in batches
+    if (decode_tokens_in_batches(g_context, g_batch, user_tokens, current_position, true)) {
+        LOGe("%s: llama_decode() failed!", __func__);
+        return 2;
+    }
+]=])
+set(GAMEOCR_PREFILL_PERF_PATCHED [=[
+    gameocr_request_init_ms = (ggml_time_us() - gameocr_request_started_us) / 1000.0;
+    llama_perf_context_reset(g_context);
+
+    // Decode user tokens in batches
+    if (decode_tokens_in_batches(g_context, g_batch, user_tokens, current_position, true)) {
+        LOGe("%s: llama_decode() failed!", __func__);
+        gameocr_log_request_stats("prefill_error");
+        return 2;
+    }
+]=])
+string(FIND "${GAMEOCR_AI_CHAT_SOURCE}" "${GAMEOCR_PREFILL_PERF_ORIGINAL}" GAMEOCR_PREFILL_PERF_INDEX)
+if(GAMEOCR_PREFILL_PERF_INDEX EQUAL -1)
+    message(FATAL_ERROR "GameOCR ai_chat prefill performance patch no longer matches upstream")
+endif()
+string(REPLACE
+        "${GAMEOCR_PREFILL_PERF_ORIGINAL}"
+        "${GAMEOCR_PREFILL_PERF_PATCHED}"
+        GAMEOCR_AI_CHAT_SOURCE
+        "${GAMEOCR_AI_CHAT_SOURCE}")
+
+set(GAMEOCR_LIMIT_PERF_ORIGINAL [=[
+    if (current_position >= stop_generation_position) {
+        LOGw("%s: STOP: hitting stop position: %d", __func__, stop_generation_position);
+        return nullptr;
+    }
+]=])
+set(GAMEOCR_LIMIT_PERF_PATCHED [=[
+    if (current_position >= stop_generation_position) {
+        LOGw("%s: STOP: hitting stop position: %d", __func__, stop_generation_position);
+        gameocr_log_request_stats("limit");
+        return nullptr;
+    }
+]=])
+string(FIND "${GAMEOCR_AI_CHAT_SOURCE}" "${GAMEOCR_LIMIT_PERF_ORIGINAL}" GAMEOCR_LIMIT_PERF_INDEX)
+if(GAMEOCR_LIMIT_PERF_INDEX EQUAL -1)
+    message(FATAL_ERROR "GameOCR ai_chat generation-limit performance patch no longer matches upstream")
+endif()
+string(REPLACE
+        "${GAMEOCR_LIMIT_PERF_ORIGINAL}"
+        "${GAMEOCR_LIMIT_PERF_PATCHED}"
+        GAMEOCR_AI_CHAT_SOURCE
+        "${GAMEOCR_AI_CHAT_SOURCE}")
+
+set(GAMEOCR_DECODE_ERROR_PERF_ORIGINAL [=[
+    if (llama_decode(g_context, g_batch) != 0) {
+        LOGe("%s: llama_decode() failed for generated token", __func__);
+        return nullptr;
+    }
+]=])
+set(GAMEOCR_DECODE_ERROR_PERF_PATCHED [=[
+    if (llama_decode(g_context, g_batch) != 0) {
+        LOGe("%s: llama_decode() failed for generated token", __func__);
+        gameocr_log_request_stats("decode_error");
+        return nullptr;
+    }
+]=])
+string(FIND "${GAMEOCR_AI_CHAT_SOURCE}" "${GAMEOCR_DECODE_ERROR_PERF_ORIGINAL}" GAMEOCR_DECODE_ERROR_PERF_INDEX)
+if(GAMEOCR_DECODE_ERROR_PERF_INDEX EQUAL -1)
+    message(FATAL_ERROR "GameOCR ai_chat decode-error performance patch no longer matches upstream")
+endif()
+string(REPLACE
+        "${GAMEOCR_DECODE_ERROR_PERF_ORIGINAL}"
+        "${GAMEOCR_DECODE_ERROR_PERF_PATCHED}"
+        GAMEOCR_AI_CHAT_SOURCE
+        "${GAMEOCR_AI_CHAT_SOURCE}")
+
+set(GAMEOCR_EOG_PERF_ORIGINAL [=[
+    if (llama_vocab_is_eog(llama_model_get_vocab(g_model), new_token_id)) {
+        LOGd("id: %d,\tIS EOG!\nSTOP.", new_token_id);
+        chat_add_and_format(ROLE_ASSISTANT, assistant_ss.str());
+        return nullptr;
+    }
+]=])
+set(GAMEOCR_EOG_PERF_PATCHED [=[
+    if (llama_vocab_is_eog(llama_model_get_vocab(g_model), new_token_id)) {
+        LOGd("id: %d,\tIS EOG!\nSTOP.", new_token_id);
+        chat_add_and_format(ROLE_ASSISTANT, assistant_ss.str());
+        gameocr_log_request_stats("eog");
+        return nullptr;
+    }
+]=])
+string(FIND "${GAMEOCR_AI_CHAT_SOURCE}" "${GAMEOCR_EOG_PERF_ORIGINAL}" GAMEOCR_EOG_PERF_INDEX)
+if(GAMEOCR_EOG_PERF_INDEX EQUAL -1)
+    message(FATAL_ERROR "GameOCR ai_chat EOG performance patch no longer matches upstream")
+endif()
+string(REPLACE
+        "${GAMEOCR_EOG_PERF_ORIGINAL}"
+        "${GAMEOCR_EOG_PERF_PATCHED}"
         GAMEOCR_AI_CHAT_SOURCE
         "${GAMEOCR_AI_CHAT_SOURCE}")
 

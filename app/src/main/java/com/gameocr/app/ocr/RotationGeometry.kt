@@ -22,5 +22,10 @@ internal fun mapRectFromRotated180(rect: Rect, imageW: Int, imageH: Int): Rect {
 
 internal fun mapBlocksFromRotated180(blocks: List<TextBlock>, imageW: Int, imageH: Int): List<TextBlock> =
     blocks.map { block ->
-        block.copy(boundingBox = mapRectFromRotated180(block.boundingBox, imageW, imageH))
+        block.copy(
+            boundingBox = mapRectFromRotated180(block.boundingBox, imageW, imageH),
+            sourceBoxes = block.sourceBoxes.map { box ->
+                mapRectFromRotated180(box, imageW, imageH)
+            },
+        )
     }

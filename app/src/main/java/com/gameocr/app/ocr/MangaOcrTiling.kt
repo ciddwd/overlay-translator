@@ -1,5 +1,7 @@
 package com.gameocr.app.ocr
 
+import com.gameocr.app.data.PaddleDetectionProfile
+
 internal data class OcrTile(
     val left: Int,
     val top: Int,
@@ -14,6 +16,13 @@ internal data class OcrTile(
 }
 
 internal object MangaOcrTiling {
+    fun shouldUseTiles(
+        width: Int,
+        height: Int,
+        profile: PaddleDetectionProfile,
+        tileSide: Int = DEFAULT_TILE_SIDE,
+    ): Boolean = profile.enableMangaTiling && shouldUseTiles(width, height, tileSide)
+
     fun shouldUseTiles(width: Int, height: Int, tileSide: Int = DEFAULT_TILE_SIDE): Boolean =
         maxOf(width, height) > tileSide
 

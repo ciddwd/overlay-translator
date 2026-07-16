@@ -11,6 +11,7 @@ import android.graphics.Paint
 import android.graphics.Rect
 import com.gameocr.app.R
 import com.gameocr.app.data.OcrEngineKind
+import com.gameocr.app.data.PaddleDetectionProfile
 import com.gameocr.app.data.PaddleModelVersion
 import com.gameocr.app.util.CpuThreadPolicy
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -23,6 +24,7 @@ import kotlinx.coroutines.withContext
 import timber.log.Timber
 import java.io.File
 import java.nio.FloatBuffer
+import java.security.MessageDigest
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
 
@@ -30,6 +32,9 @@ internal enum class PaddleCropOrientation {
     ORIGINAL,
     ROTATED_90,
 }
+
+internal fun paddleVerticalCropRotationDegrees(width: Int, height: Int): Float? =
+    if (height > width * 1.5f) -90f else null
 
 internal data class PaddleRecognitionCandidate(
     val text: String,
@@ -224,6 +229,7 @@ class PaddleOcrEngine @Inject constructor(
     /** 当前已加载的模型版本。版本切换时 invalidate session 强制重新加载。 */
     private var loadedVersion: PaddleModelVersion? = null
     private val runCounter = AtomicLong(0L)
+    private val detectCallCounter = AtomicLong(0L)
     private val availableProcessors by lazy { CpuThreadPolicy.availableProcessors() }
     private val ortThreads by lazy { CpuThreadPolicy.select(availableProcessors) }
 
@@ -231,7 +237,13 @@ class PaddleOcrEngine @Inject constructor(
         ensureReady()
         val s = settingsRepository.get()
         return withContext(Dispatchers.Default) {
-            runFull(bitmap, s.dbnetProbThresh, s.dbnetBoxScoreThresh, s.dbnetUnclipRatio)
+            runFull(
+                bitmap = bitmap,
+                binThresh = s.dbnetProbThresh,
+                scoreThresh = s.dbnetBoxScoreThresh,
+                unclipRatio = s.dbnetUnclipRatio,
+                profile = s.paddleDetectionProfile,
+            )
         }
     }
 
@@ -274,6 +286,15 @@ class PaddleOcrEngine @Inject constructor(
             files.rec.length(),
             files.keys.absolutePath,
             files.keys.length(),
+        )
+        val fingerprintStartedAt = System.currentTimeMillis()
+        Timber.i(
+            "PaddleOCR model fingerprint version=%s detSha256=%s recSha256=%s keysSha256=%s elapsed=%dms",
+            version.name,
+            files.det.sha256(),
+            files.rec.sha256(),
+            files.keys.sha256(),
+            System.currentTimeMillis() - fingerprintStartedAt,
         )
         val e = env ?: OrtEnvironment.getEnvironment().also { env = it }
         val sessionOptions = OrtSession.SessionOptions().apply {
@@ -348,30 +369,53 @@ class PaddleOcrEngine @Inject constructor(
         return result
     }
 
+    private fun File.sha256(): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        inputStream().buffered().use { input ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                digest.update(buffer, 0, count)
+            }
+        }
+        return digest.digest().joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+    }
+
     private fun runFull(
         bitmap: Bitmap,
         binThresh: Float = DET_PROB_THRESH,
         scoreThresh: Float = DET_BOX_SCORE_THRESH,
         unclipRatio: Float = DET_UNCLIP_RATIO,
+        profile: PaddleDetectionProfile = PaddleDetectionProfile.FAST,
     ): List<TextBlock> {
         val runId = runCounter.incrementAndGet()
         val ver = loadedVersion?.name ?: "?"
         val t0 = System.currentTimeMillis()
         Timber.i(
-            "PaddleOCR run#%d begin version=%s bitmap=%dx%d probThresh=%.3f boxScoreThresh=%.3f unclip=%.3f detLimit=%d recH=%d recMaxW=%d keys=%d",
+            "PaddleOCR run#%d begin version=%s profile=%s bitmap=%dx%d probThresh=%.3f boxScoreThresh=%.3f unclip=%.3f detLimit=%d mangaTiling=%s recH=%d recMaxW=%d keys=%d",
             runId,
             ver,
+            profile.name,
             bitmap.width,
             bitmap.height,
             binThresh,
             scoreThresh,
             unclipRatio,
-            DET_LIMIT_SIDE_LEN,
+            profile.maxSideLen,
+            profile.enableMangaTiling,
             REC_TARGET_H,
             REC_MAX_W,
             keys.size,
         )
-        val quads = detectQuads(bitmap, binThresh, scoreThresh, unclipRatio, runId)
+        val quads = detectQuadsForRecognition(
+            bitmap = bitmap,
+            binThresh = binThresh,
+            scoreThresh = scoreThresh,
+            unclipRatio = unclipRatio,
+            profile = profile,
+            runId = runId,
+        )
         val tDet = System.currentTimeMillis() - t0
         Timber.i(
             "PaddleOCR run#%d det done version=%s elapsed=%dms quads=%d bitmap=%dx%d",
@@ -383,7 +427,13 @@ class PaddleOcrEngine @Inject constructor(
             bitmap.height,
         )
         if (quads.isEmpty()) {
-            Timber.i("PaddleOCR run#%d summary version=%s no quads total=%dms", runId, ver, System.currentTimeMillis() - t0)
+            Timber.i(
+                "PaddleOCR run#%d summary version=%s profile=%s no quads total=%dms",
+                runId,
+                ver,
+                profile.name,
+                System.currentTimeMillis() - t0,
+            )
             return emptyList()
         }
         val sorted = quads.sortedWith(compareBy({ it.centerY }, { it.centerX }))
@@ -419,9 +469,10 @@ class PaddleOcrEngine @Inject constructor(
         val tTotal = System.currentTimeMillis() - t0
         val joined = results.joinToString(" | ") { it.text.forPaddleOcrLog(80) }
         Timber.i(
-            "PaddleOCR run#%d summary version=%s det=%dms rec=%dms total=%dms quads=%d kept=%d dropped=%d joined='%s'",
+            "PaddleOCR run#%d summary version=%s profile=%s det=%dms rec=%dms total=%dms quads=%d kept=%d dropped=%d joined='%s'",
             runId,
             ver,
+            profile.name,
             tDet,
             tRec,
             tTotal,
@@ -432,15 +483,82 @@ class PaddleOcrEngine @Inject constructor(
         )
         logRepository.info(
             com.gameocr.app.data.LogRepository.Category.OCR,
-            "[%s] det=%dms rec=%dms total=%dms %d quads→%d results %dx%d".format(
-                ver, tDet, tRec, tTotal, quads.size, results.size, bitmap.width, bitmap.height
+            "[%s/%s] det=%dms rec=%dms total=%dms %d quads→%d results %dx%d".format(
+                ver, profile.name, tDet, tRec, tTotal, quads.size, results.size, bitmap.width, bitmap.height
             )
         )
         return results
     }
 
+    private fun detectQuadsForRecognition(
+        bitmap: Bitmap,
+        binThresh: Float,
+        scoreThresh: Float,
+        unclipRatio: Float,
+        profile: PaddleDetectionProfile,
+        runId: Long,
+    ): List<DBPostprocessor.Quad> {
+        val base = detectQuads(
+            bitmap = bitmap,
+            binThresh = binThresh,
+            scoreThresh = scoreThresh,
+            unclipRatio = unclipRatio,
+            profile = profile,
+            runId = runId,
+            passLabel = "full",
+        )
+        if (!MangaOcrTiling.shouldUseTiles(bitmap.width, bitmap.height, profile)) {
+            Timber.i(
+                "PaddleOCR run#%d tiling skipped profile=%s enabled=%s bitmap=%dx%d tileSide=%d",
+                runId,
+                profile.name,
+                profile.enableMangaTiling,
+                bitmap.width,
+                bitmap.height,
+                MangaOcrTiling.DEFAULT_TILE_SIDE,
+            )
+            return base
+        }
+
+        val tiles = MangaOcrTiling.tilesFor(bitmap.width, bitmap.height)
+        val tiled = mutableListOf<DBPostprocessor.Quad>()
+        for (tile in tiles) {
+            val crop = Bitmap.createBitmap(bitmap, tile.left, tile.top, tile.width, tile.height)
+            try {
+                val tileQuads = detectQuads(
+                    bitmap = crop,
+                    binThresh = binThresh,
+                    scoreThresh = scoreThresh,
+                    unclipRatio = unclipRatio,
+                    profile = profile,
+                    runId = runId,
+                    passLabel = "tile[$tile]",
+                )
+                tiled += tileQuads.map { it.offsetBy(tile.left.toFloat(), tile.top.toFloat()) }
+            } finally {
+                crop.recycle()
+            }
+        }
+
+        // Tiles run at full resolution. Put them first so duplicate suppression keeps the finer box.
+        val merged = dedupePaddleQuads(tiled + base)
+        Timber.i(
+            "PaddleOCR run#%d tiled detection profile=%s base=%d tiled=%d merged=%d duplicates=%d tiles=%d bitmap=%dx%d",
+            runId,
+            profile.name,
+            base.size,
+            tiled.size,
+            merged.size,
+            base.size + tiled.size - merged.size,
+            tiles.size,
+            bitmap.width,
+            bitmap.height,
+        )
+        return merged
+    }
+
     /**
-     * DBNet 检测：把 bitmap 缩到 [DET_LIMIT_SIDE_LEN] 输入，输出 prob map → DBPostprocessor 提取旋转矩形。
+     * DBNet detection using the selected input-size profile.
      *
      * `internal` 可见性：同包 [MangaOcrEngine] 复用此检测器（仅检测、不识别），把 DBNet 出框
      * 直接喂给 manga-ocr 做整气泡识别。调用前必须先 [ensureReady]——MangaOcrEngine 会负责。
@@ -450,60 +568,106 @@ class PaddleOcrEngine @Inject constructor(
         binThresh: Float = DET_PROB_THRESH,
         scoreThresh: Float = DET_BOX_SCORE_THRESH,
         unclipRatio: Float = DET_UNCLIP_RATIO,
+        profile: PaddleDetectionProfile = PaddleDetectionProfile.FAST,
         runId: Long? = null,
+        passLabel: String = "full",
     ): List<DBPostprocessor.Quad> {
         val trace = runId?.let { "run#$it " }.orEmpty()
+        val detectCallId = detectCallCounter.incrementAndGet()
         val session = detSession ?: run {
-            Timber.w("PaddleOCR ${trace}detect skipped: detSession=null")
+            Timber.w("PaddleOCR ${trace}detCall#%d skipped: detSession=null", detectCallId)
             return emptyList()
         }
         val e = env ?: run {
-            Timber.w("PaddleOCR ${trace}detect skipped: env=null")
+            Timber.w("PaddleOCR ${trace}detCall#%d skipped: env=null", detectCallId)
             return emptyList()
         }
-        val (resized, scale) = resizeKeepingAspect(bitmap, DET_LIMIT_SIDE_LEN)
+        val resizeStartedAt = System.currentTimeMillis()
+        val plan = PaddleDetectionSizing.plan(bitmap.width, bitmap.height, profile)
+        val resized = if (plan.resized) {
+            Bitmap.createScaledBitmap(bitmap, plan.targetWidth, plan.targetHeight, true)
+        } else {
+            bitmap
+        }
+        val resizeMs = System.currentTimeMillis() - resizeStartedAt
         val (rW, rH) = resized.width to resized.height
         Timber.i(
-            "PaddleOCR ${trace}det input src=%dx%d resized=%dx%d scaleBack=%.4f tensor=[1,3,%d,%d] probThresh=%.3f boxScoreThresh=%.3f unclip=%.3f",
+            "PaddleOCR ${trace}detCall#%d input pass=%s profile=%s maxSide=%d src=%dx%d tensor=%dx%d pixels=%d resize=%s resizeMs=%d inputScaleX=%.6f inputScaleY=%.6f probThresh=%.3f boxScoreThresh=%.3f unclip=%.3f connectivity=8",
+            detectCallId,
+            passLabel,
+            profile.name,
+            profile.maxSideLen,
             bitmap.width,
             bitmap.height,
             rW,
             rH,
-            scale,
-            rH,
-            rW,
+            plan.inputPixels,
+            plan.resized,
+            resizeMs,
+            plan.scaleX,
+            plan.scaleY,
             binThresh,
             scoreThresh,
             unclipRatio,
         )
 
         try {
+            val nchwStartedAt = System.currentTimeMillis()
+            val inputData = bitmapToNCHW(resized, DET_MEAN, DET_STD)
+            val nchwMs = System.currentTimeMillis() - nchwStartedAt
+            val tensorStartedAt = System.currentTimeMillis()
             val inputTensor = OnnxTensor.createTensor(
                 e,
-                FloatBuffer.wrap(bitmapToNCHW(resized, DET_MEAN, DET_STD)),
+                FloatBuffer.wrap(inputData),
                 longArrayOf(1, 3, rH.toLong(), rW.toLong())
             )
+            val tensorMs = System.currentTimeMillis() - tensorStartedAt
             return inputTensor.use { tensor ->
                 val inferStart = System.currentTimeMillis()
-                session.run(mapOf(session.inputNames.first() to tensor)).use { res ->
+                session.run(mapOf(session.inputNames.first() to tensor)).use resultUse@{ res ->
                     val inferMs = System.currentTimeMillis() - inferStart
                     val out = res.get(0).value as Array<Array<Array<FloatArray>>>
                     val probMap = out[0][0]
                     val stats = paddleProbMapStats(probMap, binThresh, scoreThresh)
+                    val outputHeight = probMap.size
+                    val outputWidth = probMap.firstOrNull()?.size ?: 0
+                    if (outputWidth <= 0 || outputHeight <= 0) {
+                        Timber.w("PaddleOCR ${trace}detCall#%d empty probability map", detectCallId)
+                        return@resultUse emptyList()
+                    }
+                    val outputScale = PaddleDetectionSizing.outputScale(
+                        sourceWidth = bitmap.width,
+                        sourceHeight = bitmap.height,
+                        outputWidth = outputWidth,
+                        outputHeight = outputHeight,
+                    )
                     val postStart = System.currentTimeMillis()
                     val quads = DBPostprocessor.extractQuads(
                         probMap = probMap,
-                        scale = scale,
+                        scaleX = outputScale.x,
+                        scaleY = outputScale.y,
                         binThresh = binThresh,
                         scoreThresh = scoreThresh,
                         unclipRatio = unclipRatio
                     )
                     val postMs = System.currentTimeMillis() - postStart
                     Timber.i(
-                        "PaddleOCR ${trace}det output %s infer=%dms post=%dms quads=%d",
+                        "PaddleOCR ${trace}detCall#%d output pass=%s profile=%s %s preprocess=%dms(resize=%d,nchw=%d,tensor=%d) infer=%dms post=%dms total=%dms outputScaleX=%.6f outputScaleY=%.6f mapped=%dx%d quads=%d",
+                        detectCallId,
+                        passLabel,
+                        profile.name,
                         stats.toLogString(),
+                        resizeMs + nchwMs + tensorMs,
+                        resizeMs,
+                        nchwMs,
+                        tensorMs,
                         inferMs,
                         postMs,
+                        resizeMs + nchwMs + tensorMs + inferMs + postMs,
+                        outputScale.x,
+                        outputScale.y,
+                        (outputWidth * outputScale.x).toInt(),
+                        (outputHeight * outputScale.y).toInt(),
                         quads.size,
                     )
                     quads
@@ -531,34 +695,42 @@ class PaddleOcrEngine @Inject constructor(
             return ""
         }
         return try {
+            val rotationDegrees = paddleVerticalCropRotationDegrees(crop.width, crop.height)
             Timber.i(
-                "PaddleOCR run#%d rec[%d] crop=%dx%d tryRotated=%s quad=%s",
+                "PaddleOCR run#%d rec[%d] crop=%dx%d tryRotated=%s rotationDegrees=%s quad=%s",
                 runId,
                 boxIndex,
                 crop.width,
                 crop.height,
-                shouldTryRotatedCrop(crop),
+                rotationDegrees != null,
+                rotationDegrees?.fmt3() ?: "none",
                 quad.toPaddleLogString(),
             )
             val candidates = mutableListOf<PaddleRecognitionCandidate>()
             candidates += recognizeCrop(crop, PaddleCropOrientation.ORIGINAL, session, e, runId, boxIndex)
-            if (shouldTryRotatedCrop(crop)) {
-                val rotated = rotateCrop90(crop)
+            if (rotationDegrees != null) {
+                val rotated = rotateCrop(crop, rotationDegrees)
                 if (rotated != null) {
                     try {
                         Timber.i(
-                            "PaddleOCR run#%d rec[%d] rotatedCrop=%dx%d",
+                            "PaddleOCR run#%d rec[%d] rotatedCrop=%dx%d rotationDegrees=%.3f",
                             runId,
                             boxIndex,
                             rotated.width,
                             rotated.height,
+                            rotationDegrees,
                         )
                         candidates += recognizeCrop(rotated, PaddleCropOrientation.ROTATED_90, session, e, runId, boxIndex)
                     } finally {
                         rotated.recycle()
                     }
                 } else {
-                    Timber.w("PaddleOCR run#%d rec[%d] rotateCrop90 failed", runId, boxIndex)
+                    Timber.w(
+                        "PaddleOCR run#%d rec[%d] rotateCrop failed rotationDegrees=%.3f",
+                        runId,
+                        boxIndex,
+                        rotationDegrees,
+                    )
                 }
             }
 
@@ -646,7 +818,8 @@ class PaddleOcrEngine @Inject constructor(
 
     /**
      * 用 [Matrix.setPolyToPoly] 实现 cv2.warpPerspective 等价：把 4 点 quad 映射到水平
-     * 矩形（cropW x cropH）。竖排（高 > 宽 1.5 倍）裁出后旋转 90 度，让 rec 模型按横排理解。
+     * 矩形（cropW x cropH）。竖排（高 > 宽 1.5 倍）裁出后按 PaddleOCR 官方方向逆时针旋转
+     * 90 度，让 rec 模型按横排理解并保持原来的从上到下阅读顺序。
      */
     private fun warpCropQuad(src: Bitmap, quad: DBPostprocessor.Quad): Bitmap? {
         val w1 = hypotF(quad.p1.x - quad.p0.x, quad.p1.y - quad.p0.y)
@@ -680,11 +853,8 @@ class PaddleOcrEngine @Inject constructor(
         return out
     }
 
-    private fun shouldTryRotatedCrop(crop: Bitmap): Boolean =
-        crop.height > crop.width * VERTICAL_CROP_RATIO
-
-    private fun rotateCrop90(crop: Bitmap): Bitmap? {
-        val rotateMatrix = Matrix().apply { postRotate(90f) }
+    private fun rotateCrop(crop: Bitmap, degrees: Float): Bitmap? {
+        val rotateMatrix = Matrix().apply { postRotate(degrees) }
         return runCatching {
             Bitmap.createBitmap(crop, 0, 0, crop.width, crop.height, rotateMatrix, true)
         }.getOrNull()
@@ -751,18 +921,6 @@ class PaddleOcrEngine @Inject constructor(
         val emittedChars: Int,
     )
 
-    /** 等比缩放到最长边 = [limitSideLen]，且边长是 32 的倍数（DBNet 要求）。返回 (resized, scaleBackFactor)。 */
-    private fun resizeKeepingAspect(bitmap: Bitmap, limitSideLen: Int): Pair<Bitmap, Float> {
-        val w = bitmap.width; val h = bitmap.height
-        val ratio = limitSideLen.toFloat() / maxOf(w, h)
-        var newW = (w * ratio).toInt()
-        var newH = (h * ratio).toInt()
-        newW = ((newW + 31) / 32 * 32).coerceAtLeast(32)
-        newH = ((newH + 31) / 32 * 32).coerceAtLeast(32)
-        val scaled = Bitmap.createScaledBitmap(bitmap, newW, newH, true)
-        return scaled to (1f / ratio)
-    }
-
     /**
      * Bitmap → CHW float[]，按 mean / std 归一化。
      *
@@ -799,12 +957,10 @@ class PaddleOcrEngine @Inject constructor(
     }
 
     companion object {
-        private const val DET_LIMIT_SIDE_LEN = 2400
         private const val DET_PROB_THRESH = 0.3f
         private const val MIN_BOX_AREA = 16
         private const val DET_BOX_SCORE_THRESH = 0.6f
         private const val DET_UNCLIP_RATIO = 1.6f
-        private const val VERTICAL_CROP_RATIO = 1.5f
         private const val REC_TARGET_H = 48
         private const val REC_MAX_W = 480
         private val DET_MEAN = floatArrayOf(0.485f, 0.456f, 0.406f)

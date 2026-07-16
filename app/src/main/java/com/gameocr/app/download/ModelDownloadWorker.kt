@@ -36,10 +36,22 @@ class ModelDownloadWorker @AssistedInject constructor(
 ) : CoroutineWorker(appContext, workerParams) {
 
     private var lastProgressUpdateAt = 0L
+    private var lastSpec: ModelDownloadSpec? = null
+    private var lastFile = ""
+    private var lastDownloaded = 0L
+    private var lastTotal = -1L
+    private var lastBatchIndex = 0
+    private var lastBatchCount = 0
 
     override suspend fun doWork(): Result {
         val specs = ModelDownloadSpec.decodeAll(inputData.getStringArray(KEY_SPECS).orEmpty())
-            ?: return Result.failure(workDataOf(KEY_ERROR to "Invalid model download request"))
+            ?: return Result.failure(
+                terminalData(
+                    specs = emptyList(),
+                    status = "Invalid model download request",
+                    error = "Invalid model download request",
+                )
+            )
         val ownerPresetId = inputData.getString(KEY_OWNER_PRESET_ID).orEmpty()
         Timber.i(
             "Background model download started id=%s ownerPresetId=%s attempt=%d specs=%s",
@@ -56,7 +68,7 @@ class ModelDownloadWorker @AssistedInject constructor(
             val status = applicationContext.getString(R.string.model_download_complete)
             publish(status, "", 1, 1, force = true, batchIndex = specs.size, batchCount = specs.size)
             Timber.i("Background model download completed id=%s specs=%d", id, specs.size)
-            Result.success(workDataOf(KEY_STATUS to status))
+            Result.success(terminalData(specs, status))
         } catch (t: CancellationException) {
             Timber.i("Background model download cancelled id=%s", id)
             throw t
@@ -68,8 +80,21 @@ class ModelDownloadWorker @AssistedInject constructor(
                 if (retry) R.string.model_download_retrying_format else R.string.model_download_failed_format,
                 detail,
             )
-            publish(status, "", 0, -1, force = true, batchIndex = 0, batchCount = specs.size)
-            if (retry) Result.retry() else Result.failure(workDataOf(KEY_STATUS to status, KEY_ERROR to detail))
+            publish(
+                status = status,
+                file = lastFile,
+                downloaded = lastDownloaded,
+                total = lastTotal,
+                force = true,
+                spec = lastSpec,
+                batchIndex = lastBatchIndex,
+                batchCount = lastBatchCount.takeIf { it > 0 } ?: specs.size,
+            )
+            if (retry) {
+                Result.retry()
+            } else {
+                Result.failure(terminalData(specs, status, detail))
+            }
         }
     }
 
@@ -166,6 +191,13 @@ class ModelDownloadWorker @AssistedInject constructor(
         batchIndex: Int,
         batchCount: Int,
     ) {
+        if (spec != null) lastSpec = spec
+        if (file.isNotBlank()) lastFile = file
+        lastDownloaded = downloaded
+        lastTotal = total
+        lastBatchIndex = batchIndex
+        lastBatchCount = batchCount
+
         val now = SystemClock.elapsedRealtime()
         if (!force && now - lastProgressUpdateAt < PROGRESS_UPDATE_INTERVAL_MS) return
         lastProgressUpdateAt = now
@@ -208,11 +240,30 @@ class ModelDownloadWorker @AssistedInject constructor(
             )
             .build()
         return ForegroundInfo(
-            NOTIFICATION_ID,
+            notificationId(),
             notification,
             ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
         )
     }
+
+    private fun terminalData(
+        specs: List<ModelDownloadSpec>,
+        status: String,
+        error: String = "",
+    ): androidx.work.Data =
+        androidx.work.Data.Builder()
+            .putStringArray(KEY_SPECS, specs.map { it.encode() }.toTypedArray())
+            .putString(KEY_STATUS, status)
+            .putString(KEY_ERROR, error)
+            .putString(KEY_FILE, lastFile)
+            .putLong(KEY_DOWNLOADED, lastDownloaded)
+            .putLong(KEY_TOTAL, lastTotal)
+            .putString(KEY_CURRENT_SPEC, lastSpec?.encode().orEmpty())
+            .putLong(KEY_FINISHED_AT, System.currentTimeMillis())
+            .build()
+
+    private fun notificationId(): Int =
+        NOTIFICATION_ID_BASE + ((id.hashCode() and Int.MAX_VALUE) % NOTIFICATION_ID_RANGE)
 
     private fun createNotificationChannel() {
         val manager = applicationContext.getSystemService(Service.NOTIFICATION_SERVICE) as NotificationManager
@@ -246,9 +297,11 @@ class ModelDownloadWorker @AssistedInject constructor(
         const val KEY_BATCH_INDEX = "model_download_batch_index"
         const val KEY_BATCH_COUNT = "model_download_batch_count"
         const val KEY_OWNER_PRESET_ID = "model_download_owner_preset_id"
+        const val KEY_FINISHED_AT = "model_download_finished_at"
 
         private const val NOTIFICATION_CHANNEL_ID = "model_downloads_visible_v2"
-        private const val NOTIFICATION_ID = 2002
+        private const val NOTIFICATION_ID_BASE = 2002
+        private const val NOTIFICATION_ID_RANGE = 100_000
         private const val PROGRESS_UPDATE_INTERVAL_MS = 750L
     }
 }

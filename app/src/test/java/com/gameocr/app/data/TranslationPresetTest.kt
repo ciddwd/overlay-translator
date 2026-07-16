@@ -36,8 +36,31 @@ class TranslationPresetTest {
         assertEquals("zh-CN", applied.targetLang)
         assertEquals(OcrEngineKind.MANGA_OCR_JA, applied.ocrEngine)
         assertEquals(TranslatorEngine.LOCAL_SAKURA, applied.translatorEngine)
-        assertTrue(applied.mergeAdjacentBlocks)
         assertEquals(MergeStrength.AGGRESSIVE, applied.mergeStrength)
+        data class DisplayPolicyCase(
+            val name: String,
+            val mergeAdjacentBlocks: Boolean,
+            val overlayStyleMode: OverlayStyleMode,
+            val overlayTheme: OverlayTheme,
+        )
+        listOf(
+            DisplayPolicyCase(
+                name = "catalog preset",
+                mergeAdjacentBlocks = preset.mergeAdjacentBlocks,
+                overlayStyleMode = preset.overlayStyleMode,
+                overlayTheme = preset.overlayTheme,
+            ),
+            DisplayPolicyCase(
+                name = "applied settings",
+                mergeAdjacentBlocks = applied.mergeAdjacentBlocks,
+                overlayStyleMode = applied.overlayStyleMode,
+                overlayTheme = applied.overlayTheme,
+            ),
+        ).forEach { case ->
+            assertFalse(case.name, case.mergeAdjacentBlocks)
+            assertEquals(case.name, OverlayStyleMode.ADAPTIVE, case.overlayStyleMode)
+            assertEquals(case.name, OverlayTheme.CLASSIC_DARK, case.overlayTheme)
+        }
 
         assertEquals(base.apiKey, applied.apiKey)
         assertEquals(base.baiduOcrApiKey, applied.baiduOcrApiKey)
