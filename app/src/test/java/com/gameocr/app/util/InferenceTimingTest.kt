@@ -7,6 +7,78 @@ import org.junit.Test
 class InferenceTimingTest {
 
     @Test
+    fun stageTiming_coversPrecisionClockReversalAndOverAccountedCases() {
+        data class Case(
+            val name: String,
+            val startNs: Long,
+            val endNs: Long,
+            val totalUs: Long,
+            val stagesUs: List<Long>,
+            val expectedElapsedUs: Long,
+            val expectedTotalUs: Long,
+            val expectedAccountedUs: Long,
+            val expectedUnaccountedUs: Long,
+        )
+
+        listOf(
+            Case(
+                name = "normal microsecond breakdown",
+                startNs = 1_000_000L,
+                endNs = 4_456_789L,
+                totalUs = 3_456L,
+                stagesUs = listOf(1_000L, 2_000L, 400L),
+                expectedElapsedUs = 3_456L,
+                expectedTotalUs = 3_456L,
+                expectedAccountedUs = 3_400L,
+                expectedUnaccountedUs = 56L,
+            ),
+            Case(
+                name = "sub microsecond truncates safely",
+                startNs = 10L,
+                endNs = 999L,
+                totalUs = 0L,
+                stagesUs = emptyList(),
+                expectedElapsedUs = 0L,
+                expectedTotalUs = 0L,
+                expectedAccountedUs = 0L,
+                expectedUnaccountedUs = 0L,
+            ),
+            Case(
+                name = "clock reversal and negative stages are clamped",
+                startNs = 9_000L,
+                endNs = 1_000L,
+                totalUs = -5L,
+                stagesUs = listOf(-1L, 2L),
+                expectedElapsedUs = 0L,
+                expectedTotalUs = 0L,
+                expectedAccountedUs = 2L,
+                expectedUnaccountedUs = 0L,
+            ),
+            Case(
+                name = "over accounted stages never produce negative other time",
+                startNs = 0L,
+                endNs = 10_000L,
+                totalUs = 10L,
+                stagesUs = listOf(7L, 8L),
+                expectedElapsedUs = 10L,
+                expectedTotalUs = 10L,
+                expectedAccountedUs = 15L,
+                expectedUnaccountedUs = 0L,
+            ),
+        ).forEach { case ->
+            assertEquals(
+                "${case.name} elapsed",
+                case.expectedElapsedUs,
+                InferenceTiming.elapsedUs(case.startNs, case.endNs),
+            )
+            val summary = InferenceTiming.stageSummary(case.totalUs, case.stagesUs)
+            assertEquals("${case.name} total", case.expectedTotalUs, summary.totalUs)
+            assertEquals("${case.name} accounted", case.expectedAccountedUs, summary.accountedUs)
+            assertEquals("${case.name} unaccounted", case.expectedUnaccountedUs, summary.unaccountedUs)
+        }
+    }
+
+    @Test
     fun generation_coversRuntimeTimingCases() {
         data class Case(
             val name: String,

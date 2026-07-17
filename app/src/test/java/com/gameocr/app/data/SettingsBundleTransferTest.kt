@@ -71,6 +71,8 @@ class SettingsBundleTransferTest {
             PortableCase("font list", original.overlayFonts, portable.overlayFonts),
             PortableCase("preset count", original.translationPresets.size, portable.translationPresets.size),
             PortableCase("active preset", original.activeTranslationPresetId, portable.activeTranslationPresetId),
+            PortableCase("retired Manga OCR bubble gap", 0, portable.bubbleClusterGap),
+            PortableCase("retired Manga OCR crop padding", 0, portable.mangaOcrCropPaddingPx),
         )
         portableCases.forEach { case -> assertEquals(case.name, case.expected, case.actual) }
 
@@ -287,6 +289,8 @@ class SettingsBundleTransferTest {
         assertEquals(Settings().baseUrl, preview.settings?.baseUrl)
         assertEquals(emptyList<String>(), preview.settings?.cleartextAllowedHosts)
         assertEquals("zh-TW", preview.settings?.targetLang)
+        assertEquals(0, preview.settings?.bubbleClusterGap)
+        assertEquals(0, preview.settings?.mangaOcrCropPaddingPx)
         assertTrue(preview.skippedSettingFields.isEmpty())
     }
 
@@ -355,6 +359,7 @@ class SettingsBundleTransferTest {
             localLlmMirrorUrl = "https://portable.example/models/",
             dbnetProbThresh = 0.31f,
             bubbleClusterGap = 41,
+            mangaOcrCropPaddingPx = 17,
         )
         val preset = TranslationPresetCatalog.fromSettings(
             id = "custom_portable",

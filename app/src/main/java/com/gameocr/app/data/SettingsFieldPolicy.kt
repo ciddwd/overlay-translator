@@ -207,8 +207,8 @@ object SettingsFieldPolicy {
         portable("dbnetBoxScoreThresh", R.string.settings_search_item_dbnet_advanced),
         portable("dbnetUnclipRatio", R.string.settings_search_item_dbnet_advanced),
         portable("mangaOcrDbnetUnclipRatio", R.string.settings_search_item_dbnet_advanced),
-        portable("bubbleClusterGap", R.string.settings_search_item_dbnet_advanced),
-        portable("mangaOcrCropPaddingPx", R.string.settings_search_item_dbnet_advanced),
+        portable("bubbleClusterGap"),
+        portable("mangaOcrCropPaddingPx"),
         portable("localLlmMirror", R.string.settings_search_item_llm_mirror),
         privateConnection("localLlmMirrorUrl", R.string.settings_search_item_llm_mirror),
         portable("translationPresets", R.string.settings_section_translation_presets, SettingsDiagnostic.SUMMARY),
@@ -244,7 +244,9 @@ object SettingsFieldPolicy {
     }
 
     fun encodePortable(settings: Settings): JsonObject {
-        val encoded = json.encodeToJsonElement(settings).asObject()
+        val encoded = json.encodeToJsonElement(
+            MangaOcrAdvancedSettingsPolicy.normalize(settings)
+        ).asObject()
         return JsonObject(encoded.filterKeys(portableFieldNames::contains))
     }
 
@@ -261,7 +263,9 @@ object SettingsFieldPolicy {
             }
         }
         return SettingsFieldDecodeResult(
-            settings = json.decodeFromJsonElement(JsonObject(defaults)),
+            settings = MangaOcrAdvancedSettingsPolicy.normalize(
+                json.decodeFromJsonElement<Settings>(JsonObject(defaults))
+            ),
             skippedFields = skipped.sorted(),
         )
     }
@@ -271,13 +275,17 @@ object SettingsFieldPolicy {
         val importedValues = json.encodeToJsonElement(imported).asObject()
         val merged = currentValues.toMutableMap()
         portableFieldNames.forEach { name -> importedValues[name]?.let { merged[name] = it } }
-        return json.decodeFromJsonElement<Settings>(JsonObject(merged)).copy(
-            runtimeTranslationContext = current.runtimeTranslationContext,
+        return MangaOcrAdvancedSettingsPolicy.normalize(
+            json.decodeFromJsonElement<Settings>(JsonObject(merged)).copy(
+                runtimeTranslationContext = current.runtimeTranslationContext,
+            )
         )
     }
 
     fun formatDiagnostics(settings: Settings): String {
-        val encoded = json.encodeToJsonElement(settings).asObject()
+        val encoded = json.encodeToJsonElement(
+            MangaOcrAdvancedSettingsPolicy.normalize(settings)
+        ).asObject()
         return buildString {
             rules.forEach { rule ->
                 append("  ").append(rule.name).append(": ")

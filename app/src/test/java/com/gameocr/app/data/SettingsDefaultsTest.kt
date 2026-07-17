@@ -35,11 +35,27 @@ class SettingsDefaultsTest {
     }
 
     @Test
-    fun paddleDetectionAndMangaCropPadding_defaultsAreStable() {
-        val settings = Settings()
+    fun paddleDetectionAndRetiredMangaAdvancedSettings_defaultsAreStable() {
+        assertEquals(PaddleDetectionProfile.FAST, Settings().paddleDetectionProfile)
 
-        assertEquals(PaddleDetectionProfile.FAST, settings.paddleDetectionProfile)
-        assertEquals(0, settings.mangaOcrCropPaddingPx)
+        data class Case(val name: String, val gap: Int, val cropPadding: Int)
+        val cases = listOf(
+            Case(
+                "settings",
+                Settings().bubbleClusterGap,
+                Settings().mangaOcrCropPaddingPx,
+            ),
+            Case(
+                "translation preset",
+                TranslationPreset(id = "test", name = "test").bubbleClusterGap,
+                TranslationPreset(id = "test", name = "test").mangaOcrCropPaddingPx,
+            ),
+        )
+
+        cases.forEach { case ->
+            assertEquals("${case.name} bubble gap", 0, case.gap)
+            assertEquals("${case.name} crop padding", 0, case.cropPadding)
+        }
     }
 
     @Test

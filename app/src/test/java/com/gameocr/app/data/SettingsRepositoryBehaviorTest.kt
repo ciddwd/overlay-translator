@@ -24,7 +24,7 @@ class SettingsRepositoryBehaviorTest {
         }
         val fontName = "${"b".repeat(64)}.ttf"
         val preset = TranslationPreset(id = "custom_roundtrip", name = "Round trip")
-        val expected = Settings(
+        val requested = Settings(
             baseUrl = "https://roundtrip.example/v1/",
             apiKey = "api-key",
             model = "roundtrip-model",
@@ -149,15 +149,16 @@ class SettingsRepositoryBehaviorTest {
             dbnetUnclipRatio = 1.37f,
             mangaOcrDbnetUnclipRatio = 1.83f,
             bubbleClusterGap = 47,
+            mangaOcrCropPaddingPx = 29,
             localLlmMirror = LlmMirrorChoice.CUSTOM,
             localLlmMirrorUrl = "https://mirror.example/llm/",
             translationPresets = listOf(preset),
             activeTranslationPresetId = preset.id,
         )
 
-        repository.update { expected }
+        repository.update { requested }
 
-        assertEquals(expected, repository.get())
+        assertEquals(MangaOcrAdvancedSettingsPolicy.normalize(requested), repository.get())
     }
 
     private class FileBackedContext(private val root: File) : ContextWrapper(null) {

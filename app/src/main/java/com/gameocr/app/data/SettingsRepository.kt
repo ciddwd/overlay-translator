@@ -245,6 +245,40 @@ class SettingsRepository @Inject constructor(
         return changed
     }
 
+    suspend fun migrateRetiredMangaOcrAdvancedSettingsIfNeeded(): Boolean {
+        var changed = false
+        context.dataStore.edit { prefs ->
+            if (prefs[Keys.BubbleClusterGap]?.let {
+                    MangaOcrAdvancedSettingsPolicy.effectiveBubbleClusterGap(it)
+                } != prefs[Keys.BubbleClusterGap]
+            ) {
+                prefs[Keys.BubbleClusterGap] = MangaOcrAdvancedSettingsPolicy.BUBBLE_CLUSTER_GAP
+                changed = true
+            }
+            if (prefs[Keys.MangaOcrCropPaddingPx]?.let {
+                    MangaOcrAdvancedSettingsPolicy.effectiveCropPaddingPx(it)
+                } != prefs[Keys.MangaOcrCropPaddingPx]
+            ) {
+                prefs[Keys.MangaOcrCropPaddingPx] = MangaOcrAdvancedSettingsPolicy.CROP_PADDING_PX
+                changed = true
+            }
+
+            val storedPresets = prefs[Keys.TranslationPresets]
+                ?.let(secretCodec::decodeStored)
+                ?.takeIf(String::isNotBlank)
+                ?.let { raw ->
+                    runCatching { json.decodeFromString<List<TranslationPreset>>(raw) }
+                        .getOrNull()
+                }
+            val normalizedPresets = storedPresets?.map(MangaOcrAdvancedSettingsPolicy::normalize)
+            if (storedPresets != null && normalizedPresets != storedPresets) {
+                prefs.putSecure(Keys.TranslationPresets, json.encodeToString(normalizedPresets))
+                changed = true
+            }
+        }
+        return changed
+    }
+
     /**
      * 任何用到 [Settings.captureRegion] 的入口都应该先调一次：把上次保存时屏幕尺寸跟当前
      * 屏幕尺寸比较，不同就按比例 rescale region 写回，更新 saved 字段。这样旋转屏幕时
@@ -298,7 +332,7 @@ class SettingsRepository @Inject constructor(
     suspend fun update(transform: (Settings) -> Settings) {
         context.dataStore.edit { prefs ->
             val current = prefs.toSettings()
-            val next = transform(current)
+            val next = MangaOcrAdvancedSettingsPolicy.normalize(transform(current))
             prefs.putSecure(Keys.BaseUrl, next.baseUrl)
             prefs.putSecure(Keys.ApiKey, next.apiKey)
             prefs[Keys.Model] = next.model
@@ -419,7 +453,11 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.ArcMenuPageSize] = FloatingMenu.coercePageSize(next.arcMenuPageSize)
             prefs.putSecure(
                 Keys.TranslationPresets,
-                json.encodeToString(next.translationPresets.filterNot { TranslationPresetCatalog.isBuiltIn(it.id) })
+                json.encodeToString(
+                    next.translationPresets
+                        .map(MangaOcrAdvancedSettingsPolicy::normalize)
+                        .filterNot { TranslationPresetCatalog.isBuiltIn(it.id) }
+                )
             )
             prefs[Keys.ActiveTranslationPresetId] = next.activeTranslationPresetId
             prefs[Keys.FloatingSkillKey] = next.floatingButtonSkill.name
@@ -436,8 +474,8 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.DbnetBoxScoreThresh] = next.dbnetBoxScoreThresh
             prefs[Keys.DbnetUnclipRatio] = next.dbnetUnclipRatio
             prefs[Keys.MangaOcrDbnetUnclipRatio] = next.mangaOcrDbnetUnclipRatio
-            prefs[Keys.BubbleClusterGap] = next.bubbleClusterGap
-            prefs[Keys.MangaOcrCropPaddingPx] = next.mangaOcrCropPaddingPx
+            prefs[Keys.BubbleClusterGap] = MangaOcrAdvancedSettingsPolicy.BUBBLE_CLUSTER_GAP
+            prefs[Keys.MangaOcrCropPaddingPx] = MangaOcrAdvancedSettingsPolicy.CROP_PADDING_PX
         }
     }
 
@@ -454,7 +492,7 @@ class SettingsRepository @Inject constructor(
             layout = storedTranslationOutputLayout,
             direction = storedTranslationOutputDirection,
         )
-        return Settings(
+        return MangaOcrAdvancedSettingsPolicy.normalize(Settings(
             baseUrl = secureString(Keys.BaseUrl, default.baseUrl),
             apiKey = secureString(Keys.ApiKey, default.apiKey),
             model = this[Keys.Model] ?: default.model,
@@ -703,10 +741,9 @@ class SettingsRepository @Inject constructor(
             dbnetUnclipRatio = this[Keys.DbnetUnclipRatio] ?: default.dbnetUnclipRatio,
             mangaOcrDbnetUnclipRatio = this[Keys.MangaOcrDbnetUnclipRatio]
                 ?: default.mangaOcrDbnetUnclipRatio,
-            bubbleClusterGap = this[Keys.BubbleClusterGap] ?: default.bubbleClusterGap,
-            mangaOcrCropPaddingPx = this[Keys.MangaOcrCropPaddingPx]
-                ?: default.mangaOcrCropPaddingPx
+            bubbleClusterGap = MangaOcrAdvancedSettingsPolicy.BUBBLE_CLUSTER_GAP,
+            mangaOcrCropPaddingPx = MangaOcrAdvancedSettingsPolicy.CROP_PADDING_PX
             // runtimeTranslationContext is request-scoped and deliberately never persisted.
-        )
+        ))
     }
 }

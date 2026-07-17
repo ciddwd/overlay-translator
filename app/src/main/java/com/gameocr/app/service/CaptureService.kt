@@ -61,7 +61,9 @@ import com.gameocr.app.data.TranslationPresetCatalog
 import com.gameocr.app.data.needsRawBitmap
 import com.gameocr.app.data.Languages
 import com.gameocr.app.ocr.BitmapPreprocessor
+import com.gameocr.app.ocr.MangaOcrEngine
 import com.gameocr.app.ocr.MangaOcrModelInstaller
+import com.gameocr.app.ocr.MangaOcrStartupPolicy
 import com.gameocr.app.ocr.OcrEngine
 import com.gameocr.app.ocr.OrientationCoordinator
 import com.gameocr.app.ocr.OrientationResult
@@ -169,6 +171,7 @@ class CaptureService : Service() {
     @Inject lateinit var orientationCoordinator: OrientationCoordinator
     // 用于路由层判断"manga-ocr 模型是否已下载"——未下载时 (VERTICAL_RTL, ja) 不会被路由到 manga
     @Inject lateinit var mangaOcrModelInstaller: MangaOcrModelInstaller
+    @Inject lateinit var mangaOcrEngine: MangaOcrEngine
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -186,6 +189,7 @@ class CaptureService : Service() {
     private var translationBlockCopyOverlay: TranslationBlockCopyOverlay? = null
 
     private var loopJob: Job? = null
+    private var ocrWarmupJob: Job? = null
     private var previousLoopFingerprint: LoopFrameFingerprint? = null
     private var previousLoopOcrText: String? = null
     private var loopFrameStabilityState = LoopFrameStabilityState()
@@ -374,6 +378,7 @@ class CaptureService : Service() {
         }
 
         CaptureServiceState.setRunning(true)
+        startOcrWarmupIfNeeded()
 
         // Shizuku 路径 dry-run：即使 availability == READY，未通过 ADB / root 配对的 Shizuku 也会
         // 让 newProcess(screencap) 失败（exit=1）。立刻跑一次截屏，失败则用悬浮错误条引导用户改
@@ -400,6 +405,24 @@ class CaptureService : Service() {
                     test.recycle()
                 }
             }
+        }
+    }
+
+    private fun startOcrWarmupIfNeeded() {
+        ocrWarmupJob?.cancel()
+        ocrWarmupJob = scope.launch {
+            val settings = settingsRepository.get()
+            val modelInstalled = mangaOcrModelInstaller.checkInstalled() != null
+            if (!MangaOcrStartupPolicy.shouldPrewarm(settings.ocrEngine, modelInstalled)) {
+                Timber.tag("MangaOcrPerf").i(
+                    "prewarm skipped engine=%s modelInstalled=%s",
+                    settings.ocrEngine,
+                    modelInstalled,
+                )
+                return@launch
+            }
+            runCatching { mangaOcrEngine.prewarm() }
+                .onFailure { Timber.w(it, "MangaOcr background prewarm failed") }
         }
     }
 
@@ -3025,6 +3048,8 @@ class CaptureService : Service() {
         loopMode = false
         loopJob?.cancel()
         loopJob = null
+        ocrWarmupJob?.cancel()
+        ocrWarmupJob = null
         resetLoopFrameHistory()
         resetLoopRuntimeState()
         settingsCollectJob?.cancel()

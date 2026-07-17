@@ -369,6 +369,7 @@ class TranslationPresetTest {
             dbnetUnclipRatio = 1.37f,
             mangaOcrDbnetUnclipRatio = 1.83f,
             bubbleClusterGap = 47,
+            mangaOcrCropPaddingPx = 29,
         )
         val applied = preset.applyTo(Settings())
         val rebuilt = TranslationPresetCatalog.fromSettings(
@@ -387,7 +388,11 @@ class TranslationPresetTest {
             val settingsField = Settings::class.java.getDeclaredField(presetField.name).apply {
                 isAccessible = true
             }
-            val expected = presetField.get(preset)
+            val expected = when (presetField.name) {
+                "bubbleClusterGap" -> MangaOcrAdvancedSettingsPolicy.BUBBLE_CLUSTER_GAP
+                "mangaOcrCropPaddingPx" -> MangaOcrAdvancedSettingsPolicy.CROP_PADDING_PX
+                else -> presetField.get(preset)
+            }
             assertEquals("applyTo ${presetField.name}", expected, settingsField.get(applied))
             assertEquals("fromSettings ${presetField.name}", expected, presetField.get(rebuilt))
         }

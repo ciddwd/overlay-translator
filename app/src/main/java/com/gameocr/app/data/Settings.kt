@@ -279,15 +279,10 @@ data class Settings(
      * 1.65 比 PaddleOCR 常见 1.5 默认值多一点裁剪余量，同时仍避免过度吞邻泡。
      */
     val mangaOcrDbnetUnclipRatio: Float = 1.65f,
-    /**
-     * BubbleClusterer 聚类时把每个 DBNet quad 外扩多少像素后做并查集合并。
-     * 18 px 是 PaddleOCR DBNet 论文常见列距下限；屏译漫画竖排两列字间距经常 20–40 px，
-     * 升到 32 px 让「キャプテン / お疲れ様でした!!」这类两列气泡能聚为单个 bubble 整体送入
-     * manga-ocr。过大可能误合相邻独立气泡，用户可在设置滑条调 8–60。
-     */
-    val bubbleClusterGap: Int = 32,
-    /** Extra crop-only margin for manga-ocr bubbles. It never expands overlay/display bounds. */
-    val mangaOcrCropPaddingPx: Int = 0,
+    /** 兼容旧存档保留的退役字段；读取、保存和运行时始终强制为 0。 */
+    val bubbleClusterGap: Int = MangaOcrAdvancedSettingsPolicy.BUBBLE_CLUSTER_GAP,
+    /** 兼容旧存档保留的退役字段；读取、保存和运行时始终强制为 0。 */
+    val mangaOcrCropPaddingPx: Int = MangaOcrAdvancedSettingsPolicy.CROP_PADDING_PX,
     /**
      * 端侧 LLM 下载源选择。默认 [LlmMirrorChoice.HF_MIRROR]——国内用户绝大多数直连可达：
      * - Hy-MT2 / Sakura 在此模式下走 hf-mirror.com。
@@ -422,8 +417,8 @@ data class TranslationPreset(
     val dbnetBoxScoreThresh: Float = 0.5f,
     val dbnetUnclipRatio: Float = 1.55f,
     val mangaOcrDbnetUnclipRatio: Float = 1.65f,
-    val bubbleClusterGap: Int = 32,
-    val mangaOcrCropPaddingPx: Int = 0,
+    val bubbleClusterGap: Int = MangaOcrAdvancedSettingsPolicy.BUBBLE_CLUSTER_GAP,
+    val mangaOcrCropPaddingPx: Int = MangaOcrAdvancedSettingsPolicy.CROP_PADDING_PX,
     val settingsHash: String = ""
 ) {
     fun applyTo(settings: Settings): Settings {
@@ -496,8 +491,8 @@ data class TranslationPreset(
         dbnetBoxScoreThresh = dbnetBoxScoreThresh,
         dbnetUnclipRatio = dbnetUnclipRatio,
         mangaOcrDbnetUnclipRatio = mangaOcrDbnetUnclipRatio,
-        bubbleClusterGap = bubbleClusterGap,
-        mangaOcrCropPaddingPx = mangaOcrCropPaddingPx
+        bubbleClusterGap = MangaOcrAdvancedSettingsPolicy.BUBBLE_CLUSTER_GAP,
+        mangaOcrCropPaddingPx = MangaOcrAdvancedSettingsPolicy.CROP_PADDING_PX
         )
     }
 }
@@ -608,8 +603,8 @@ object TranslationPresetCatalog {
             dbnetBoxScoreThresh = settings.dbnetBoxScoreThresh,
             dbnetUnclipRatio = settings.dbnetUnclipRatio,
             mangaOcrDbnetUnclipRatio = settings.mangaOcrDbnetUnclipRatio,
-            bubbleClusterGap = settings.bubbleClusterGap,
-            mangaOcrCropPaddingPx = settings.mangaOcrCropPaddingPx
+            bubbleClusterGap = MangaOcrAdvancedSettingsPolicy.BUBBLE_CLUSTER_GAP,
+            mangaOcrCropPaddingPx = MangaOcrAdvancedSettingsPolicy.CROP_PADDING_PX
         )
         return preset.copy(settingsHash = settingsHash(preset))
     }
@@ -634,6 +629,12 @@ object TranslationPresetCatalog {
             preset.translationOutputFollowRecognition,
             preset.translationOutputLayout,
             preset.translationOutputDirection,
+        )
+        val bubbleClusterGap = MangaOcrAdvancedSettingsPolicy.effectiveBubbleClusterGap(
+            preset.bubbleClusterGap
+        )
+        val mangaOcrCropPaddingPx = MangaOcrAdvancedSettingsPolicy.effectiveCropPaddingPx(
+            preset.mangaOcrCropPaddingPx
         )
         return sha256(
             preset.baseUrl,
@@ -714,8 +715,8 @@ object TranslationPresetCatalog {
             preset.dbnetBoxScoreThresh.toBits(),
             preset.dbnetUnclipRatio.toBits(),
             preset.mangaOcrDbnetUnclipRatio.toBits(),
-            preset.bubbleClusterGap,
-            preset.mangaOcrCropPaddingPx
+            bubbleClusterGap,
+            mangaOcrCropPaddingPx
         )
     }
 

@@ -164,6 +164,7 @@ import com.gameocr.app.data.FloatingSkill
 import com.gameocr.app.data.Languages
 import com.gameocr.app.data.LoopTriggerMode
 import com.gameocr.app.data.LoopTextRegionMode
+import com.gameocr.app.data.MangaOcrAdvancedSettingsPolicy
 import com.gameocr.app.data.MenuItemId
 import com.gameocr.app.data.OcrEngineKind
 import com.gameocr.app.data.OverlayFontImportError
@@ -534,8 +535,6 @@ fun SettingsScreen(
     var paddleDetectionProfile by remember {
         mutableStateOf(com.gameocr.app.data.PaddleDetectionProfile.FAST)
     }
-    var dbnetGap by remember { mutableStateOf(32) }
-    var mangaOcrCropPaddingPx by remember { mutableStateOf(0) }
     var dbnetAdvancedExpanded by remember { mutableStateOf(false) }
     var showDbnetResetConfirm by remember { mutableStateOf(false) }
     var manualTextOrient by remember { mutableStateOf<com.gameocr.app.ocr.TextOrientation?>(null) }
@@ -794,8 +793,6 @@ fun SettingsScreen(
         dbnetUnclip = s.dbnetUnclipRatio
         mangaOcrDbnetUnclip = s.mangaOcrDbnetUnclipRatio
         paddleDetectionProfile = s.paddleDetectionProfile
-        dbnetGap = s.bubbleClusterGap
-        mangaOcrCropPaddingPx = s.mangaOcrCropPaddingPx
         translationPresets = s.translationPresets
         activeTranslationPresetId = s.activeTranslationPresetId
         pinnedLanguages = s.pinnedLanguages
@@ -1113,8 +1110,8 @@ fun SettingsScreen(
         dbnetBoxScoreThresh = dbnetScore,
         dbnetUnclipRatio = dbnetUnclip,
         mangaOcrDbnetUnclipRatio = mangaOcrDbnetUnclip,
-        bubbleClusterGap = dbnetGap,
-        mangaOcrCropPaddingPx = mangaOcrCropPaddingPx
+        bubbleClusterGap = MangaOcrAdvancedSettingsPolicy.BUBBLE_CLUSTER_GAP,
+        mangaOcrCropPaddingPx = MangaOcrAdvancedSettingsPolicy.CROP_PADDING_PX
     )
 
     fun buildSettingsTransferSnapshot(): Settings = buildTranslationPresetSnapshot().copy(
@@ -2199,8 +2196,6 @@ fun SettingsScreen(
             dbnetUnclip = s.dbnetUnclipRatio
             mangaOcrDbnetUnclip = s.mangaOcrDbnetUnclipRatio
             paddleDetectionProfile = s.paddleDetectionProfile
-            dbnetGap = s.bubbleClusterGap
-            mangaOcrCropPaddingPx = s.mangaOcrCropPaddingPx
             manualTextOrient = s.manualTextOrientation
             resolveTranslationOutputSettings(
                 s.translationOutputFollowRecognition,
@@ -3431,8 +3426,6 @@ fun SettingsScreen(
                                 dbnetProb,
                                 dbnetScore,
                                 unclipToSave,
-                                dbnetGap,
-                                mangaOcrCropPaddingPx,
                             )
                         }
                     }
@@ -3444,16 +3437,12 @@ fun SettingsScreen(
                         } else {
                             dbnetUnclip = defaultSettings.dbnetUnclipRatio
                         }
-                        dbnetGap = defaultSettings.bubbleClusterGap
-                        mangaOcrCropPaddingPx = defaultSettings.mangaOcrCropPaddingPx
                         scope.launch {
                             viewModel.saveDbnetThresholds(
                                 ocrEngine,
                                 defaultSettings.dbnetProbThresh,
                                 defaultSettings.dbnetBoxScoreThresh,
                                 defaultDbnetUnclip,
-                                defaultSettings.bubbleClusterGap,
-                                defaultSettings.mangaOcrCropPaddingPx,
                             )
                         }
                     }
@@ -3544,29 +3533,6 @@ fun SettingsScreen(
                             valueRange = 1.2f..2.5f,
                             steps = 25
                         )
-                        if (isMangaOcrDbnet) {
-                            DbnetAdvancedSliderSection(
-                                title = stringResource(R.string.settings_dbnet_gap_label, dbnetGap),
-                                description = stringResource(R.string.settings_dbnet_gap_desc),
-                                value = dbnetGap.toFloat(),
-                                onValueChange = { dbnetGap = it.toInt() },
-                                onValueChangeFinished = saveDbnetNow,
-                                valueRange = 0f..60f,
-                                steps = 59
-                            )
-                            DbnetAdvancedSliderSection(
-                                title = stringResource(
-                                    R.string.settings_manga_crop_padding_label,
-                                    mangaOcrCropPaddingPx,
-                                ),
-                                description = stringResource(R.string.settings_manga_crop_padding_desc),
-                                value = mangaOcrCropPaddingPx.toFloat(),
-                                onValueChange = { mangaOcrCropPaddingPx = it.toInt() },
-                                onValueChangeFinished = saveDbnetNow,
-                                valueRange = 0f..32f,
-                                steps = 31,
-                            )
-                        }
                     }
                     if (showDbnetResetConfirm) {
                         AlertDialog(
@@ -3818,10 +3784,22 @@ fun SettingsScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 val layoutControlsEnabled =
                     manualOverlayLayoutControlsEnabled(overlayStyleMode, renderMode)
-                if (renderMode == RenderMode.BLOCKS) {
-                    SwitchRow(
+                Text(stringResource(R.string.settings_render_mode_label), style = MaterialTheme.typography.labelLarge)
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    EngineChip(renderMode, RenderMode.BLOCKS, stringResource(R.string.settings_render_blocks_chip)) { renderMode = it }
+                    EngineChip(
+                        renderMode,
+                        RenderMode.FLOATING_WINDOW,
+                        stringResource(R.string.settings_render_floating_window_chip),
+                        enabled = layoutControlsEnabled,
+                    ) { renderMode = it }
+                    InlineSwitchLabel(
                         label = stringResource(R.string.settings_overlay_style_adaptive),
                         checked = overlayStyleMode == OverlayStyleMode.ADAPTIVE,
+                        enabled = renderMode == RenderMode.BLOCKS,
                         helpText = stringResource(R.string.settings_overlay_style_adaptive_desc),
                     ) { enabled ->
                         overlayStyleMode = if (enabled) {
@@ -3830,23 +3808,13 @@ fun SettingsScreen(
                             OverlayStyleMode.FIXED
                         }
                     }
-                    if (!layoutControlsEnabled) {
-                        Text(
-                            stringResource(R.string.settings_overlay_adaptive_layout_locked),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                    }
                 }
-                Text(stringResource(R.string.settings_render_mode_label), style = MaterialTheme.typography.labelLarge)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    EngineChip(renderMode, RenderMode.BLOCKS, stringResource(R.string.settings_render_blocks_chip)) { renderMode = it }
-                    EngineChip(
-                        renderMode,
-                        RenderMode.FLOATING_WINDOW,
-                        stringResource(R.string.settings_render_floating_window_chip),
-                        enabled = layoutControlsEnabled,
-                    ) { renderMode = it }
+                if (!layoutControlsEnabled) {
+                    Text(
+                        stringResource(R.string.settings_overlay_adaptive_layout_locked),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
                 }
 
                 if (renderMode == RenderMode.FLOATING_WINDOW) {
@@ -6767,6 +6735,41 @@ internal fun SwitchRow(
                 .padding(start = 12.dp)
                 .weight(1f)
                 .alpha(if (enabled) 1f else 0.4f)
+        )
+        helpText?.let { SettingHelpTooltip(text = it) }
+    }
+}
+
+@Composable
+private fun InlineSwitchLabel(
+    label: String,
+    checked: Boolean,
+    enabled: Boolean,
+    helpText: String? = null,
+    onChange: (Boolean) -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Switch(
+            checked = checked,
+            onCheckedChange = onChange,
+            enabled = enabled,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+                checkedTrackColor = MaterialTheme.colorScheme.primary,
+                checkedBorderColor = MaterialTheme.colorScheme.primary,
+                uncheckedThumbColor = MaterialTheme.colorScheme.outline,
+                uncheckedTrackColor = MaterialTheme.colorScheme.surface,
+                uncheckedBorderColor = MaterialTheme.colorScheme.outline,
+            ),
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelLarge,
+            modifier = Modifier
+                .padding(start = 8.dp)
+                .alpha(if (enabled) 1f else 0.4f),
         )
         helpText?.let { SettingHelpTooltip(text = it) }
     }

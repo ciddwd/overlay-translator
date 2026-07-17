@@ -67,6 +67,13 @@ class GameOcrApp : Application(), Configuration.Provider {
                     }
                 }
                 .onFailure { Timber.w(it, "Failed to migrate text orientation auto-detect default") }
+            runCatching { settingsRepository.migrateRetiredMangaOcrAdvancedSettingsIfNeeded() }
+                .onSuccess { changed ->
+                    if (changed) {
+                        Timber.i("Reset retired Manga OCR advanced settings to zero")
+                    }
+                }
+                .onFailure { Timber.w(it, "Failed to reset retired Manga OCR advanced settings") }
             settingsRepository.settings.collect { settings ->
                 CrashRecorder.updateSettingsSummary(CrashRecorder.formatSettings(settings))
                 cleartextInterceptor.allowedHosts = settings.cleartextAllowedHosts.toSet()

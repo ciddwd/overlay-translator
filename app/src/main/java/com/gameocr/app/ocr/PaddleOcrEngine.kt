@@ -9,11 +9,14 @@ import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Rect
+import android.os.SystemClock
 import com.gameocr.app.R
 import com.gameocr.app.data.OcrEngineKind
 import com.gameocr.app.data.PaddleDetectionProfile
 import com.gameocr.app.data.PaddleModelVersion
 import com.gameocr.app.util.CpuThreadPolicy
+import com.gameocr.app.util.InferenceTiming
+import com.gameocr.app.util.ReusableDirectBufferPool
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -230,6 +233,10 @@ class PaddleOcrEngine @Inject constructor(
     private var loadedVersion: PaddleModelVersion? = null
     private val runCounter = AtomicLong(0L)
     private val detectCallCounter = AtomicLong(0L)
+    private val detInputBufferPool = ReusableDirectBufferPool(
+        maxRetainedFloatBuffers = 2,
+        maxRetainedLongBuffers = 0,
+    )
     private val availableProcessors by lazy { CpuThreadPolicy.availableProcessors() }
     private val ortThreads by lazy { CpuThreadPolicy.select(availableProcessors) }
 
@@ -582,14 +589,16 @@ class PaddleOcrEngine @Inject constructor(
             Timber.w("PaddleOCR ${trace}detCall#%d skipped: env=null", detectCallId)
             return emptyList()
         }
-        val resizeStartedAt = System.currentTimeMillis()
+        val pipelineStartedAtNs = SystemClock.elapsedRealtimeNanos()
+        val resizeStartedAtNs = SystemClock.elapsedRealtimeNanos()
         val plan = PaddleDetectionSizing.plan(bitmap.width, bitmap.height, profile)
         val resized = if (plan.resized) {
             Bitmap.createScaledBitmap(bitmap, plan.targetWidth, plan.targetHeight, true)
         } else {
             bitmap
         }
-        val resizeMs = System.currentTimeMillis() - resizeStartedAt
+        val resizeUs = InferenceTiming.elapsedUs(resizeStartedAtNs, SystemClock.elapsedRealtimeNanos())
+        val resizeMs = resizeUs / 1_000L
         val (rW, rH) = resized.width to resized.height
         Timber.i(
             "PaddleOCR ${trace}detCall#%d input pass=%s profile=%s maxSide=%d src=%dx%d tensor=%dx%d pixels=%d resize=%s resizeMs=%d inputScaleX=%.6f inputScaleY=%.6f probThresh=%.3f boxScoreThresh=%.3f unclip=%.3f connectivity=8",
@@ -612,65 +621,146 @@ class PaddleOcrEngine @Inject constructor(
         )
 
         try {
-            val nchwStartedAt = System.currentTimeMillis()
+            val nchwStartedAtNs = SystemClock.elapsedRealtimeNanos()
             val inputData = bitmapToNCHW(resized, DET_MEAN, DET_STD)
-            val nchwMs = System.currentTimeMillis() - nchwStartedAt
-            val tensorStartedAt = System.currentTimeMillis()
-            val inputTensor = OnnxTensor.createTensor(
-                e,
-                FloatBuffer.wrap(inputData),
-                longArrayOf(1, 3, rH.toLong(), rW.toLong())
+            val nchwUs = InferenceTiming.elapsedUs(nchwStartedAtNs, SystemClock.elapsedRealtimeNanos())
+            val nchwMs = nchwUs / 1_000L
+
+            val bufferAcquireStartedAtNs = SystemClock.elapsedRealtimeNanos()
+            val inputLease = detInputBufferPool.acquireFloat(inputData.size)
+            val bufferAcquireUs = InferenceTiming.elapsedUs(
+                bufferAcquireStartedAtNs,
+                SystemClock.elapsedRealtimeNanos(),
             )
-            val tensorMs = System.currentTimeMillis() - tensorStartedAt
-            return inputTensor.use { tensor ->
-                val inferStart = System.currentTimeMillis()
-                session.run(mapOf(session.inputNames.first() to tensor)).use resultUse@{ res ->
-                    val inferMs = System.currentTimeMillis() - inferStart
-                    val out = res.get(0).value as Array<Array<Array<FloatArray>>>
-                    val probMap = out[0][0]
-                    val stats = paddleProbMapStats(probMap, binThresh, scoreThresh)
-                    val outputHeight = probMap.size
-                    val outputWidth = probMap.firstOrNull()?.size ?: 0
-                    if (outputWidth <= 0 || outputHeight <= 0) {
-                        Timber.w("PaddleOCR ${trace}detCall#%d empty probability map", detectCallId)
-                        return@resultUse emptyList()
+            return inputLease.use { lease ->
+                val inputBuffer = lease.buffer
+                val bufferFillStartedAtNs = SystemClock.elapsedRealtimeNanos()
+                inputBuffer.put(inputData)
+                inputBuffer.flip()
+                val bufferFillUs = InferenceTiming.elapsedUs(
+                    bufferFillStartedAtNs,
+                    SystemClock.elapsedRealtimeNanos(),
+                )
+                val inputBufferDirect = inputBuffer.isDirect
+
+                val tensorStartedAtNs = SystemClock.elapsedRealtimeNanos()
+                val inputTensor = OnnxTensor.createTensor(
+                    e,
+                    inputBuffer,
+                    longArrayOf(1, 3, rH.toLong(), rW.toLong())
+                )
+                val tensorUs = InferenceTiming.elapsedUs(tensorStartedAtNs, SystemClock.elapsedRealtimeNanos())
+                val tensorMs = tensorUs / 1_000L
+                val tensorOwnsBuffer = inputTensor.ownsBuffer()
+
+                inputTensor.use { tensor ->
+                    val inferStartedAtNs = SystemClock.elapsedRealtimeNanos()
+                    val inferenceResult = session.run(mapOf(session.inputNames.first() to tensor))
+                    val inferUs = InferenceTiming.elapsedUs(inferStartedAtNs, SystemClock.elapsedRealtimeNanos())
+                    val inferMs = inferUs / 1_000L
+                    inferenceResult.use resultUse@{ res ->
+                        val outputStartedAtNs = SystemClock.elapsedRealtimeNanos()
+                        @Suppress("UNCHECKED_CAST")
+                        val out = res.get(0).value as Array<Array<Array<FloatArray>>>
+                        val probMap = out[0][0]
+                        val outputReadUs = InferenceTiming.elapsedUs(
+                            outputStartedAtNs,
+                            SystemClock.elapsedRealtimeNanos(),
+                        )
+
+                        val statsStartedAtNs = SystemClock.elapsedRealtimeNanos()
+                        val stats = paddleProbMapStats(probMap, binThresh, scoreThresh)
+                        val statsUs = InferenceTiming.elapsedUs(statsStartedAtNs, SystemClock.elapsedRealtimeNanos())
+                        val outputHeight = probMap.size
+                        val outputWidth = probMap.firstOrNull()?.size ?: 0
+                        if (outputWidth <= 0 || outputHeight <= 0) {
+                            Timber.w("PaddleOCR ${trace}detCall#%d empty probability map", detectCallId)
+                            return@resultUse emptyList()
+                        }
+                        val outputScale = PaddleDetectionSizing.outputScale(
+                            sourceWidth = bitmap.width,
+                            sourceHeight = bitmap.height,
+                            outputWidth = outputWidth,
+                            outputHeight = outputHeight,
+                        )
+
+                        val postStartedAtNs = SystemClock.elapsedRealtimeNanos()
+                        val quads = DBPostprocessor.extractQuads(
+                            probMap = probMap,
+                            scaleX = outputScale.x,
+                            scaleY = outputScale.y,
+                            binThresh = binThresh,
+                            scoreThresh = scoreThresh,
+                            unclipRatio = unclipRatio
+                        )
+                        val postUs = InferenceTiming.elapsedUs(postStartedAtNs, SystemClock.elapsedRealtimeNanos())
+                        val postMs = postUs / 1_000L
+                        val pipelineTotalUs = InferenceTiming.elapsedUs(
+                            pipelineStartedAtNs,
+                            SystemClock.elapsedRealtimeNanos(),
+                        )
+                        val timing = InferenceTiming.stageSummary(
+                            totalUs = pipelineTotalUs,
+                            stagesUs = listOf(
+                                resizeUs,
+                                nchwUs,
+                                bufferAcquireUs,
+                                bufferFillUs,
+                                tensorUs,
+                                inferUs,
+                                outputReadUs,
+                                statsUs,
+                                postUs,
+                            ),
+                        )
+                        Timber.i(
+                            "PaddleOCR ${trace}detCall#%d output pass=%s profile=%s %s preprocess=%dms(resize=%d,nchw=%d,buffer=%d,tensor=%d) infer=%dms post=%dms total=%dms outputScaleX=%.6f outputScaleY=%.6f mapped=%dx%d quads=%d",
+                            detectCallId,
+                            passLabel,
+                            profile.name,
+                            stats.toLogString(),
+                            (resizeUs + nchwUs + bufferAcquireUs + bufferFillUs + tensorUs) / 1_000L,
+                            resizeMs,
+                            nchwMs,
+                            (bufferAcquireUs + bufferFillUs) / 1_000L,
+                            tensorMs,
+                            inferMs,
+                            postMs,
+                            pipelineTotalUs / 1_000L,
+                            outputScale.x,
+                            outputScale.y,
+                            (outputWidth * outputScale.x).toInt(),
+                            (outputHeight * outputScale.y).toInt(),
+                            quads.size,
+                        )
+                        Timber.tag(DBNET_DETAIL_TAG).i(
+                            "detCall=%d pass=%s profile=%s timingUs total=%d resize=%d nchw=%d bufferAcquire=%d bufferFill=%d tensorCreate=%d run=%d outputRead=%d stats=%d post=%d other=%d inputFloats=%d inputBytes=%d inputDirect=%s bufferReused=%s bufferCapacityFloats=%d tensorOwnsBuffer=%s output=%dx%d quads=%d",
+                            detectCallId,
+                            passLabel,
+                            profile.name,
+                            timing.totalUs,
+                            resizeUs,
+                            nchwUs,
+                            bufferAcquireUs,
+                            bufferFillUs,
+                            tensorUs,
+                            inferUs,
+                            outputReadUs,
+                            statsUs,
+                            postUs,
+                            timing.unaccountedUs,
+                            inputData.size,
+                            inputData.size.toLong() * Float.SIZE_BYTES,
+                            inputBufferDirect,
+                            lease.reused,
+                            lease.capacityElements,
+                            tensorOwnsBuffer,
+                            outputWidth,
+                            outputHeight,
+                            quads.size,
+                        )
+                        quads
                     }
-                    val outputScale = PaddleDetectionSizing.outputScale(
-                        sourceWidth = bitmap.width,
-                        sourceHeight = bitmap.height,
-                        outputWidth = outputWidth,
-                        outputHeight = outputHeight,
-                    )
-                    val postStart = System.currentTimeMillis()
-                    val quads = DBPostprocessor.extractQuads(
-                        probMap = probMap,
-                        scaleX = outputScale.x,
-                        scaleY = outputScale.y,
-                        binThresh = binThresh,
-                        scoreThresh = scoreThresh,
-                        unclipRatio = unclipRatio
-                    )
-                    val postMs = System.currentTimeMillis() - postStart
-                    Timber.i(
-                        "PaddleOCR ${trace}detCall#%d output pass=%s profile=%s %s preprocess=%dms(resize=%d,nchw=%d,tensor=%d) infer=%dms post=%dms total=%dms outputScaleX=%.6f outputScaleY=%.6f mapped=%dx%d quads=%d",
-                        detectCallId,
-                        passLabel,
-                        profile.name,
-                        stats.toLogString(),
-                        resizeMs + nchwMs + tensorMs,
-                        resizeMs,
-                        nchwMs,
-                        tensorMs,
-                        inferMs,
-                        postMs,
-                        resizeMs + nchwMs + tensorMs + inferMs + postMs,
-                        outputScale.x,
-                        outputScale.y,
-                        (outputWidth * outputScale.x).toInt(),
-                        (outputHeight * outputScale.y).toInt(),
-                        quads.size,
-                    )
-                    quads
                 }
             }
         } finally {
@@ -954,9 +1044,11 @@ class PaddleOcrEngine @Inject constructor(
         detSession = null
         recSession = null
         env = null
+        detInputBufferPool.clear()
     }
 
     companion object {
+        private const val DBNET_DETAIL_TAG = "DBNetDetail"
         private const val DET_PROB_THRESH = 0.3f
         private const val MIN_BOX_AREA = 16
         private const val DET_BOX_SCORE_THRESH = 0.6f
