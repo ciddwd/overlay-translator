@@ -7,6 +7,20 @@ import org.junit.Test
 class SettingsDefaultsTest {
 
     @Test
+    fun developerDiagnostics_defaultToOff() {
+        data class Case(val name: String, val actual: Boolean)
+
+        val settings = Settings()
+        listOf(
+            Case("developer options", settings.developerOptionsEnabled),
+            Case("OCR screenshot saving", settings.ocrScreenshotSavingEnabled),
+            Case("disable translation cache", settings.disableTranslationCache),
+        ).forEach { case ->
+            assertEquals(case.name, false, case.actual)
+        }
+    }
+
+    @Test
     fun paddleModelVersion_defaultsToStableV5AcrossSettingsAndPresets() {
         data class Case(
             val source: String,

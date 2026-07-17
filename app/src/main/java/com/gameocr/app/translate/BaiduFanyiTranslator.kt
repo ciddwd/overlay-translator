@@ -63,7 +63,7 @@ class BaiduFanyiTranslator @Inject constructor(
                 continue
             }
             val key = cache.key(t, "baidu-fanyi-$targetCode", targetCode, "")
-            val hit = cache.get(key)
+            val hit = cache.get(key, settings)
             if (hit != null) result[i] = hit
             else pending.add(i)
         }
@@ -108,7 +108,7 @@ class BaiduFanyiTranslator @Inject constructor(
             val text = results.getOrNull(order)?.dst?.trim() ?: continue
             result[idx] = text
             val key = cache.key(sources[idx].trim(), "baidu-fanyi-$targetCode", targetCode, "")
-            cache.put(key, text)
+            cache.put(key, text, settings)
         }
         return result.toList()
     }

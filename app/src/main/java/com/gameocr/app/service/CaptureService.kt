@@ -93,14 +93,17 @@ import com.gameocr.app.overlay.WordSelectOverlay
 import com.gameocr.app.ui.MainActivity
 import com.gameocr.app.translate.TranslationException
 import com.gameocr.app.translate.Translator
+import com.gameocr.app.translate.RoutingTranslator
 import com.gameocr.app.translate.WordHeuristic
 import com.gameocr.app.translate.WordResult
 import com.gameocr.app.translate.WordSelectTranslationCoordinator
 import com.gameocr.app.translate.WordSelectTranslationStage
+import com.gameocr.app.util.InferenceTiming
 import com.gameocr.app.util.VerticalDiagnosticLog
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -190,6 +193,7 @@ class CaptureService : Service() {
 
     private var loopJob: Job? = null
     private var ocrWarmupJob: Job? = null
+    private var localLlmWarmupJob: Job? = null
     private var previousLoopFingerprint: LoopFrameFingerprint? = null
     private var previousLoopOcrText: String? = null
     private var loopFrameStabilityState = LoopFrameStabilityState()
@@ -379,6 +383,7 @@ class CaptureService : Service() {
 
         CaptureServiceState.setRunning(true)
         startOcrWarmupIfNeeded()
+        startLocalLlmWarmupIfNeeded()
 
         // Shizuku 路径 dry-run：即使 availability == READY，未通过 ADB / root 配对的 Shizuku 也会
         // 让 newProcess(screencap) 失败（exit=1）。立刻跑一次截屏，失败则用悬浮错误条引导用户改
@@ -423,6 +428,40 @@ class CaptureService : Service() {
             }
             runCatching { mangaOcrEngine.prewarm() }
                 .onFailure { Timber.w(it, "MangaOcr background prewarm failed") }
+        }
+    }
+
+    private fun startLocalLlmWarmupIfNeeded() {
+        localLlmWarmupJob?.cancel()
+        localLlmWarmupJob = scope.launch {
+            // Avoid running two large cold-start inference workloads against each other. If Manga
+            // OCR is selected, let its short real-inference warmup finish before loading the LLM.
+            ocrWarmupJob?.join()
+            val routing = translator as? RoutingTranslator
+            if (routing == null) {
+                Timber.tag("LocalLlmPerf").i("prewarm skipped decision=SKIP_ROUTER_UNAVAILABLE")
+                return@launch
+            }
+            val settings = settingsRepository.get()
+            val startedAt = SystemClock.elapsedRealtime()
+            runCatching { routing.prewarmLocalModel(settings) }
+                .onSuccess { result ->
+                    Timber.tag("LocalLlmPerf").i(
+                        "prewarm decision=%s kind=%s totalMs=%d",
+                        result.decision.name,
+                        result.modelKind ?: "none",
+                        InferenceTiming.elapsedMs(startedAt, SystemClock.elapsedRealtime()),
+                    )
+                }
+                .onFailure { error ->
+                    if (error is CancellationException) throw error
+                    Timber.tag("LocalLlmPerf").w(
+                        error,
+                        "prewarm failed engine=%s totalMs=%d",
+                        settings.translatorEngine.name,
+                        InferenceTiming.elapsedMs(startedAt, SystemClock.elapsedRealtime()),
+                    )
+                }
         }
     }
 
@@ -619,7 +658,14 @@ class CaptureService : Service() {
                 return
             }
             logWordSelectPerf("crop_ready", "crop=${cropped.width}x${cropped.height}")
-            dumpCaptureFrameForDebug(this, diagId, "word-select-crop", cropped)?.let { file ->
+            dumpCaptureFrameForDebug(
+                context = this,
+                diagId = diagId,
+                label = "word-select-crop",
+                developerOptionsEnabled = settings.developerOptionsEnabled,
+                screenshotSavingEnabled = settings.ocrScreenshotSavingEnabled,
+                bitmap = cropped,
+            )?.let { file ->
                 logVerticalDiag(diagId, "debug crop dumped path=${file.absolutePath}")
                 logRepository.info(
                     LogRepository.Category.CAPTURE,
@@ -1353,13 +1399,23 @@ class CaptureService : Service() {
             }
             // 在拿 settings 之前先 rescale region，免得拿到的是旧屏幕方向的坐标。
             restoreCaptureChromeOnce(showLoading = showLoadingAfterScreenshot)
+            val dmNow = resources.displayMetrics
+            settingsRepository.rescaleCaptureRegionIfNeeded(dmNow.widthPixels, dmNow.heightPixels)
+            val settings = settingsRepository.get()
             val fullStats = sampleBitmapFrameStats(full)
             logVerticalDiag(
                 diagId,
                 "screenshot full=${full.width}x${full.height} stats=${fullStats.toDiagString()}"
             )
             logCaptureGeometry(diagId, "fullScreen", full)
-            dumpCaptureFrameForDebug(this, diagId, "full", full)?.let { file ->
+            dumpCaptureFrameForDebug(
+                context = this,
+                diagId = diagId,
+                label = "full",
+                developerOptionsEnabled = settings.developerOptionsEnabled,
+                screenshotSavingEnabled = settings.ocrScreenshotSavingEnabled,
+                bitmap = full,
+            )?.let { file ->
                 logVerticalDiag(diagId, "debug frame dumped path=${file.absolutePath}")
                 logRepository.info(
                     LogRepository.Category.CAPTURE,
@@ -1368,9 +1424,6 @@ class CaptureService : Service() {
                 )
             }
             logBlankLikeFrame(diagId, "screenshot", fullStats)
-            val dmNow = resources.displayMetrics
-            settingsRepository.rescaleCaptureRegionIfNeeded(dmNow.widthPixels, dmNow.heightPixels)
-            val settings = settingsRepository.get()
             applyOverlayConfig(settings)
             logVerticalSettings(diagId, settings, dmNow.widthPixels, dmNow.heightPixels)
 
@@ -3050,6 +3103,8 @@ class CaptureService : Service() {
         loopJob = null
         ocrWarmupJob?.cancel()
         ocrWarmupJob = null
+        localLlmWarmupJob?.cancel()
+        localLlmWarmupJob = null
         resetLoopFrameHistory()
         resetLoopRuntimeState()
         settingsCollectJob?.cancel()

@@ -106,6 +106,8 @@ object SettingsFieldPolicy {
         portable("loopTextRegionMode", R.string.settings_search_item_loop_region),
         portable("loopTranslateRegionOnly", R.string.settings_search_item_loop_region),
         portable("developerOptionsEnabled", R.string.settings_search_item_developer_ocr),
+        portable("ocrScreenshotSavingEnabled", R.string.settings_search_item_developer_ocr),
+        portable("disableTranslationCache", R.string.settings_search_item_developer_ocr),
         portable("ocrRedBoxModeEnabled", R.string.settings_search_item_developer_ocr),
         portable("ocrRedBoxShowSourceText", R.string.settings_search_item_developer_ocr),
         portable("ocrRedBoxShowTranslation", R.string.settings_search_item_developer_ocr),

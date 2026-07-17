@@ -244,6 +244,104 @@ string(REPLACE
         GAMEOCR_AI_CHAT_SOURCE
         "${GAMEOCR_AI_CHAT_SOURCE}")
 
+# Expose read-only prompt metrics to the app without modifying the llama.cpp submodule.
+# These functions are appended to the generated translation unit, so they can reuse the
+# binding's loaded model, tokenizer, chat template and actual context size.
+string(APPEND GAMEOCR_AI_CHAT_SOURCE [=[
+
+extern "C"
+JNIEXPORT jint JNICALL
+Java_com_gameocr_app_llm_LlamaPromptMetrics_countTextTokens(
+        JNIEnv *env,
+        jobject /*unused*/,
+        jstring jtext) {
+    if (g_context == nullptr || jtext == nullptr) {
+        return -1;
+    }
+    const auto *text = env->GetStringUTFChars(jtext, nullptr);
+    const auto tokens = common_tokenize(g_context, std::string(text), false, false);
+    env->ReleaseStringUTFChars(jtext, text);
+    return (jint) tokens.size();
+}
+
+extern "C"
+JNIEXPORT jint JNICALL
+Java_com_gameocr_app_llm_LlamaPromptMetrics_countUserPromptTokens(
+        JNIEnv *env,
+        jobject /*unused*/,
+        jstring jprompt) {
+    if (g_context == nullptr || jprompt == nullptr) {
+        return -1;
+    }
+
+    const auto *prompt = env->GetStringUTFChars(jprompt, nullptr);
+    std::string formatted_prompt(prompt);
+    const bool has_chat_template = common_chat_templates_was_explicit(g_chat_templates.get());
+    if (has_chat_template) {
+        // processUserPrompt() resets every request to the optional system message before
+        // formatting. Mirror that state here so this count exactly matches the next prefill.
+        std::vector<common_chat_msg> base_messages;
+        if (!chat_msgs.empty() && chat_msgs.front().role == ROLE_SYSTEM) {
+            base_messages.push_back(chat_msgs.front());
+        }
+        common_chat_msg user_message;
+        user_message.role = ROLE_USER;
+        user_message.content = prompt;
+        formatted_prompt = common_chat_format_single(
+                g_chat_templates.get(),
+                base_messages,
+                user_message,
+                true,
+                /* use_jinja */ false);
+    }
+    env->ReleaseStringUTFChars(jprompt, prompt);
+
+    const auto tokens = common_tokenize(
+            g_context,
+            formatted_prompt,
+            has_chat_template,
+            has_chat_template);
+    return (jint) tokens.size();
+}
+
+extern "C"
+JNIEXPORT jint JNICALL
+Java_com_gameocr_app_llm_LlamaPromptMetrics_contextSizeTokens(
+        JNIEnv * /*env*/,
+        jobject /*unused*/) {
+    return g_context == nullptr ? -1 : (jint) llama_n_ctx(g_context);
+}
+
+extern "C"
+JNIEXPORT jint JNICALL
+Java_com_gameocr_app_llm_LlamaPromptMetrics_batchSizeTokens(
+        JNIEnv * /*env*/,
+        jobject /*unused*/) {
+    return g_context == nullptr ? -1 : (jint) llama_n_batch(g_context);
+}
+
+extern "C"
+JNIEXPORT jint JNICALL
+Java_com_gameocr_app_llm_LlamaPromptMetrics_sequenceCapacity(
+        JNIEnv * /*env*/,
+        jobject /*unused*/) {
+    return g_context == nullptr ? -1 : (jint) llama_n_seq_max(g_context) - 1;
+}
+
+extern "C"
+JNIEXPORT jint JNICALL
+Java_com_gameocr_app_llm_LlamaPromptMetrics_systemPromptTokens(
+        JNIEnv * /*env*/,
+        jobject /*unused*/) {
+    return g_context == nullptr ? -1 : (jint) system_prompt_position;
+}
+]=])
+
+# The implementation is appended to ai_chat.cpp's generated translation unit so it can
+# safely reuse the binding's process-global model, context, chat template and system KV.
+file(READ "${CMAKE_CURRENT_LIST_DIR}/llama_multi_sequence.inc" GAMEOCR_MULTI_SEQUENCE_SOURCE)
+string(APPEND GAMEOCR_AI_CHAT_SOURCE "\n${GAMEOCR_MULTI_SEQUENCE_SOURCE}\n")
+
 set(GAMEOCR_AI_CHAT_CPP "${CMAKE_CURRENT_BINARY_DIR}/gameocr_ai_chat.cpp")
 file(WRITE "${GAMEOCR_AI_CHAT_CPP}" "${GAMEOCR_AI_CHAT_SOURCE}")
 

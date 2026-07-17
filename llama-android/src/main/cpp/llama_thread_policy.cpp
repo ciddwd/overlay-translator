@@ -35,6 +35,28 @@ int select_inference_threads(const int available_processors) {
     return 6;
 }
 
+int thread_value_from_environment(
+        const char * name,
+        const int fallback,
+        const int maximum) {
+    const char * raw_value = std::getenv(name);
+    if (raw_value == nullptr) return fallback;
+
+    char * end = nullptr;
+    const long value = std::strtol(raw_value, &end, 10);
+    if (end != raw_value && *end == '\0' && value >= 1 && value <= maximum) {
+        return static_cast<int>(value);
+    }
+    __android_log_print(
+            ANDROID_LOG_WARN,
+            "LocalLlmPerf",
+            "invalid thread environment %s=%s; keeping %d",
+            name,
+            raw_value,
+            fallback);
+    return fallback;
+}
+
 bool requests_vulkan() {
     const char * value = std::getenv("GAMEOCR_VULKAN_OFFLOAD");
     return value != nullptr && std::strcmp(value, "1") == 0;
@@ -149,16 +171,30 @@ extern "C" llama_context * gameocr_llama_init_from_model(
     const long detected = sysconf(_SC_NPROCESSORS_ONLN);
     const int available_processors = detected > 0 ? static_cast<int>(detected) : 1;
     const int selected_threads = select_inference_threads(available_processors);
-    const int upstream_threads = params.n_threads;
+    const int generation_threads = thread_value_from_environment(
+            "GAMEOCR_GENERATION_THREADS", selected_threads, selected_threads);
+    const int prompt_threads = thread_value_from_environment(
+            "GAMEOCR_PROMPT_THREADS", selected_threads, selected_threads);
+    const int upstream_generation_threads = params.n_threads;
+    const int upstream_prompt_threads = params.n_threads_batch;
 
-    params.n_threads = selected_threads;
-    params.n_threads_batch = selected_threads;
+    params.n_threads = generation_threads;
+    params.n_threads_batch = prompt_threads;
+    // Sequence 0 owns the reusable system prompt; 1..8 are independent translations.
+    // Unified KV preserves the full per-sequence context while sharing the system prefix.
+    params.n_seq_max = 9;
+    params.kv_unified = true;
     __android_log_print(
             ANDROID_LOG_INFO,
             "LocalLlmPerf",
-            "thread policy availableProcessors=%d upstreamRequested=%d selected=%d max=6",
+            "thread policy native availableProcessors=%d upstreamTG=%d upstreamPP=%d "
+            "TG=%d PP=%d max=6 nSeqMax=%u kvUnified=%s",
             available_processors,
-            upstream_threads,
-            selected_threads);
+            upstream_generation_threads,
+            upstream_prompt_threads,
+            generation_threads,
+            prompt_threads,
+            params.n_seq_max,
+            params.kv_unified ? "true" : "false");
     return llama_init_from_model(model, params);
 }

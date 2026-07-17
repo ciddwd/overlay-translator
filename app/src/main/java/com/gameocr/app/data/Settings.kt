@@ -25,6 +25,8 @@ data class Settings(
     val loopTextRegionMode: LoopTextRegionMode = LoopTextRegionMode.AUTO,
     val loopTranslateRegionOnly: Boolean = true,
     val developerOptionsEnabled: Boolean = false,
+    val ocrScreenshotSavingEnabled: Boolean = false,
+    val disableTranslationCache: Boolean = false,
     val ocrRedBoxModeEnabled: Boolean = false,
     val ocrRedBoxShowSourceText: Boolean = true,
     val ocrRedBoxShowTranslation: Boolean = false,

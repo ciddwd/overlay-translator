@@ -438,6 +438,8 @@ fun SettingsScreen(
     var loopTextRegionMode by remember { mutableStateOf(LoopTextRegionMode.AUTO) }
     var loopTranslateRegionOnly by remember { mutableStateOf(true) }
     var developerOptionsEnabled by remember { mutableStateOf(false) }
+    var ocrScreenshotSavingEnabled by remember { mutableStateOf(false) }
+    var disableTranslationCache by remember { mutableStateOf(false) }
     var ocrRedBoxModeEnabled by remember { mutableStateOf(false) }
     var ocrRedBoxShowSourceText by remember { mutableStateOf(true) }
     var ocrRedBoxShowTranslation by remember { mutableStateOf(false) }
@@ -726,6 +728,8 @@ fun SettingsScreen(
         loopTextRegionMode = s.loopTextRegionMode
         loopTranslateRegionOnly = s.loopTranslateRegionOnly
         developerOptionsEnabled = s.developerOptionsEnabled
+        ocrScreenshotSavingEnabled = s.ocrScreenshotSavingEnabled
+        disableTranslationCache = s.disableTranslationCache
         ocrRedBoxModeEnabled = s.ocrRedBoxModeEnabled
         ocrRedBoxShowSourceText = s.ocrRedBoxShowSourceText
         ocrRedBoxShowTranslation = s.ocrRedBoxShowTranslation
@@ -1028,6 +1032,8 @@ fun SettingsScreen(
         loopTextRegionMode = loopTextRegionMode,
         loopTranslateRegionOnly = loopTranslateRegionOnly,
         developerOptionsEnabled = developerOptionsEnabled,
+        ocrScreenshotSavingEnabled = ocrScreenshotSavingEnabled,
+        disableTranslationCache = disableTranslationCache,
         ocrRedBoxModeEnabled = ocrRedBoxModeEnabled,
         ocrRedBoxShowSourceText = ocrRedBoxShowSourceText,
         ocrRedBoxShowTranslation = ocrRedBoxShowTranslation,
@@ -1199,6 +1205,8 @@ fun SettingsScreen(
             loopTextRegionMode = loopTextRegionMode,
             loopTranslateRegionOnly = loopTranslateRegionOnly,
             developerOptionsEnabled = developerOptionsEnabled,
+            ocrScreenshotSavingEnabled = ocrScreenshotSavingEnabled,
+            disableTranslationCache = disableTranslationCache,
             ocrRedBoxModeEnabled = ocrRedBoxModeEnabled,
             ocrRedBoxShowSourceText = ocrRedBoxShowSourceText,
             ocrRedBoxShowTranslation = ocrRedBoxShowTranslation,
@@ -2130,6 +2138,8 @@ fun SettingsScreen(
             loopSkipSimilarFrames = s.loopSkipSimilarFrames
             loopFrameSimilarityThreshold = s.loopFrameSimilarityThreshold
             developerOptionsEnabled = s.developerOptionsEnabled
+            ocrScreenshotSavingEnabled = s.ocrScreenshotSavingEnabled
+            disableTranslationCache = s.disableTranslationCache
             ocrRedBoxModeEnabled = s.ocrRedBoxModeEnabled
             ocrRedBoxShowSourceText = s.ocrRedBoxShowSourceText
             ocrRedBoxShowTranslation = s.ocrRedBoxShowTranslation
@@ -4312,6 +4322,16 @@ fun SettingsScreen(
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         SwitchRow(
+                            label = stringResource(R.string.settings_ocr_screenshot_saving_label),
+                            checked = ocrScreenshotSavingEnabled,
+                            helpText = stringResource(R.string.settings_ocr_screenshot_saving_hint),
+                        ) { ocrScreenshotSavingEnabled = it }
+                        SwitchRow(
+                            label = stringResource(R.string.settings_disable_translation_cache_label),
+                            checked = disableTranslationCache,
+                            helpText = stringResource(R.string.settings_disable_translation_cache_hint),
+                        ) { disableTranslationCache = it }
+                        SwitchRow(
                             label = stringResource(R.string.settings_ocr_red_box_mode_label),
                             checked = ocrRedBoxModeEnabled,
                             helpText = stringResource(R.string.settings_ocr_red_box_mode_hint),
@@ -5588,8 +5608,9 @@ internal val SETTINGS_SEARCH_LOOP_REGION_KEYWORDS = listOf(
 
 internal val SETTINGS_SEARCH_DEVELOPER_OCR_KEYWORDS = listOf(
     "developer", "developer mode", "debug", "diagnostic", "ocr box", "red box",
-    "bounding box", "source text", "translation text", "开发者", "开发者模式", "调试",
-    "诊断", "OCR 红框", "红框", "边界框", "原文", "译文",
+    "bounding box", "source text", "translation text", "screenshot", "save screenshot",
+    "translation cache", "disable cache", "开发者", "开发者模式", "调试", "诊断",
+    "OCR 红框", "红框", "边界框", "原文", "译文", "截图保存", "翻译缓存", "禁用缓存",
 )
 
 private val SETTING_ITEMS: List<SearchEntry> = listOf(

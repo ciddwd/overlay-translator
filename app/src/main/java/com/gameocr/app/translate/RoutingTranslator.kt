@@ -52,6 +52,22 @@ class RoutingTranslator @Inject constructor(
 
     fun prefersBatchFor(settings: Settings): Boolean = engineFor(settings).prefersBatch
 
+    internal suspend fun prewarmLocalModel(settings: Settings): LocalLlmPrewarmResult {
+        val local = engineFor(settings) as? LocalLlamaTranslator
+        val installed = local?.isPrewarmModelInstalled() == true
+        val decision = LocalLlmPrewarmPolicy.decide(
+            routedToLocalModel = local != null,
+            modelInstalled = installed,
+        )
+        if (decision == LocalLlmPrewarmDecision.PREWARM) {
+            checkNotNull(local).prewarm(settings)
+        }
+        return LocalLlmPrewarmResult(
+            decision = decision,
+            modelKind = local?.prewarmModelKind?.name,
+        )
+    }
+
     override suspend fun translateBatch(sources: List<String>, settings: Settings): List<String?> {
         val enriched = translationContextResolver.enrich(sources.joinToString("\n"), settings)
         return normalizeBatch(

@@ -7,6 +7,7 @@ import android.system.Os
 import com.arm.aichat.AiChat
 import com.arm.aichat.InferenceEngine
 import com.arm.aichat.UnsupportedArchitectureException
+import com.gameocr.app.BuildConfig
 import com.gameocr.app.R
 import com.gameocr.app.util.CpuThreadPolicy
 import com.gameocr.app.util.InferenceTiming
@@ -28,7 +29,8 @@ import timber.log.Timber
  * 在 [HunyuanMtTranslator] 与 [SakuraGalTranslator] 之间复用，切换模型时先 cleanUp 再 loadModel。
  *
  * 内存策略（与 Plan 一致）：
- * - **Lazy load**：[ensureLoaded] 在首次翻译时按需加载，Service 启动不预热；
+ * - **Background prewarm**：选择已安装的本地翻译模型时，悬浮翻译 Service 启动后调用
+ *   [ensureLoaded]；若预热尚未完成，首次翻译复用同一把初始化锁等待，不会重复加载；
  * - **Idle unload**：每次 [touch] 重置 5 分钟倒计时，到点自动 [unload]，释放 ~440-1024 MB；
  * - 引擎实例本身不 [InferenceEngine.destroy]（destroy 后无法再次 loadModel），只 cleanUp 卸权重。
  *
@@ -63,6 +65,8 @@ class LlamaEngineHolder @Inject constructor(
     fun isDeviceCapable(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
 
     val currentKind: LlmModelKind? get() = loadedKind
+
+    fun isModelInstalled(kind: LlmModelKind): Boolean = installer.checkInstalled(kind) != null
 
     /**
      * 确保指定 [kind] 的模型已加载到 engine 中，必要时切换。
@@ -105,11 +109,16 @@ class LlamaEngineHolder @Inject constructor(
             )
 
         val availableProcessors = CpuThreadPolicy.availableProcessors()
-        val selectedThreads = CpuThreadPolicy.select(availableProcessors)
+        val threadConfig = LocalLlmThreadPolicy.select(
+            availableProcessors = availableProcessors,
+            requestedGenerationThreads = BuildConfig.LOCAL_LLM_GENERATION_THREADS,
+        )
         Timber.tag(PERF_TAG).i(
-            "thread policy availableProcessors=%d selected=%d max=%d",
+            "thread policy availableProcessors=%d TG=%d PP=%d requestedTG=%d max=%d",
             availableProcessors,
-            selectedThreads,
+            threadConfig.generationThreads,
+            threadConfig.promptThreads,
+            BuildConfig.LOCAL_LLM_GENERATION_THREADS,
             CpuThreadPolicy.MAX_INFERENCE_THREADS,
         )
         val totalStartedAt = SystemClock.elapsedRealtime()
@@ -123,6 +132,9 @@ class LlamaEngineHolder @Inject constructor(
                 true,
             )
             LocalLlmSamplingPolicy.nativeEnvironment(kind).forEach { (name, value) ->
+                Os.setenv(name, value, true)
+            }
+            LocalLlmThreadPolicy.nativeEnvironment(threadConfig).forEach { (name, value) ->
                 Os.setenv(name, value, true)
             }
         }.onFailure {
@@ -173,7 +185,7 @@ class LlamaEngineHolder @Inject constructor(
             }
             Timber.tag(PERF_TAG).i(
                 "model load kind=%s totalMs=%d engineAcquireMs=%d modelLoadMs=%d systemPromptMs=%d " +
-                    "fileMb=%d reusedEngine=%s threads=%d requestedVulkan=%s",
+                    "fileMb=%d reusedEngine=%s TG=%d PP=%d requestedVulkan=%s",
                 kind.name,
                 InferenceTiming.elapsedMs(totalStartedAt, SystemClock.elapsedRealtime()),
                 engineAcquireMs,
@@ -181,7 +193,8 @@ class LlamaEngineHolder @Inject constructor(
                 systemPromptMs,
                 modelFile.length() / 1024 / 1024,
                 current != null,
-                selectedThreads,
+                threadConfig.generationThreads,
+                threadConfig.promptThreads,
                 requestedVulkan,
             )
         } catch (uae: UnsupportedArchitectureException) {

@@ -49,6 +49,8 @@ class SettingsRepository @Inject constructor(
         val LoopTextRegionMode = stringPreferencesKey("loop_text_region_mode")
         val LoopTranslateRegionOnly = booleanPreferencesKey("loop_translate_region_only")
         val DeveloperOptionsEnabled = booleanPreferencesKey("developer_options_enabled")
+        val OcrScreenshotSavingEnabled = booleanPreferencesKey("ocr_screenshot_saving_enabled")
+        val DisableTranslationCache = booleanPreferencesKey("disable_translation_cache")
         val OcrRedBoxModeEnabled = booleanPreferencesKey("ocr_red_box_mode_enabled")
         val OcrRedBoxShowSourceText = booleanPreferencesKey("ocr_red_box_show_source_text")
         val OcrRedBoxShowTranslation = booleanPreferencesKey("ocr_red_box_show_translation")
@@ -350,6 +352,8 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.LoopTextRegionMode] = next.loopTextRegionMode.name
             prefs[Keys.LoopTranslateRegionOnly] = next.loopTranslateRegionOnly
             prefs[Keys.DeveloperOptionsEnabled] = next.developerOptionsEnabled
+            prefs[Keys.OcrScreenshotSavingEnabled] = next.ocrScreenshotSavingEnabled
+            prefs[Keys.DisableTranslationCache] = next.disableTranslationCache
             prefs[Keys.OcrRedBoxModeEnabled] = next.ocrRedBoxModeEnabled
             prefs[Keys.OcrRedBoxShowSourceText] = next.ocrRedBoxShowSourceText
             prefs[Keys.OcrRedBoxShowTranslation] = next.ocrRedBoxShowTranslation
@@ -529,6 +533,10 @@ class SettingsRepository @Inject constructor(
                 ?: default.loopTranslateRegionOnly,
             developerOptionsEnabled = this[Keys.DeveloperOptionsEnabled]
                 ?: default.developerOptionsEnabled,
+            ocrScreenshotSavingEnabled = this[Keys.OcrScreenshotSavingEnabled]
+                ?: default.ocrScreenshotSavingEnabled,
+            disableTranslationCache = this[Keys.DisableTranslationCache]
+                ?: default.disableTranslationCache,
             ocrRedBoxModeEnabled = this[Keys.OcrRedBoxModeEnabled]
                 ?: default.ocrRedBoxModeEnabled,
             ocrRedBoxShowSourceText = this[Keys.OcrRedBoxShowSourceText]
