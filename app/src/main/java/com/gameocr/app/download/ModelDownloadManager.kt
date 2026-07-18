@@ -13,12 +13,38 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+
+internal data class IndependentDownloadFailure<T>(
+    val item: T,
+    val cause: Throwable,
+)
+
+internal suspend fun <T> runModelDownloadsIndependently(
+    items: List<T>,
+    download: suspend (T) -> Unit,
+): List<IndependentDownloadFailure<T>> = supervisorScope {
+    items.map { item ->
+        async {
+            try {
+                download(item)
+                null
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                IndependentDownloadFailure(item, t)
+            }
+        }
+    }.awaitAll().filterNotNull()
+}
 
 @Singleton
 class ModelDownloadManager @Inject constructor(
@@ -50,6 +76,23 @@ class ModelDownloadManager @Inject constructor(
                 ?: terminal.outputData.getString(ModelDownloadWorker.KEY_STATUS)
                 ?: "Model download ${terminal.state.name.lowercase()}"
             throw RuntimeException(detail)
+        }
+    }
+
+    suspend fun enqueueIndependentlyAndAwait(
+        specs: List<ModelDownloadSpec>,
+        onProgress: (String) -> Unit,
+        ownerPresetId: String? = null,
+    ) {
+        val failures = runModelDownloadsIndependently(splitModelDownloadRequests(specs)) { request ->
+            enqueueAndAwait(request, onProgress, ownerPresetId)
+        }
+        if (failures.isNotEmpty()) {
+            throw RuntimeException(
+                failures.joinToString("; ") { failure ->
+                    failure.cause.message ?: failure.cause.javaClass.simpleName
+                }
+            )
         }
     }
 

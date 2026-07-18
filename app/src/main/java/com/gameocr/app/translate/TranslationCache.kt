@@ -1,6 +1,7 @@
 package com.gameocr.app.translate
 
 import android.util.LruCache
+import com.gameocr.app.data.Settings
 
 /**
  * 译文缓存：key = 原文 + 模型 + 目标语 + prompt 哈希。
@@ -12,10 +13,13 @@ class TranslationCache(capacity: Int = 256) {
     fun key(source: String, model: String, targetLang: String, prompt: String): String =
         "$model|$targetLang|${prompt.hashCode()}|${source.hashCode()}|${source.length}"
 
-    fun get(key: String): String? = cache.get(key)
+    fun get(key: String, settings: Settings): String? {
+        if (!TranslationCachePolicy.isEnabled(settings)) return null
+        return cache.get(key)
+    }
 
-    fun put(key: String, value: String) {
-        if (!TranslationCachePolicy.shouldCache(value)) return
+    fun put(key: String, value: String, settings: Settings) {
+        if (!TranslationCachePolicy.shouldCache(settings, value)) return
         cache.put(key, value)
     }
 
@@ -25,5 +29,16 @@ class TranslationCache(capacity: Int = 256) {
 }
 
 internal object TranslationCachePolicy {
-    fun shouldCache(value: String): Boolean = value.isNotBlank()
+    fun isEnabled(settings: Settings): Boolean = isEnabled(
+        developerOptionsEnabled = settings.developerOptionsEnabled,
+        disableTranslationCache = settings.disableTranslationCache,
+    )
+
+    fun isEnabled(
+        developerOptionsEnabled: Boolean,
+        disableTranslationCache: Boolean,
+    ): Boolean = !(developerOptionsEnabled && disableTranslationCache)
+
+    fun shouldCache(settings: Settings, value: String): Boolean =
+        isEnabled(settings) && value.isNotBlank()
 }

@@ -7,9 +7,33 @@ internal data class GenerationTiming(
     val outputPiecesPerSecond: Double?,
 )
 
+internal data class InferenceStageSummary(
+    val totalUs: Long,
+    val accountedUs: Long,
+    val unaccountedUs: Long,
+)
+
 internal object InferenceTiming {
     fun elapsedMs(startMs: Long, endMs: Long): Long =
         (endMs - startMs).coerceAtLeast(0L)
+
+    fun elapsedUs(startNs: Long, endNs: Long): Long =
+        ((endNs - startNs).coerceAtLeast(0L)) / 1_000L
+
+    fun stageSummary(
+        totalUs: Long,
+        stagesUs: Iterable<Long>,
+    ): InferenceStageSummary {
+        val safeTotalUs = totalUs.coerceAtLeast(0L)
+        val accountedUs = stagesUs.fold(0L) { total, stage ->
+            total + stage.coerceAtLeast(0L)
+        }
+        return InferenceStageSummary(
+            totalUs = safeTotalUs,
+            accountedUs = accountedUs,
+            unaccountedUs = (safeTotalUs - accountedUs).coerceAtLeast(0L),
+        )
+    }
 
     fun generation(
         queuedAtMs: Long,

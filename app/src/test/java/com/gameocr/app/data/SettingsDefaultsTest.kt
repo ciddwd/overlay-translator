@@ -7,6 +7,20 @@ import org.junit.Test
 class SettingsDefaultsTest {
 
     @Test
+    fun developerDiagnostics_defaultToOff() {
+        data class Case(val name: String, val actual: Boolean)
+
+        val settings = Settings()
+        listOf(
+            Case("developer options", settings.developerOptionsEnabled),
+            Case("OCR screenshot saving", settings.ocrScreenshotSavingEnabled),
+            Case("disable translation cache", settings.disableTranslationCache),
+        ).forEach { case ->
+            assertEquals(case.name, false, case.actual)
+        }
+    }
+
+    @Test
     fun paddleModelVersion_defaultsToStableV5AcrossSettingsAndPresets() {
         data class Case(
             val source: String,
@@ -32,6 +46,30 @@ class SettingsDefaultsTest {
 
         assertEquals(1.55f, settings.dbnetUnclipRatio, 0.0001f)
         assertEquals(1.65f, settings.mangaOcrDbnetUnclipRatio, 0.0001f)
+    }
+
+    @Test
+    fun paddleDetectionAndRetiredMangaAdvancedSettings_defaultsAreStable() {
+        assertEquals(PaddleDetectionProfile.FAST, Settings().paddleDetectionProfile)
+
+        data class Case(val name: String, val gap: Int, val cropPadding: Int)
+        val cases = listOf(
+            Case(
+                "settings",
+                Settings().bubbleClusterGap,
+                Settings().mangaOcrCropPaddingPx,
+            ),
+            Case(
+                "translation preset",
+                TranslationPreset(id = "test", name = "test").bubbleClusterGap,
+                TranslationPreset(id = "test", name = "test").mangaOcrCropPaddingPx,
+            ),
+        )
+
+        cases.forEach { case ->
+            assertEquals("${case.name} bubble gap", 0, case.gap)
+            assertEquals("${case.name} crop padding", 0, case.cropPadding)
+        }
     }
 
     @Test

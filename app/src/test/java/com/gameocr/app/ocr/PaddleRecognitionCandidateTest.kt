@@ -69,6 +69,32 @@ class PaddleRecognitionCandidateTest {
     }
 
     @Test
+    fun paddleVerticalCropRotationDegrees_usesOfficialCounterClockwiseDirection() {
+        data class Case(
+            val name: String,
+            val width: Int,
+            val height: Int,
+            val expectedDegrees: Float?,
+        )
+
+        val cases = listOf(
+            Case("strongly vertical", width = 40, height = 100, expectedDegrees = -90f),
+            Case("just above threshold", width = 100, height = 151, expectedDegrees = -90f),
+            Case("exact threshold stays horizontal", width = 100, height = 150, expectedDegrees = null),
+            Case("square stays horizontal", width = 100, height = 100, expectedDegrees = null),
+            Case("wide crop stays horizontal", width = 200, height = 80, expectedDegrees = null),
+        )
+
+        cases.forEach { case ->
+            assertEquals(
+                case.name,
+                case.expectedDegrees,
+                paddleVerticalCropRotationDegrees(case.width, case.height),
+            )
+        }
+    }
+
+    @Test
     fun paddleLogTextStats_countsCharactersForDiagnostics() {
         data class Case(
             val name: String,

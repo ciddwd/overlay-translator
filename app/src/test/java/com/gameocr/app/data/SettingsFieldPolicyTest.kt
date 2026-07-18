@@ -72,4 +72,43 @@ class SettingsFieldPolicyTest {
         assertEquals(Settings().translatorEngine, decoded.settings.translatorEngine)
         assertEquals("zh-TW", decoded.settings.targetLang)
     }
+
+    @Test
+    fun retiredMangaAdvancedSettings_areZeroForEveryPortableBoundary() {
+        data class Case(val name: String, val settings: Settings)
+        val cases = listOf(
+            Case(
+                "portable encoding",
+                SettingsFieldPolicy.decodePortable(
+                    SettingsFieldPolicy.encodePortable(
+                        Settings(bubbleClusterGap = 47, mangaOcrCropPaddingPx = 23)
+                    )
+                ).settings,
+            ),
+            Case(
+                "legacy portable decoding",
+                SettingsFieldPolicy.decodePortable(
+                    JsonObject(
+                        mapOf(
+                            "bubbleClusterGap" to JsonPrimitive(47),
+                            "mangaOcrCropPaddingPx" to JsonPrimitive(23),
+                        )
+                    )
+                ).settings,
+            ),
+            Case(
+                "portable merge",
+                SettingsFieldPolicy.applyPortable(
+                    current = Settings(bubbleClusterGap = 19, mangaOcrCropPaddingPx = 11),
+                    imported = Settings(bubbleClusterGap = 47, mangaOcrCropPaddingPx = 23),
+                ),
+            ),
+        )
+
+        cases.forEach { case ->
+            assertEquals("${case.name} bubble gap", 0, case.settings.bubbleClusterGap)
+            assertEquals("${case.name} crop padding", 0, case.settings.mangaOcrCropPaddingPx)
+        }
+    }
+
 }

@@ -6,6 +6,7 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import com.gameocr.app.R
 import com.gameocr.app.data.FloatingMenu
+import com.gameocr.app.data.MangaOcrAdvancedSettingsPolicy
 import com.gameocr.app.data.OcrEngineKind
 import com.gameocr.app.data.OverlayFontEntry
 import com.gameocr.app.data.OverlayFontCommit
@@ -201,6 +202,8 @@ class SettingsViewModel @Inject constructor(
         loopTextRegionMode: com.gameocr.app.data.LoopTextRegionMode,
         loopTranslateRegionOnly: Boolean,
         developerOptionsEnabled: Boolean,
+        ocrScreenshotSavingEnabled: Boolean,
+        disableTranslationCache: Boolean,
         ocrRedBoxModeEnabled: Boolean,
         ocrRedBoxShowSourceText: Boolean,
         ocrRedBoxShowTranslation: Boolean,
@@ -209,6 +212,7 @@ class SettingsViewModel @Inject constructor(
         renderMode: RenderMode,
         translationBlockInteractionMode: TranslationBlockInteractionMode,
         placement: OverlayPlacement,
+        overlayStyleMode: com.gameocr.app.data.OverlayStyleMode,
         overlayTheme: OverlayTheme,
         customBg: Int,
         customFg: Int,
@@ -277,6 +281,8 @@ class SettingsViewModel @Inject constructor(
                 loopTextRegionMode = loopTextRegionMode,
                 loopTranslateRegionOnly = loopTranslateRegionOnly,
                 developerOptionsEnabled = developerOptionsEnabled,
+                ocrScreenshotSavingEnabled = ocrScreenshotSavingEnabled,
+                disableTranslationCache = disableTranslationCache,
                 ocrRedBoxModeEnabled = ocrRedBoxModeEnabled,
                 ocrRedBoxShowSourceText = ocrRedBoxShowSourceText,
                 ocrRedBoxShowTranslation = ocrRedBoxShowTranslation,
@@ -285,6 +291,7 @@ class SettingsViewModel @Inject constructor(
                 renderMode = renderMode,
                 translationBlockInteractionMode = translationBlockInteractionMode,
                 overlayPlacement = placement,
+                overlayStyleMode = overlayStyleMode,
                 overlayTheme = overlayTheme,
                 customBgColor = customBg,
                 customFgColor = customFg,
@@ -751,6 +758,14 @@ class SettingsViewModel @Inject constructor(
         modelDownloadManager.enqueueAndAwait(specs, onProgress, ownerPresetId)
     }
 
+    suspend fun downloadModelsIndependently(
+        specs: List<ModelDownloadSpec>,
+        onProgress: (String) -> Unit,
+        ownerPresetId: String? = null,
+    ) {
+        modelDownloadManager.enqueueIndependentlyAndAwait(specs, onProgress, ownerPresetId)
+    }
+
     fun cancelModelDownload(workId: java.util.UUID) = modelDownloadManager.cancel(workId)
 
     fun deleteLlmModel(kind: LlmModelKind): Boolean = llmInstaller.delete(kind)
@@ -759,13 +774,16 @@ class SettingsViewModel @Inject constructor(
         repo.update { it.copy(localLlmMirror = choice, localLlmMirrorUrl = customUrl.trim()) }
     }
 
-    /** DBNet/聚类阈值即时落盘；prob/score/gap 共用，unclip 按 Paddle/MangaOCR 分开。 */
+    suspend fun savePaddleDetectionProfile(profile: com.gameocr.app.data.PaddleDetectionProfile) {
+        repo.update { it.copy(paddleDetectionProfile = profile) }
+    }
+
+    /** DBNet 阈值即时落盘；prob/score 共用，unclip 按 Paddle/MangaOCR 分开。 */
     suspend fun saveDbnetThresholds(
         ocrEngine: OcrEngineKind,
         prob: Float,
         score: Float,
         unclip: Float,
-        gap: Int,
     ) {
         repo.update {
             val clampedUnclip = unclip.coerceIn(1.2f, 2.6f)
@@ -782,7 +800,8 @@ class SettingsViewModel @Inject constructor(
                 } else {
                     it.mangaOcrDbnetUnclipRatio
                 },
-                bubbleClusterGap = gap.coerceIn(8, 80),
+                bubbleClusterGap = MangaOcrAdvancedSettingsPolicy.BUBBLE_CLUSTER_GAP,
+                mangaOcrCropPaddingPx = MangaOcrAdvancedSettingsPolicy.CROP_PADDING_PX,
             )
         }
     }

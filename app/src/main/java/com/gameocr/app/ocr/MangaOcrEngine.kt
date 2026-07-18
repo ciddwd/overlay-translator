@@ -6,15 +6,27 @@ import ai.onnxruntime.OrtSession
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Paint
-import android.graphics.PointF
 import android.graphics.Rect
+import android.os.Build
+import android.os.Debug
+import android.os.PowerManager
+import android.os.Process
 import android.os.SystemClock
+import android.os.Trace
 import com.gameocr.app.R
+import com.gameocr.app.data.MangaOcrAdvancedSettingsPolicy
 import com.gameocr.app.data.OcrEngineKind
 import com.gameocr.app.data.dbnetUnclipRatioFor
 import com.gameocr.app.util.CpuThreadPolicy
+import com.gameocr.app.util.DecoderStepTimingSample
+import com.gameocr.app.util.DecoderStepTimingSummary
+import com.gameocr.app.util.InferenceDiagnostics
+import com.gameocr.app.util.InferenceRuntimeDelta
+import com.gameocr.app.util.InferenceRuntimeSnapshot
 import com.gameocr.app.util.InferenceTiming
+import com.gameocr.app.util.ReusableDirectBufferPool
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -24,8 +36,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import timber.log.Timber
-import java.nio.FloatBuffer
-import java.nio.LongBuffer
+import java.io.Closeable
+import java.io.File
 import kotlin.coroutines.coroutineContext
 
 /**
@@ -59,10 +71,21 @@ class MangaOcrEngine @Inject constructor(
 ) : OcrEngine {
 
     private val initLock = Mutex()
+    private val warmupLock = Mutex()
     private var env: OrtEnvironment? = null
     private var encSession: OrtSession? = null
     private var decSession: OrtSession? = null
+    private var encSessionOptions: OrtSession.SessionOptions? = null
+    private var decSessionOptions: OrtSession.SessionOptions? = null
+    @Volatile private var inferenceWarmupCompleted = false
     private var id2tok: Array<String> = emptyArray()
+    private val directBufferPool = ReusableDirectBufferPool(
+        maxRetainedFloatBuffers = 2,
+        maxRetainedLongBuffers = 2,
+    )
+    private val powerManager by lazy {
+        context.getSystemService(PowerManager::class.java)
+    }
 
     // 启动时自适应解析（不同 Optimum 版本输入/输出名可能不一致）
     private var encOutputName: String = "last_hidden_state"
@@ -81,7 +104,11 @@ class MangaOcrEngine @Inject constructor(
         paddle.ensureReady()
         val paddleReadyMs = InferenceTiming.elapsedMs(paddleReadyStartedAt, SystemClock.elapsedRealtime())
         val s = settingsRepository.get()
-        val results = withContext(Dispatchers.Default) { runFull(bitmap, s) }
+        val results = withContext(Dispatchers.Default) {
+            traceSection(MangaOcrTracePolicy.sectionName(MangaOcrTraceStage.RUN)) {
+                runFull(bitmap, s)
+            }
+        }
         Timber.tag(PERF_TAG).i(
             "recognize totalMs=%d mangaReadyMs=%d paddleReadyMs=%d bitmap=%dx%d blocks=%d ortThreads=%d",
             InferenceTiming.elapsedMs(startedAt, SystemClock.elapsedRealtime()),
@@ -100,13 +127,6 @@ class MangaOcrEngine @Inject constructor(
         val startedAt = SystemClock.elapsedRealtime()
         val files = installer.checkInstalled()
             ?: throw ModelNotReadyException(context.getString(R.string.err_manga_ocr_not_ready))
-        val e = env ?: OrtEnvironment.getEnvironment().also { env = it }
-        val opts = OrtSession.SessionOptions().apply {
-            // 端侧推理别抢主线程；2 thread 实测够用
-            setIntraOpNumThreads(ortThreads)
-        }
-        val enc = e.createSession(files.encoder.absolutePath, opts)
-        val dec = e.createSession(files.decoder.absolutePath, opts)
 
         // 解析 vocab —— 行号即 token id（6144 行 BertJapaneseTokenizer 风格）
         val tokens = files.vocab.readText(Charsets.UTF_8).split('\n')
@@ -116,13 +136,23 @@ class MangaOcrEngine @Inject constructor(
             tokens.getOrNull(CLS_ID) != "[CLS]" ||
             tokens.getOrNull(SEP_ID) != "[SEP]"
         ) {
-            enc.close()
-            dec.close()
             throw ModelNotReadyException(
                 context.getString(R.string.err_manga_ocr_not_ready) + " (vocab broken)"
             )
         }
         id2tok = tokens.toTypedArray()
+
+        val e = env ?: OrtEnvironment.getEnvironment().also { env = it }
+        val encLoaded = createSessionWithOptimizedCache(e, files.encoder, "encoder")
+        val decLoaded = try {
+            createSessionWithOptimizedCache(e, files.decoder, "decoder")
+        } catch (t: Throwable) {
+            runCatching { encLoaded.session.close() }
+            runCatching { encLoaded.options.close() }
+            throw t
+        }
+        val enc = encLoaded.session
+        val dec = decLoaded.session
 
         // 自适应输入/输出名
         encOutputName = pickName(enc.outputNames, "last_hidden_state", "hidden_states", "output_0")
@@ -131,20 +161,335 @@ class MangaOcrEngine @Inject constructor(
 
         encSession = enc
         decSession = dec
+        encSessionOptions = encLoaded.options
+        decSessionOptions = decLoaded.options
         Timber.i(
-            "MangaOcr ready: enc=%dKB dec=%dKB vocab=%d encOut=%s decIn=%s decHidden=%s",
+            "MangaOcr ready: enc=%dKB dec=%dKB vocab=%d encCache=%s decCache=%s encOut=%s decIn=%s decHidden=%s",
             files.encoder.length() / 1024, files.decoder.length() / 1024, tokens.size,
+            encLoaded.cacheHit, decLoaded.cacheHit,
             encOutputName, decInputIdsName, decHiddenName
         )
         Timber.tag(PERF_TAG).i(
-            "init totalMs=%d encKb=%d decKb=%d vocab=%d availableProcessors=%d ortThreads=%d",
+            "init totalMs=%d encMs=%d decMs=%d encCache=%s decCache=%s encKb=%d decKb=%d vocab=%d availableProcessors=%d ortThreads=%d",
             InferenceTiming.elapsedMs(startedAt, SystemClock.elapsedRealtime()),
+            encLoaded.createMs,
+            decLoaded.createMs,
+            encLoaded.cacheHit,
+            decLoaded.cacheHit,
             files.encoder.length() / 1024,
             files.decoder.length() / 1024,
             tokens.size,
             availableProcessors,
             ortThreads,
         )
+    }
+
+    suspend fun prewarm() {
+        val startedAt = SystemClock.elapsedRealtime()
+        val mangaStartedAt = SystemClock.elapsedRealtime()
+        ensureReady()
+        val mangaMs = InferenceTiming.elapsedMs(mangaStartedAt, SystemClock.elapsedRealtime())
+        val paddleStartedAt = SystemClock.elapsedRealtime()
+        paddle.ensureReady()
+        val paddleMs = InferenceTiming.elapsedMs(paddleStartedAt, SystemClock.elapsedRealtime())
+        val settings = settingsRepository.get()
+        val displayMetrics = context.resources.displayMetrics
+        val plan = MangaOcrStartupPolicy.inferenceWarmupPlan(
+            screenWidth = displayMetrics.widthPixels,
+            screenHeight = displayMetrics.heightPixels,
+        )
+        var skipped = false
+        var inference = InferenceWarmupTiming()
+        warmupLock.withLock {
+            if (!MangaOcrStartupPolicy.shouldRunInferenceWarmup(inferenceWarmupCompleted)) {
+                skipped = true
+                return@withLock
+            }
+            Timber.tag(PERF_TAG).i(
+                "prewarm inference start detector=%dx%d profile=%s encoderRuns=%d decoderSteps=%d",
+                plan.detectorWidth,
+                plan.detectorHeight,
+                settings.paddleDetectionProfile,
+                plan.encoderRuns,
+                plan.decoderSteps,
+            )
+            inference = withContext(Dispatchers.Default) {
+                runInferenceWarmup(settings, plan)
+            }
+            inferenceWarmupCompleted = true
+        }
+        Timber.tag(PERF_TAG).i(
+            "prewarm totalMs=%d mangaMs=%d paddleMs=%d inferenceMs=%d dbnetMs=%d encoderMs=%d decoderMs=%d encoderRuns=%d decoderSteps=%d skipped=%s completed=%s",
+            InferenceTiming.elapsedMs(startedAt, SystemClock.elapsedRealtime()),
+            mangaMs,
+            paddleMs,
+            inference.totalMs,
+            inference.dbnetMs,
+            inference.encoderMs,
+            inference.decoderMs,
+            inference.encoderRuns,
+            inference.decoderSteps,
+            skipped,
+            inferenceWarmupCompleted,
+        )
+    }
+
+    private data class InferenceWarmupTiming(
+        val totalMs: Long = 0L,
+        val dbnetMs: Long = 0L,
+        val encoderMs: Long = 0L,
+        val decoderMs: Long = 0L,
+        val encoderRuns: Int = 0,
+        val decoderSteps: Int = 0,
+    )
+
+    private suspend fun runInferenceWarmup(
+        settings: com.gameocr.app.data.Settings,
+        plan: MangaOcrInferenceWarmupPlan,
+    ): InferenceWarmupTiming {
+        val startedAt = SystemClock.elapsedRealtime()
+        coroutineContext.ensureActive()
+
+        val detectorStartedAt = SystemClock.elapsedRealtime()
+        val detectorBitmap = Bitmap.createBitmap(
+            plan.detectorWidth,
+            plan.detectorHeight,
+            Bitmap.Config.ARGB_8888,
+        ).apply {
+            eraseColor(Color.WHITE)
+        }
+        try {
+            paddle.detectQuads(
+                bitmap = detectorBitmap,
+                binThresh = settings.dbnetProbThresh,
+                scoreThresh = settings.dbnetBoxScoreThresh,
+                unclipRatio = settings.dbnetUnclipRatioFor(OcrEngineKind.MANGA_OCR_JA),
+                profile = settings.paddleDetectionProfile,
+                passLabel = "manga-prewarm",
+            )
+        } finally {
+            detectorBitmap.recycle()
+        }
+        val dbnetMs = InferenceTiming.elapsedMs(detectorStartedAt, SystemClock.elapsedRealtime())
+
+        val e = checkNotNull(env) { "MangaOcr environment missing after ensureReady" }
+        val enc = checkNotNull(encSession) { "MangaOcr encoder missing after ensureReady" }
+        val dec = checkNotNull(decSession) { "MangaOcr decoder missing after ensureReady" }
+        var encoderMs = 0L
+        var decoderMs = 0L
+        var decoderSteps = 0
+        val encoderBitmap = Bitmap.createBitmap(
+            IMG_SIZE,
+            IMG_SIZE,
+            Bitmap.Config.ARGB_8888,
+        ).apply {
+            eraseColor(Color.WHITE)
+        }
+        try {
+            repeat(plan.encoderRuns) { runIndex ->
+                coroutineContext.ensureActive()
+                val encoderRun = runEncoderInference(encoderBitmap, e, enc)
+                encoderMs += encoderRun.timing.totalMs
+                logEncoderDetail(
+                    scope = "prewarm[$runIndex]",
+                    timing = encoderRun.timing,
+                    cropWidth = encoderBitmap.width,
+                    cropHeight = encoderBitmap.height,
+                )
+
+                var currentDecoderMs = 0L
+                var warmupToken = -1
+                encoderRun.use { encoderOutput ->
+                    if (runIndex < plan.decoderSteps) {
+                        coroutineContext.ensureActive()
+                        val decoderRuntimeStart = captureInferenceRuntimeSnapshot(
+                            includeSystemStats = false,
+                            startingBoundary = true,
+                        )
+                        val ids = IntArray(1) { CLS_ID }
+                        val step = runDecoderStep(
+                            environment = e,
+                            decoder = dec,
+                            hidden = encoderOutput.hidden,
+                            ids = ids,
+                            length = 1,
+                        )
+                        warmupToken = step.nextId
+                        val decoderRuntime = InferenceDiagnostics.runtimeDelta(
+                            decoderRuntimeStart,
+                            captureInferenceRuntimeSnapshot(
+                                includeSystemStats = false,
+                                startingBoundary = false,
+                            ),
+                        )
+                        val decoderTotalUs = decoderRuntime.wallUs
+                        val decoderSummary = InferenceTiming.stageSummary(
+                            totalUs = decoderTotalUs,
+                            stagesUs = listOf(
+                                step.bufferAcquireUs,
+                                step.inputFillUs,
+                                step.tensorCreateUs,
+                                step.runUs,
+                                step.logitsReadUs,
+                                step.argmaxUs,
+                            ),
+                        )
+                        val decoderTiming = MangaDecoderTiming(
+                            totalMs = decoderTotalUs / 1_000L,
+                            totalUs = decoderTotalUs,
+                            bufferAcquireUs = step.bufferAcquireUs,
+                            inputFillUs = step.inputFillUs,
+                            tensorCreateUs = step.tensorCreateUs,
+                            runUs = step.runUs,
+                            logitsReadUs = step.logitsReadUs,
+                            argmaxUs = step.argmaxUs,
+                            otherUs = decoderSummary.unaccountedUs,
+                            steps = 1,
+                            nonDirectInputs = if (step.inputDirect) 0 else 1,
+                            reusedInputs = if (step.bufferReused) 1 else 0,
+                            tensorOwnedCopies = if (step.tensorOwnsBuffer) 1 else 0,
+                            runtime = decoderRuntime,
+                            stepRun = InferenceDiagnostics.summarizeDecoderSteps(
+                                listOf(
+                                    DecoderStepTimingSample(
+                                        stepIndex = 0,
+                                        inputLength = 1,
+                                        runUs = step.runUs,
+                                    ),
+                                ),
+                            ),
+                        )
+                        currentDecoderMs = decoderTiming.totalMs
+                        decoderMs += currentDecoderMs
+                        decoderSteps++
+                        logDecoderDetail("prewarm[$runIndex]", decoderTiming)
+                    }
+                }
+                Timber.tag(PERF_TAG).i(
+                    "prewarm manga run=%d encoderMs=%d decoderMs=%d decoderToken=%d",
+                    runIndex,
+                    encoderRun.timing.totalMs,
+                    currentDecoderMs,
+                    warmupToken,
+                )
+            }
+        } finally {
+            encoderBitmap.recycle()
+        }
+
+        return InferenceWarmupTiming(
+            totalMs = InferenceTiming.elapsedMs(startedAt, SystemClock.elapsedRealtime()),
+            dbnetMs = dbnetMs,
+            encoderMs = encoderMs,
+            decoderMs = decoderMs,
+            encoderRuns = plan.encoderRuns,
+            decoderSteps = decoderSteps,
+        )
+    }
+
+    private data class LoadedOrtSession(
+        val session: OrtSession,
+        val options: OrtSession.SessionOptions,
+        val cacheHit: Boolean,
+        val createMs: Long,
+    )
+
+    private fun createSessionWithOptimizedCache(
+        environment: OrtEnvironment,
+        source: File,
+        role: String,
+    ): LoadedOrtSession {
+        val cacheDir = checkNotNull(source.parentFile) {
+            "MangaOcr model has no parent directory: ${source.absolutePath}"
+        }
+        val cache = File(
+            cacheDir,
+            MangaOcrStartupPolicy.optimizedCacheFileName(
+                sourceFileName = source.name,
+                sourceLength = source.length(),
+                sourceLastModified = source.lastModified(),
+                runtimeSignature = "cpu-all-t$ortThreads-ort${environment.version}",
+            ),
+        )
+        cacheDir.listFiles()
+            ?.filter {
+                it.name != cache.name &&
+                    MangaOcrStartupPolicy.isOptimizedCacheFileFor(source.name, it.name)
+            }
+            ?.forEach { stale ->
+                if (!stale.delete()) {
+                    Timber.w("MangaOcr failed to delete stale %s cache: %s", role, stale.absolutePath)
+                }
+            }
+
+        if (cache.isFile && MangaOcrStartupPolicy.isReusableOptimizedCache(cache.length())) {
+            val cachedOptions = newSessionOptions(OrtSession.SessionOptions.OptLevel.NO_OPT)
+            val cacheStartedAt = SystemClock.elapsedRealtime()
+            try {
+                val session = environment.createSession(cache.absolutePath, cachedOptions)
+                val createMs = InferenceTiming.elapsedMs(cacheStartedAt, SystemClock.elapsedRealtime())
+                Timber.tag(PERF_TAG).i(
+                    "session role=%s cacheHit=true createMs=%d sourceKb=%d cacheKb=%d",
+                    role,
+                    createMs,
+                    source.length() / 1024,
+                    cache.length() / 1024,
+                )
+                return LoadedOrtSession(session, cachedOptions, cacheHit = true, createMs = createMs)
+            } catch (t: Throwable) {
+                runCatching { cachedOptions.close() }
+                if (!cache.delete()) {
+                    Timber.w("MangaOcr failed to delete broken %s cache: %s", role, cache.absolutePath)
+                }
+                Timber.w(t, "MangaOcr %s optimized cache load failed; falling back to source model", role)
+            }
+        }
+
+        val tempCache = File(cacheDir, cache.name + ".tmp")
+        if (tempCache.exists() && !tempCache.delete()) {
+            Timber.w("MangaOcr failed to delete stale %s temp cache: %s", role, tempCache.absolutePath)
+        }
+        val sourceOptions = newSessionOptions(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+        val cacheOutputConfigured = runCatching {
+            sourceOptions.setOptimizedModelFilePath(tempCache.absolutePath)
+        }.onFailure {
+            Timber.w(it, "MangaOcr %s optimized cache output unavailable", role)
+        }.isSuccess
+        val sourceStartedAt = SystemClock.elapsedRealtime()
+        try {
+            val session = environment.createSession(source.absolutePath, sourceOptions)
+            val createMs = InferenceTiming.elapsedMs(sourceStartedAt, SystemClock.elapsedRealtime())
+            if (cacheOutputConfigured &&
+                tempCache.isFile &&
+                MangaOcrStartupPolicy.isReusableOptimizedCache(tempCache.length())
+            ) {
+                if (cache.exists() && !cache.delete()) {
+                    Timber.w("MangaOcr failed to replace old %s cache: %s", role, cache.absolutePath)
+                }
+                if (!tempCache.renameTo(cache)) {
+                    Timber.w("MangaOcr failed to publish %s optimized cache: %s", role, tempCache.absolutePath)
+                }
+            }
+            Timber.tag(PERF_TAG).i(
+                "session role=%s cacheHit=false createMs=%d sourceKb=%d cacheKb=%d",
+                role,
+                createMs,
+                source.length() / 1024,
+                cache.takeIf(File::isFile)?.length()?.div(1024) ?: 0L,
+            )
+            return LoadedOrtSession(session, sourceOptions, cacheHit = false, createMs = createMs)
+        } catch (t: Throwable) {
+            runCatching { sourceOptions.close() }
+            runCatching { tempCache.delete() }
+            throw t
+        }
+    }
+
+    private fun newSessionOptions(
+        optimizationLevel: OrtSession.SessionOptions.OptLevel,
+    ): OrtSession.SessionOptions = OrtSession.SessionOptions().apply {
+        setIntraOpNumThreads(ortThreads)
+        setOptimizationLevel(optimizationLevel)
     }
 
     private fun pickName(names: Set<String>, vararg candidates: String): String {
@@ -156,14 +501,20 @@ class MangaOcrEngine @Inject constructor(
 
     private suspend fun runFull(bitmap: Bitmap, settings: com.gameocr.app.data.Settings): List<TextBlock> {
         val startedAt = SystemClock.elapsedRealtime()
+        val runtimeStart = captureInferenceRuntimeSnapshot(
+            includeSystemStats = true,
+            startingBoundary = true,
+        )
         // 1) 复用 paddle DBNet 检测 → quads；大图额外走重叠分块，提升整屏小字召回。
         val mangaUnclipRatio = settings.dbnetUnclipRatioFor(OcrEngineKind.MANGA_OCR_JA)
         val detectStartedAt = SystemClock.elapsedRealtime()
-        val quads = detectQuadsForManga(
-            bitmap = bitmap,
-            settings = settings,
-            mangaUnclipRatio = mangaUnclipRatio
-        )
+        val quads = traceSection(MangaOcrTracePolicy.sectionName(MangaOcrTraceStage.DETECT)) {
+            detectQuadsForManga(
+                bitmap = bitmap,
+                settings = settings,
+                mangaUnclipRatio = mangaUnclipRatio
+            )
+        }
         val detectMs = InferenceTiming.elapsedMs(detectStartedAt, SystemClock.elapsedRealtime())
         if (quads.isEmpty()) {
             Timber.i("MangaOcr: DBNet returned 0 quads")
@@ -174,32 +525,63 @@ class MangaOcrEngine @Inject constructor(
                 bitmap.width,
                 bitmap.height,
             )
+            logRuntimeDetail(
+                scope = "run-empty",
+                start = runtimeStart,
+                end = captureInferenceRuntimeSnapshot(
+                    includeSystemStats = true,
+                    startingBoundary = false,
+                ),
+            )
             return emptyList()
         }
 
         // 2) quad → IntRect → 气泡聚类（用 BubbleClusterer.IntRect 而非 android.graphics.Rect，
         //    后者在 JVM 单测里是 Stub 不能直接构造）
         val clusterStartedAt = SystemClock.elapsedRealtime()
-        val rects = quads.map { quad ->
-            val b = quad.axisAlignedBounds()
-            BubbleClusterer.IntRect(
-                left = b[0].coerceAtLeast(0),
-                top = b[1].coerceAtLeast(0),
-                right = b[2].coerceAtMost(bitmap.width),
-                bottom = b[3].coerceAtMost(bitmap.height)
+        val (rects, bubbles) = traceSection(
+            MangaOcrTracePolicy.sectionName(MangaOcrTraceStage.CLUSTER)
+        ) {
+            val clusteredRects = quads.map { quad ->
+                val b = quad.axisAlignedBounds()
+                BubbleClusterer.IntRect(
+                    left = b[0].coerceAtLeast(0),
+                    top = b[1].coerceAtLeast(0),
+                    right = b[2].coerceAtMost(bitmap.width),
+                    bottom = b[3].coerceAtMost(bitmap.height)
+                )
+            }
+            val bubbleClusterGap = MangaOcrAdvancedSettingsPolicy.effectiveBubbleClusterGap(
+                settings.bubbleClusterGap
             )
+            val cropPaddingPx = MangaOcrAdvancedSettingsPolicy.effectiveCropPaddingPx(
+                settings.mangaOcrCropPaddingPx
+            )
+            val clusteredBubbles = BubbleClusterer.cluster(
+                rects = clusteredRects,
+                imgW = bitmap.width,
+                imgH = bitmap.height,
+                pad = cropPaddingPx,
+                gap = bubbleClusterGap,
+            )
+            clusteredRects to clusteredBubbles
         }
-        val bubbles = BubbleClusterer.cluster(
-            rects = rects,
-            imgW = bitmap.width,
-            imgH = bitmap.height,
-            pad = CLUSTER_PAD_PX,
-            gap = settings.bubbleClusterGap.coerceIn(8, 60)
+        val bubbleClusterGap = MangaOcrAdvancedSettingsPolicy.effectiveBubbleClusterGap(
+            settings.bubbleClusterGap
+        )
+        val cropPaddingPx = MangaOcrAdvancedSettingsPolicy.effectiveCropPaddingPx(
+            settings.mangaOcrCropPaddingPx
         )
         val clusterMs = InferenceTiming.elapsedMs(clusterStartedAt, SystemClock.elapsedRealtime())
         Timber.i(
-            "MangaOcr: %d quads -> %d bubbles (gap=%d, dbnet=%.2f/%.2f×%.2f)",
-            quads.size, bubbles.size, settings.bubbleClusterGap,
+            "MangaOcr: %d quads -> %d bubbles (profile=%s maxSide=%d tiling=%s gap=%d cropPad=%d dbnet=%.2f/%.2f×%.2f)",
+            quads.size,
+            bubbles.size,
+            settings.paddleDetectionProfile.name,
+            settings.paddleDetectionProfile.maxSideLen,
+            settings.paddleDetectionProfile.enableMangaTiling,
+            bubbleClusterGap,
+            cropPaddingPx,
             settings.dbnetProbThresh, settings.dbnetBoxScoreThresh, mangaUnclipRatio
         )
 
@@ -213,38 +595,73 @@ class MangaOcrEngine @Inject constructor(
             val cropWidth = crop.width
             val cropHeight = crop.height
             val recognition = try {
-                recognizeBubble(crop)
+                traceSection(
+                    MangaOcrTracePolicy.sectionName(MangaOcrTraceStage.BUBBLE, i)
+                ) {
+                    recognizeBubble(crop, i)
+                }
             } finally {
                 crop.recycle()
             }
             val text = recognition.text.trim()
+            val memberRects = bubble.memberIndices.mapNotNull(rects::getOrNull)
             Timber.tag(PERF_TAG).i(
                 "bubble index=%d totalMs=%d encoderMs=%d decoderMs=%d decoderSteps=%d crop=%dx%d chars=%d",
                 i,
                 InferenceTiming.elapsedMs(bubbleStartedAt, SystemClock.elapsedRealtime()),
-                recognition.encoderMs,
-                recognition.decoderMs,
-                recognition.decoderSteps,
+                recognition.encoder.totalMs,
+                recognition.decoder.totalMs,
+                recognition.decoder.steps,
                 cropWidth,
                 cropHeight,
                 text.length,
             )
-            Timber.i("MangaOcr bub[%d] %s -> '%s' (%d chars)", i, bubble.rect, text, text.length)
+            logEncoderDetail("bubble[$i]", recognition.encoder, cropWidth, cropHeight)
+            logDecoderDetail("bubble[$i]", recognition.decoder)
+            Timber.i(
+                "MangaOcr bub[%d] content=%s crop=%s cropPad=%d members=%d memberRects=%s -> '%s' (%d chars)",
+                i,
+                bubble.contentRect,
+                bubble.rect,
+                cropPaddingPx,
+                bubble.memberIndices.size,
+                memberRects,
+                text,
+                text.length,
+            )
             if (text.isEmpty()) continue
             if (shouldDropMangaOcrEdgeNoise(text, bubble.rect, bitmap.width, bitmap.height)) {
                 Timber.i("MangaOcr drop edge noise bub[%d] %s -> '%s'", i, bubble.rect, text)
                 continue
             }
+            val sourceBoxes = memberRects.map { rect ->
+                Rect(rect.left, rect.top, rect.right, rect.bottom)
+            }
+            val bubbleBounds = Rect(
+                bubble.contentRect.left,
+                bubble.contentRect.top,
+                bubble.contentRect.right,
+                bubble.contentRect.bottom,
+            )
             results += TextBlock(
                 text = text,
-                boundingBox = Rect(bubble.rect.left, bubble.rect.top, bubble.rect.right, bubble.rect.bottom),
+                boundingBox = bubbleBounds,
                 confidence = 1f,
-                recognizedLanguage = "ja"
+                recognizedLanguage = "ja",
+                layoutOrientation = inferSourceLayoutOrientation(
+                    sourceBoxes = memberRects,
+                    blockBounds = bubble.contentRect,
+                ),
+                sourceBoxes = sourceBoxes,
             )
         }
         val bubblesMs = InferenceTiming.elapsedMs(bubblesStartedAt, SystemClock.elapsedRealtime())
         Timber.tag(PERF_TAG).i(
-            "run totalMs=%d detectMs=%d clusterMs=%d bubblesMs=%d bitmap=%dx%d quads=%d bubbles=%d blocks=%d",
+            "run profile=%s maxSide=%d tiling=%s cropPad=%d totalMs=%d detectMs=%d clusterMs=%d bubblesMs=%d bitmap=%dx%d quads=%d bubbles=%d blocks=%d",
+            settings.paddleDetectionProfile.name,
+            settings.paddleDetectionProfile.maxSideLen,
+            settings.paddleDetectionProfile.enableMangaTiling,
+            cropPaddingPx,
             InferenceTiming.elapsedMs(startedAt, SystemClock.elapsedRealtime()),
             detectMs,
             clusterMs,
@@ -254,6 +671,14 @@ class MangaOcrEngine @Inject constructor(
             quads.size,
             bubbles.size,
             results.size,
+        )
+        logRuntimeDetail(
+            scope = "run",
+            start = runtimeStart,
+            end = captureInferenceRuntimeSnapshot(
+                includeSystemStats = true,
+                startingBoundary = false,
+            ),
         )
         return results
     }
@@ -268,8 +693,23 @@ class MangaOcrEngine @Inject constructor(
             binThresh = settings.dbnetProbThresh,
             scoreThresh = settings.dbnetBoxScoreThresh,
             unclipRatio = mangaUnclipRatio,
+            profile = settings.paddleDetectionProfile,
+            passLabel = "manga-full",
         )
-        if (!MangaOcrTiling.shouldUseTiles(bitmap.width, bitmap.height)) {
+        if (!MangaOcrTiling.shouldUseTiles(
+                bitmap.width,
+                bitmap.height,
+                settings.paddleDetectionProfile,
+            )
+        ) {
+            Timber.i(
+                "MangaOcr tiling skipped profile=%s enabled=%s bitmap=%dx%d tileSide=%d",
+                settings.paddleDetectionProfile.name,
+                settings.paddleDetectionProfile.enableMangaTiling,
+                bitmap.width,
+                bitmap.height,
+                MangaOcrTiling.DEFAULT_TILE_SIDE,
+            )
             return base
         }
 
@@ -284,6 +724,8 @@ class MangaOcrEngine @Inject constructor(
                     binThresh = settings.dbnetProbThresh,
                     scoreThresh = settings.dbnetBoxScoreThresh,
                     unclipRatio = mangaUnclipRatio,
+                    profile = settings.paddleDetectionProfile,
+                    passLabel = "manga-tile[$tile]",
                 )
                 tiled += tileQuads.map { it.offsetBy(tile.left.toFloat(), tile.top.toFloat()) }
             } finally {
@@ -291,7 +733,8 @@ class MangaOcrEngine @Inject constructor(
             }
         }
 
-        val merged = dedupeQuads(base + tiled)
+        // Tiles run at full resolution. Put them first so duplicate suppression keeps the finer box.
+        val merged = dedupePaddleQuads(tiled + base)
         Timber.i(
             "MangaOcr tiled DBNet: base=%d tiled=%d merged=%d tiles=%d bitmap=%dx%d",
             base.size, tiled.size, merged.size, tiles.size, bitmap.width, bitmap.height
@@ -312,138 +755,565 @@ class MangaOcrEngine @Inject constructor(
         }.getOrNull()
     }
 
-    private fun DBPostprocessor.Quad.offsetBy(dx: Float, dy: Float): DBPostprocessor.Quad =
-        DBPostprocessor.Quad(
-            p0 = PointF(p0.x + dx, p0.y + dy),
-            p1 = PointF(p1.x + dx, p1.y + dy),
-            p2 = PointF(p2.x + dx, p2.y + dy),
-            p3 = PointF(p3.x + dx, p3.y + dy)
-        )
+    private data class MangaPreprocessResult(
+        val data: FloatArray,
+        val totalUs: Long,
+        val scaleUs: Long,
+        val grayUs: Long,
+        val pixelReadUs: Long,
+        val nchwUs: Long,
+        val otherUs: Long,
+    )
 
-    private fun dedupeQuads(quads: List<DBPostprocessor.Quad>): List<DBPostprocessor.Quad> {
-        val out = mutableListOf<DBPostprocessor.Quad>()
-        for (quad in quads.sortedWith(compareBy({ it.centerY }, { it.centerX }))) {
-            if (out.none { existing -> quadDuplicate(existing, quad) }) {
-                out += quad
-            }
+    private data class MangaEncoderTiming(
+        val totalMs: Long = 0L,
+        val totalUs: Long = 0L,
+        val preprocessUs: Long = 0L,
+        val scaleUs: Long = 0L,
+        val grayUs: Long = 0L,
+        val pixelReadUs: Long = 0L,
+        val nchwUs: Long = 0L,
+        val inputBufferAcquireUs: Long = 0L,
+        val inputBufferFillUs: Long = 0L,
+        val inputTensorCreateUs: Long = 0L,
+        val runUs: Long = 0L,
+        val outputLookupUs: Long = 0L,
+        val otherUs: Long = 0L,
+        val inputFloats: Int = 0,
+        val inputDirect: Boolean = false,
+        val inputBufferReused: Boolean = false,
+        val inputBufferCapacityFloats: Int = 0,
+        val inputTensorOwnsBuffer: Boolean = false,
+        val hiddenFloats: Int = 0,
+    )
+
+    private class MangaEncoderRun(
+        private val result: OrtSession.Result,
+        val hidden: OnnxTensor,
+        val timing: MangaEncoderTiming,
+    ) : Closeable {
+        override fun close() {
+            result.close()
         }
-        return out
     }
 
-    private fun quadDuplicate(a: DBPostprocessor.Quad, b: DBPostprocessor.Quad): Boolean {
-        if (axisAlignedIou(a, b) >= 0.72f) return true
-        val dx = a.centerX - b.centerX
-        val dy = a.centerY - b.centerY
-        val centerClose = dx * dx + dy * dy <= 16f * 16f
-        if (!centerClose) return false
-        val areaA = quadArea(a)
-        val areaB = quadArea(b)
-        val ratio = minOf(areaA, areaB) / maxOf(areaA, areaB).coerceAtLeast(1f)
-        return ratio >= 0.75f
-    }
+    private data class DecoderStepResult(
+        val nextId: Int,
+        val bufferAcquireUs: Long,
+        val inputFillUs: Long,
+        val tensorCreateUs: Long,
+        val runUs: Long,
+        val logitsReadUs: Long,
+        val argmaxUs: Long,
+        val inputDirect: Boolean,
+        val bufferReused: Boolean,
+        val tensorOwnsBuffer: Boolean,
+    )
 
-    private fun axisAlignedIou(a: DBPostprocessor.Quad, b: DBPostprocessor.Quad): Float {
-        val ar = a.axisAlignedBounds()
-        val br = b.axisAlignedBounds()
-        val interW = (minOf(ar[2], br[2]) - maxOf(ar[0], br[0])).coerceAtLeast(0)
-        val interH = (minOf(ar[3], br[3]) - maxOf(ar[1], br[1])).coerceAtLeast(0)
-        val inter = interW * interH
-        if (inter <= 0) return 0f
-        val areaA = ((ar[2] - ar[0]).coerceAtLeast(0) * (ar[3] - ar[1]).coerceAtLeast(0)).toFloat()
-        val areaB = ((br[2] - br[0]).coerceAtLeast(0) * (br[3] - br[1]).coerceAtLeast(0)).toFloat()
-        return inter / (areaA + areaB - inter).coerceAtLeast(1f)
-    }
-
-    private fun quadArea(q: DBPostprocessor.Quad): Float {
-        val r = q.axisAlignedBounds()
-        return ((r[2] - r[0]).coerceAtLeast(0) * (r[3] - r[1]).coerceAtLeast(0)).toFloat()
-    }
+    private data class MangaDecoderTiming(
+        val totalMs: Long = 0L,
+        val totalUs: Long = 0L,
+        val bufferAcquireUs: Long = 0L,
+        val inputFillUs: Long = 0L,
+        val tensorCreateUs: Long = 0L,
+        val runUs: Long = 0L,
+        val logitsReadUs: Long = 0L,
+        val argmaxUs: Long = 0L,
+        val decodeUs: Long = 0L,
+        val otherUs: Long = 0L,
+        val steps: Int = 0,
+        val nonDirectInputs: Int = 0,
+        val reusedInputs: Int = 0,
+        val tensorOwnedCopies: Int = 0,
+        val runtime: InferenceRuntimeDelta? = null,
+        val stepRun: DecoderStepTimingSummary = DecoderStepTimingSummary(),
+    )
 
     private data class BubbleRecognition(
         val text: String,
-        val encoderMs: Long,
-        val decoderMs: Long,
-        val decoderSteps: Int,
+        val encoder: MangaEncoderTiming = MangaEncoderTiming(),
+        val decoder: MangaDecoderTiming = MangaDecoderTiming(),
     )
 
-    private suspend fun recognizeBubble(crop: Bitmap): BubbleRecognition {
-        val e = env ?: return BubbleRecognition("", 0L, 0L, 0)
-        val enc = encSession ?: return BubbleRecognition("", 0L, 0L, 0)
-        val dec = decSession ?: return BubbleRecognition("", 0L, 0L, 0)
+    private suspend fun recognizeBubble(
+        crop: Bitmap,
+        bubbleIndex: Int,
+    ): BubbleRecognition {
+        val e = env ?: return BubbleRecognition("")
+        val enc = encSession ?: return BubbleRecognition("")
+        val dec = decSession ?: return BubbleRecognition("")
 
-        // ---- encoder：一次 ----
-        val encoderStartedAt = SystemClock.elapsedRealtime()
-        val pix = OnnxTensor.createTensor(
-            e,
-            FloatBuffer.wrap(preprocess224(crop)),
-            longArrayOf(1, 3, IMG_SIZE.toLong(), IMG_SIZE.toLong())
+        val encoderRun = traceSection(
+            MangaOcrTracePolicy.sectionName(MangaOcrTraceStage.ENCODER, bubbleIndex)
+        ) {
+            runEncoderInference(crop, e, enc)
+        }
+        val decoderRuntimeStart = captureInferenceRuntimeSnapshot(
+            includeSystemStats = false,
+            startingBoundary = true,
         )
-        val encOut: OnnxTensor = pix.use { tensor ->
-            enc.run(mapOf("pixel_values" to tensor)).use { result ->
-                // 复制一份 OnnxTensor 出来避免 result.use 释放后失效
-                val orig = result[encOutputName].get()
-                copyHiddenState(orig as OnnxTensor)
-            }
-        }
-        val encoderMs = InferenceTiming.elapsedMs(encoderStartedAt, SystemClock.elapsedRealtime())
-
-        // ---- decoder：greedy 自回归 ----
-        val decoderStartedAt = SystemClock.elapsedRealtime()
+        var bufferAcquireUs = 0L
+        var inputFillUs = 0L
+        var tensorCreateUs = 0L
+        var runUs = 0L
+        var logitsReadUs = 0L
+        var argmaxUs = 0L
         var decoderSteps = 0
-        val text = encOut.use { hidden ->
-            val ids = IntArray(MAX_TOKENS + 1)
-            ids[0] = CLS_ID
-            var len = 1
-            for (step in 0 until MAX_TOKENS) {
-                coroutineContext.ensureActive()
-                decoderSteps++
-                val idsCopy = LongArray(len) { ids[it].toLong() }
-                val idsTensor = OnnxTensor.createTensor(
-                    e,
-                    LongBuffer.wrap(idsCopy),
-                    longArrayOf(1, len.toLong())
-                )
-                val nextId = idsTensor.use { it2 ->
-                    dec.run(
-                        mapOf(
-                            decInputIdsName to it2,
-                            decHiddenName to hidden
-                        )
-                    ).use { result ->
-                        @Suppress("UNCHECKED_CAST")
-                        val logits = result[0].value as Array<Array<FloatArray>>
-                        argmaxLastStep(logits[0])
-                    }
+        var nonDirectInputs = 0
+        var reusedInputs = 0
+        var tensorOwnedCopies = 0
+        var decodeUs = 0L
+        val stepRunSamples = ArrayList<DecoderStepTimingSample>(MAX_TOKENS)
+
+        val text = traceSection(
+            MangaOcrTracePolicy.sectionName(MangaOcrTraceStage.DECODER, bubbleIndex)
+        ) {
+            encoderRun.use { encoderOutput ->
+                val ids = IntArray(MAX_TOKENS + 1)
+                ids[0] = CLS_ID
+                var len = 1
+                for (step in 0 until MAX_TOKENS) {
+                    coroutineContext.ensureActive()
+                    val stepResult = runDecoderStep(e, dec, encoderOutput.hidden, ids, len)
+                    decoderSteps++
+                    bufferAcquireUs += stepResult.bufferAcquireUs
+                    inputFillUs += stepResult.inputFillUs
+                    tensorCreateUs += stepResult.tensorCreateUs
+                    runUs += stepResult.runUs
+                    logitsReadUs += stepResult.logitsReadUs
+                    argmaxUs += stepResult.argmaxUs
+                    stepRunSamples += DecoderStepTimingSample(
+                        stepIndex = step,
+                        inputLength = len,
+                        runUs = stepResult.runUs,
+                    )
+                    if (!stepResult.inputDirect) nonDirectInputs++
+                    if (stepResult.bufferReused) reusedInputs++
+                    if (stepResult.tensorOwnsBuffer) tensorOwnedCopies++
+
+                    if (stepResult.nextId == SEP_ID) break
+                    ids[len] = stepResult.nextId
+                    len++
+                    if (len > MAX_TOKENS) break
                 }
-                if (nextId == SEP_ID) break
-                ids[len] = nextId
-                len++
-                if (len > MAX_TOKENS) break
+                val decodeStartedAtNs = SystemClock.elapsedRealtimeNanos()
+                val decoded = decodeTokens(ids, fromIdx = 1, toIdx = len)
+                decodeUs = InferenceTiming.elapsedUs(
+                    decodeStartedAtNs,
+                    SystemClock.elapsedRealtimeNanos(),
+                )
+                decoded
             }
-            decodeTokens(ids, fromIdx = 1, toIdx = len)
         }
+        val decoderRuntime = InferenceDiagnostics.runtimeDelta(
+            decoderRuntimeStart,
+            captureInferenceRuntimeSnapshot(
+                includeSystemStats = false,
+                startingBoundary = false,
+            ),
+        )
+        val decoderTotalUs = decoderRuntime.wallUs
+        val decoderSummary = InferenceTiming.stageSummary(
+            totalUs = decoderTotalUs,
+            stagesUs = listOf(
+                bufferAcquireUs,
+                inputFillUs,
+                tensorCreateUs,
+                runUs,
+                logitsReadUs,
+                argmaxUs,
+                decodeUs,
+            ),
+        )
         return BubbleRecognition(
             text = text,
-            encoderMs = encoderMs,
-            decoderMs = InferenceTiming.elapsedMs(decoderStartedAt, SystemClock.elapsedRealtime()),
-            decoderSteps = decoderSteps,
+            encoder = encoderRun.timing,
+            decoder = MangaDecoderTiming(
+                totalMs = decoderTotalUs / 1_000L,
+                totalUs = decoderTotalUs,
+                bufferAcquireUs = bufferAcquireUs,
+                inputFillUs = inputFillUs,
+                tensorCreateUs = tensorCreateUs,
+                runUs = runUs,
+                logitsReadUs = logitsReadUs,
+                argmaxUs = argmaxUs,
+                decodeUs = decodeUs,
+                otherUs = decoderSummary.unaccountedUs,
+                steps = decoderSteps,
+                nonDirectInputs = nonDirectInputs,
+                reusedInputs = reusedInputs,
+                tensorOwnedCopies = tensorOwnedCopies,
+                runtime = decoderRuntime,
+                stepRun = InferenceDiagnostics.summarizeDecoderSteps(stepRunSamples),
+            ),
         )
     }
 
+    private fun runEncoderInference(
+        crop: Bitmap,
+        environment: OrtEnvironment,
+        encoder: OrtSession,
+    ): MangaEncoderRun {
+        val totalStartedAtMs = SystemClock.elapsedRealtime()
+        val totalStartedAtNs = SystemClock.elapsedRealtimeNanos()
+        val preprocess = preprocess224Timed(crop)
+
+        val bufferAcquireStartedAtNs = SystemClock.elapsedRealtimeNanos()
+        val inputLease = directBufferPool.acquireFloat(preprocess.data.size)
+        val inputBufferAcquireUs = InferenceTiming.elapsedUs(
+            bufferAcquireStartedAtNs,
+            SystemClock.elapsedRealtimeNanos(),
+        )
+
+        var inputBufferFillUs = 0L
+        var inputTensorCreateUs = 0L
+        var inputDirect = false
+        var inputTensorOwnsBuffer = false
+        var runUs = 0L
+        var outputLookupUs = 0L
+        var encoderResult: OrtSession.Result? = null
+        lateinit var hidden: OnnxTensor
+        var hiddenFloats = 0
+        inputLease.use { lease ->
+            val inputBuffer = lease.buffer
+            val bufferFillStartedAtNs = SystemClock.elapsedRealtimeNanos()
+            inputBuffer.put(preprocess.data)
+            inputBuffer.flip()
+            inputBufferFillUs = InferenceTiming.elapsedUs(
+                bufferFillStartedAtNs,
+                SystemClock.elapsedRealtimeNanos(),
+            )
+            inputDirect = inputBuffer.isDirect
+
+            val tensorStartedAtNs = SystemClock.elapsedRealtimeNanos()
+            val pixelTensor = OnnxTensor.createTensor(
+                environment,
+                inputBuffer,
+                longArrayOf(1, 3, IMG_SIZE.toLong(), IMG_SIZE.toLong()),
+            )
+            inputTensorCreateUs = InferenceTiming.elapsedUs(
+                tensorStartedAtNs,
+                SystemClock.elapsedRealtimeNanos(),
+            )
+            inputTensorOwnsBuffer = pixelTensor.ownsBuffer()
+
+            pixelTensor.use { tensor ->
+                val runStartedAtNs = SystemClock.elapsedRealtimeNanos()
+                val result = encoder.run(mapOf("pixel_values" to tensor))
+                runUs = InferenceTiming.elapsedUs(runStartedAtNs, SystemClock.elapsedRealtimeNanos())
+                try {
+                    val lookupStartedAtNs = SystemClock.elapsedRealtimeNanos()
+                    hidden = result[encOutputName].get() as OnnxTensor
+                    outputLookupUs = InferenceTiming.elapsedUs(
+                        lookupStartedAtNs,
+                        SystemClock.elapsedRealtimeNanos(),
+                    )
+                    hiddenFloats = tensorElementCount(hidden.info.shape)
+                    encoderResult = result
+                } catch (t: Throwable) {
+                    result.close()
+                    throw t
+                }
+            }
+        }
+        val totalUs = InferenceTiming.elapsedUs(totalStartedAtNs, SystemClock.elapsedRealtimeNanos())
+        val summary = InferenceTiming.stageSummary(
+            totalUs = totalUs,
+            stagesUs = listOf(
+                preprocess.totalUs,
+                inputBufferAcquireUs,
+                inputBufferFillUs,
+                inputTensorCreateUs,
+                runUs,
+                outputLookupUs,
+            ),
+        )
+        return MangaEncoderRun(
+            result = checkNotNull(encoderResult),
+            hidden = hidden,
+            timing = MangaEncoderTiming(
+                totalMs = InferenceTiming.elapsedMs(totalStartedAtMs, SystemClock.elapsedRealtime()),
+                totalUs = totalUs,
+                preprocessUs = preprocess.totalUs,
+                scaleUs = preprocess.scaleUs,
+                grayUs = preprocess.grayUs,
+                pixelReadUs = preprocess.pixelReadUs,
+                nchwUs = preprocess.nchwUs,
+                inputBufferAcquireUs = inputBufferAcquireUs,
+                inputBufferFillUs = inputBufferFillUs,
+                inputTensorCreateUs = inputTensorCreateUs,
+                runUs = runUs,
+                outputLookupUs = outputLookupUs,
+                otherUs = summary.unaccountedUs + preprocess.otherUs,
+                inputFloats = preprocess.data.size,
+                inputDirect = inputDirect,
+                inputBufferReused = inputLease.reused,
+                inputBufferCapacityFloats = inputLease.capacityElements,
+                inputTensorOwnsBuffer = inputTensorOwnsBuffer,
+                hiddenFloats = hiddenFloats,
+            ),
+        )
+    }
+
+    private fun runDecoderStep(
+        environment: OrtEnvironment,
+        decoder: OrtSession,
+        hidden: OnnxTensor,
+        ids: IntArray,
+        length: Int,
+    ): DecoderStepResult {
+        val bufferAcquireStartedAtNs = SystemClock.elapsedRealtimeNanos()
+        val inputLease = directBufferPool.acquireLong(MAX_TOKENS + 1)
+        val bufferAcquireUs = InferenceTiming.elapsedUs(
+            bufferAcquireStartedAtNs,
+            SystemClock.elapsedRealtimeNanos(),
+        )
+        return inputLease.use { lease ->
+            val inputBuffer = lease.buffer
+            val inputFillStartedAtNs = SystemClock.elapsedRealtimeNanos()
+            for (index in 0 until length) {
+                inputBuffer.put(ids[index].toLong())
+            }
+            inputBuffer.flip()
+            val inputFillUs = InferenceTiming.elapsedUs(
+                inputFillStartedAtNs,
+                SystemClock.elapsedRealtimeNanos(),
+            )
+            val inputDirect = inputBuffer.isDirect
+
+            val tensorStartedAtNs = SystemClock.elapsedRealtimeNanos()
+            val idsTensor = OnnxTensor.createTensor(
+                environment,
+                inputBuffer,
+                longArrayOf(1, length.toLong()),
+            )
+            val tensorCreateUs = InferenceTiming.elapsedUs(
+                tensorStartedAtNs,
+                SystemClock.elapsedRealtimeNanos(),
+            )
+            val tensorOwnsBuffer = idsTensor.ownsBuffer()
+
+            var runUs = 0L
+            var logitsReadUs = 0L
+            var argmaxUs = 0L
+            val nextId = idsTensor.use { inputIds ->
+                val runStartedAtNs = SystemClock.elapsedRealtimeNanos()
+                val result = decoder.run(
+                    mapOf(
+                        decInputIdsName to inputIds,
+                        decHiddenName to hidden,
+                    ),
+                )
+                runUs = InferenceTiming.elapsedUs(runStartedAtNs, SystemClock.elapsedRealtimeNanos())
+                result.use {
+                    val logitsStartedAtNs = SystemClock.elapsedRealtimeNanos()
+                    @Suppress("UNCHECKED_CAST")
+                    val logits = it[0].value as Array<Array<FloatArray>>
+                    logitsReadUs = InferenceTiming.elapsedUs(
+                        logitsStartedAtNs,
+                        SystemClock.elapsedRealtimeNanos(),
+                    )
+                    val argmaxStartedAtNs = SystemClock.elapsedRealtimeNanos()
+                    val id = argmaxLastStep(logits[0])
+                    argmaxUs = InferenceTiming.elapsedUs(
+                        argmaxStartedAtNs,
+                        SystemClock.elapsedRealtimeNanos(),
+                    )
+                    id
+                }
+            }
+            DecoderStepResult(
+                nextId = nextId,
+                bufferAcquireUs = bufferAcquireUs,
+                inputFillUs = inputFillUs,
+                tensorCreateUs = tensorCreateUs,
+                runUs = runUs,
+                logitsReadUs = logitsReadUs,
+                argmaxUs = argmaxUs,
+                inputDirect = inputDirect,
+                bufferReused = lease.reused,
+                tensorOwnsBuffer = tensorOwnsBuffer,
+            )
+        }
+    }
+
     /** ONNX result 出 use 块后底层 buffer 会释放，必须 deep copy。 */
-    private fun copyHiddenState(src: OnnxTensor): OnnxTensor {
-        val info = src.info
-        val shape = info.shape
-        // shape: [batch=1, seq=197, hidden=192]
-        @Suppress("UNCHECKED_CAST")
-        val data = src.value as Array<Array<FloatArray>>
-        val flat = FloatArray(shape[0].toInt() * shape[1].toInt() * shape[2].toInt())
-        var idx = 0
-        for (a in data) for (b in a) for (f in b) { flat[idx++] = f }
-        return OnnxTensor.createTensor(
-            env ?: OrtEnvironment.getEnvironment(),
-            FloatBuffer.wrap(flat),
-            shape
+    private fun tensorElementCount(shape: LongArray): Int {
+        val count = shape.fold(1L) { total, dimension ->
+            require(dimension > 0L) { "Unexpected MangaOcr tensor shape: ${shape.contentToString()}" }
+            require(total <= Int.MAX_VALUE / dimension) {
+                "MangaOcr tensor is too large: ${shape.contentToString()}"
+            }
+            total * dimension
+        }
+        return count.toInt()
+    }
+
+    private fun captureInferenceRuntimeSnapshot(
+        includeSystemStats: Boolean,
+        startingBoundary: Boolean,
+    ): InferenceRuntimeSnapshot {
+        val boundaryNs = if (startingBoundary) null else SystemClock.elapsedRealtimeNanos()
+        val thread = Thread.currentThread()
+        val threadId = Process.myTid()
+        val processCpuMs = Process.getElapsedCpuTime()
+        val callerThreadCpuNs = Debug.threadCpuTimeNanos().takeIf { it >= 0L }
+        val callerThreadPriority = runCatching {
+            Process.getThreadPriority(threadId)
+        }.getOrNull()
+        val javaHeapUsedBytes = if (includeSystemStats) {
+            Runtime.getRuntime().let { runtime -> runtime.totalMemory() - runtime.freeMemory() }
+        } else {
+            0L
+        }
+        val nativeHeapAllocatedBytes = if (includeSystemStats) {
+            Debug.getNativeHeapAllocatedSize()
+        } else {
+            0L
+        }
+        val gcCount = runtimeStatLong("art.gc.gc-count", includeSystemStats)
+        val gcTimeMs = runtimeStatLong("art.gc.gc-time", includeSystemStats)
+        val blockingGcCount = runtimeStatLong("art.gc.blocking-gc-count", includeSystemStats)
+        val blockingGcTimeMs = runtimeStatLong("art.gc.blocking-gc-time", includeSystemStats)
+        val thermalStatus = if (includeSystemStats && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            runCatching { powerManager?.currentThermalStatus }.getOrNull()
+        } else {
+            null
+        }
+        return InferenceRuntimeSnapshot(
+            elapsedRealtimeNs = boundaryNs ?: SystemClock.elapsedRealtimeNanos(),
+            processCpuMs = processCpuMs,
+            callerThreadCpuNs = callerThreadCpuNs,
+            callerThreadId = threadId,
+            callerThreadName = thread.name,
+            callerThreadPriority = callerThreadPriority,
+            gcCount = gcCount,
+            gcTimeMs = gcTimeMs,
+            blockingGcCount = blockingGcCount,
+            blockingGcTimeMs = blockingGcTimeMs,
+            javaHeapUsedBytes = javaHeapUsedBytes,
+            nativeHeapAllocatedBytes = nativeHeapAllocatedBytes,
+            thermalStatus = thermalStatus,
+        )
+    }
+
+    private fun runtimeStatLong(name: String, enabled: Boolean): Long? =
+        if (enabled) Debug.getRuntimeStat(name)?.toLongOrNull() else null
+
+    private fun logRuntimeDetail(
+        scope: String,
+        start: InferenceRuntimeSnapshot,
+        end: InferenceRuntimeSnapshot,
+    ) {
+        val runtime = InferenceDiagnostics.runtimeDelta(start, end)
+        Timber.tag(RUNTIME_DETAIL_TAG).i(
+            "scope=%s wallUs=%d processCpuMs=%d processCpuCorePermille=%d callerThreadCpuUs=%d callerCpuWallPermille=%d thread=%s(tid=%d,priority=%d)->%s(tid=%d,priority=%d) gc(count=%d,timeMs=%d,blockingCount=%d,blockingTimeMs=%d) heap(javaDeltaBytes=%d,nativeDeltaBytes=%d,javaEndBytes=%d,nativeEndBytes=%d) thermal=%s->%s availableProcessors=%d ortThreads=%d",
+            scope,
+            runtime.wallUs,
+            runtime.processCpuMs,
+            runtime.processCpuCorePermille ?: -1,
+            runtime.callerThreadCpuUs ?: -1L,
+            runtime.callerThreadCpuWallPermille ?: -1,
+            runtime.callerThreadStartName ?: "unknown",
+            runtime.callerThreadStartId ?: -1,
+            runtime.callerThreadStartPriority ?: -1,
+            runtime.callerThreadEndName ?: "unknown",
+            runtime.callerThreadEndId ?: -1,
+            runtime.callerThreadEndPriority ?: -1,
+            runtime.gcCount ?: -1L,
+            runtime.gcTimeMs ?: -1L,
+            runtime.blockingGcCount ?: -1L,
+            runtime.blockingGcTimeMs ?: -1L,
+            runtime.javaHeapDeltaBytes,
+            runtime.nativeHeapDeltaBytes,
+            runtime.javaHeapEndBytes,
+            runtime.nativeHeapEndBytes,
+            InferenceDiagnostics.thermalStatusName(runtime.thermalStart),
+            InferenceDiagnostics.thermalStatusName(runtime.thermalEnd),
+            availableProcessors,
+            ortThreads,
+        )
+    }
+
+    private fun logEncoderDetail(
+        scope: String,
+        timing: MangaEncoderTiming,
+        cropWidth: Int,
+        cropHeight: Int,
+    ) {
+        Timber.tag(ENCODER_DETAIL_TAG).i(
+            "scope=%s crop=%dx%d timingUs total=%d preprocess=%d(scale=%d,gray=%d,pixels=%d,nchw=%d) inputBuffer(acquire=%d,fill=%d,reused=%s,capacityFloats=%d) inputTensor=%d run=%d outputLookup=%d hiddenRetained=true other=%d inputFloats=%d inputBytes=%d inputDirect=%s inputTensorOwnsBuffer=%s hiddenFloats=%d hiddenBytes=%d",
+            scope,
+            cropWidth,
+            cropHeight,
+            timing.totalUs,
+            timing.preprocessUs,
+            timing.scaleUs,
+            timing.grayUs,
+            timing.pixelReadUs,
+            timing.nchwUs,
+            timing.inputBufferAcquireUs,
+            timing.inputBufferFillUs,
+            timing.inputBufferReused,
+            timing.inputBufferCapacityFloats,
+            timing.inputTensorCreateUs,
+            timing.runUs,
+            timing.outputLookupUs,
+            timing.otherUs,
+            timing.inputFloats,
+            timing.inputFloats.toLong() * Float.SIZE_BYTES,
+            timing.inputDirect,
+            timing.inputTensorOwnsBuffer,
+            timing.hiddenFloats,
+            timing.hiddenFloats.toLong() * Float.SIZE_BYTES,
+        )
+    }
+
+    private fun logDecoderDetail(
+        scope: String,
+        timing: MangaDecoderTiming,
+    ) {
+        val runtime = timing.runtime
+        val stepRun = timing.stepRun
+        val slowest = stepRun.slowest.joinToString(separator = ",") {
+            "${it.stepIndex}:${it.inputLength}:${it.runUs}"
+        }
+        Timber.tag(DECODER_DETAIL_TAG).i(
+            "scope=%s timingUs total=%d bufferAcquire=%d inputFill=%d tensorCreate=%d run=%d logitsRead=%d argmax=%d decode=%d other=%d steps=%d nonDirectInputs=%d reusedInputs=%d tensorOwnedCopies=%d runtime(processCpuMs=%d,processCpuCorePermille=%d,callerThreadCpuUs=%d,callerCpuWallPermille=%d,thread=%s/%d/p%d->%s/%d/p%d) stepRunUs(count=%d,avg=%d,min=%d,p50=%d,p90=%d,p95=%d,max=%d,firstQuarterAvg=%d,lastQuarterAvg=%d,slowestStepInputRun=%s)",
+            scope,
+            timing.totalUs,
+            timing.bufferAcquireUs,
+            timing.inputFillUs,
+            timing.tensorCreateUs,
+            timing.runUs,
+            timing.logitsReadUs,
+            timing.argmaxUs,
+            timing.decodeUs,
+            timing.otherUs,
+            timing.steps,
+            timing.nonDirectInputs,
+            timing.reusedInputs,
+            timing.tensorOwnedCopies,
+            runtime?.processCpuMs ?: -1L,
+            runtime?.processCpuCorePermille ?: -1,
+            runtime?.callerThreadCpuUs ?: -1L,
+            runtime?.callerThreadCpuWallPermille ?: -1,
+            runtime?.callerThreadStartName ?: "unknown",
+            runtime?.callerThreadStartId ?: -1,
+            runtime?.callerThreadStartPriority ?: -1,
+            runtime?.callerThreadEndName ?: "unknown",
+            runtime?.callerThreadEndId ?: -1,
+            runtime?.callerThreadEndPriority ?: -1,
+            stepRun.count,
+            stepRun.averageUs,
+            stepRun.minUs,
+            stepRun.p50Us,
+            stepRun.p90Us,
+            stepRun.p95Us,
+            stepRun.maxUs,
+            stepRun.firstQuarterAverageUs,
+            stepRun.lastQuarterAverageUs,
+            slowest.ifEmpty { "none" },
         )
     }
 
@@ -474,18 +1344,30 @@ class MangaOcrEngine @Inject constructor(
      * 224×224 squash + L→RGB + (x/255 - 0.5)/0.5 + NCHW float[]。
      * 与 PoC `preprocess_224` 1:1 等价（manga-ocr 官方 ViTImageProcessor 行为）。
      */
-    private fun preprocess224(crop: Bitmap): FloatArray {
+    private fun preprocess224Timed(crop: Bitmap): MangaPreprocessResult {
+        val totalStartedAtNs = SystemClock.elapsedRealtimeNanos()
         // L→RGB：强制把任何输入转灰度再扩到 3 通道，与 kha-white 训练流程一致
+        val scaleStartedAtNs = SystemClock.elapsedRealtimeNanos()
         val squashed = if (crop.width == IMG_SIZE && crop.height == IMG_SIZE) crop
         else Bitmap.createScaledBitmap(crop, IMG_SIZE, IMG_SIZE, true)
+        val scaleUs = InferenceTiming.elapsedUs(scaleStartedAtNs, SystemClock.elapsedRealtimeNanos())
+
+        val grayStartedAtNs = SystemClock.elapsedRealtimeNanos()
         val grayRgb = toGrayThenRgb(squashed)
         if (squashed !== crop) squashed.recycle()
+        val grayUs = InferenceTiming.elapsedUs(grayStartedAtNs, SystemClock.elapsedRealtimeNanos())
 
+        val pixelReadStartedAtNs = SystemClock.elapsedRealtimeNanos()
         val pixels = IntArray(IMG_SIZE * IMG_SIZE)
         grayRgb.getPixels(pixels, 0, IMG_SIZE, 0, 0, IMG_SIZE, IMG_SIZE)
         grayRgb.recycle()
+        val pixelReadUs = InferenceTiming.elapsedUs(
+            pixelReadStartedAtNs,
+            SystemClock.elapsedRealtimeNanos(),
+        )
 
         // NCHW: channel-major
+        val nchwStartedAtNs = SystemClock.elapsedRealtimeNanos()
         val arr = FloatArray(3 * IMG_SIZE * IMG_SIZE)
         val plane = IMG_SIZE * IMG_SIZE
         for (i in 0 until plane) {
@@ -498,7 +1380,21 @@ class MangaOcrEngine @Inject constructor(
             arr[plane + i] = (g - 0.5f) / 0.5f
             arr[2 * plane + i] = (b - 0.5f) / 0.5f
         }
-        return arr
+        val nchwUs = InferenceTiming.elapsedUs(nchwStartedAtNs, SystemClock.elapsedRealtimeNanos())
+        val totalUs = InferenceTiming.elapsedUs(totalStartedAtNs, SystemClock.elapsedRealtimeNanos())
+        val summary = InferenceTiming.stageSummary(
+            totalUs = totalUs,
+            stagesUs = listOf(scaleUs, grayUs, pixelReadUs, nchwUs),
+        )
+        return MangaPreprocessResult(
+            data = arr,
+            totalUs = totalUs,
+            scaleUs = scaleUs,
+            grayUs = grayUs,
+            pixelReadUs = pixelReadUs,
+            nchwUs = nchwUs,
+            otherUs = summary.unaccountedUs,
+        )
     }
 
     /**
@@ -530,13 +1426,22 @@ class MangaOcrEngine @Inject constructor(
     override fun close() {
         runCatching { encSession?.close() }
         runCatching { decSession?.close() }
+        runCatching { encSessionOptions?.close() }
+        runCatching { decSessionOptions?.close() }
         encSession = null
         decSession = null
+        encSessionOptions = null
+        decSessionOptions = null
+        inferenceWarmupCompleted = false
+        directBufferPool.clear()
         // env 是 ORT 全局单例，不在这里关；与 PaddleOcrEngine.close() 行为一致
     }
 
     companion object {
         private const val PERF_TAG = "MangaOcrPerf"
+        private const val ENCODER_DETAIL_TAG = "MangaEncoderDetail"
+        private const val DECODER_DETAIL_TAG = "MangaDecoderDetail"
+        private const val RUNTIME_DETAIL_TAG = "MangaRuntimeDetail"
         const val PAD_ID = 0
         const val UNK_ID = 1
         const val CLS_ID = 2
@@ -552,8 +1457,18 @@ class MangaOcrEngine @Inject constructor(
          */
         const val MAX_TOKENS = 48
 
-        /** [BubbleClusterer] 参数；PoC 实测安全值。 */
-        const val CLUSTER_PAD_PX = 12
         const val CLUSTER_GAP_PX = 18
+    }
+}
+
+private inline fun <T> traceSection(
+    sectionName: String,
+    block: () -> T,
+): T {
+    Trace.beginSection(sectionName)
+    return try {
+        block()
+    } finally {
+        Trace.endSection()
     }
 }

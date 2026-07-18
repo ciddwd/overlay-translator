@@ -1,5 +1,16 @@
 package com.gameocr.app.overlay
 
+import com.gameocr.app.ocr.TextOrientation
+
+internal fun resolveOverlayBlockOrientation(
+    pageOrientation: TextOrientation,
+    blockOrientation: TextOrientation?,
+    followRecognition: Boolean,
+): TextOrientation =
+    blockOrientation
+        ?.takeIf { followRecognition && it != TextOrientation.UNKNOWN }
+        ?: pageOrientation
+
 internal fun normalizeVerticalOverlayText(raw: String): String {
     val normalized = raw.replace("\r\n", "\n").replace('\r', '\n')
     if ('\n' !in normalized) return normalized
@@ -18,9 +29,10 @@ internal fun normalizeVerticalOverlayText(raw: String): String {
 
 internal fun verticalTextReadableMinSizePx(
     originalTextSizePx: Float,
-    minReadableTextSizePx: Float
+    minReadableTextSizePx: Float,
+    minimumOriginalSizeRatio: Float = 0.86f,
 ): Float {
-    val ratioFloor = originalTextSizePx * 0.86f
+    val ratioFloor = originalTextSizePx * minimumOriginalSizeRatio.coerceIn(0f, 1f)
     return minOf(originalTextSizePx, maxOf(ratioFloor, minReadableTextSizePx))
 }
 

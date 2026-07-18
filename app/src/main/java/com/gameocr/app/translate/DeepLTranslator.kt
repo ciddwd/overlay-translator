@@ -52,7 +52,7 @@ class DeepLTranslator @Inject constructor(
 
         val targetCode = mapTargetLang(settings.targetLang)
         val cacheKey = cache.key(trimmed, "deepl-$targetCode", targetCode, "")
-        cache.get(cacheKey)?.let { return it }
+        cache.get(cacheKey, settings)?.let { return it }
 
         val translated = when (settings.deeplProtocol) {
             DeeplProtocol.OFFICIAL -> {
@@ -78,7 +78,7 @@ class DeepLTranslator @Inject constructor(
                 }
             }
         }
-        cache.put(cacheKey, translated)
+        cache.put(cacheKey, translated, settings)
         return translated
     }
 
@@ -162,7 +162,7 @@ class DeepLTranslator @Inject constructor(
                 continue
             }
             val key = cache.key(t, "deepl-$targetCode", targetCode, "")
-            val hit = cache.get(key)
+            val hit = cache.get(key, settings)
             if (hit != null) result[i] = hit
             else pending.add(i)
         }
@@ -203,7 +203,7 @@ class DeepLTranslator @Inject constructor(
             val translated = parsed.translations.getOrNull(order)?.text?.trim() ?: continue
             result[idx] = translated
             val key = cache.key(sources[idx].trim(), "deepl-$targetCode", targetCode, "")
-            cache.put(key, translated)
+            cache.put(key, translated, settings)
         }
         return result.toList()
     }

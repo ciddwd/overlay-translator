@@ -65,6 +65,46 @@ internal fun verticalOverlaySlot(
     }
 }
 
+/**
+ * Expands a final adaptive vertical viewport without crossing a neighbouring OCR block.
+ * Japanese vertical text grows toward the left first; LTR vertical text grows toward the right.
+ * At a screen edge the remaining width is borrowed from the opposite side.
+ */
+internal fun adaptiveVerticalOverflowSlot(
+    rect: OverlayIntRect,
+    allRects: List<OverlayIntRect>,
+    screenWidth: Int,
+    rightToLeft: Boolean,
+    minGapPx: Int,
+    requiredWidthPx: Int,
+): VerticalOverlaySlot {
+    val safeScreenWidth = screenWidth.coerceAtLeast(1)
+    val gap = minGapPx.coerceAtLeast(0)
+    val requiredWidth = maxOf(rect.width, requiredWidthPx.coerceAtLeast(1))
+        .coerceAtMost(safeScreenWidth)
+    val leftBoundary = nearestLeftBoundary(rect, allRects, gap).coerceIn(0, safeScreenWidth - 1)
+    val rightBoundary = nearestRightBoundary(rect, allRects, safeScreenWidth, gap)
+        .coerceIn(leftBoundary + 1, safeScreenWidth)
+    val originalLeft = rect.left.coerceIn(leftBoundary, rightBoundary - 1)
+    val originalRight = rect.right.coerceIn(originalLeft + 1, rightBoundary)
+
+    return if (rightToLeft) {
+        var right = originalRight
+        val left = (right - requiredWidth).coerceAtLeast(leftBoundary)
+        if (right - left < requiredWidth) {
+            right = (left + requiredWidth).coerceAtMost(rightBoundary)
+        }
+        VerticalOverlaySlot(left = left, right = right)
+    } else {
+        var left = originalLeft
+        val right = (left + requiredWidth).coerceAtMost(rightBoundary)
+        if (right - left < requiredWidth) {
+            left = (right - requiredWidth).coerceAtLeast(leftBoundary)
+        }
+        VerticalOverlaySlot(left = left, right = right)
+    }
+}
+
 private fun nearestLeftBoundary(
     rect: OverlayIntRect,
     allRects: List<OverlayIntRect>,

@@ -36,8 +36,31 @@ class TranslationPresetTest {
         assertEquals("zh-CN", applied.targetLang)
         assertEquals(OcrEngineKind.MANGA_OCR_JA, applied.ocrEngine)
         assertEquals(TranslatorEngine.LOCAL_SAKURA, applied.translatorEngine)
-        assertTrue(applied.mergeAdjacentBlocks)
         assertEquals(MergeStrength.AGGRESSIVE, applied.mergeStrength)
+        data class DisplayPolicyCase(
+            val name: String,
+            val mergeAdjacentBlocks: Boolean,
+            val overlayStyleMode: OverlayStyleMode,
+            val overlayTheme: OverlayTheme,
+        )
+        listOf(
+            DisplayPolicyCase(
+                name = "catalog preset",
+                mergeAdjacentBlocks = preset.mergeAdjacentBlocks,
+                overlayStyleMode = preset.overlayStyleMode,
+                overlayTheme = preset.overlayTheme,
+            ),
+            DisplayPolicyCase(
+                name = "applied settings",
+                mergeAdjacentBlocks = applied.mergeAdjacentBlocks,
+                overlayStyleMode = applied.overlayStyleMode,
+                overlayTheme = applied.overlayTheme,
+            ),
+        ).forEach { case ->
+            assertFalse(case.name, case.mergeAdjacentBlocks)
+            assertEquals(case.name, OverlayStyleMode.ADAPTIVE, case.overlayStyleMode)
+            assertEquals(case.name, OverlayTheme.CLASSIC_DARK, case.overlayTheme)
+        }
 
         assertEquals(base.apiKey, applied.apiKey)
         assertEquals(base.baiduOcrApiKey, applied.baiduOcrApiKey)
@@ -346,6 +369,7 @@ class TranslationPresetTest {
             dbnetUnclipRatio = 1.37f,
             mangaOcrDbnetUnclipRatio = 1.83f,
             bubbleClusterGap = 47,
+            mangaOcrCropPaddingPx = 29,
         )
         val applied = preset.applyTo(Settings())
         val rebuilt = TranslationPresetCatalog.fromSettings(
@@ -364,7 +388,11 @@ class TranslationPresetTest {
             val settingsField = Settings::class.java.getDeclaredField(presetField.name).apply {
                 isAccessible = true
             }
-            val expected = presetField.get(preset)
+            val expected = when (presetField.name) {
+                "bubbleClusterGap" -> MangaOcrAdvancedSettingsPolicy.BUBBLE_CLUSTER_GAP
+                "mangaOcrCropPaddingPx" -> MangaOcrAdvancedSettingsPolicy.CROP_PADDING_PX
+                else -> presetField.get(preset)
+            }
             assertEquals("applyTo ${presetField.name}", expected, settingsField.get(applied))
             assertEquals("fromSettings ${presetField.name}", expected, presetField.get(rebuilt))
         }

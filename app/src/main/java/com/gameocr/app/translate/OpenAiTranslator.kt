@@ -50,7 +50,7 @@ class OpenAiTranslator @Inject constructor(
             settings.targetLang,
             settings.promptTemplate + settings.runtimeTranslationContext,
         )
-        cache.get(cacheKey)?.let { return it }
+        cache.get(cacheKey, settings)?.let { return it }
 
         val request = buildRequest(trimmed, settings, stream = false)
         val timedClient = client.withApiTimeout(settings.apiTimeoutSeconds)
@@ -69,7 +69,7 @@ class OpenAiTranslator @Inject constructor(
                     ?: throw TranslationException(appContext.getString(R.string.err_openai_no_choices))
             }
         }
-        cache.put(cacheKey, translated)
+        cache.put(cacheKey, translated, settings)
         return translated
     }
 
@@ -84,7 +84,7 @@ class OpenAiTranslator @Inject constructor(
             settings.targetLang,
             settings.promptTemplate + settings.runtimeTranslationContext,
         )
-        cache.get(cacheKey)?.let {
+        cache.get(cacheKey, settings)?.let {
             emit(it)
             return@flow
         }
@@ -123,7 +123,7 @@ class OpenAiTranslator @Inject constructor(
         } finally {
             response.close()
         }
-        if (acc.isNotEmpty()) cache.put(cacheKey, acc.toString())
+        if (acc.isNotEmpty()) cache.put(cacheKey, acc.toString(), settings)
     }.flowOn(Dispatchers.IO)
 
     /**

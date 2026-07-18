@@ -10,6 +10,23 @@ import android.text.TextPaint
 import android.util.TypedValue
 import android.view.View
 import com.gameocr.app.data.OverlayTextStyle
+import kotlin.math.roundToInt
+
+internal data class AdaptiveVerticalTextFitSnapshot(
+    val phase: AdaptiveTextLayoutPhase,
+    val textHash: Int,
+    val textLength: Int,
+    val initialTextSizePx: Float,
+    val finalTextSizePx: Float,
+    val minTextSizePx: Int,
+    val maxTextSizePx: Int,
+    val probes: Int,
+    val requiredWidthPx: Int,
+    val contentWidthPx: Int,
+    val contentHeightPx: Int,
+    val nextSizeFits: Boolean?,
+    val overflow: Boolean,
+)
 
 /**
  * 竖排（tategaki）文本 View。**包装 [VerticalTextDrawer]**——`measure` 走 Drawer.measure，
@@ -32,6 +49,19 @@ class VerticalTextView(context: Context) : View(context) {
     }
     private var textColor: Int = Color.WHITE
     private var textStyle: OverlayTextStyle = OverlayTextStyle()
+    internal var minimumReadableTextSizeSp: Float = 12f
+    internal var minimumReadableTextSizeRatio: Float = 0.86f
+    internal var adaptiveTextFitEnabled: Boolean = false
+    internal var adaptiveMaximumTextSizeSp: Float = ADAPTIVE_MAX_TEXT_SIZE_SP.toFloat()
+    internal var adaptiveTextLayoutPhase: AdaptiveTextLayoutPhase = AdaptiveTextLayoutPhase.FINAL
+        set(value) {
+            if (field == value) return
+            field = value
+            requestLayout()
+            invalidate()
+        }
+    internal var onAdaptiveTextFitResolved: ((AdaptiveVerticalTextFitSnapshot) -> Unit)? = null
+    private var lastAdaptiveTextFitSnapshot: AdaptiveVerticalTextFitSnapshot? = null
 
     /**
      * 当前文本。setter 会触发 [requestLayout]（重算尺寸）+ [invalidate]（重绘）。
@@ -137,7 +167,20 @@ class VerticalTextView(context: Context) : View(context) {
         if (contentW <= 0f || contentH <= 0f) return
         val originalTextSize = paint.textSize
         val layoutText = normalizeVerticalOverlayText(text)
-        shrinkTextToFit(layoutText, contentW, contentH, originalTextSize)
+        val fitSnapshot = if (
+            adaptiveTextFitEnabled && shouldFitAdaptiveFinalBounds(adaptiveTextLayoutPhase)
+        ) {
+            fitAdaptiveTextToBounds(layoutText, contentW, contentH, originalTextSize)
+        } else {
+            shrinkTextToFit(layoutText, contentW, contentH, originalTextSize)
+        }
+        if (
+            shouldReportAdaptiveTextLayout(adaptiveTextLayoutPhase) &&
+            fitSnapshot != lastAdaptiveTextFitSnapshot
+        ) {
+            lastAdaptiveTextFitSnapshot = fitSnapshot
+            onAdaptiveTextFitResolved?.invoke(fitSnapshot)
+        }
         canvas.save()
         canvas.clipRect(padL, padT, width - padR, height - padB)
         canvas.translate(padL.toFloat(), padT.toFloat())
@@ -206,23 +249,130 @@ class VerticalTextView(context: Context) : View(context) {
         contentW: Float,
         contentH: Float,
         originalTextSize: Float
-    ) {
-        if (layoutText.isEmpty()) return
+    ): AdaptiveVerticalTextFitSnapshot {
+        if (layoutText.isEmpty()) {
+            return AdaptiveVerticalTextFitSnapshot(
+                phase = adaptiveTextLayoutPhase,
+                textHash = text.hashCode(),
+                textLength = text.length,
+                initialTextSizePx = originalTextSize,
+                finalTextSizePx = originalTextSize,
+                minTextSizePx = originalTextSize.roundToInt(),
+                maxTextSizePx = originalTextSize.roundToInt(),
+                probes = 0,
+                requiredWidthPx = 0,
+                contentWidthPx = contentW.toInt(),
+                contentHeightPx = contentH.toInt(),
+                nextSizeFits = null,
+                overflow = false,
+            )
+        }
         val minTextSize = verticalTextReadableMinSizePx(
             originalTextSizePx = originalTextSize,
-            minReadableTextSizePx = sp2px(12f)
+            minReadableTextSizePx = sp2px(minimumReadableTextSizeSp),
+            minimumOriginalSizeRatio = minimumReadableTextSizeRatio,
         )
-        repeat(4) {
-            val requiredW = VerticalTextDrawer.measure(
+        var iterations = 0
+        var requiredWidth = VerticalTextDrawer.measure(
+            layoutText,
+            paint,
+            contentH.toInt(),
+            letterSpacingEm = textStyle.letterSpacingEm,
+            lineSpacingMultiplier = textStyle.lineSpacingMultiplier
+        ).first
+        while (iterations < 8 && requiredWidth > contentW && paint.textSize > minTextSize) {
+            val ratio = (contentW / requiredWidth).coerceIn(0.65f, 0.97f)
+            val nextSize = (paint.textSize * ratio).coerceAtLeast(minTextSize)
+            if (nextSize >= paint.textSize) break
+            paint.textSize = nextSize
+            iterations++
+            requiredWidth = VerticalTextDrawer.measure(
                 layoutText,
                 paint,
                 contentH.toInt(),
                 letterSpacingEm = textStyle.letterSpacingEm,
                 lineSpacingMultiplier = textStyle.lineSpacingMultiplier
             ).first
-            if (requiredW <= contentW || paint.textSize <= minTextSize) return
-            val ratio = (contentW / requiredW).coerceIn(0.86f, 0.97f)
-            paint.textSize = (paint.textSize * ratio).coerceAtLeast(minTextSize)
         }
+        return AdaptiveVerticalTextFitSnapshot(
+            phase = adaptiveTextLayoutPhase,
+            textHash = text.hashCode(),
+            textLength = text.length,
+            initialTextSizePx = originalTextSize,
+            finalTextSizePx = paint.textSize,
+            minTextSizePx = minTextSize.roundToInt(),
+            maxTextSizePx = originalTextSize.roundToInt(),
+            probes = iterations,
+            requiredWidthPx = requiredWidth,
+            contentWidthPx = contentW.toInt(),
+            contentHeightPx = contentH.toInt(),
+            nextSizeFits = null,
+            overflow = requiredWidth > contentW,
+        )
+    }
+
+    private fun fitAdaptiveTextToBounds(
+        layoutText: String,
+        contentW: Float,
+        contentH: Float,
+        originalTextSize: Float,
+    ): AdaptiveVerticalTextFitSnapshot {
+        val minTextSizePx = sp2px(minimumReadableTextSizeSp).roundToInt().coerceAtLeast(1)
+        val maxTextSizePx = sp2px(adaptiveMaximumTextSizeSp)
+            .roundToInt()
+            .coerceAtLeast(minTextSizePx)
+        if (layoutText.isEmpty()) {
+            paint.textSize = maxTextSizePx.toFloat()
+            return AdaptiveVerticalTextFitSnapshot(
+                phase = adaptiveTextLayoutPhase,
+                textHash = text.hashCode(),
+                textLength = text.length,
+                initialTextSizePx = originalTextSize,
+                finalTextSizePx = paint.textSize,
+                minTextSizePx = minTextSizePx,
+                maxTextSizePx = maxTextSizePx,
+                probes = 0,
+                requiredWidthPx = 0,
+                contentWidthPx = contentW.toInt(),
+                contentHeightPx = contentH.toInt(),
+                nextSizeFits = null,
+                overflow = false,
+            )
+        }
+
+        fun requiredWidthAt(sizePx: Int): Int {
+            paint.textSize = sizePx.toFloat()
+            return VerticalTextDrawer.measure(
+                layoutText,
+                paint,
+                contentH.toInt(),
+                letterSpacingEm = textStyle.letterSpacingEm,
+                lineSpacingMultiplier = textStyle.lineSpacingMultiplier,
+            ).first
+        }
+
+        val search = adaptiveLargestFittingTextSizePx(
+            minSizePx = minTextSizePx,
+            maxSizePx = maxTextSizePx,
+        ) { candidatePx ->
+            requiredWidthAt(candidatePx) <= contentW
+        }
+        paint.textSize = search.sizePx.toFloat()
+        val requiredWidth = requiredWidthAt(search.sizePx)
+        return AdaptiveVerticalTextFitSnapshot(
+            phase = adaptiveTextLayoutPhase,
+            textHash = text.hashCode(),
+            textLength = text.length,
+            initialTextSizePx = originalTextSize,
+            finalTextSizePx = paint.textSize,
+            minTextSizePx = minTextSizePx,
+            maxTextSizePx = maxTextSizePx,
+            probes = search.probes,
+            requiredWidthPx = requiredWidth,
+            contentWidthPx = contentW.toInt(),
+            contentHeightPx = contentH.toInt(),
+            nextSizeFits = search.nextSizeFits,
+            overflow = requiredWidth > contentW,
+        )
     }
 }

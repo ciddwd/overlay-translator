@@ -24,8 +24,40 @@ class BubbleClustererTest {
         assertEquals(1, result.size)
         val b = result[0]
         assertEquals(listOf(0), b.memberIndices)
+        assertEquals(IntRect(10, 20, 30, 40), b.contentRect)
         // pad=12 → 外扩到 (-2, 8, 42, 52)，clamp 到 (0, 8, 42, 52)
         assertEquals(IntRect(0, 8, 42, 52), b.rect)
+    }
+
+    @Test
+    fun crop_padding_is_table_driven_and_never_changes_content_bounds() {
+        data class Case(
+            val name: String,
+            val input: IntRect,
+            val imageWidth: Int,
+            val imageHeight: Int,
+            val padding: Int,
+            val expectedCrop: IntRect,
+        )
+
+        val cases = listOf(
+            Case("default-zero", IntRect(10, 20, 30, 40), 100, 100, 0, IntRect(10, 20, 30, 40)),
+            Case("positive-margin", IntRect(20, 30, 40, 50), 100, 100, 12, IntRect(8, 18, 52, 62)),
+            Case("top-left-clamp", IntRect(3, 4, 20, 22), 100, 100, 12, IntRect(0, 0, 32, 34)),
+            Case("bottom-right-clamp", IntRect(80, 85, 98, 99), 100, 100, 12, IntRect(68, 73, 100, 100)),
+        )
+
+        cases.forEach { case ->
+            val bubble = BubbleClusterer.cluster(
+                rects = listOf(case.input),
+                imgW = case.imageWidth,
+                imgH = case.imageHeight,
+                pad = case.padding,
+                gap = 18,
+            ).single()
+            assertEquals(case.name, case.input, bubble.contentRect)
+            assertEquals(case.name, case.expectedCrop, bubble.rect)
+        }
     }
 
     @Test
@@ -51,7 +83,41 @@ class BubbleClustererTest {
         val b = result[0]
         // 外接矩形 (0,0,55,20)，pad=0，clamp 不生效
         assertEquals(IntRect(0, 0, 55, 20), b.rect)
+        assertEquals(IntRect(0, 0, 55, 20), b.contentRect)
         assertTrue(b.memberIndices.containsAll(listOf(0, 1)))
+    }
+
+    @Test
+    fun gap_uses_actual_edge_distance_instead_of_double_inflation() {
+        data class Case(
+            val name: String,
+            val second: IntRect,
+            val gap: Int,
+            val expectedBubbleCount: Int,
+        )
+
+        val first = IntRect(0, 0, 20, 20)
+        val cases = listOf(
+            Case("zero-gap-merges-touching-edges", IntRect(20, 0, 40, 20), 0, 1),
+            Case("zero-gap-splits-one-pixel-distance", IntRect(21, 0, 41, 20), 0, 2),
+            Case("inside-horizontal-boundary", IntRect(37, 0, 57, 20), 18, 1),
+            Case("on-horizontal-boundary", IntRect(38, 0, 58, 20), 18, 1),
+            Case("outside-horizontal-boundary", IntRect(39, 0, 59, 20), 18, 2),
+            Case("inside-both-axes", IntRect(38, 38, 58, 58), 18, 1),
+            Case("outside-vertical-boundary", IntRect(38, 39, 58, 59), 18, 2),
+            Case("negative-gap-is-zero", IntRect(21, 0, 41, 20), -1, 2),
+        )
+
+        cases.forEach { case ->
+            val result = BubbleClusterer.cluster(
+                rects = listOf(first, case.second),
+                imgW = 100,
+                imgH = 100,
+                pad = 0,
+                gap = case.gap,
+            )
+            assertEquals(case.name, case.expectedBubbleCount, result.size)
+        }
     }
 
     @Test

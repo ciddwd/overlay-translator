@@ -25,6 +25,8 @@ data class Settings(
     val loopTextRegionMode: LoopTextRegionMode = LoopTextRegionMode.AUTO,
     val loopTranslateRegionOnly: Boolean = true,
     val developerOptionsEnabled: Boolean = false,
+    val ocrScreenshotSavingEnabled: Boolean = false,
+    val disableTranslationCache: Boolean = false,
     val ocrRedBoxModeEnabled: Boolean = false,
     val ocrRedBoxShowSourceText: Boolean = true,
     val ocrRedBoxShowTranslation: Boolean = false,
@@ -35,6 +37,7 @@ data class Settings(
      */
     val captureRegionSavedScreenW: Int = 0,
     val captureRegionSavedScreenH: Int = 0,
+    val overlayStyleMode: OverlayStyleMode = OverlayStyleMode.FIXED,
     val overlayTextSizeSp: Int = 14,
     val overlayTextStyle: OverlayTextStyle = OverlayTextStyle(),
     val overlayAlpha: Float = 0.85f,
@@ -102,6 +105,7 @@ data class Settings(
      */
     val tencentOcrLanguage: TencentOcrLanguage = TencentOcrLanguage.AUTO,
     val paddleModelVersion: PaddleModelVersion = PaddleModelVersion.V5_MOBILE,
+    val paddleDetectionProfile: PaddleDetectionProfile = PaddleDetectionProfile.FAST,
     val paddleModelMirrorUrl: String = "",
     /**
      * manga-ocr 模型下载镜像 URL（可选）。l0wgear/manga-ocr-2025-onnx 没有公开 hf-mirror 代理
@@ -277,13 +281,10 @@ data class Settings(
      * 1.65 比 PaddleOCR 常见 1.5 默认值多一点裁剪余量，同时仍避免过度吞邻泡。
      */
     val mangaOcrDbnetUnclipRatio: Float = 1.65f,
-    /**
-     * BubbleClusterer 聚类时把每个 DBNet quad 外扩多少像素后做并查集合并。
-     * 18 px 是 PaddleOCR DBNet 论文常见列距下限；屏译漫画竖排两列字间距经常 20–40 px，
-     * 升到 32 px 让「キャプテン / お疲れ様でした!!」这类两列气泡能聚为单个 bubble 整体送入
-     * manga-ocr。过大可能误合相邻独立气泡，用户可在设置滑条调 8–60。
-     */
-    val bubbleClusterGap: Int = 32,
+    /** 兼容旧存档保留的退役字段；读取、保存和运行时始终强制为 0。 */
+    val bubbleClusterGap: Int = MangaOcrAdvancedSettingsPolicy.BUBBLE_CLUSTER_GAP,
+    /** 兼容旧存档保留的退役字段；读取、保存和运行时始终强制为 0。 */
+    val mangaOcrCropPaddingPx: Int = MangaOcrAdvancedSettingsPolicy.CROP_PADDING_PX,
     /**
      * 端侧 LLM 下载源选择。默认 [LlmMirrorChoice.HF_MIRROR]——国内用户绝大多数直连可达：
      * - Hy-MT2 / Sakura 在此模式下走 hf-mirror.com。
@@ -366,6 +367,7 @@ data class TranslationPreset(
     val translationBlockInteractionMode: TranslationBlockInteractionMode =
         TranslationBlockInteractionMode.COPY_BUTTON,
     val overlayPlacement: OverlayPlacement = OverlayPlacement.OVERLAP,
+    val overlayStyleMode: OverlayStyleMode = OverlayStyleMode.FIXED,
     val overlayTheme: OverlayTheme = OverlayTheme.CLASSIC_DARK,
     val customBgColor: Int = 0xE6000000.toInt(),
     val customFgColor: Int = 0xFFFFFFFF.toInt(),
@@ -396,6 +398,7 @@ data class TranslationPreset(
     val tencentOcrEndpoint: TencentOcrEndpoint = TencentOcrEndpoint.GENERAL_BASIC,
     val tencentOcrLanguage: TencentOcrLanguage = TencentOcrLanguage.AUTO,
     val paddleModelVersion: PaddleModelVersion = PaddleModelVersion.V5_MOBILE,
+    val paddleDetectionProfile: PaddleDetectionProfile = PaddleDetectionProfile.FAST,
     val apiTimeoutSeconds: Int = 30,
     val mergeAdjacentBlocks: Boolean = false,
     val mergeStrength: MergeStrength = MergeStrength.STANDARD,
@@ -416,7 +419,8 @@ data class TranslationPreset(
     val dbnetBoxScoreThresh: Float = 0.5f,
     val dbnetUnclipRatio: Float = 1.55f,
     val mangaOcrDbnetUnclipRatio: Float = 1.65f,
-    val bubbleClusterGap: Int = 32,
+    val bubbleClusterGap: Int = MangaOcrAdvancedSettingsPolicy.BUBBLE_CLUSTER_GAP,
+    val mangaOcrCropPaddingPx: Int = MangaOcrAdvancedSettingsPolicy.CROP_PADDING_PX,
     val settingsHash: String = ""
 ) {
     fun applyTo(settings: Settings): Settings {
@@ -437,6 +441,7 @@ data class TranslationPreset(
         renderMode = renderMode,
         translationBlockInteractionMode = translationBlockInteractionMode,
         overlayPlacement = overlayPlacement,
+        overlayStyleMode = overlayStyleMode,
         overlayTheme = overlayTheme,
         customBgColor = customBgColor,
         customFgColor = customFgColor,
@@ -467,6 +472,7 @@ data class TranslationPreset(
         tencentOcrEndpoint = tencentOcrEndpoint,
         tencentOcrLanguage = tencentOcrLanguage,
         paddleModelVersion = paddleModelVersion,
+        paddleDetectionProfile = paddleDetectionProfile,
         apiTimeoutSeconds = apiTimeoutSeconds,
         mergeAdjacentBlocks = mergeAdjacentBlocks,
         mergeStrength = mergeStrength,
@@ -487,7 +493,8 @@ data class TranslationPreset(
         dbnetBoxScoreThresh = dbnetBoxScoreThresh,
         dbnetUnclipRatio = dbnetUnclipRatio,
         mangaOcrDbnetUnclipRatio = mangaOcrDbnetUnclipRatio,
-        bubbleClusterGap = bubbleClusterGap
+        bubbleClusterGap = MangaOcrAdvancedSettingsPolicy.BUBBLE_CLUSTER_GAP,
+        mangaOcrCropPaddingPx = MangaOcrAdvancedSettingsPolicy.CROP_PADDING_PX
         )
     }
 }
@@ -506,8 +513,9 @@ object TranslationPresetCatalog {
                 targetLang = "zh-CN",
                 ocrEngine = OcrEngineKind.MANGA_OCR_JA,
                 translatorEngine = TranslatorEngine.LOCAL_SAKURA,
-                overlayTheme = OverlayTheme.PAPER_LIGHT,
-                mergeAdjacentBlocks = true,
+                overlayStyleMode = OverlayStyleMode.ADAPTIVE,
+                overlayTheme = OverlayTheme.CLASSIC_DARK,
+                mergeAdjacentBlocks = false,
                 mergeStrength = MergeStrength.AGGRESSIVE
             )
         )
@@ -545,6 +553,7 @@ object TranslationPresetCatalog {
             renderMode = settings.renderMode,
             translationBlockInteractionMode = settings.translationBlockInteractionMode,
             overlayPlacement = settings.overlayPlacement,
+            overlayStyleMode = settings.overlayStyleMode,
             overlayTheme = settings.overlayTheme,
             customBgColor = settings.customBgColor,
             customFgColor = settings.customFgColor,
@@ -575,6 +584,7 @@ object TranslationPresetCatalog {
             tencentOcrEndpoint = settings.tencentOcrEndpoint,
             tencentOcrLanguage = settings.tencentOcrLanguage,
             paddleModelVersion = settings.paddleModelVersion,
+            paddleDetectionProfile = settings.paddleDetectionProfile,
             apiTimeoutSeconds = settings.apiTimeoutSeconds,
             mergeAdjacentBlocks = settings.mergeAdjacentBlocks,
             mergeStrength = settings.mergeStrength,
@@ -595,7 +605,8 @@ object TranslationPresetCatalog {
             dbnetBoxScoreThresh = settings.dbnetBoxScoreThresh,
             dbnetUnclipRatio = settings.dbnetUnclipRatio,
             mangaOcrDbnetUnclipRatio = settings.mangaOcrDbnetUnclipRatio,
-            bubbleClusterGap = settings.bubbleClusterGap
+            bubbleClusterGap = MangaOcrAdvancedSettingsPolicy.BUBBLE_CLUSTER_GAP,
+            mangaOcrCropPaddingPx = MangaOcrAdvancedSettingsPolicy.CROP_PADDING_PX
         )
         return preset.copy(settingsHash = settingsHash(preset))
     }
@@ -621,6 +632,12 @@ object TranslationPresetCatalog {
             preset.translationOutputLayout,
             preset.translationOutputDirection,
         )
+        val bubbleClusterGap = MangaOcrAdvancedSettingsPolicy.effectiveBubbleClusterGap(
+            preset.bubbleClusterGap
+        )
+        val mangaOcrCropPaddingPx = MangaOcrAdvancedSettingsPolicy.effectiveCropPaddingPx(
+            preset.mangaOcrCropPaddingPx
+        )
         return sha256(
             preset.baseUrl,
             preset.model,
@@ -635,6 +652,7 @@ object TranslationPresetCatalog {
             preset.renderMode.name,
             preset.translationBlockInteractionMode.name,
             preset.overlayPlacement.name,
+            preset.overlayStyleMode.name,
             preset.overlayTheme.name,
             preset.customBgColor,
             preset.customFgColor,
@@ -678,6 +696,7 @@ object TranslationPresetCatalog {
             preset.tencentOcrEndpoint.name,
             preset.tencentOcrLanguage.name,
             preset.paddleModelVersion.name,
+            preset.paddleDetectionProfile.name,
             preset.apiTimeoutSeconds,
             preset.mergeAdjacentBlocks,
             preset.mergeStrength.name,
@@ -698,7 +717,8 @@ object TranslationPresetCatalog {
             preset.dbnetBoxScoreThresh.toBits(),
             preset.dbnetUnclipRatio.toBits(),
             preset.mangaOcrDbnetUnclipRatio.toBits(),
-            preset.bubbleClusterGap
+            bubbleClusterGap,
+            mangaOcrCropPaddingPx
         )
     }
 
@@ -869,6 +889,30 @@ enum class DeeplProtocol {
 }
 
 /**
+ * DBNet input-size profiles. Thresholds and unclip remain independent user settings.
+ */
+@Serializable
+enum class PaddleDetectionProfile(
+    @StringRes val labelRes: Int,
+    @StringRes val descRes: Int,
+    val maxSideLen: Int,
+    val enableMangaTiling: Boolean,
+) {
+    FAST(
+        R.string.settings_paddle_detection_fast,
+        R.string.settings_paddle_detection_fast_desc,
+        maxSideLen = 960,
+        enableMangaTiling = false,
+    ),
+    ACCURATE(
+        R.string.settings_paddle_detection_accurate,
+        R.string.settings_paddle_detection_accurate_desc,
+        maxSideLen = 1920,
+        enableMangaTiling = true,
+    ),
+}
+
+/**
  * PaddleOCR 模型版本。支持多版本切换：v5 mobile（当前默认）和 v6 tiny（更轻量、更快）。
  * 每个版本的模型文件存在独立子目录（[PaddleModelInstaller.modelsDir] / [dirName]），
  * 切版本时不需要删另一个版本的模型。
@@ -879,6 +923,9 @@ enum class DeeplProtocol {
 enum class PaddleModelVersion(
     val displayNameRes: Int,
     val descRes: Int,
+    val languageCount: Int,
+    val supportedLanguagesRes: Int,
+    val supportsJapanese: Boolean,
     /** modelsDir 下的子目录名 */
     val dirName: String
 ) {
@@ -886,24 +933,36 @@ enum class PaddleModelVersion(
     V5_MOBILE(
         R.string.paddle_version_v5_mobile,
         R.string.paddle_version_v5_mobile_desc,
+        4,
+        R.string.paddle_version_v5_mobile_languages,
+        true,
         "v5"
     ),
     /** PP-OCRv6 tiny（det ~1.5M params + rec ~1.5M params，极轻量极快） */
     V6_TINY(
         R.string.paddle_version_v6_tiny,
         R.string.paddle_version_v6_tiny_desc,
+        49,
+        R.string.paddle_version_v6_tiny_languages,
+        false,
         "v6tiny"
     ),
     /** PP-OCRv6 small: mobile tier with higher accuracy than tiny at a higher runtime cost. */
     V6_SMALL(
         R.string.paddle_version_v6_small,
         R.string.paddle_version_v6_small_desc,
+        50,
+        R.string.paddle_version_v6_full_languages,
+        true,
         "v6small"
     ),
     /** PP-OCRv6 medium: higher accuracy tier with a larger download/runtime cost. */
     V6_MEDIUM(
         R.string.paddle_version_v6_medium,
         R.string.paddle_version_v6_medium_desc,
+        50,
+        R.string.paddle_version_v6_full_languages,
+        true,
         "v6medium"
     );
 }
@@ -1267,6 +1326,43 @@ enum class OverlayPlacement {
     /** 紧贴原文上方（适合下方有 UI 元素时）。 */
     ABOVE
 }
+
+@Serializable
+enum class OverlayStyleMode {
+    /** Use the colors, font size and effects configured by the user. */
+    FIXED,
+    /** Derive block colors and a safe maximum font size from the captured image. */
+    ADAPTIVE
+}
+
+internal fun adaptiveOverlayActive(
+    mode: OverlayStyleMode,
+    renderMode: RenderMode,
+): Boolean =
+    mode == OverlayStyleMode.ADAPTIVE && renderMode == RenderMode.BLOCKS
+
+internal fun manualOverlayLayoutControlsEnabled(
+    mode: OverlayStyleMode,
+    renderMode: RenderMode,
+): Boolean =
+    !adaptiveOverlayActive(mode, renderMode)
+
+internal fun Settings.effectiveOverlayRenderSettings(): Settings =
+    if (adaptiveOverlayActive(overlayStyleMode, renderMode)) {
+        copy(
+            overlayTextSizeSp = 14,
+            overlayTextStyle = OverlayTextStyle(),
+            overlayAlpha = 1f,
+            overlayTheme = OverlayTheme.CLASSIC_DARK,
+            overlayPlacement = OverlayPlacement.OVERLAP,
+            overlayOffsetX = 0,
+            overlayOffsetY = 0,
+            overlayAllowWrap = true,
+            overlayAvoidCollision = false,
+        )
+    } else {
+        this
+    }
 
 @Serializable
 enum class OverlayTheme {

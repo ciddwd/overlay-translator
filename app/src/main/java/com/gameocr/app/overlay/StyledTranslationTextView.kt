@@ -13,10 +13,37 @@ import com.gameocr.app.data.OverlayTextAlignment
 import com.gameocr.app.data.OverlayTextStyle
 import com.gameocr.app.util.VerticalDiagnosticLog
 
+internal data class AdaptiveHorizontalTextLayoutSnapshot(
+    val phase: AdaptiveTextLayoutPhase,
+    val textHash: Int,
+    val textLength: Int,
+    val finalTextSizePx: Float,
+    val autoSizeMaxTextSizePx: Int,
+    val measuredWidthPx: Int,
+    val measuredHeightPx: Int,
+    val contentWidthPx: Int,
+    val contentHeightPx: Int,
+    val layoutHeightPx: Int,
+    val lineCount: Int,
+    val visibleTextEnd: Int,
+    val ellipsized: Boolean,
+    val overflowReasons: Set<AdaptiveTextOverflowReason>,
+    val overflow: Boolean,
+)
+
 /** TextView that draws an optional outline before the normal filled translation text. */
 @SuppressLint("AppCompatCustomView") // Platform TextView keeps the framework text-selection ActionMode.
 class StyledTranslationTextView(context: Context) : TextView(context) {
     var horizontalRightToLeft: Boolean = false
+    internal var adaptiveTextFitEnabled: Boolean = false
+    internal var adaptiveTextLayoutPhase: AdaptiveTextLayoutPhase = AdaptiveTextLayoutPhase.FINAL
+        set(value) {
+            if (field == value) return
+            field = value
+            requestLayout()
+            invalidate()
+        }
+    internal var onAdaptiveTextLayoutResolved: ((AdaptiveHorizontalTextLayoutSnapshot) -> Unit)? = null
 
     private var outlineWidthPx = 0f
     private var outlineColor = 0
@@ -26,6 +53,7 @@ class StyledTranslationTextView(context: Context) : TextView(context) {
     private var shadowDyPx = 0f
     private var shadowColor = 0
     private var drawingPass = false
+    private var lastAdaptiveTextLayoutSnapshot: AdaptiveHorizontalTextLayoutSnapshot? = null
 
     override fun startActionMode(callback: ActionMode.Callback, type: Int): ActionMode? {
         val mode = super.startActionMode(callback, type)
@@ -59,6 +87,7 @@ class StyledTranslationTextView(context: Context) : TextView(context) {
     override fun onDraw(canvas: Canvas) {
         if (outlineWidthPx <= 0f) {
             super.onDraw(canvas)
+            reportAdaptiveTextLayout()
             return
         }
 
@@ -87,6 +116,59 @@ class StyledTranslationTextView(context: Context) : TextView(context) {
             applyFillShadow()
             drawingPass = false
         }
+        reportAdaptiveTextLayout()
+    }
+
+    private fun reportAdaptiveTextLayout() {
+        if (!shouldReportAdaptiveTextLayout(adaptiveTextLayoutPhase)) return
+        val callback = onAdaptiveTextLayoutResolved ?: return
+        val textLayout = layout ?: return
+        val resolvedLineCount = textLayout.lineCount
+        val visibleTextEnd = if (resolvedLineCount > 0) {
+            textLayout.getLineEnd(resolvedLineCount - 1)
+        } else {
+            0
+        }
+        var ellipsized = false
+        for (line in 0 until resolvedLineCount) {
+            if (textLayout.getEllipsisCount(line) > 0) {
+                ellipsized = true
+                break
+            }
+        }
+        // Match framework TextView#autoSizeText available-space calculations. In particular,
+        // total top/bottom padding includes the gravity offset and would hide vertical overflow.
+        val contentWidth = (measuredWidth - totalPaddingLeft - totalPaddingRight).coerceAtLeast(0)
+        val contentHeight = (measuredHeight - extendedPaddingTop - extendedPaddingBottom).coerceAtLeast(0)
+        val overflowReasons = adaptiveTextLayoutOverflowReasons(
+            textLength = text.length,
+            visibleTextEnd = visibleTextEnd,
+            layoutHeightPx = textLayout.height,
+            contentHeightPx = contentHeight,
+            lineCount = resolvedLineCount,
+            maxLines = maxLines,
+            ellipsized = ellipsized,
+        )
+        val snapshot = AdaptiveHorizontalTextLayoutSnapshot(
+            phase = adaptiveTextLayoutPhase,
+            textHash = text.toString().hashCode(),
+            textLength = text.length,
+            finalTextSizePx = textSize,
+            autoSizeMaxTextSizePx = autoSizeMaxTextSize,
+            measuredWidthPx = measuredWidth,
+            measuredHeightPx = measuredHeight,
+            contentWidthPx = contentWidth,
+            contentHeightPx = contentHeight,
+            layoutHeightPx = textLayout.height,
+            lineCount = resolvedLineCount,
+            visibleTextEnd = visibleTextEnd,
+            ellipsized = ellipsized,
+            overflowReasons = overflowReasons,
+            overflow = overflowReasons.isNotEmpty(),
+        )
+        if (snapshot == lastAdaptiveTextLayoutSnapshot) return
+        lastAdaptiveTextLayoutSnapshot = snapshot
+        callback(snapshot)
     }
 
     private fun applyFillShadow() {

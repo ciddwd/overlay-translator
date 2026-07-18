@@ -40,11 +40,11 @@ class GoogleTranslator @Inject constructor(
         val from = mapLang(settings.sourceLang)
         val to = mapLang(settings.targetLang)
         val cacheKey = cache.key(trimmed, "google", to, from)
-        cache.get(cacheKey)?.let { return it }
+        cache.get(cacheKey, settings)?.let { return it }
 
         val timedClient = client.withApiTimeout(settings.apiTimeoutSeconds)
         val translated = callEndpoint(trimmed, from, to, timedClient)
-        cache.put(cacheKey, translated)
+        cache.put(cacheKey, translated, settings)
         return translated
     }
 

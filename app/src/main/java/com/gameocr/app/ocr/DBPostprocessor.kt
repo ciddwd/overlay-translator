@@ -42,7 +42,8 @@ object DBPostprocessor {
      * 主入口：从 prob_map 提取所有候选 Quad（已映射到原图坐标系）。
      *
      * @param probMap DBNet 输出 [H][W] 概率图
-     * @param scale 把 prob_map 坐标乘 scale 还原到原图坐标
+     * @param scaleX 把 prob_map X 坐标还原到原图坐标
+     * @param scaleY 把 prob_map Y 坐标还原到原图坐标
      * @param binThresh 二值化阈值
      * @param scoreThresh box 平均概率阈值（低于丢）
      * @param unclipRatio 外扩比例（pyclipper unclip 公式：dist = area * ratio / perim）
@@ -50,7 +51,8 @@ object DBPostprocessor {
      */
     fun extractQuads(
         probMap: Array<FloatArray>,
-        scale: Float,
+        scaleX: Float,
+        scaleY: Float,
         binThresh: Float,
         scoreThresh: Float,
         unclipRatio: Float,
@@ -97,10 +99,10 @@ object DBPostprocessor {
                 val unclipped = unclip(quad, unclipRatio, maxUnclip)
                 // 映射回原图
                 val mapped = Quad(
-                    PointF(unclipped.p0.x * scale, unclipped.p0.y * scale),
-                    PointF(unclipped.p1.x * scale, unclipped.p1.y * scale),
-                    PointF(unclipped.p2.x * scale, unclipped.p2.y * scale),
-                    PointF(unclipped.p3.x * scale, unclipped.p3.y * scale)
+                    PointF(unclipped.p0.x * scaleX, unclipped.p0.y * scaleY),
+                    PointF(unclipped.p1.x * scaleX, unclipped.p1.y * scaleY),
+                    PointF(unclipped.p2.x * scaleX, unclipped.p2.y * scaleY),
+                    PointF(unclipped.p3.x * scaleX, unclipped.p3.y * scaleY)
                 )
                 result.add(mapped)
             }

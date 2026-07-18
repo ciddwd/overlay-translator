@@ -1,0 +1,48 @@
+duration_ms: 90000
+
+buffers {
+  size_kb: 65536
+  fill_policy: RING_BUFFER
+}
+
+data_sources {
+  config {
+    name: "linux.ftrace"
+    target_buffer: 0
+    ftrace_config {
+      atrace_apps: "com.gameocr.app.debug"
+      atrace_categories: "sched"
+      atrace_categories: "freq"
+      atrace_categories: "idle"
+      compact_sched {
+        enabled: true
+      }
+    }
+  }
+}
+
+data_sources {
+  config {
+    name: "linux.process_stats"
+    target_buffer: 0
+    process_stats_config {
+      scan_all_processes_on_start: true
+      proc_stats_poll_ms: 1000
+    }
+  }
+}
+
+data_sources {
+  config {
+    name: "linux.sys_stats"
+    target_buffer: 0
+    sys_stats_config {
+      stat_period_ms: 250
+      cpufreq_period_ms: 100
+    }
+  }
+}
+
+write_into_file: true
+file_write_period_ms: 1000
+max_file_size_bytes: 134217728

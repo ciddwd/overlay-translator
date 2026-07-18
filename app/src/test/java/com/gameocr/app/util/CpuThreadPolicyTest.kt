@@ -57,7 +57,9 @@ class CpuThreadPolicyTest {
             Case("up to four cores selects two threads", "if (processors <= 4) return 2"),
             Case("up to six cores selects four threads", "if (processors <= 6) return 4"),
             Case("seven or more cores selects six threads", "return 6"),
-            Case("runtime log reports six-thread cap", "selected=%d max=6"),
+            Case("runtime log reports split TG and PP", "TG=%d PP=%d max=6"),
+            Case("generation thread override is explicit", "GAMEOCR_GENERATION_THREADS"),
+            Case("prompt thread override is explicit", "GAMEOCR_PROMPT_THREADS"),
         ).forEach { case ->
             assertTrue(case.name, source.contains(case.marker))
         }

@@ -3,29 +3,21 @@ package com.gameocr.app.capture
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
-import android.graphics.Point
 import android.hardware.display.VirtualDisplay
 import android.media.Image
 import android.media.ImageReader
 import android.media.projection.MediaProjection
-import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
-import android.view.WindowManager
 import com.gameocr.app.util.VerticalDiagnosticLog
-import timber.log.Timber
+import com.gameocr.app.util.physicalDisplaySize
 import java.util.concurrent.atomic.AtomicBoolean
+import timber.log.Timber
 
-/**
- * MediaProjection + VirtualDisplay + ImageReader 的标准实现。
- *
- * 注意：MediaProjection 必须由调用方在已启动 mediaProjection 类型前台服务的进程中通过
- * [MediaProjectionManager.getMediaProjection] 拿到后再传进来；否则 Android 14+ 会抛
- * SecurityException。本类只负责"用 token 拉流 + 取最新一帧"。
- */
+/** MediaProjection + VirtualDisplay + ImageReader screenshot implementation. */
 class MediaProjectionScreenshotter(
     private val context: Context,
-    private val projection: MediaProjection
+    private val projection: MediaProjection,
 ) : Screenshotter {
 
     private val handlerThread = HandlerThread("MediaProjection-Capture").apply { start() }
@@ -47,28 +39,18 @@ class MediaProjectionScreenshotter(
 
         override fun onCapturedContentResize(width: Int, height: Int) {
             VerticalDiagnosticLog.i(
-                "mediaProjection callback resize target=${width}x$height current=${this@MediaProjectionScreenshotter.width}x${this@MediaProjectionScreenshotter.height}"
+                "mediaProjection callback resize target=${width}x$height " +
+                    "current=${this@MediaProjectionScreenshotter.width}x${this@MediaProjectionScreenshotter.height}"
             )
             resizeProjection(width, height, "capturedContentResize")
         }
     }
 
     init {
-        val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            // 全屏 MediaProjection 用 maximumWindowMetrics；旋转后由 callback / Service 配置变化
-            // resize 现有 VirtualDisplay，不能在 Android 14+ 上用同一个 token 再创建一次。
-            val bounds = wm.maximumWindowMetrics.bounds
-            width = bounds.width()
-            height = bounds.height()
-        } else {
-            @Suppress("DEPRECATION")
-            val display = wm.defaultDisplay
-            val p = Point()
-            @Suppress("DEPRECATION") display.getRealSize(p)
-            width = p.x
-            height = p.y
-        }
+        // Keep MediaProjection and overlay windows in the same full-display coordinate space.
+        val physicalSize = physicalDisplaySize(context)
+        width = physicalSize.width
+        height = physicalSize.height
         density = context.resources.configuration.densityDpi
 
         projection.registerCallback(projectionCallback, handler)
@@ -76,13 +58,17 @@ class MediaProjectionScreenshotter(
         imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
         virtualDisplay = projection.createVirtualDisplay(
             "屏译截屏",
-            width, height, density,
+            width,
+            height,
+            density,
             MediaProjectionCaptureConfig.virtualDisplayFlags,
             imageReader!!.surface,
-            null, handler
+            null,
+            handler,
         )
         Timber.i(
-            "MediaProjection ready: ${width}x$height @ $density dpi flags=${MediaProjectionCaptureConfig.virtualDisplayFlags}"
+            "MediaProjection ready: ${width}x$height @ $density dpi " +
+                "flags=${MediaProjectionCaptureConfig.virtualDisplayFlags}"
         )
         VerticalDiagnosticLog.i(
             "mediaProjection ready configured=${width}x$height densityDpi=$density " +
@@ -145,7 +131,6 @@ class MediaProjectionScreenshotter(
     override suspend fun capture(): Bitmap? {
         if (!isReady) return null
         val reader = imageReader ?: return null
-        // 等到下一帧到达；如果已经有最新帧，直接取
         val image: Image = awaitNextImage(reader) ?: return null
         return try {
             imageToBitmap(image)
@@ -168,7 +153,7 @@ class MediaProjectionScreenshotter(
                 }
             },
             timeoutMs = NEXT_FRAME_TIMEOUT_MS,
-            closeUndelivered = { it.close() }
+            closeUndelivered = { it.close() },
         )
         if (image == null) {
             Timber.w("Timed out waiting for next MediaProjection frame")
@@ -193,14 +178,18 @@ class MediaProjectionScreenshotter(
         val bufferBytes = buffer.remaining()
         val raw = Bitmap.createBitmap(bmpWidth, frameHeight, Bitmap.Config.ARGB_8888)
         raw.copyPixelsFromBuffer(buffer)
-        // 切掉行尾 padding
-        val output = if (rowPadding == 0) raw else Bitmap.createBitmap(raw, 0, 0, frameWidth, frameHeight).also {
-            if (it !== raw) raw.recycle()
+        val output = if (rowPadding == 0) {
+            raw
+        } else {
+            Bitmap.createBitmap(raw, 0, 0, frameWidth, frameHeight).also {
+                if (it !== raw) raw.recycle()
+            }
         }
         VerticalDiagnosticLog.i(
             "mediaProjection frame image=${image.width}x${image.height} configured=${width}x$height " +
                 "pixelStride=$pixelStride rowStride=$rowStride rowPadding=$rowPadding " +
-                "bufferBytes=$bufferBytes raw=${bmpWidth}x$frameHeight output=${output.width}x${output.height}"
+                "bufferBytes=$bufferBytes raw=${bmpWidth}x$frameHeight " +
+                "output=${output.width}x${output.height}"
         )
         return output
     }

@@ -6,9 +6,9 @@ package com.gameocr.app.ocr
  * manga-ocr 训练时见的是**整个气泡**的 crop（多列竖排在一个 224×224 输入里），不是单行文本。
  * 用 DBNet 行级 quads 直接逐个识别会浪费 manga-ocr 的跨行连读能力。
  *
- * 算法：膨胀矩形 + 并查集
- * 1. 每个输入矩形外扩 [gap] 像素（向四面）
- * 2. 任意两矩形相交（含相邻 gap 内）→ 并查集合并
+ * 算法：矩形边缘距离 + 并查集
+ * 1. 计算任意两个矩形在 X / Y 轴上的真实边缘距离
+ * 2. 两轴距离均不超过 [gap] → 并查集合并
  * 3. 合并完用每组的外接矩形 + 再外扩 [pad] 给 manga-ocr 留 padding，clamp 到画面边界
  *
  * 复杂度 O(N²)；DBNet 单页 N 通常 < 100，实测 < 5ms。
@@ -28,8 +28,10 @@ object BubbleClusterer {
     }
 
     data class Bubble(
-        /** 合并后的外接矩形 + [pad] 外扩 + clamp 到 (0..imgW, 0..imgH) */
+        /** Crop rectangle used only by manga-ocr recognition. Includes [pad]. */
         val rect: IntRect,
+        /** Union of the detected member boxes before crop padding. Used for display geometry. */
+        val contentRect: IntRect,
         /** 原 [rects] 数组中属于本气泡的索引（按输入顺序） */
         val memberIndices: List<Int>
     )
@@ -39,23 +41,21 @@ object BubbleClusterer {
      * @param imgW 原图宽度（用于 rect clamp）
      * @param imgH 原图高度
      * @param pad 合并后 bubble rect 向四面外扩的像素数，给 manga-ocr 留 padding
-     * @param gap 两矩形外扩 [gap] 后仍相交则视为同一气泡；越大越激进
+     * @param gap 两矩形在 X / Y 轴上允许的最大真实边缘距离；越大越激进
      * @return 按 (top, left) 排序的 bubble 列表，每个 rect 已 clamp 到画面内
      */
     fun cluster(
         rects: List<IntRect>,
         imgW: Int,
         imgH: Int,
-        pad: Int = 12,
+        pad: Int = 0,
         gap: Int = 18
     ): List<Bubble> {
         val n = rects.size
         if (n == 0) return emptyList()
 
-        // 每个矩形向四面外扩 gap 像素，用来判 "邻接"
-        val inflated = rects.map { r ->
-            IntRect(r.left - gap, r.top - gap, r.right + gap, r.bottom + gap)
-        }
+        // 使用真实边缘距离，避免两边同时外扩导致有效阈值翻倍。
+        val maximumEdgeGap = gap.coerceAtLeast(0)
 
         // 并查集
         val parent = IntArray(n) { it }
@@ -73,10 +73,10 @@ object BubbleClusterer {
             if (ra != rb) parent[ra] = rb
         }
 
-        // 两两判相交（含邻接）
+        // 两两判断是否在允许的边缘距离内。
         for (i in 0 until n) {
             for (j in i + 1 until n) {
-                if (rectsOverlap(inflated[i], inflated[j])) union(i, j)
+                if (rectsWithinGap(rects[i], rects[j], maximumEdgeGap)) union(i, j)
             }
         }
 
@@ -97,20 +97,34 @@ object BubbleClusterer {
                 if (rc.right > r) r = rc.right
                 if (rc.bottom > b) b = rc.bottom
             }
-            val rect = IntRect(
+            val contentRect = IntRect(
+                l.coerceIn(0, imgW),
+                t.coerceIn(0, imgH),
+                r.coerceIn(0, imgW),
+                b.coerceIn(0, imgH)
+            )
+            val cropRect = IntRect(
                 (l - pad).coerceAtLeast(0),
                 (t - pad).coerceAtLeast(0),
                 (r + pad).coerceAtMost(imgW),
                 (b + pad).coerceAtMost(imgH)
             )
-            Bubble(rect = rect, memberIndices = members.toList())
+            Bubble(rect = cropRect, contentRect = contentRect, memberIndices = members.toList())
         }
 
         // 按 (top, left) 稳定排序，便于阅读 / 日志
         return bubbles.sortedWith(compareBy({ it.rect.top }, { it.rect.left }))
     }
 
-    /** Android Rect 的 intersects 严格不允许 touch；这里允许相切（边界共享视为相交）。 */
-    private fun rectsOverlap(a: IntRect, b: IntRect): Boolean =
-        a.left <= b.right && b.left <= a.right && a.top <= b.bottom && b.top <= a.bottom
+    /** 两轴均重叠或相距不超过 maximumGap 时视为相邻。 */
+    private fun rectsWithinGap(a: IntRect, b: IntRect, maximumGap: Int): Boolean =
+        axisGap(a.left, a.right, b.left, b.right) <= maximumGap &&
+            axisGap(a.top, a.bottom, b.top, b.bottom) <= maximumGap
+
+    private fun axisGap(aStart: Int, aEnd: Int, bStart: Int, bEnd: Int): Int =
+        when {
+            aEnd < bStart -> bStart - aEnd
+            bEnd < aStart -> aStart - bEnd
+            else -> 0
+        }
 }

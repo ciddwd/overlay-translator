@@ -6,6 +6,76 @@ import org.junit.Test
 class VerticalOverlayLayoutTest {
 
     @Test
+    fun adaptive_vertical_overflow_slot_table_driven_expands_without_crossing_neighbors() {
+        data class Case(
+            val name: String,
+            val rect: OverlayIntRect,
+            val neighbors: List<OverlayIntRect> = emptyList(),
+            val screenWidth: Int = 1000,
+            val rightToLeft: Boolean,
+            val requiredWidth: Int,
+            val expected: VerticalOverlaySlot,
+        )
+
+        val cases = listOf(
+            Case(
+                name = "Japanese column grows left",
+                rect = OverlayIntRect(900, 100, 920, 200),
+                rightToLeft = true,
+                requiredWidth = 56,
+                expected = VerticalOverlaySlot(864, 920),
+            ),
+            Case(
+                name = "left edge Japanese column borrows right side",
+                rect = OverlayIntRect(0, 100, 13, 200),
+                rightToLeft = true,
+                requiredWidth = 42,
+                expected = VerticalOverlaySlot(0, 42),
+            ),
+            Case(
+                name = "right edge LTR column borrows left side",
+                rect = OverlayIntRect(987, 100, 1000, 200),
+                rightToLeft = false,
+                requiredWidth = 42,
+                expected = VerticalOverlaySlot(958, 1000),
+            ),
+            Case(
+                name = "dense neighbors cap expansion and preserve gap",
+                rect = OverlayIntRect(100, 100, 120, 200),
+                neighbors = listOf(
+                    OverlayIntRect(70, 100, 90, 200),
+                    OverlayIntRect(140, 100, 160, 200),
+                ),
+                rightToLeft = true,
+                requiredWidth = 56,
+                expected = VerticalOverlaySlot(98, 132),
+            ),
+            Case(
+                name = "smaller requirement never shrinks source box",
+                rect = OverlayIntRect(300, 100, 360, 200),
+                rightToLeft = false,
+                requiredWidth = 20,
+                expected = VerticalOverlaySlot(300, 360),
+            ),
+        )
+
+        cases.forEach { case ->
+            assertEquals(
+                case.name,
+                case.expected,
+                adaptiveVerticalOverflowSlot(
+                    rect = case.rect,
+                    allRects = case.neighbors + case.rect,
+                    screenWidth = case.screenWidth,
+                    rightToLeft = case.rightToLeft,
+                    minGapPx = 8,
+                    requiredWidthPx = case.requiredWidth,
+                ),
+            )
+        }
+    }
+
+    @Test
     fun vertical_overlay_slot_table_driven_rtl_collision_bounds() {
         data class Case(
             val name: String,

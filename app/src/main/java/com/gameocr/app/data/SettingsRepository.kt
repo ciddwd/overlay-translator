@@ -49,9 +49,12 @@ class SettingsRepository @Inject constructor(
         val LoopTextRegionMode = stringPreferencesKey("loop_text_region_mode")
         val LoopTranslateRegionOnly = booleanPreferencesKey("loop_translate_region_only")
         val DeveloperOptionsEnabled = booleanPreferencesKey("developer_options_enabled")
+        val OcrScreenshotSavingEnabled = booleanPreferencesKey("ocr_screenshot_saving_enabled")
+        val DisableTranslationCache = booleanPreferencesKey("disable_translation_cache")
         val OcrRedBoxModeEnabled = booleanPreferencesKey("ocr_red_box_mode_enabled")
         val OcrRedBoxShowSourceText = booleanPreferencesKey("ocr_red_box_show_source_text")
         val OcrRedBoxShowTranslation = booleanPreferencesKey("ocr_red_box_show_translation")
+        val OverlayStyleMode = stringPreferencesKey("overlay_style_mode")
         val TextSize = intPreferencesKey("overlay_text_size")
         val OverlayTextStyle = stringPreferencesKey("overlay_text_style_json")
         val Alpha = floatPreferencesKey("overlay_alpha")
@@ -77,6 +80,7 @@ class SettingsRepository @Inject constructor(
         val PreferShizuku = booleanPreferencesKey("prefer_shizuku")
         val Placement = stringPreferencesKey("overlay_placement")
         val PaddleVersion = stringPreferencesKey("paddle_model_version")
+        val PaddleDetectionProfile = stringPreferencesKey("paddle_detection_profile")
         val PaddleMirror = stringPreferencesKey("paddle_mirror_url")
         val MangaOcrMirror = stringPreferencesKey("manga_ocr_mirror_url")
         val OrientationModelMirror = stringPreferencesKey("orientation_model_mirror_url")
@@ -166,6 +170,7 @@ class SettingsRepository @Inject constructor(
         val DbnetUnclipRatio = floatPreferencesKey("dbnet_unclip_ratio")
         val MangaOcrDbnetUnclipRatio = floatPreferencesKey("manga_ocr_dbnet_unclip_ratio")
         val BubbleClusterGap = intPreferencesKey("bubble_cluster_gap")
+        val MangaOcrCropPaddingPx = intPreferencesKey("manga_ocr_crop_padding_px")
     }
 
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
@@ -242,6 +247,40 @@ class SettingsRepository @Inject constructor(
         return changed
     }
 
+    suspend fun migrateRetiredMangaOcrAdvancedSettingsIfNeeded(): Boolean {
+        var changed = false
+        context.dataStore.edit { prefs ->
+            if (prefs[Keys.BubbleClusterGap]?.let {
+                    MangaOcrAdvancedSettingsPolicy.effectiveBubbleClusterGap(it)
+                } != prefs[Keys.BubbleClusterGap]
+            ) {
+                prefs[Keys.BubbleClusterGap] = MangaOcrAdvancedSettingsPolicy.BUBBLE_CLUSTER_GAP
+                changed = true
+            }
+            if (prefs[Keys.MangaOcrCropPaddingPx]?.let {
+                    MangaOcrAdvancedSettingsPolicy.effectiveCropPaddingPx(it)
+                } != prefs[Keys.MangaOcrCropPaddingPx]
+            ) {
+                prefs[Keys.MangaOcrCropPaddingPx] = MangaOcrAdvancedSettingsPolicy.CROP_PADDING_PX
+                changed = true
+            }
+
+            val storedPresets = prefs[Keys.TranslationPresets]
+                ?.let(secretCodec::decodeStored)
+                ?.takeIf(String::isNotBlank)
+                ?.let { raw ->
+                    runCatching { json.decodeFromString<List<TranslationPreset>>(raw) }
+                        .getOrNull()
+                }
+            val normalizedPresets = storedPresets?.map(MangaOcrAdvancedSettingsPolicy::normalize)
+            if (storedPresets != null && normalizedPresets != storedPresets) {
+                prefs.putSecure(Keys.TranslationPresets, json.encodeToString(normalizedPresets))
+                changed = true
+            }
+        }
+        return changed
+    }
+
     /**
      * 任何用到 [Settings.captureRegion] 的入口都应该先调一次：把上次保存时屏幕尺寸跟当前
      * 屏幕尺寸比较，不同就按比例 rescale region 写回，更新 saved 字段。这样旋转屏幕时
@@ -295,7 +334,7 @@ class SettingsRepository @Inject constructor(
     suspend fun update(transform: (Settings) -> Settings) {
         context.dataStore.edit { prefs ->
             val current = prefs.toSettings()
-            val next = transform(current)
+            val next = MangaOcrAdvancedSettingsPolicy.normalize(transform(current))
             prefs.putSecure(Keys.BaseUrl, next.baseUrl)
             prefs.putSecure(Keys.ApiKey, next.apiKey)
             prefs[Keys.Model] = next.model
@@ -313,9 +352,12 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.LoopTextRegionMode] = next.loopTextRegionMode.name
             prefs[Keys.LoopTranslateRegionOnly] = next.loopTranslateRegionOnly
             prefs[Keys.DeveloperOptionsEnabled] = next.developerOptionsEnabled
+            prefs[Keys.OcrScreenshotSavingEnabled] = next.ocrScreenshotSavingEnabled
+            prefs[Keys.DisableTranslationCache] = next.disableTranslationCache
             prefs[Keys.OcrRedBoxModeEnabled] = next.ocrRedBoxModeEnabled
             prefs[Keys.OcrRedBoxShowSourceText] = next.ocrRedBoxShowSourceText
             prefs[Keys.OcrRedBoxShowTranslation] = next.ocrRedBoxShowTranslation
+            prefs[Keys.OverlayStyleMode] = next.overlayStyleMode.name
             prefs[Keys.TextSize] = next.overlayTextSizeSp
             prefs[Keys.OverlayTextStyle] = json.encodeToString(next.overlayTextStyle.normalized())
             prefs[Keys.Alpha] = next.overlayAlpha
@@ -343,6 +385,7 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.PreferShizuku] = next.preferShizukuCapture
             prefs[Keys.Placement] = next.overlayPlacement.name
             prefs[Keys.PaddleVersion] = next.paddleModelVersion.name
+            prefs[Keys.PaddleDetectionProfile] = next.paddleDetectionProfile.name
             prefs.putSecure(Keys.PaddleMirror, next.paddleModelMirrorUrl)
             prefs.putSecure(Keys.MangaOcrMirror, next.mangaOcrModelMirrorUrl)
             prefs.putSecure(Keys.OrientationModelMirror, next.orientationModelMirrorUrl)
@@ -414,7 +457,11 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.ArcMenuPageSize] = FloatingMenu.coercePageSize(next.arcMenuPageSize)
             prefs.putSecure(
                 Keys.TranslationPresets,
-                json.encodeToString(next.translationPresets.filterNot { TranslationPresetCatalog.isBuiltIn(it.id) })
+                json.encodeToString(
+                    next.translationPresets
+                        .map(MangaOcrAdvancedSettingsPolicy::normalize)
+                        .filterNot { TranslationPresetCatalog.isBuiltIn(it.id) }
+                )
             )
             prefs[Keys.ActiveTranslationPresetId] = next.activeTranslationPresetId
             prefs[Keys.FloatingSkillKey] = next.floatingButtonSkill.name
@@ -431,7 +478,8 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.DbnetBoxScoreThresh] = next.dbnetBoxScoreThresh
             prefs[Keys.DbnetUnclipRatio] = next.dbnetUnclipRatio
             prefs[Keys.MangaOcrDbnetUnclipRatio] = next.mangaOcrDbnetUnclipRatio
-            prefs[Keys.BubbleClusterGap] = next.bubbleClusterGap
+            prefs[Keys.BubbleClusterGap] = MangaOcrAdvancedSettingsPolicy.BUBBLE_CLUSTER_GAP
+            prefs[Keys.MangaOcrCropPaddingPx] = MangaOcrAdvancedSettingsPolicy.CROP_PADDING_PX
         }
     }
 
@@ -448,7 +496,7 @@ class SettingsRepository @Inject constructor(
             layout = storedTranslationOutputLayout,
             direction = storedTranslationOutputDirection,
         )
-        return Settings(
+        return MangaOcrAdvancedSettingsPolicy.normalize(Settings(
             baseUrl = secureString(Keys.BaseUrl, default.baseUrl),
             apiKey = secureString(Keys.ApiKey, default.apiKey),
             model = this[Keys.Model] ?: default.model,
@@ -485,12 +533,19 @@ class SettingsRepository @Inject constructor(
                 ?: default.loopTranslateRegionOnly,
             developerOptionsEnabled = this[Keys.DeveloperOptionsEnabled]
                 ?: default.developerOptionsEnabled,
+            ocrScreenshotSavingEnabled = this[Keys.OcrScreenshotSavingEnabled]
+                ?: default.ocrScreenshotSavingEnabled,
+            disableTranslationCache = this[Keys.DisableTranslationCache]
+                ?: default.disableTranslationCache,
             ocrRedBoxModeEnabled = this[Keys.OcrRedBoxModeEnabled]
                 ?: default.ocrRedBoxModeEnabled,
             ocrRedBoxShowSourceText = this[Keys.OcrRedBoxShowSourceText]
                 ?: default.ocrRedBoxShowSourceText,
             ocrRedBoxShowTranslation = this[Keys.OcrRedBoxShowTranslation]
                 ?: default.ocrRedBoxShowTranslation,
+            overlayStyleMode = runCatching {
+                OverlayStyleMode.valueOf(this[Keys.OverlayStyleMode] ?: "")
+            }.getOrDefault(default.overlayStyleMode),
             overlayTextSizeSp = this[Keys.TextSize] ?: default.overlayTextSizeSp,
             overlayTextStyle = this[Keys.OverlayTextStyle]
                 ?.takeIf { it.isNotBlank() }
@@ -543,6 +598,9 @@ class SettingsRepository @Inject constructor(
                 .getOrDefault(default.overlayPlacement),
             paddleModelVersion = runCatching { PaddleModelVersion.valueOf(this[Keys.PaddleVersion] ?: "") }
                 .getOrDefault(default.paddleModelVersion),
+            paddleDetectionProfile = runCatching {
+                PaddleDetectionProfile.valueOf(this[Keys.PaddleDetectionProfile] ?: "")
+            }.getOrDefault(default.paddleDetectionProfile),
             paddleModelMirrorUrl = secureString(Keys.PaddleMirror, default.paddleModelMirrorUrl),
             mangaOcrModelMirrorUrl = secureString(Keys.MangaOcrMirror, default.mangaOcrModelMirrorUrl),
             orientationModelMirrorUrl = secureString(
@@ -691,8 +749,9 @@ class SettingsRepository @Inject constructor(
             dbnetUnclipRatio = this[Keys.DbnetUnclipRatio] ?: default.dbnetUnclipRatio,
             mangaOcrDbnetUnclipRatio = this[Keys.MangaOcrDbnetUnclipRatio]
                 ?: default.mangaOcrDbnetUnclipRatio,
-            bubbleClusterGap = this[Keys.BubbleClusterGap] ?: default.bubbleClusterGap
+            bubbleClusterGap = MangaOcrAdvancedSettingsPolicy.BUBBLE_CLUSTER_GAP,
+            mangaOcrCropPaddingPx = MangaOcrAdvancedSettingsPolicy.CROP_PADDING_PX
             // runtimeTranslationContext is request-scoped and deliberately never persisted.
-        )
+        ))
     }
 }

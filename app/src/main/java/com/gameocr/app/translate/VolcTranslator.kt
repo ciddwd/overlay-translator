@@ -74,7 +74,7 @@ class VolcTranslator @Inject constructor(
                 continue
             }
             val key = cache.key(t, "volc-$targetCode", targetCode, "")
-            val hit = cache.get(key)
+            val hit = cache.get(key, settings)
             if (hit != null) result[i] = hit
             else pending.add(i)
         }
@@ -102,7 +102,7 @@ class VolcTranslator @Inject constructor(
             val text = translations.getOrNull(order)?.translation?.trim() ?: continue
             result[idx] = text
             val key = cache.key(sources[idx].trim(), "volc-$targetCode", targetCode, "")
-            cache.put(key, text)
+            cache.put(key, text, settings)
         }
         return result.toList()
     }

@@ -9,24 +9,43 @@ class CaptureFrameDebugDumpPolicyTest {
     fun shouldDumpFrame_tableDriven() {
         data class Case(
             val name: String,
-            val debugBuild: Boolean,
+            val developerOptionsEnabled: Boolean,
+            val screenshotSavingEnabled: Boolean,
             val frameIndex: Int,
             val expected: Boolean
         )
 
         val cases = listOf(
-            Case("release build never dumps", false, 1, false),
-            Case("debug first frame dumps", true, 1, true),
-            Case("debug max frame dumps", true, CaptureFrameDebugDumpPolicy.MAX_FRAMES_PER_PROCESS, true),
-            Case("debug over max skips", true, CaptureFrameDebugDumpPolicy.MAX_FRAMES_PER_PROCESS + 1, false),
-            Case("debug zero index skips", true, 0, false)
+            Case("developer options off", false, true, 1, false),
+            Case("screenshot setting off", true, false, 1, false),
+            Case("both settings off", false, false, 1, false),
+            Case("first enabled frame dumps", true, true, 1, true),
+            Case(
+                "enabled max frame dumps",
+                true,
+                true,
+                CaptureFrameDebugDumpPolicy.MAX_FRAMES_PER_PROCESS,
+                true,
+            ),
+            Case(
+                "enabled over max skips",
+                true,
+                true,
+                CaptureFrameDebugDumpPolicy.MAX_FRAMES_PER_PROCESS + 1,
+                false,
+            ),
+            Case("enabled zero index skips", true, true, 0, false),
         )
 
         cases.forEach { case ->
             assertEquals(
                 case.name,
                 case.expected,
-                CaptureFrameDebugDumpPolicy.shouldDumpFrame(case.debugBuild, case.frameIndex)
+                CaptureFrameDebugDumpPolicy.shouldDumpFrame(
+                    case.developerOptionsEnabled,
+                    case.screenshotSavingEnabled,
+                    case.frameIndex,
+                )
             )
         }
     }

@@ -106,12 +106,15 @@ object SettingsFieldPolicy {
         portable("loopTextRegionMode", R.string.settings_search_item_loop_region),
         portable("loopTranslateRegionOnly", R.string.settings_search_item_loop_region),
         portable("developerOptionsEnabled", R.string.settings_search_item_developer_ocr),
+        portable("ocrScreenshotSavingEnabled", R.string.settings_search_item_developer_ocr),
+        portable("disableTranslationCache", R.string.settings_search_item_developer_ocr),
         portable("ocrRedBoxModeEnabled", R.string.settings_search_item_developer_ocr),
         portable("ocrRedBoxShowSourceText", R.string.settings_search_item_developer_ocr),
         portable("ocrRedBoxShowTranslation", R.string.settings_search_item_developer_ocr),
         deviceLocal("captureRegion", diagnostic = SettingsDiagnostic.SUMMARY),
         deviceLocal("captureRegionSavedScreenW"),
         deviceLocal("captureRegionSavedScreenH"),
+        portable("overlayStyleMode", R.string.settings_search_item_overlay_theme),
         portable("overlayTextSizeSp", R.string.settings_search_item_text_size),
         portable("overlayTextStyle", R.string.settings_search_item_text_style),
         portable("overlayAlpha", R.string.settings_search_item_alpha),
@@ -149,6 +152,7 @@ object SettingsFieldPolicy {
         portable("tencentOcrEndpoint", R.string.settings_search_item_tencent_endpoint),
         portable("tencentOcrLanguage", R.string.settings_search_item_tencent_lang),
         portable("paddleModelVersion", R.string.settings_search_item_paddle_download),
+        portable("paddleDetectionProfile", R.string.settings_search_item_dbnet_advanced),
         privateConnection("paddleModelMirrorUrl", R.string.settings_search_item_paddle_download),
         privateConnection("mangaOcrModelMirrorUrl", R.string.settings_search_item_manga_ocr_download),
         privateConnection("orientationModelMirrorUrl", R.string.settings_search_item_orientation_model),
@@ -205,7 +209,8 @@ object SettingsFieldPolicy {
         portable("dbnetBoxScoreThresh", R.string.settings_search_item_dbnet_advanced),
         portable("dbnetUnclipRatio", R.string.settings_search_item_dbnet_advanced),
         portable("mangaOcrDbnetUnclipRatio", R.string.settings_search_item_dbnet_advanced),
-        portable("bubbleClusterGap", R.string.settings_search_item_dbnet_advanced),
+        portable("bubbleClusterGap"),
+        portable("mangaOcrCropPaddingPx"),
         portable("localLlmMirror", R.string.settings_search_item_llm_mirror),
         privateConnection("localLlmMirrorUrl", R.string.settings_search_item_llm_mirror),
         portable("translationPresets", R.string.settings_section_translation_presets, SettingsDiagnostic.SUMMARY),
@@ -241,7 +246,9 @@ object SettingsFieldPolicy {
     }
 
     fun encodePortable(settings: Settings): JsonObject {
-        val encoded = json.encodeToJsonElement(settings).asObject()
+        val encoded = json.encodeToJsonElement(
+            MangaOcrAdvancedSettingsPolicy.normalize(settings)
+        ).asObject()
         return JsonObject(encoded.filterKeys(portableFieldNames::contains))
     }
 
@@ -258,7 +265,9 @@ object SettingsFieldPolicy {
             }
         }
         return SettingsFieldDecodeResult(
-            settings = json.decodeFromJsonElement(JsonObject(defaults)),
+            settings = MangaOcrAdvancedSettingsPolicy.normalize(
+                json.decodeFromJsonElement<Settings>(JsonObject(defaults))
+            ),
             skippedFields = skipped.sorted(),
         )
     }
@@ -268,13 +277,17 @@ object SettingsFieldPolicy {
         val importedValues = json.encodeToJsonElement(imported).asObject()
         val merged = currentValues.toMutableMap()
         portableFieldNames.forEach { name -> importedValues[name]?.let { merged[name] = it } }
-        return json.decodeFromJsonElement<Settings>(JsonObject(merged)).copy(
-            runtimeTranslationContext = current.runtimeTranslationContext,
+        return MangaOcrAdvancedSettingsPolicy.normalize(
+            json.decodeFromJsonElement<Settings>(JsonObject(merged)).copy(
+                runtimeTranslationContext = current.runtimeTranslationContext,
+            )
         )
     }
 
     fun formatDiagnostics(settings: Settings): String {
-        val encoded = json.encodeToJsonElement(settings).asObject()
+        val encoded = json.encodeToJsonElement(
+            MangaOcrAdvancedSettingsPolicy.normalize(settings)
+        ).asObject()
         return buildString {
             rules.forEach { rule ->
                 append("  ").append(rule.name).append(": ")

@@ -138,10 +138,27 @@ class SettingsScreenModelStatusTest {
         val sectionStart = source.indexOf("title = stringResource(R.string.settings_section_overlay)")
         val preview = source.indexOf("OverlayPreviewCard(", startIndex = sectionStart)
         val colors = source.indexOf("R.string.settings_overlay_theme_label", startIndex = sectionStart)
+        val displayMode = source.indexOf("R.string.settings_render_mode_label", startIndex = sectionStart)
+        val displayFlow = source.indexOf("FlowRow(", startIndex = displayMode)
+        val blocks = source.indexOf("R.string.settings_render_blocks_chip", startIndex = displayMode)
+        val floating = source.indexOf("R.string.settings_render_floating_window_chip", startIndex = displayMode)
+        val adaptive = source.indexOf("R.string.settings_overlay_style_adaptive", startIndex = displayMode)
+        val floatingContent = source.indexOf("R.string.settings_floating_window_content_label", startIndex = displayMode)
         val cases = listOf(
             Case("translation display section exists", sectionStart >= 0),
             Case("preview exists inside section", preview > sectionStart),
             Case("preview precedes color controls", preview in (sectionStart + 1)..<colors),
+            Case("display mode follows color controls", displayMode > colors),
+            Case("display mode options use a wrapping row", displayFlow in (displayMode + 1)..<blocks),
+            Case("block display is the first option", blocks in (displayFlow + 1)..<floating),
+            Case("floating window is followed by adaptive switch", adaptive in (floating + 1)..<floatingContent),
+            Case("adaptive switch uses the compact labelled control", source.contains("InlineSwitchLabel(")),
+            Case(
+                "adaptive switch stays visible but is disabled for floating window",
+                source.contains("enabled = renderMode == RenderMode.BLOCKS"),
+            ),
+            Case("translation style mode label is removed", !source.contains("R.string.settings_overlay_style_mode_label")),
+            Case("style controls are not dimmed by adaptive mode", !source.contains("manualStyleEnabled")),
             Case("section reports window bounds", source.contains("onBoundsInWindow = { _, bottom -> overlaySectionBottomInWindow = bottom }")),
             Case("sticky state uses section-aware policy", source.contains("StickyOverlayPreviewPolicy.shouldStick(")),
         )
@@ -1573,6 +1590,70 @@ class SettingsScreenModelStatusTest {
                 case.expected,
                 cleartextHostsWithLocalOcrUrls(case.hosts, case.umiUrl, case.lunaUrl)
             )
+        }
+    }
+
+    @Test
+    fun retiredMangaAdvancedSettings_areHiddenAndForcedToZeroAcrossLayers() {
+        data class Case(
+            val name: String,
+            val sourcePath: String,
+            val marker: String,
+            val expectedPresent: Boolean,
+        )
+
+        val cases = listOf(
+            Case(
+                "bubble gap control is hidden",
+                "src/main/java/com/gameocr/app/ui/SettingsScreen.kt",
+                "R.string.settings_dbnet_gap_label",
+                false,
+            ),
+            Case(
+                "crop padding control is hidden",
+                "src/main/java/com/gameocr/app/ui/SettingsScreen.kt",
+                "R.string.settings_manga_crop_padding_label",
+                false,
+            ),
+            Case(
+                "view model saves bubble gap as zero",
+                "src/main/java/com/gameocr/app/ui/SettingsViewModel.kt",
+                "bubbleClusterGap = MangaOcrAdvancedSettingsPolicy.BUBBLE_CLUSTER_GAP",
+                true,
+            ),
+            Case(
+                "view model saves crop padding as zero",
+                "src/main/java/com/gameocr/app/ui/SettingsViewModel.kt",
+                "mangaOcrCropPaddingPx = MangaOcrAdvancedSettingsPolicy.CROP_PADDING_PX",
+                true,
+            ),
+            Case(
+                "Manga OCR runtime ignores stored bubble gap",
+                "src/main/java/com/gameocr/app/ocr/MangaOcrEngine.kt",
+                "MangaOcrAdvancedSettingsPolicy.effectiveBubbleClusterGap(",
+                true,
+            ),
+            Case(
+                "Manga OCR runtime ignores stored crop padding",
+                "src/main/java/com/gameocr/app/ocr/MangaOcrEngine.kt",
+                "MangaOcrAdvancedSettingsPolicy.effectiveCropPaddingPx(",
+                true,
+            ),
+            Case(
+                "legacy DataStore values have a startup migration",
+                "src/main/java/com/gameocr/app/data/SettingsRepository.kt",
+                "migrateRetiredMangaOcrAdvancedSettingsIfNeeded",
+                true,
+            ),
+        )
+
+        cases.forEach { case ->
+            val source = listOf(
+                File(case.sourcePath),
+                File("app", case.sourcePath),
+            ).firstOrNull(File::isFile)?.readText()
+                ?: error("Source file not found: ${case.sourcePath}")
+            assertEquals(case.name, case.expectedPresent, source.contains(case.marker))
         }
     }
 

@@ -8,6 +8,25 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 
+data class BatchTranslationUpdate(
+    val index: Int,
+    val text: String?,
+)
+
+internal class BatchTranslationProgressState(size: Int) {
+    private val emitted = BooleanArray(size.coerceAtLeast(0))
+
+    fun accept(index: Int): Boolean {
+        if (index !in emitted.indices || emitted[index]) return false
+        emitted[index] = true
+        return true
+    }
+
+    fun isEmitted(index: Int): Boolean = index in emitted.indices && emitted[index]
+
+    fun pendingIndexes(): List<Int> = emitted.indices.filterNot { emitted[it] }
+}
+
 interface Translator {
     /**
      * 翻译一段文本（非流式）。失败抛异常。返回 null 表示空输入。
@@ -41,6 +60,24 @@ interface Translator {
                 async { runCatching { translate(src, settings) }.getOrNull() }
             }.awaitAll()
         }
+    }
+
+    /**
+     * Batch translation with completed-item notifications. The callback is deliberately
+     * non-suspending: native inference may invoke it while holding the engine mutex, so callers
+     * must enqueue UI work and return immediately. Engines without incremental batching retain
+     * the old behavior and emit all items after [translateBatch] completes.
+     */
+    suspend fun translateBatchIncremental(
+        sources: List<String>,
+        settings: Settings,
+        onUpdate: (BatchTranslationUpdate) -> Unit,
+    ): List<String?> {
+        val results = translateBatch(sources, settings)
+        results.forEachIndexed { index, text ->
+            onUpdate(BatchTranslationUpdate(index = index, text = text))
+        }
+        return results
     }
 
     /**

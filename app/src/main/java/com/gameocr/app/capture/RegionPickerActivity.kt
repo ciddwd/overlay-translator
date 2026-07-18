@@ -19,6 +19,7 @@ import android.widget.LinearLayout
 import androidx.activity.ComponentActivity
 import com.gameocr.app.R
 import com.gameocr.app.data.SettingsRepository
+import com.gameocr.app.util.physicalDisplaySize
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
@@ -71,8 +72,8 @@ class RegionPickerActivity : ComponentActivity() {
         // 用 runBlocking 读一次：DataStore 第一次 collect 很快，Activity 启动这点延迟可忽略。
         // 先按当前屏幕尺寸把 region rescale 一次——用户上次保存的可能是另一方向的坐标。
         val saved = runBlocking {
-            val dm = resources.displayMetrics
-            settingsRepository.rescaleCaptureRegionIfNeeded(dm.widthPixels, dm.heightPixels)
+            val screen = physicalDisplaySize(this@RegionPickerActivity)
+            settingsRepository.rescaleCaptureRegionIfNeeded(screen.width, screen.height)
             settingsRepository.get().captureRegion
         }
         val initial = saved?.takeIf { it.isValid() }?.let {
@@ -217,12 +218,12 @@ class RegionPickerActivity : ComponentActivity() {
     private fun saveAndFinish(rect: Rect) {
         scope.launch {
             val region = CaptureRegion(rect.left, rect.top, rect.right, rect.bottom)
-            val dm = resources.displayMetrics
+            val screen = physicalDisplaySize(this@RegionPickerActivity)
             // 同时写当前屏幕尺寸——下次读 region 时如果屏幕方向变了，按 saved/current 比例自动 rescale。
             settingsRepository.update { it.copy(
                 captureRegion = region,
-                captureRegionSavedScreenW = dm.widthPixels,
-                captureRegionSavedScreenH = dm.heightPixels
+                captureRegionSavedScreenW = screen.width,
+                captureRegionSavedScreenH = screen.height
             ) }
             finish()
         }
