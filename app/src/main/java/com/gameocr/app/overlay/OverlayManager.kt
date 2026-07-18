@@ -19,6 +19,7 @@ import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.core.view.WindowCompat
 import com.gameocr.app.R
 import com.gameocr.app.data.BorderStyle
 import com.gameocr.app.data.FloatingWindowContentMode
@@ -32,6 +33,7 @@ import com.gameocr.app.data.TranslationBlockInteractionMode
 import com.gameocr.app.ocr.TextBlock
 import com.gameocr.app.ocr.TextOrientation
 import com.gameocr.app.util.VerticalDiagnosticLog
+import com.gameocr.app.util.physicalDisplaySize
 import kotlin.math.ceil
 import kotlinx.coroutines.CoroutineScope
 import timber.log.Timber
@@ -87,11 +89,19 @@ class OverlayManager(
     // 译文 View 缓存：横排走 TextView，竖排走 VerticalTextView。updateBlockText 会按实际类型分支 setText
     private val blockViews = mutableMapOf<Int, View>()
     private val blockContents = mutableMapOf<Int, TranslationBlockContent>()
+    private val blockStreamingUpdateCounts = mutableMapOf<Int, Int>()
+    private val blockFrameUpdateCoalescers =
+        mutableMapOf<Int, LatestFrameUpdateCoalescer<PendingOverlayTextUpdate>>()
     private var blocksDiagnosticId: Long? = null
 
     private data class TranslationBlockContent(
         val source: String,
         var translation: String,
+    )
+
+    private data class PendingOverlayTextUpdate(
+        val text: String,
+        val phase: AdaptiveTextLayoutPhase,
     )
 
     private data class OcrDebugBlockState(
@@ -106,6 +116,9 @@ class OverlayManager(
     }
     /** 悬浮窗口流式模式下：idx → 译文 TextView。null 表示当前不是流式状态。 */
     private var floatingDstViews: MutableMap<Int, TextView>? = null
+    private val floatingStreamingUpdateCounts = mutableMapOf<Int, Int>()
+    private val floatingFrameUpdateCoalescers =
+        mutableMapOf<Int, LatestFrameUpdateCoalescer<PendingOverlayTextUpdate>>()
     /** 上一次悬浮窗口内容（用户改配色保存时重建内容，立即生效）。Pair = (src, dst)。 */
     private var lastFloatingPairs: MutableList<Pair<String, String>>? = null
     /** 上一次是流式还是整批显示。重建 content 时决定 floatingDstViews 是否要重建。 */
@@ -418,18 +431,39 @@ class OverlayManager(
     }
 
     /** 流式：更新第 [index] 段译文。需先调过 [prepareFloatingWindow]。 */
-    fun updateFloatingWindowText(index: Int, text: String) {
-        VerticalDiagnosticLog.i(
-            "overlay updateFloatingWindowText block#${index + 1} " + text.toDiagText()
-        )
-        floatingDstViews?.get(index)?.text = text
-        // 同步缓存的 pairs，让 syncFloatingWindowFromSettings 重建 content 时拿到最新译文
+    internal fun updateFloatingWindowText(
+        index: Int,
+        text: String,
+        phase: AdaptiveTextLayoutPhase = AdaptiveTextLayoutPhase.FINAL,
+    ) {
         lastFloatingPairs?.let { list ->
             if (index in list.indices) {
                 val (src, _) = list[index]
                 list[index] = src to text
             }
         }
+        if (phase == AdaptiveTextLayoutPhase.STREAMING) {
+            floatingStreamingUpdateCounts[index] = (floatingStreamingUpdateCounts[index] ?: 0) + 1
+            val target = floatingDstViews?.get(index) ?: return
+            val coalescer = floatingFrameUpdateCoalescers.getOrPut(index) {
+                LatestFrameUpdateCoalescer(
+                    scheduleFrame = { target.postOnAnimation(it) },
+                    publish = { update -> applyFloatingWindowText(index, update) },
+                )
+            }
+            coalescer.submit(PendingOverlayTextUpdate(text, phase))
+            return
+        }
+        val streamingUpdates = floatingStreamingUpdateCounts.remove(index) ?: 0
+        val coalescer = floatingFrameUpdateCoalescers.remove(index)
+        coalescer?.discardPending()
+        val stats = coalescer?.stats() ?: FrameUpdateStats(0, 0)
+        VerticalDiagnosticLog.i(
+            "overlay updateFloatingWindowText block#${index + 1} phase=${phase.name} " +
+                "streamingUpdates=$streamingUpdates renderedUpdates=${stats.published} " +
+                "coalescedUpdates=${stats.coalesced} " + text.toDiagText()
+        )
+        applyFloatingWindowText(index, PendingOverlayTextUpdate(text, phase))
     }
 
     /** 仅悬浮窗口模式有效：是否当前可见（用于循环模式 hasActiveBlocks 等价的判定，目前未用）。 */
@@ -478,6 +512,8 @@ class OverlayManager(
         pairs: List<Pair<String, String>>,
         streaming: Boolean
     ): View {
+        floatingFrameUpdateCoalescers.values.forEach { it.discardPending() }
+        floatingFrameUpdateCoalescers.clear()
         val container = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             val padH = (16 * context.resources.displayMetrics.density).toInt()
@@ -559,8 +595,9 @@ class OverlayManager(
             this.alpha = if (overlayStyleMode == OverlayStyleMode.ADAPTIVE) 1f else this@OverlayManager.alpha
         }
         val dm = context.resources.displayMetrics
-        val screenW = dm.widthPixels
-        val screenH = dm.heightPixels
+        val physicalSize = physicalDisplaySize(context)
+        val screenW = physicalSize.width
+        val screenH = physicalSize.height
         val interactionPlan = translationBlockInteractionPlan(translationBlockInteractionMode)
         val defaultIsVertical = orientation == TextOrientation.VERTICAL_RTL ||
             orientation == TextOrientation.VERTICAL_LTR
@@ -568,7 +605,8 @@ class OverlayManager(
         VerticalDiagnosticLog.i(
             "${diagPrefix}overlay showBlocks count=${blocks.size} orientation=$orientation vertical=$defaultIsVertical " +
                 "leftToRight=$defaultLeftToRight followBlockOrientations=$followBlockOrientations " +
-                "screen=${screenW}x${screenH} textSizeSp=$textSizeSp " +
+                "screen=${screenW}x${screenH} resources=${dm.widthPixels}x${dm.heightPixels} " +
+                "textSizeSp=$textSizeSp " +
                 "alpha=$alpha placement=$placement offset=(${offsetX},${offsetY}) " +
                 "regionOffset=(${regionOffset.x},${regionOffset.y}) allowWrap=$allowWrap " +
                 "avoidCollision=$avoidCollision theme=$theme styleMode=$overlayStyleMode"
@@ -630,9 +668,16 @@ class OverlayManager(
                     "screenBox=${overlayRect.toDiagString()} orig=${origW}x${origH} " +
                     "src=${block.text.toDiagText()} dst=${dst.toDiagText()} " +
                     (adaptiveStyle?.let {
+                        val estimate = it.textSizeEstimate
                         "adaptiveBg=#${it.backgroundColor.toUInt().toString(16)} " +
                             "adaptiveFg=#${it.foregroundColor.toUInt().toString(16)} " +
                             "adaptiveMaxSp=${String.format(java.util.Locale.US, "%.1f", it.maxTextSizeSp)} " +
+                            "textSizeSource=${estimate.source.name} " +
+                            "sourceMedianPx=${estimate.sourceLineMedianPx?.let { value ->
+                                String.format(java.util.Locale.US, "%.1f", value)
+                            } ?: "none"} " +
+                            "glyphs=${estimate.sourceGlyphCount} " +
+                            "scaledDensity=${String.format(java.util.Locale.US, "%.2f", estimate.scaledDensity)} " +
                             "sourceBoxes=${block.sourceBoxes.size} " +
                             "eraseMode=${if (block.sourceBoxes.isEmpty()) "full" else "source_boxes"} " +
                             "exactSize=${adaptiveSize?.width}x${adaptiveSize?.height} " +
@@ -722,7 +767,7 @@ class OverlayManager(
                 // 竖排（tategaki）走 VerticalTextView：逐字纵向画，列从右往左换。
                 // 强制 OVERLAP 语义——竖排里 BELOW/ABOVE 没意义（日漫气泡是固定的，译文
                 // 覆盖原文位置）；用户即使选了 BELOW/ABOVE，竖排也按 OVERLAP 处理。
-                VerticalTextView(context).apply {
+                VerticalTextView(context).apply verticalView@ {
                     this.text = dst
                     this.leftToRight = leftToRight
                     this.typeface = overlayTypeface
@@ -733,6 +778,30 @@ class OverlayManager(
                     if (adaptiveStyle != null) {
                         minimumReadableTextSizeSp = ADAPTIVE_MIN_TEXT_SIZE_SP.toFloat()
                         minimumReadableTextSizeRatio = 0f
+                        adaptiveTextFitEnabled = true
+                        adaptiveMaximumTextSizeSp = ADAPTIVE_MAX_TEXT_SIZE_SP.toFloat()
+                        adaptiveTextLayoutPhase = resolveAdaptiveTextLayoutPhase(dst)
+                        onAdaptiveTextFitResolved = { snapshot ->
+                            val expanded = expandAdaptiveVerticalViewport(
+                                view = this@verticalView,
+                                blockIndex = idx,
+                                sourceRect = overlayRect,
+                                allRects = allOverlayRects,
+                                screenWidth = screenW,
+                                rightToLeft = !leftToRight,
+                                minGapPx = (8 * dm.density).toInt().coerceAtLeast(8),
+                                snapshot = snapshot,
+                                diagPrefix = diagPrefix,
+                            )
+                            if (!expanded) {
+                                logAdaptiveVerticalTextSize(
+                                    diagPrefix = diagPrefix,
+                                    blockIndex = idx,
+                                    style = adaptiveStyle,
+                                    snapshot = snapshot,
+                                )
+                            }
+                        }
                     }
                     // 竖排高度由 LayoutParams 固定到原文 box；Drawer 会按 boundsH 自动换列。
                     minimumHeight = verticalHeightPx
@@ -744,7 +813,7 @@ class OverlayManager(
                 }
             } else {
                 val horizontalRightToLeft = blockOrientation == TextOrientation.HORIZONTAL_RTL
-                StyledTranslationTextView(context).apply {
+                StyledTranslationTextView(context).apply horizontalView@ {
                     this.horizontalRightToLeft = horizontalRightToLeft
                     text = if (horizontalRightToLeft) horizontalRtlDisplayText(dst) else dst
                     // RLO keeps logical paragraph order but lets Android reorder each wrapped line.
@@ -767,13 +836,45 @@ class OverlayManager(
                         baseLineSpacingMultiplier = 1.05f
                     )
                     if (adaptiveStyle != null && allowWrap) {
-                        adaptiveAutoSizeMaxSp(adaptiveStyle.maxTextSizeSp)?.let { maxSizeSp ->
+                        adaptiveTextFitEnabled = true
+                        adaptiveTextLayoutPhase = resolveAdaptiveTextLayoutPhase(dst)
+                        val initialMaxSizeSp = when (adaptiveTextLayoutPhase) {
+                            AdaptiveTextLayoutPhase.PLACEHOLDER -> adaptiveStyle.maxTextSizeSp
+                            AdaptiveTextLayoutPhase.STREAMING,
+                            AdaptiveTextLayoutPhase.FINAL -> ADAPTIVE_MAX_TEXT_SIZE_SP.toFloat()
+                        }
+                        adaptiveAutoSizeMaxSp(initialMaxSizeSp)?.let { maxSizeSp ->
                             setAutoSizeTextTypeUniformWithConfiguration(
                                 ADAPTIVE_MIN_TEXT_SIZE_SP,
                                 maxSizeSp,
                                 1,
                                 TypedValue.COMPLEX_UNIT_SP,
                             )
+                        }
+                        onAdaptiveTextLayoutResolved = { snapshot ->
+                            val belowBoundaryScreen = if (belowNeighborTop >= screenH) {
+                                screenH
+                            } else {
+                                belowNeighborTop + regionOffset.y + offsetY
+                            }
+                            val expanded = expandAdaptiveHorizontalViewport(
+                                view = this@horizontalView,
+                                blockIndex = idx,
+                                topPx = resolvedBaseTop.coerceAtLeast(0),
+                                screenHeight = screenH,
+                                lowerBoundaryPx = belowBoundaryScreen,
+                                gapPx = (8 * dm.density).toInt().coerceAtLeast(8),
+                                snapshot = snapshot,
+                                diagPrefix = diagPrefix,
+                            )
+                            if (!expanded) {
+                                logAdaptiveHorizontalTextSize(
+                                    diagPrefix = diagPrefix,
+                                    blockIndex = idx,
+                                    style = adaptiveStyle,
+                                    snapshot = snapshot,
+                                )
+                            }
                         }
                     }
                     if (horizontalRightToLeft) {
@@ -875,10 +976,7 @@ class OverlayManager(
         }
         root.setOnClickListener { clear() }
 
-        val params = newLayoutParams(focusable = interactionPlan.windowFocusable).apply {
-            width = WindowManager.LayoutParams.MATCH_PARENT
-            height = WindowManager.LayoutParams.MATCH_PARENT
-        }
+        val params = newLayoutParams(focusable = interactionPlan.windowFocusable)
         val cutoutMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             cutoutModeLogLabel(params.layoutInDisplayCutoutMode)
         } else {
@@ -937,6 +1035,7 @@ class OverlayManager(
                 }
             }
             window.decorView.setBackgroundColor(Color.TRANSPARENT)
+            WindowCompat.setDecorFitsSystemWindows(window, false)
             dialog.show()
             window.setLayout(params.width, params.height)
             blocksDialog = dialog
@@ -951,8 +1050,9 @@ class OverlayManager(
     ) {
         val root = FrameLayout(context)
         val dm = context.resources.displayMetrics
-        val screenW = dm.widthPixels
-        val screenH = dm.heightPixels
+        val physicalSize = physicalDisplaySize(context)
+        val screenW = physicalSize.width
+        val screenH = physicalSize.height
         val strokePx = (2f * dm.density).toInt().coerceAtLeast(2)
         val paddingPx = (3f * dm.density).toInt().coerceAtLeast(2)
         val red = 0xFFFF2020.toInt()
@@ -995,10 +1095,7 @@ class OverlayManager(
             blockViews[index] = view
         }
         root.setOnClickListener { clear() }
-        val params = newLayoutParams().apply {
-            width = WindowManager.LayoutParams.MATCH_PARENT
-            height = WindowManager.LayoutParams.MATCH_PARENT
-        }
+        val params = newLayoutParams()
         runCatching { wm.addView(root, params) }
             .onFailure { Timber.w(it, "Failed to show OCR debug boxes") }
         blocksView = root
@@ -1095,14 +1192,198 @@ class OverlayManager(
         }
     }
 
-    fun updateBlockText(index: Int, text: String) {
+    private fun applyFloatingWindowText(index: Int, update: PendingOverlayTextUpdate) {
+        val target = floatingDstViews?.get(index) ?: return
+        if (target is StyledTranslationTextView) {
+            target.adaptiveTextLayoutPhase = update.phase
+        }
+        target.text = update.text
+    }
+
+    private fun expandAdaptiveVerticalViewport(
+        view: VerticalTextView,
+        blockIndex: Int,
+        sourceRect: OverlayIntRect,
+        allRects: List<OverlayIntRect>,
+        screenWidth: Int,
+        rightToLeft: Boolean,
+        minGapPx: Int,
+        snapshot: AdaptiveVerticalTextFitSnapshot,
+        diagPrefix: String,
+    ): Boolean {
+        if (snapshot.phase != AdaptiveTextLayoutPhase.FINAL || !snapshot.overflow) return false
+        val layout = view.layoutParams as? FrameLayout.LayoutParams ?: return false
+        val currentWidth = layout.width.takeIf { it > 0 } ?: view.width.coerceAtLeast(1)
+        val target = adaptiveVerticalOverflowSlot(
+            rect = sourceRect,
+            allRects = allRects,
+            screenWidth = screenWidth,
+            rightToLeft = rightToLeft,
+            minGapPx = minGapPx,
+            requiredWidthPx = snapshot.requiredWidthPx,
+        )
+        if (target.width <= currentWidth) return false
+
+        layout.width = target.width
+        if (rightToLeft) {
+            layout.gravity = Gravity.TOP or Gravity.RIGHT
+            layout.leftMargin = 0
+            layout.rightMargin = (screenWidth - target.right).coerceAtLeast(0)
+        } else {
+            layout.gravity = Gravity.TOP or Gravity.LEFT
+            layout.leftMargin = target.left
+            layout.rightMargin = 0
+        }
+        view.layoutParams = layout
+        VerticalDiagnosticLog.i(
+            "${diagPrefix}adaptive expand block#${blockIndex + 1} axis=V " +
+                "fromW=$currentWidth targetSlot=${target.toDiagString()} targetW=${target.width} " +
+                "requiredW=${snapshot.requiredWidthPx} constrained=${target.width < snapshot.requiredWidthPx}"
+        )
+        return true
+    }
+
+    private fun expandAdaptiveHorizontalViewport(
+        view: StyledTranslationTextView,
+        blockIndex: Int,
+        topPx: Int,
+        screenHeight: Int,
+        lowerBoundaryPx: Int,
+        gapPx: Int,
+        snapshot: AdaptiveHorizontalTextLayoutSnapshot,
+        diagPrefix: String,
+    ): Boolean {
+        if (snapshot.phase != AdaptiveTextLayoutPhase.FINAL || !snapshot.overflow) return false
+        val layout = view.layoutParams as? FrameLayout.LayoutParams ?: return false
+        val currentHeight = layout.height.takeIf { it > 0 } ?: view.height.coerceAtLeast(1)
+        val targetHeight = adaptiveHorizontalOverflowHeight(
+            currentHeightPx = currentHeight,
+            contentHeightPx = snapshot.contentHeightPx,
+            requiredContentHeightPx = snapshot.layoutHeightPx,
+            topPx = topPx,
+            screenHeightPx = screenHeight,
+            lowerBoundaryPx = lowerBoundaryPx,
+            gapPx = gapPx,
+        )
+        if (targetHeight <= currentHeight) return false
+
+        layout.height = targetHeight
+        view.layoutParams = layout
+        VerticalDiagnosticLog.i(
+            "${diagPrefix}adaptive expand block#${blockIndex + 1} axis=H " +
+                "fromH=$currentHeight targetH=$targetHeight requiredContentH=${snapshot.layoutHeightPx} " +
+                "boundary=$lowerBoundaryPx constrained=${targetHeight < currentHeight +
+                    (snapshot.layoutHeightPx - snapshot.contentHeightPx).coerceAtLeast(0)}"
+        )
+        return true
+    }
+
+    private fun logAdaptiveHorizontalTextSize(
+        diagPrefix: String,
+        blockIndex: Int,
+        style: AdaptiveOverlayStyle,
+        snapshot: AdaptiveHorizontalTextLayoutSnapshot,
+    ) {
+        val density = style.textSizeEstimate.scaledDensity.takeIf { it > 0f }
+            ?: (context.resources.displayMetrics.density * context.resources.configuration.fontScale)
+                .coerceAtLeast(1f)
+        val finalSp = snapshot.finalTextSizePx / density
+        val autoSizeMaxSp = snapshot.autoSizeMaxTextSizePx
+            .takeIf { it > 0 }
+            ?.let { it / density }
+        val overflowReasons = snapshot.overflowReasons
+            .joinToString(separator = ",") { it.name }
+            .ifEmpty { "none" }
+        val heightFillRatio = if (snapshot.contentHeightPx > 0) {
+            snapshot.layoutHeightPx.toFloat() / snapshot.contentHeightPx
+        } else {
+            0f
+        }
+        VerticalDiagnosticLog.i(
+            "${diagPrefix}adaptive textSize block#${blockIndex + 1} axis=H " +
+                "phase=${snapshot.phase.name} " +
+                "source=${style.textSizeEstimate.source.name} " +
+                "sourceEstimateSp=${String.format(java.util.Locale.US, "%.1f", style.maxTextSizeSp)} " +
+                "autoRangeSp=${autoSizeMaxSp?.let {
+                    "$ADAPTIVE_MIN_TEXT_SIZE_SP..${String.format(java.util.Locale.US, "%.1f", it)}"
+                } ?: "off"} " +
+                "finalSp=${String.format(java.util.Locale.US, "%.1f", finalSp)} " +
+                "textLength=${snapshot.textLength} measured=${snapshot.measuredWidthPx}x${snapshot.measuredHeightPx} " +
+                "viewport=${snapshot.contentWidthPx}x${snapshot.contentHeightPx} " +
+                "layoutH=${snapshot.layoutHeightPx} lines=${snapshot.lineCount} " +
+                "heightFill=${String.format(java.util.Locale.US, "%.2f", heightFillRatio)} " +
+                "visibleEnd=${snapshot.visibleTextEnd} ellipsized=${snapshot.ellipsized} " +
+                "overflow=${snapshot.overflow} overflowReasons=$overflowReasons"
+        )
+    }
+
+    private fun logAdaptiveVerticalTextSize(
+        diagPrefix: String,
+        blockIndex: Int,
+        style: AdaptiveOverlayStyle,
+        snapshot: AdaptiveVerticalTextFitSnapshot,
+    ) {
+        val density = style.textSizeEstimate.scaledDensity.takeIf { it > 0f }
+            ?: (context.resources.displayMetrics.density * context.resources.configuration.fontScale)
+                .coerceAtLeast(1f)
+        val fillRatio = if (snapshot.contentWidthPx > 0) {
+            snapshot.requiredWidthPx.toFloat() / snapshot.contentWidthPx
+        } else {
+            0f
+        }
+        VerticalDiagnosticLog.i(
+            "${diagPrefix}adaptive textSize block#${blockIndex + 1} axis=V " +
+                "phase=${snapshot.phase.name} " +
+                "source=${style.textSizeEstimate.source.name} " +
+                "sourceEstimateSp=${String.format(java.util.Locale.US, "%.1f", style.maxTextSizeSp)} " +
+                "rangeSp=${String.format(java.util.Locale.US, "%.1f", snapshot.minTextSizePx / density)}.." +
+                "${String.format(java.util.Locale.US, "%.1f", snapshot.maxTextSizePx / density)} " +
+                "startSp=${String.format(java.util.Locale.US, "%.1f", snapshot.initialTextSizePx / density)} " +
+                "finalSp=${String.format(java.util.Locale.US, "%.1f", snapshot.finalTextSizePx / density)} " +
+                "textLength=${snapshot.textLength} probes=${snapshot.probes} " +
+                "requiredW=${snapshot.requiredWidthPx} viewport=${snapshot.contentWidthPx}x${snapshot.contentHeightPx} " +
+                "widthFill=${String.format(java.util.Locale.US, "%.2f", fillRatio)} " +
+                "nextSizeFits=${snapshot.nextSizeFits?.toString() ?: "n/a"} " +
+                "overflow=${snapshot.overflow}"
+        )
+    }
+
+    internal fun updateBlockText(
+        index: Int,
+        text: String,
+        phase: AdaptiveTextLayoutPhase = AdaptiveTextLayoutPhase.FINAL,
+    ) {
         blockContents[index]?.translation = text
         val target = blockViews[index]
+        if (phase == AdaptiveTextLayoutPhase.STREAMING) {
+            blockStreamingUpdateCounts[index] = (blockStreamingUpdateCounts[index] ?: 0) + 1
+            target ?: return
+            val coalescer = blockFrameUpdateCoalescers.getOrPut(index) {
+                LatestFrameUpdateCoalescer(
+                    scheduleFrame = { target.postOnAnimation(it) },
+                    publish = { update -> applyBlockText(index, update) },
+                )
+            }
+            coalescer.submit(PendingOverlayTextUpdate(text, phase))
+            return
+        }
+        val streamingUpdates = blockStreamingUpdateCounts.remove(index) ?: 0
+        val coalescer = blockFrameUpdateCoalescers.remove(index)
+        coalescer?.discardPending()
+        val stats = coalescer?.stats() ?: FrameUpdateStats(0, 0)
         VerticalDiagnosticLog.i(
             "${blocksDiagnosticId.toDiagPrefix()}overlay updateBlockText block#${index + 1} " +
+                "phase=${phase.name} streamingUpdates=$streamingUpdates " +
+                "renderedUpdates=${stats.published} coalescedUpdates=${stats.coalesced} " +
                 "view=${target?.javaClass?.simpleName ?: "missing"} " +
                 text.toDiagText()
         )
+        applyBlockText(index, PendingOverlayTextUpdate(text, phase))
+    }
+
+    private fun applyBlockText(index: Int, update: PendingOverlayTextUpdate) {
+        val text = update.text
+        val phase = update.phase
         when (val v = blockViews[index]) {
             is TextView -> {
                 val debugState = v.tag as? OcrDebugBlockState
@@ -1111,6 +1392,21 @@ class OverlayManager(
                     v.text = label
                     v.contentDescription = label.ifBlank { context.getString(R.string.ocr_debug_box_only) }
                 } else {
+                    if (v is StyledTranslationTextView) {
+                        if (
+                            v.adaptiveTextFitEnabled &&
+                            v.adaptiveTextLayoutPhase == AdaptiveTextLayoutPhase.PLACEHOLDER &&
+                            phase != AdaptiveTextLayoutPhase.PLACEHOLDER
+                        ) {
+                            v.setAutoSizeTextTypeUniformWithConfiguration(
+                                ADAPTIVE_MIN_TEXT_SIZE_SP,
+                                ADAPTIVE_MAX_TEXT_SIZE_SP,
+                                1,
+                                TypedValue.COMPLEX_UNIT_SP,
+                            )
+                        }
+                        v.adaptiveTextLayoutPhase = phase
+                    }
                     v.text = if (v is StyledTranslationTextView && v.horizontalRightToLeft) {
                         horizontalRtlDisplayText(text)
                     } else {
@@ -1118,7 +1414,10 @@ class OverlayManager(
                     }
                 }
             }
-            is VerticalTextView -> v.text = text
+            is VerticalTextView -> {
+                v.adaptiveTextLayoutPhase = phase
+                v.text = text
+            }
             else -> { /* 找不到 view 静默忽略，避免清屏 race condition 抛 NPE */ }
         }
         updateTranslationBlockActionState(index)
@@ -1133,6 +1432,9 @@ class OverlayManager(
         dismissError()
         floatingWindow.hide()
         floatingDstViews = null
+        floatingStreamingUpdateCounts.clear()
+        floatingFrameUpdateCoalescers.values.forEach { it.discardPending() }
+        floatingFrameUpdateCoalescers.clear()
         lastFloatingPairs = null
         val dialog = blocksDialog
         blocksDialog = null
@@ -1144,6 +1446,9 @@ class OverlayManager(
         blocksView = null
         blockViews.clear()
         blockContents.clear()
+        blockStreamingUpdateCounts.clear()
+        blockFrameUpdateCoalescers.values.forEach { it.discardPending() }
+        blockFrameUpdateCoalescers.clear()
         blocksDiagnosticId = null
     }
 
@@ -1153,10 +1458,11 @@ class OverlayManager(
      *   避免横屏 cutout / status bar inset 把整体推右导致译文偏右。
      * - NOT_FOCUSABLE / NOT_TOUCH_MODAL 让 overlay 不抢焦点。
      */
-    private fun newLayoutParams(focusable: Boolean = false): WindowManager.LayoutParams =
-        WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
+    private fun newLayoutParams(focusable: Boolean = false): WindowManager.LayoutParams {
+        val physicalSize = physicalDisplaySize(context)
+        return WindowManager.LayoutParams(
+            physicalSize.width,
+            physicalSize.height,
             overlayType,
             WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
@@ -1168,6 +1474,9 @@ class OverlayManager(
             // [hasActiveResult] 与循环结果生命周期共同避免把应用自己的译文截回去。
             PixelFormat.TRANSLUCENT
         ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = 0
+            y = 0
             // 把 cutout / system bar 也算进 layout 区域，确保 overlay (0,0) = 物理屏幕 (0,0)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 layoutInDisplayCutoutMode =
@@ -1179,6 +1488,7 @@ class OverlayManager(
                 fitInsetsSides = 0
             }
         }
+    }
 
     private fun String.toDiagText(): String =
         "len=$length text=\"${VerticalDiagnosticLog.text(this)}\""

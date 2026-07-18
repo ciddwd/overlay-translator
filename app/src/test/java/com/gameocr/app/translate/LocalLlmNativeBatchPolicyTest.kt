@@ -8,6 +8,40 @@ import org.junit.Test
 class LocalLlmNativeBatchPolicyTest {
 
     @Test
+    fun batchResultUpdates_tableDriven_restoreEveryOriginalIndex() {
+        data class Case(
+            val name: String,
+            val indexes: List<Int>,
+            val translated: String?,
+            val expected: List<BatchTranslationUpdate>,
+        )
+
+        val cases = listOf(
+            Case("single result", listOf(2), "译文", listOf(BatchTranslationUpdate(2, "译文"))),
+            Case(
+                "deduplicated source restores duplicate positions",
+                listOf(0, 3, 7),
+                "相同译文",
+                listOf(
+                    BatchTranslationUpdate(0, "相同译文"),
+                    BatchTranslationUpdate(3, "相同译文"),
+                    BatchTranslationUpdate(7, "相同译文"),
+                ),
+            ),
+            Case("null failure is still emitted", listOf(1), null, listOf(BatchTranslationUpdate(1, null))),
+            Case("empty index list", emptyList(), "unused", emptyList()),
+        )
+
+        cases.forEach { case ->
+            assertEquals(
+                case.name,
+                case.expected,
+                localLlmBatchResultUpdates(case.indexes, case.translated),
+            )
+        }
+    }
+
+    @Test
     fun selectedBatchSize_acceptsOnlyMeasuredVariantsAndNativeCapacity() {
         data class Case(
             val name: String,

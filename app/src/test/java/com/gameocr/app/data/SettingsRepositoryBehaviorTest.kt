@@ -13,15 +13,87 @@ import org.junit.Test
 class SettingsRepositoryBehaviorTest {
 
     @Test
+    fun rescaleCaptureRegion_tableDriven_migratesWorkspaceAndOrientationCoordinates() = runBlocking {
+        data class Case(
+            val name: String,
+            val region: CaptureRegion,
+            val savedWidth: Int,
+            val savedHeight: Int,
+            val currentWidth: Int,
+            val currentHeight: Int,
+            val expectedRegion: CaptureRegion,
+        )
+
+        val cases = listOf(
+            Case(
+                name = "old HyperOS workspace width migrates to physical width",
+                region = CaptureRegion(0, 0, 3053, 1440),
+                savedWidth = 3053,
+                savedHeight = 1440,
+                currentWidth = 3200,
+                currentHeight = 1440,
+                expectedRegion = CaptureRegion(0, 0, 3200, 1440),
+            ),
+            Case(
+                name = "same screen keeps coordinates",
+                region = CaptureRegion(100, 200, 1000, 900),
+                savedWidth = 3200,
+                savedHeight = 1440,
+                currentWidth = 3200,
+                currentHeight = 1440,
+                expectedRegion = CaptureRegion(100, 200, 1000, 900),
+            ),
+            Case(
+                name = "orientation change scales both axes",
+                region = CaptureRegion(144, 320, 720, 1600),
+                savedWidth = 1440,
+                savedHeight = 3200,
+                currentWidth = 3200,
+                currentHeight = 1440,
+                expectedRegion = CaptureRegion(320, 144, 1600, 720),
+            ),
+            Case(
+                name = "scaled out of range coordinates clamp to physical screen",
+                region = CaptureRegion(-100, -100, 4000, 2000),
+                savedWidth = 1600,
+                savedHeight = 720,
+                currentWidth = 3200,
+                currentHeight = 1440,
+                expectedRegion = CaptureRegion(0, 0, 3200, 1440),
+            ),
+            Case(
+                name = "missing saved metadata preserves region",
+                region = CaptureRegion(120, 240, 960, 1200),
+                savedWidth = 0,
+                savedHeight = 0,
+                currentWidth = 1440,
+                currentHeight = 3200,
+                expectedRegion = CaptureRegion(120, 240, 960, 1200),
+            ),
+        )
+
+        val root = Files.createTempDirectory("settings-region-rescale-test").toFile()
+        val repository = fileBackedRepository(root)
+        cases.forEach { case ->
+            repository.update {
+                Settings(
+                    captureRegion = case.region,
+                    captureRegionSavedScreenW = case.savedWidth,
+                    captureRegionSavedScreenH = case.savedHeight,
+                )
+            }
+            repository.rescaleCaptureRegionIfNeeded(case.currentWidth, case.currentHeight)
+            val actual = repository.get()
+            assertEquals("${case.name} region", case.expectedRegion, actual.captureRegion)
+            assertEquals("${case.name} saved width", case.currentWidth, actual.captureRegionSavedScreenW)
+            assertEquals("${case.name} saved height", case.currentHeight, actual.captureRegionSavedScreenH)
+        }
+    }
+
+    @Test
     fun repository_roundTripsACompleteNonDefaultSettingsObject() = runBlocking {
         val root = Files.createTempDirectory("settings-repository-test").toFile()
-        val context = FileBackedContext(root)
-        val repository = SettingsRepository(context, PlainTestCipher).apply {
-            setDefaultPromptProvidersForTest(
-                prompt = { "default prompt" },
-                dictionaryPrompt = { "default dictionary prompt" },
-            )
-        }
+        val repository = fileBackedRepository(root)
         val fontName = "${"b".repeat(64)}.ttf"
         val preset = TranslationPreset(id = "custom_roundtrip", name = "Round trip")
         val requested = Settings(
@@ -160,6 +232,14 @@ class SettingsRepositoryBehaviorTest {
 
         assertEquals(MangaOcrAdvancedSettingsPolicy.normalize(requested), repository.get())
     }
+
+    private fun fileBackedRepository(root: File): SettingsRepository =
+        SettingsRepository(FileBackedContext(root), PlainTestCipher).apply {
+            setDefaultPromptProvidersForTest(
+                prompt = { "default prompt" },
+                dictionaryPrompt = { "default dictionary prompt" },
+            )
+        }
 
     private class FileBackedContext(private val root: File) : ContextWrapper(null) {
         override fun getApplicationContext(): Context = this

@@ -10,6 +10,13 @@ internal data class LocalLlmNativeBatchPlan<T>(
     val nativeBatch: Boolean,
 )
 
+internal fun localLlmBatchResultUpdates(
+    resultIndexes: List<Int>,
+    translated: String?,
+): List<BatchTranslationUpdate> = resultIndexes.map { index ->
+    BatchTranslationUpdate(index = index, text = translated)
+}
+
 /**
  * Plans independent native sequences without exceeding the per-sequence context, unified KV,
  * JNI sequence capacity, or the maximum logical prompt batch accepted by llama_decode.

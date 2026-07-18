@@ -71,6 +71,7 @@ Not just full-screen translation. Draw a rectangle around a single word or phras
 ### 🎨 How the overlay looks
 
 - **Two render modes**: glued to each source box (BLOCKS), or packed into a **draggable / resizable floating window** — perfect for games with on-screen joysticks and buttons; you can lock the window to prevent accidental touches
+- **Adapt to screen**: when translations are shown over the original screen, it chooses colors, background, and text size for each text area and places the translation back over the source; turning it off restores the previous display settings
 - **Unified layout and reading order**: translated text follows OCR-detected horizontal / vertical layout and reading order by default; when disabled, both the layout and LTR / RTL direction must be selected manually, and OCR sorting uses the same resolved direction as rendering
 - **Selectable translation blocks**: long-press a block for system text selection, or choose tap-to-open panel mode to select a range or copy the full source / translation
 - **5 color themes + visual color picker**: choose background, text, border color, and opacity directly instead of typing ARGB; the picker scrolls on short landscape screens
@@ -83,8 +84,8 @@ Not just full-screen translation. Draw a rectangle around a single word or phras
 
 - **English / 简体中文 UI + Light / Dark / Follow-system theme**, applies instantly
 - **In-settings search**: search in either language; new color, font, backup, import, and export settings are indexed too
-- **System presets**: built-in bundles such as "offline Japanese manga OCR → Simplified Chinese"; missing models are listed before a preset can be applied
-- **Background model downloads**: continue after leaving Settings; both the in-app status and system notification show the current model, file, batch, and progress, with cancel, retry, and resume support
+- **System presets**: built-in bundles such as "offline Japanese manga OCR → Simplified Chinese" set up recognition, translation, and display in one step; the manga preset uses Adapt to screen by default, and lists any models you still need to download
+- **Background model downloads**: continue after leaving Settings; both the app and system notification show the current model and progress, with cancel, retry, and resume support
 - **Per-app translation context**: detect the foreground app and apply its terminology; package names always stay on-device, and only the display name is sent when you explicitly enable that option for a context-aware translator
 - **Portable settings bundle**: export / import non-sensitive settings, custom presets, and font files in one step; API keys and tokens remain on the current device
 - **Translation cache**: during the current process, identical text with the same translation configuration reuses its result for cloud engines and on-device LLMs
@@ -112,13 +113,17 @@ It is intended for users who want to choose their own OCR and translation method
 
 **Live overlay** — Discord rules page, OCR boxes glued to the source text:
 
-| Classic Dark | Paper Light |
+| Classic Dark | Paper Light | Adapt to screen |
+|---|---|---|
+| <img src="docs/screenshots/overlay-discord-dark.png" width="320" alt="Classic dark overlay" /> | <img src="docs/screenshots/overlay-discord-light.png" width="320" alt="Paper light overlay" /> | <img src="docs/screenshots/overlay-discord-adaptive.png" width="320" alt="Discord screen-adaptive overlay" /> |
+
+**In-game** — The same Sandship screen compared as the original, a source-aligned overlay, and Adapt to screen.
+
+| Display | Preview |
 |---|---|
-| <img src="docs/screenshots/overlay-discord-dark.png" width="320" alt="Classic dark overlay" /> | <img src="docs/screenshots/overlay-discord-light.png" width="320" alt="Paper light overlay" /> |
-
-**In-game** — Sandship UI, Chinese detected and overlaid:
-
-<img src="docs/screenshots/overlay-game.png" width="640" alt="In-game overlay" />
+| Original, no processing | <img src="docs/screenshots/overlay-game-original.jpg" width="640" alt="Original game screen without processing" /> |
+| Source-aligned overlay | <img src="docs/screenshots/overlay-game-source-aligned.jpg" width="640" alt="Game translations aligned to source text" /> |
+| Adapt to screen | <img src="docs/screenshots/overlay-game-adaptive.jpg" width="640" alt="Game translations adapted to the screen" /> |
 
 **Comic / subtitle scene** — manga bubbles OCR'd by column, translation glued to source:
 
@@ -126,13 +131,21 @@ It is intended for users who want to choose their own OCR and translation method
 |---|---|
 | <img src="docs/screenshots/overlay-manga.png" width="320" alt="Korean manga overlay" /> | <img src="docs/screenshots/overlay-manga-jp.png" width="320" alt="Vertical Japanese manga overlay" /> |
 
+**Japanese manga — Adapt to screen comparison** — The same vertical Japanese page shown as the original, with Adapt to screen, and with the translated text changed to a horizontal left-to-right layout:
+
+| Original | Adapt to screen | Adapt to screen (horizontal, left-to-right) |
+|---|---|---|
+| <img src="docs/screenshots/overlay-manga-jp-original.png" width="280" alt="Original Japanese manga page" /> | <img src="docs/screenshots/overlay-manga-jp-adaptive.png" width="280" alt="Japanese manga with Adapt to screen" /> | <img src="docs/screenshots/overlay-manga-jp-adaptive-horizontal-ltr.png" width="280" alt="Japanese manga adapted to the screen with horizontal left-to-right translations" /> |
+
 **Settings**:
 
 | Language / theme / system presets | Translation backend |
 |---|---|
 | <img src="docs/screenshots/settings-top.png" width="280" alt="Settings top and system presets" /> | <img src="docs/screenshots/settings-translator.png" width="280" alt="Translation backend settings" /> |
-| **OCR engines / orientation detection** | **Overlay style and font** |
-| <img src="docs/screenshots/settings-ocr.png" width="280" alt="OCR engine and orientation model settings" /> | <img src="docs/screenshots/settings-display.png" width="280" alt="Overlay display and font settings" /> |
+| **OCR engines** | **Orientation model settings** |
+| <img src="docs/screenshots/settings-ocr.png" width="280" alt="OCR engine settings" /> | <img src="docs/screenshots/settings-direction-model.png" width="280" alt="Automatic orientation detection and orientation model settings" /> |
+| **Overlay style and font** | **Adapt to screen** |
+| <img src="docs/screenshots/settings-display.png" width="280" alt="Overlay display and font settings" /> | <img src="docs/screenshots/settings-display-adaptive.png" width="280" alt="Adapt to screen settings" /> |
 | **Arc-menu buttons** | **Floating-window mode options** |
 | <img src="docs/screenshots/settings-arc-menu.png" width="280" alt="Arc-menu button settings" /> | <img src="docs/screenshots/settings-display-floating.png" width="280" alt="Floating-window mode settings" /> |
 | **Box merge / floating ball** | **Smart loop translation** |
@@ -193,49 +206,83 @@ Open the app and tap **Settings**. The top of the settings page lets you switch 
 | **Cloud** Youdao OCR | Simple one-tap | Needs App ID (API Key) + App Secret; `langType` auto-derived from source language, no separate picker |
 
 <details>
-<summary><strong>On-device OCR benchmark (Speed priority)</strong></summary>
+<summary><strong>On-device OCR benchmark</strong></summary>
 
 Test conditions:
 
 - Device: Qualcomm Snapdragon 8 Gen 3 with 16 GB RAM
-- Detection profile: Speed priority
-- Test image: the same Japanese manga screenshot for every model
-- Note: these are measurements from one device and one image. They compare models within this project and are not universal performance estimates.
+- Test image: the same full-screen `1440×3200` Japanese manga screenshot for every model
+- Preprocessing and text merging disabled; Debug build with detailed performance logging enabled
+- “OCR time” is the engine's recognition time. “Complete pipeline” also includes capture, orientation detection, any required model switch, and rendering.
+- These measurements come from one device and one image. They compare on-device models within this project and are not universal performance estimates.
 
-| OCR model | Time per run | Result on this test image |
-|---|---:|---|
-| PP-OCRv5 Mobile | 1.15 s | Reasonable speed, but produced more recognition errors |
-| PP-OCRv6 Tiny | 0.66 s | Fastest, but Japanese recognition was largely unusable on this image |
-| PP-OCRv6 Small | 1.07 s | Best overall PaddleOCR result, but missed one speech bubble |
-| PP-OCRv6 Medium | 3.02 s | Recovered some content, but still had recognition and reading-order errors |
-| Manga OCR | 3.10 s; 3.48 s for the complete OCR pipeline | Most accurate result for this Japanese manga image |
+#### Speed priority
 
-Planned additions:
+| OCR model | OCR time | Complete pipeline | Result on this test image |
+|---|---:|---:|---|
+| PP-OCRv5 Mobile | 1.17 s average | 2.30 s average | 34 segments; reasonable speed, but many wrong, missing, or garbled characters |
+| PP-OCRv6 Tiny | 0.65 s | 2.00 s¹ | 29 segments; fastest, but Japanese recognition was largely unusable |
+| PP-OCRv6 Small | 0.84 s | 2.51 s¹ | 35 segments; best overall PaddleOCR result, with most body text recognized correctly |
+| PP-OCRv6 Medium | 3.60 s | 6.36 s¹ | 35 segments; recovered some body text, but still had recognition and splitting errors |
+| Manga OCR | 5.54 s | 6.45 s | 17 complete bubbles; best vertical grouping, sentence integrity, and overall accuracy |
 
-- **On-device translation**: Sakura / Hy-MT2 initialization, prefill, decode, tokens/s, and total time
-- **On-device OCR Accuracy priority**: compare speed, missed text, and recognition output on the same image
+¹ The complete pipeline includes switching from and loading the previous PaddleOCR model: about 0.44 s for Tiny, 0.77 s for Small, and 1.80 s for Medium.
+
+#### Accuracy priority
+
+| OCR model | OCR time | Complete pipeline | Compared with Speed priority |
+|---|---:|---:|---|
+| PP-OCRv5 Mobile | 3.08 s | 4.24 s | Found 5 more segments, but added false positives and garbled text |
+| PP-OCRv6 Tiny | 1.81 s | 3.02 s | Found more boxes, but Japanese remained largely unusable |
+| PP-OCRv6 Small | 4.01 s | 5.35 s | Recovered a little small text, while adding several false positives |
+| PP-OCRv6 Medium | 16.85 s | 18.16 s | Kept only 2 more segments at a very high time cost |
+| Manga OCR | 5.73 s average | 7.00 s average | 21 segments; recovered more small text and improved the difficult bottom area, with some added noise |
+
+For this image, **PP-OCRv6 Small with Speed priority** offered the best balance of speed and Japanese recognition quality. Use **Manga OCR** when vertical manga layout and accuracy matter more. None of the PaddleOCR Accuracy profiles produced a consistent accuracy gain in this test.
 
 </details>
 
-**PaddleOCR models**: Settings → "Download PaddleOCR model" installs the selected model tier under `<filesDir>/models/paddle/<version>/`. PaddleOCR models do not ship inside the APK, so first use requires a download or local import; the default tier is v6 small, and you can switch between v5 mobile / v6 tiny / small / medium with HuggingFace, hf-mirror, or a custom mirror.
+<details>
+<summary><strong>On-device translation benchmark</strong></summary>
 
-**PP-OCRv6 Online**: select "PP-OCRv6 Online" under OCR engines and enter an AI Studio Access Token. This cloud path encodes the screenshot as JPEG, submits a PaddleOCR AI Studio asynchronous `PP-OCRv6` job, and polls its result; it does not use the on-device model files described above.
+Test conditions:
 
-- `det.onnx` (DBNet detector, size varies from several MB to tens of MB by tier)
-- `rec.onnx` (CRNN recognizer, usually tens of MB depending on tier)
-- `keys.txt` / `keys.yml` (dictionary, ~90-150 KB)
+- Device: Qualcomm Snapdragon 8 Gen 3 with 16 GB RAM
+- The same 18 Japanese OCR segments translated into Simplified Chinese
+- “Disable translation cache” enabled in Developer options; both runs reported zero cache hits
+- CPU inference at TG=6 / PP=6; native JNI B4 batching in 5 groups (4+4+4+4+2)
+- The app was force-stopped before each model run. Opening floating translation automatically loaded and prewarmed the selected model.
+- “First shown” and “All 18 complete” start at translation batch submission and exclude OCR time. Results were collected from a Debug build.
 
-**Orientation models**: the ONNX orientation package classifies full-image 0/90/180/270 rotation and text-line 0/180 direction. Once installed, the app can route vertical screenshots before OCR and rerun upside-down horizontal text while mapping boxes back to the original image. The models are bundled; while they show as ready, download and local-import actions stay disabled. Delete the installed copy first if you need to replace it.
+| On-device model | Model file | Cold prewarm | First shown | All 18 complete | Result on this test text |
+|---|---:|---:|---:|---:|---|
+| Sakura 1.5B (Q5_K_S) | ~1.20 GB | 2.99 s | 3.40 s | 10.30 s | More natural Chinese, but one negation was reversed and one time expression was mistranslated |
+| Hy-MT2 1.8B (Q4_K_M) | ~1.08 GB | 2.38 s | 3.51 s | 10.84 s | Handled negation and the time expression better, but had weaker context, long-sentence, and Chinese phrasing quality |
 
-**Manga OCR models**: Settings → "Download manga OCR model" installs the encoder / decoder / vocab / config files required by `l0wgear/manga-ocr-2025-onnx`. The public source is mainly Hugging Face; when that is unreachable, use a proxy, custom mirror, or local import.
+Sakura showed its first batch about 0.11 s sooner and finished all segments about 0.54 s sooner. Hy-MT2 completed cold prewarming about 0.61 s sooner. Sakura produced more natural Chinese in this sample, while Hy-MT2 handled some semantic details more accurately. Hy-MT2 used a 512 MiB KV buffer versus Sakura's 224 MiB, which matters on devices with less memory.
 
-**Downloads and ready state**: PaddleOCR, manga OCR, orientation, and on-device LLM models use background download work. Downloads continue after leaving Settings, while the in-app state and system notification show the current model / file / batch / progress. You can cancel from Settings or the notification; interrupted work retries and resumes incomplete files. Once a complete model is marked ready, download and local-import actions are disabled; delete the installed model first if you need to replace it.
+</details>
 
-**Automatic orientation detection**: enabled by default. Automatic mode combines image orientation, OCR result shape, and language to pick a better OCR path; if it misclassifies a frame, lock the direction manually to horizontal, vertical right-to-left, or stacked vertical.
+**PaddleOCR models**: the first use requires a download or local import. The default is **PP-OCRv5 mobile**. You can switch versions to suit the screen and language:
 
-**DBNet advanced thresholds**: the OCR page exposes detection probability, box score, unclip ratio, manga-OCR unclip, and bubble-cluster gap. Most users should leave these alone; tune them only for missed tiny manga text, split vertical columns, or noisy boxes, then reset to defaults if needed.
+- **v5 mobile**: the default, supporting Simplified Chinese, Traditional Chinese, English, and Japanese
+- **v6 tiny**: the smallest and fastest, with many Latin-script languages but no Japanese support
+- **v6 small**: a balance of speed and accuracy, with Japanese support
+- **v6 medium**: larger and slower, for faster devices where a longer wait is acceptable
 
-**On-device CPU threads**: PaddleOCR, manga OCR, orientation models, and on-device LLMs no longer use a fixed 2–4 threads. They choose 1 / 2 / 4 / 6 inference threads from the processor count reported by Android, capped at 6. The count is selected when the model loads and does not continuously change during one translation.
+**PP-OCRv6 Online**: this is a cloud recognition service. It needs an AI Studio Access Token but does not need the on-device models above. Screenshots are sent to PaddleOCR's online service when it is used.
+
+**Orientation models**: these detect rotated screens and upside-down text. They are included with the app, so no extra download is needed when they show as ready.
+
+**Manga OCR models**: the first use requires a download or local import. The main public source is Hugging Face; if it is unavailable on your network, use a proxy, custom mirror, or local import.
+
+**Downloads and ready state**: PaddleOCR, manga OCR, orientation, and offline translation models can download in the background. Downloads continue after leaving Settings, and both the app and system notification show progress. You can cancel at any time; interrupted downloads retry and continue from where they stopped. A model can be used when it shows as ready. Delete the installed model first if you want to replace it.
+
+**Automatic orientation detection**: enabled by default. It chooses horizontal or vertical text from the screen and language. If it gets a page wrong, select horizontal, vertical Japanese, or another direction manually.
+
+**Detection speed and accuracy**: "Speed" is the default. Switch to "Accuracy" when tiny, faint, or narrow vertical text is missed, but expect a longer wait. Most users should leave the advanced OCR settings unchanged; adjust them gradually only if text is repeatedly missed or too many false detections appear.
+
+**On-device performance**: local recognition and translation adjust automatically to the phone. Faster phones wait less, while entry-level devices may take longer; there is no need to set thread counts manually.
 
 **Baidu OCR caveats**: image limits are *longest side ≤ 4096 px, shortest side ≥ 15 px, aspect ratio 1:4–4:1, base64 < 4 MB*. The first two are handled automatically (downscale + JPEG quality fallback); aspect ratio out of range can only be fixed by shrinking the capture region.
 
@@ -270,10 +317,12 @@ Every online engine has a **Test connection** action. Use it before switching to
 <details>
 <summary><strong>On-device model downloads and performance</strong></summary>
 
-- Hugging Face, hf-mirror, custom mirrors, and local GGUF import are supported; background downloads provide notification progress, cancellation, retry, and resume
+- Hugging Face, hf-mirror, custom mirrors, and local model import are supported; background downloads provide notification progress, cancellation, retry, and resume
 - Large downloads warn before starting on cellular or an unknown network type
-- Sakura / Hy-MT2 select CPU inference threads from available cores, capped at 6; the production path currently uses the CPU
-- Sakura Vulkan remains a default-off experimental path; on-device LLMs are offered only on supported 64-bit devices and OS versions
+- After capture starts, an installed and selected manga OCR, Sakura, or Hy-MT2 model is prepared in advance to reduce the first wait
+- When one screen contains several text blocks, Sakura / Hy-MT2 tries to handle them together and automatically falls back to one at a time when needed
+- On-device translation currently relies mainly on the CPU. Sakura's Vulkan option remains an experimental, default-off feature and may not work or run faster on every device
+- Sakura / Hy-MT2 are available only on supported 64-bit devices and OS versions
 
 </details>
 
@@ -304,7 +353,7 @@ Every online engine has a **Test connection** action. Use it before switching to
 
 ### Presets and Arc Menu
 
-- **System presets**: built-in bundles for "offline Japanese manga OCR → Simplified Chinese". A preset includes OCR, translator, language pair, display style, and tuning thresholds. Missing required models are shown item by item before the preset can be applied.
+- **System presets**: built-in bundles such as "offline Japanese manga OCR → Simplified Chinese" set up recognition, translation, language, and display in one step. The manga preset uses Adapt to screen by default, and lists missing models for download.
 - **Custom presets**: save the current settings as a preset. A preset only shows as applied when all key settings still match; changing any key field returns the card to the unsaved state.
 - **Arc-menu buttons**: drag to reorder and choose 2-6 visible buttons per page. If there are more actions, the last slot becomes "Next page". Actions can include loop, capture region, word/full-screen mode switch, language quick switch, preset quick switch, settings, and back to main app.
 
@@ -320,6 +369,7 @@ Every online engine has a **Test connection** action. Use it before switching to
 - **TalkBack**: primary overlay entry points expose readable labels, toggle state, and double-tap / long-press actions; region selection announces state and dimensions, while complex menus are read row by row
 - **Word card**: the top close bar and bottom copy bar stay fixed while the body scrolls; landscape sizing subtracts system bars and cutout insets so actions are not clipped
 - **Crash logs**: in addition to Java exceptions, Android 11+ imports system-reported native crashes, ANRs, low-memory exits, and signal exits; settings snapshots are sanitized and system traces are read with a size limit
+- **Developer diagnostics**: you can save the screenshots used by OCR to investigate missed or incorrect text. This is off by default, saves at most 8 screenshots per app run, and may capture private content. You can also temporarily disable the translation cache so every test translates again
 
 ## ⚠️ Known limitations
 
@@ -340,6 +390,7 @@ Every online engine has a **Test connection** action. Use it before switching to
 | Feature | What users can do |
 |---|---|
 | **Floating translation** | Tap the floating ball over a game, manga, or visual novel and show translations beside the source or in a separate floating window |
+| **Adapt to screen** | Choose translation colors, background, and text size for each area, then place the translation back over the source text |
 | **Automatic loop** | Translate at a fixed interval or wait for dialogue to finish typing; skip unchanged screens and optionally prioritize lower-screen dialogue boxes |
 | **Multiple OCR choices** | Use on-device ML Kit / PaddleOCR / manga OCR, connect to OCR on your LAN, or use Baidu, Tencent, Youdao, and PP-OCRv6 Online |
 | **Horizontal and vertical text** | Detect rotated, horizontal, and vertical manga text; follow the recognized layout or manually choose layout and reading direction |
@@ -348,6 +399,7 @@ Every online engine has a **Test connection** action. Use it before switching to
 | **Word lookup** | Select a word or phrase for a translation; LLM engines can also return pronunciation, part of speech, definitions, examples, and usage notes |
 | **Consistent names and terms** | Save global or per-game names, places, and terminology so wording stays consistent across scenes |
 | **Model downloads** | Download on-device models in the background, view progress in the app and notification, cancel, retry, or resume interrupted files |
+| **Faster local translation** | Prepare offline models after capture starts and handle several text blocks together when possible to reduce waiting |
 | **Customization and migration** | Adjust colors, fonts, size, outline, and shadow; export settings, presets, terminology, and fonts for another device |
 | **Assistive features** | Trigger with both volume keys, use TalkBack action hints, export crash logs, and open background-running guides for aggressive Android ROMs |
 
@@ -359,9 +411,8 @@ These are user-facing improvements we want to continue working on, not a fixed r
 |---|---|
 | **Translation speech (TTS)** | Play a translation directly from each block with clear play / stop state |
 | **Translation history** | Revisit previously translated screens and dialogue instead of losing the last line after switching scenes |
-| **Automatic scene styling** | Pick more suitable translation colors, background, and text size from the screenshot with less manual tuning |
 | **Offline dictionary** | Show basic definitions and examples without a network connection or an LLM translator |
-| **Faster on-device translation** | Reduce offline OCR / translation wait time, heat, and battery use during long sessions |
+| **Continue improving local translation** | Further reduce waiting, heat, and battery use during long sessions |
 | **Deeper accessibility** | Make full-screen OCR text and dynamic translations individually navigable with a screen reader |
 
 ## 🤝 Contributing
@@ -465,4 +516,3 @@ PC tools in the VNR / Visual Novel Reader family have served galgame / VN player
 ## 📄 License
 
 Code is licensed under [Apache-2.0](LICENSE). Models and third-party dependencies retain their own licenses.
-

@@ -14,10 +14,25 @@ enum class AdaptiveStyleFallbackReason {
     BUSY_BACKGROUND,
 }
 
+enum class AdaptiveTextSizeSource {
+    SOURCE_BOX_MEDIAN,
+    AREA_PER_GLYPH,
+    SAFE_DEFAULT,
+}
+
+data class AdaptiveTextSizeEstimate(
+    val source: AdaptiveTextSizeSource,
+    val maxTextSizeSp: Float,
+    val sourceLineMedianPx: Float?,
+    val sourceGlyphCount: Int,
+    val scaledDensity: Float,
+)
+
 data class AdaptiveOverlayStyle(
     val backgroundColor: Int,
     val foregroundColor: Int,
     val maxTextSizeSp: Float,
+    val textSizeEstimate: AdaptiveTextSizeEstimate,
     val confidence: Float,
     val fallbackReason: AdaptiveStyleFallbackReason,
 ) {
@@ -35,6 +50,35 @@ internal data class AdaptiveStyleSample(
 )
 
 internal const val ADAPTIVE_MIN_TEXT_SIZE_SP = 4
+internal const val ADAPTIVE_MAX_TEXT_SIZE_SP = 28
+
+internal enum class AdaptiveTextLayoutPhase {
+    PLACEHOLDER,
+    STREAMING,
+    FINAL,
+}
+
+internal fun resolveAdaptiveTextLayoutPhase(text: CharSequence): AdaptiveTextLayoutPhase =
+    if (text == "…") AdaptiveTextLayoutPhase.PLACEHOLDER else AdaptiveTextLayoutPhase.FINAL
+
+internal fun shouldFitAdaptiveFinalBounds(phase: AdaptiveTextLayoutPhase): Boolean =
+    phase != AdaptiveTextLayoutPhase.PLACEHOLDER
+
+internal fun shouldReportAdaptiveTextLayout(phase: AdaptiveTextLayoutPhase): Boolean =
+    phase != AdaptiveTextLayoutPhase.STREAMING
+
+internal enum class AdaptiveTextOverflowReason {
+    ELLIPSIS,
+    TEXT_END,
+    HEIGHT,
+    MAX_LINES,
+}
+
+internal data class AdaptiveTextSizeSearchResult(
+    val sizePx: Int,
+    val probes: Int,
+    val nextSizeFits: Boolean?,
+)
 
 internal data class AdaptiveOverlaySize(val width: Int, val height: Int)
 
@@ -72,10 +116,103 @@ internal fun adaptiveEraseRects(
 internal fun adaptiveAutoSizeMaxSp(
     maxTextSizeSp: Float,
     minTextSizeSp: Int = ADAPTIVE_MIN_TEXT_SIZE_SP,
-    maxAllowedTextSizeSp: Int = 28,
+    maxAllowedTextSizeSp: Int = ADAPTIVE_MAX_TEXT_SIZE_SP,
 ): Int? {
     val resolvedMax = maxTextSizeSp.roundToInt().coerceIn(minTextSizeSp, maxAllowedTextSizeSp)
     return resolvedMax.takeIf { it > minTextSizeSp }
+}
+
+internal fun adaptiveTextLayoutOverflowReasons(
+    textLength: Int,
+    visibleTextEnd: Int,
+    layoutHeightPx: Int,
+    contentHeightPx: Int,
+    lineCount: Int,
+    maxLines: Int,
+    ellipsized: Boolean,
+): Set<AdaptiveTextOverflowReason> = buildSet {
+    if (ellipsized) add(AdaptiveTextOverflowReason.ELLIPSIS)
+    if (visibleTextEnd.coerceAtLeast(0) < textLength.coerceAtLeast(0)) {
+        add(AdaptiveTextOverflowReason.TEXT_END)
+    }
+    if (layoutHeightPx.coerceAtLeast(0) > contentHeightPx.coerceAtLeast(0)) {
+        add(AdaptiveTextOverflowReason.HEIGHT)
+    }
+    if (maxLines > 0 && lineCount > maxLines) {
+        add(AdaptiveTextOverflowReason.MAX_LINES)
+    }
+}
+
+internal fun adaptiveTextLayoutOverflow(
+    textLength: Int,
+    visibleTextEnd: Int,
+    layoutHeightPx: Int,
+    contentHeightPx: Int,
+    lineCount: Int,
+    maxLines: Int,
+    ellipsized: Boolean,
+): Boolean = adaptiveTextLayoutOverflowReasons(
+    textLength = textLength,
+    visibleTextEnd = visibleTextEnd,
+    layoutHeightPx = layoutHeightPx,
+    contentHeightPx = contentHeightPx,
+    lineCount = lineCount,
+    maxLines = maxLines,
+    ellipsized = ellipsized,
+).isNotEmpty()
+
+/** Mirrors framework TextView auto-size: binary-search the largest candidate that still fits. */
+internal fun adaptiveLargestFittingTextSizePx(
+    minSizePx: Int,
+    maxSizePx: Int,
+    fits: (Int) -> Boolean,
+): AdaptiveTextSizeSearchResult {
+    val resolvedMin = minSizePx.coerceAtLeast(1)
+    val resolvedMax = maxSizePx.coerceAtLeast(resolvedMin)
+    var low = resolvedMin
+    var high = resolvedMax
+    var best = resolvedMin
+    var probes = 0
+    while (low <= high) {
+        val candidate = low + (high - low) / 2
+        probes += 1
+        if (fits(candidate)) {
+            best = candidate
+            low = candidate + 1
+        } else {
+            high = candidate - 1
+        }
+    }
+    val nextSizeFits = if (best < resolvedMax) {
+        probes += 1
+        fits(best + 1)
+    } else {
+        null
+    }
+    return AdaptiveTextSizeSearchResult(
+        sizePx = best,
+        probes = probes,
+        nextSizeFits = nextSizeFits,
+    )
+}
+
+internal fun adaptiveHorizontalOverflowHeight(
+    currentHeightPx: Int,
+    contentHeightPx: Int,
+    requiredContentHeightPx: Int,
+    topPx: Int,
+    screenHeightPx: Int,
+    lowerBoundaryPx: Int,
+    gapPx: Int,
+): Int {
+    val currentHeight = currentHeightPx.coerceAtLeast(1)
+    val extraHeight = (requiredContentHeightPx - contentHeightPx).coerceAtLeast(0)
+    if (extraHeight == 0) return currentHeight
+    val safeTop = topPx.coerceAtLeast(0)
+    val safeBottom = minOf(screenHeightPx, lowerBoundaryPx - gapPx.coerceAtLeast(0))
+        .coerceAtLeast(safeTop)
+    val maximumHeight = (safeBottom - safeTop).coerceAtLeast(currentHeight)
+    return (currentHeight + extraHeight).coerceAtMost(maximumHeight)
 }
 
 /** Pure decision policy kept separate from Bitmap sampling so it can be exhaustively unit tested. */
@@ -88,7 +225,7 @@ internal object AdaptiveOverlayStylePolicy {
     private const val DARK_TEXT = 0xFF000000.toInt()
 
     fun resolve(sample: AdaptiveStyleSample): AdaptiveOverlayStyle {
-        val maxTextSizeSp = estimateMaxTextSizeSp(
+        val textSizeEstimate = estimateTextSize(
             widthPx = sample.boxWidthPx,
             heightPx = sample.boxHeightPx,
             sourceGlyphCount = sample.sourceGlyphCount,
@@ -96,12 +233,12 @@ internal object AdaptiveOverlayStylePolicy {
             sourceLineThicknessPx = sample.sourceLineThicknessPx,
         )
         if (sample.boxWidthPx < MIN_REGION_PX || sample.boxHeightPx < MIN_REGION_PX) {
-            return fallback(maxTextSizeSp, AdaptiveStyleFallbackReason.INVALID_REGION)
+            return fallback(textSizeEstimate, AdaptiveStyleFallbackReason.INVALID_REGION)
         }
 
         val colors = sample.edgeColors.filterOpaque()
         if (colors.size < MIN_EDGE_SAMPLES) {
-            return fallback(maxTextSizeSp, AdaptiveStyleFallbackReason.TOO_FEW_SAMPLES)
+            return fallback(textSizeEstimate, AdaptiveStyleFallbackReason.TOO_FEW_SAMPLES)
         }
 
         val bucketCounts = IntArray(4096)
@@ -143,7 +280,7 @@ internal object AdaptiveOverlayStylePolicy {
             }
         }
         if (dominantCount == 0) {
-            return fallback(maxTextSizeSp, AdaptiveStyleFallbackReason.TOO_FEW_SAMPLES)
+            return fallback(textSizeEstimate, AdaptiveStyleFallbackReason.TOO_FEW_SAMPLES)
         }
 
         val dominantBackground = argb(
@@ -155,7 +292,8 @@ internal object AdaptiveOverlayStylePolicy {
         return AdaptiveOverlayStyle(
             backgroundColor = dominantBackground,
             foregroundColor = readableForeground(dominantBackground),
-            maxTextSizeSp = maxTextSizeSp,
+            maxTextSizeSp = textSizeEstimate.maxTextSizeSp,
+            textSizeEstimate = textSizeEstimate,
             confidence = confidence,
             fallbackReason = if (confidence < MIN_CONFIDENCE) {
                 AdaptiveStyleFallbackReason.BUSY_BACKGROUND
@@ -171,8 +309,30 @@ internal object AdaptiveOverlayStylePolicy {
         sourceGlyphCount: Int,
         scaledDensity: Float,
         sourceLineThicknessPx: IntArray = IntArray(0),
-    ): Float {
-        if (widthPx <= 0 || heightPx <= 0 || scaledDensity <= 0f) return 14f
+    ): Float = estimateTextSize(
+        widthPx = widthPx,
+        heightPx = heightPx,
+        sourceGlyphCount = sourceGlyphCount,
+        scaledDensity = scaledDensity,
+        sourceLineThicknessPx = sourceLineThicknessPx,
+    ).maxTextSizeSp
+
+    internal fun estimateTextSize(
+        widthPx: Int,
+        heightPx: Int,
+        sourceGlyphCount: Int,
+        scaledDensity: Float,
+        sourceLineThicknessPx: IntArray = IntArray(0),
+    ): AdaptiveTextSizeEstimate {
+        if (widthPx <= 0 || heightPx <= 0 || scaledDensity <= 0f) {
+            return AdaptiveTextSizeEstimate(
+                source = AdaptiveTextSizeSource.SAFE_DEFAULT,
+                maxTextSizeSp = 14f,
+                sourceLineMedianPx = null,
+                sourceGlyphCount = sourceGlyphCount.coerceAtLeast(0),
+                scaledDensity = scaledDensity,
+            )
+        }
         sourceLineThicknessPx
             .filter { it > 0 }
             .sorted()
@@ -184,13 +344,26 @@ internal object AdaptiveOverlayStylePolicy {
                 } else {
                     sizes[middle].toFloat()
                 }
-                return (medianPx / scaledDensity).coerceIn(ADAPTIVE_MIN_TEXT_SIZE_SP.toFloat(), 28f)
+                return AdaptiveTextSizeEstimate(
+                    source = AdaptiveTextSizeSource.SOURCE_BOX_MEDIAN,
+                    maxTextSizeSp = (medianPx / scaledDensity)
+                        .coerceIn(ADAPTIVE_MIN_TEXT_SIZE_SP.toFloat(), ADAPTIVE_MAX_TEXT_SIZE_SP.toFloat()),
+                    sourceLineMedianPx = medianPx,
+                    sourceGlyphCount = sourceGlyphCount.coerceAtLeast(0),
+                    scaledDensity = scaledDensity,
+                )
             }
         val glyphs = sourceGlyphCount.coerceAtLeast(1)
         val estimatedGlyphPx = sqrt(widthPx.toDouble() * heightPx / glyphs).toFloat()
         val minorAxisPx = min(widthPx, heightPx).toFloat()
-        return (min(estimatedGlyphPx * 1.05f, minorAxisPx * 0.82f) / scaledDensity)
-            .coerceIn(ADAPTIVE_MIN_TEXT_SIZE_SP.toFloat(), 28f)
+        return AdaptiveTextSizeEstimate(
+            source = AdaptiveTextSizeSource.AREA_PER_GLYPH,
+            maxTextSizeSp = (min(estimatedGlyphPx * 1.05f, minorAxisPx * 0.82f) / scaledDensity)
+                .coerceIn(ADAPTIVE_MIN_TEXT_SIZE_SP.toFloat(), ADAPTIVE_MAX_TEXT_SIZE_SP.toFloat()),
+            sourceLineMedianPx = null,
+            sourceGlyphCount = sourceGlyphCount.coerceAtLeast(0),
+            scaledDensity = scaledDensity,
+        )
     }
 
     internal fun contrastRatio(foreground: Int, background: Int): Double {
@@ -207,13 +380,14 @@ internal object AdaptiveOverlayStylePolicy {
         }
 
     private fun fallback(
-        maxTextSizeSp: Float,
+        textSizeEstimate: AdaptiveTextSizeEstimate,
         reason: AdaptiveStyleFallbackReason,
         confidence: Float = 0f,
     ) = AdaptiveOverlayStyle(
         backgroundColor = SAFE_BACKGROUND,
         foregroundColor = LIGHT_TEXT,
-        maxTextSizeSp = maxTextSizeSp,
+        maxTextSizeSp = textSizeEstimate.maxTextSizeSp,
+        textSizeEstimate = textSizeEstimate,
         confidence = confidence,
         fallbackReason = reason,
     )

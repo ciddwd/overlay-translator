@@ -207,18 +207,26 @@ class CaptureChromeOrderingTest {
             Case(
                 "block overlay partial update",
                 "private suspend fun renderBlocks(",
-                "overlay?.updateBlockText(idx, partial)"
+                "overlay?.updateBlockText(idx, partial, phase)"
             ),
             Case(
                 "floating window partial update",
                 "private suspend fun renderFloatingWindow(",
-                "overlay?.updateFloatingWindowText(idx, partial)"
+                "overlay?.updateFloatingWindowText(idx, partial, phase)"
             )
         )
 
         assertTrue(
-            "translateOne should let partial callbacks switch dispatchers synchronously",
-            "onPartial: suspend (String) -> Unit" in translateSnippet
+            "translateOne should pass text and layout phase through synchronous callbacks",
+            "onUpdate: suspend (String, AdaptiveTextLayoutPhase) -> Unit" in translateSnippet
+        )
+        assertTrue(
+            "stream chunks should be marked STREAMING",
+            "onUpdate(it, AdaptiveTextLayoutPhase.STREAMING)" in translateSnippet
+        )
+        assertTrue(
+            "completed text should be marked FINAL",
+            "onUpdate(display.text, AdaptiveTextLayoutPhase.FINAL)" in translateSnippet
         )
         cases.forEach { case ->
             val snippet = functionSnippet(source, case.signature)

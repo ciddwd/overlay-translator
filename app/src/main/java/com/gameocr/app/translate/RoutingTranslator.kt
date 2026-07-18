@@ -31,6 +31,10 @@ class RoutingTranslator @Inject constructor(
     private val translationContextResolver: TranslationContextResolver,
 ) : Translator {
     override suspend fun translate(source: String, settings: Settings): String? {
+        if (shouldPassthroughNumericTranslation(source)) {
+            logNumericPassthrough(stage = "translate", count = 1, total = 1)
+            return source
+        }
         val enriched = translationContextResolver.enrich(source, settings)
         return normalizeText(
             text = engineFor(enriched).translate(source, enriched),
@@ -41,6 +45,11 @@ class RoutingTranslator @Inject constructor(
 
     override fun translateStream(source: String, settings: Settings): Flow<String> =
         flow {
+            if (shouldPassthroughNumericTranslation(source)) {
+                logNumericPassthrough(stage = "stream", count = 1, total = 1)
+                emit(source)
+                return@flow
+            }
             val enriched = translationContextResolver.enrich(source, settings)
             emitAll(engineFor(enriched).translateStream(source, enriched))
         }
@@ -68,13 +77,52 @@ class RoutingTranslator @Inject constructor(
         )
     }
 
-    override suspend fun translateBatch(sources: List<String>, settings: Settings): List<String?> {
-        val enriched = translationContextResolver.enrich(sources.joinToString("\n"), settings)
-        return normalizeBatch(
-            texts = engineFor(enriched).translateBatch(sources, enriched),
+    override suspend fun translateBatch(
+        sources: List<String>,
+        settings: Settings,
+    ): List<String?> = translateBatchIncremental(sources, settings) { }
+
+    override suspend fun translateBatchIncremental(
+        sources: List<String>,
+        settings: Settings,
+        onUpdate: (BatchTranslationUpdate) -> Unit,
+    ): List<String?> {
+        val passthroughPlan = planNumericTranslationPassthrough(sources)
+        if (passthroughPlan.passthroughUpdates.isNotEmpty()) {
+            logNumericPassthrough(
+                stage = "batch",
+                count = passthroughPlan.passthroughUpdates.size,
+                total = sources.size,
+            )
+            passthroughPlan.passthroughUpdates.forEach(onUpdate)
+        }
+        if (passthroughPlan.translatableSources.isEmpty()) {
+            return passthroughPlan.merge(emptyList())
+        }
+
+        val enriched = translationContextResolver.enrich(
+            passthroughPlan.translatableSources.joinToString("\n"),
+            settings,
+        )
+        val rawResults = engineFor(enriched).translateBatchIncremental(
+            passthroughPlan.translatableSources,
+            enriched,
+        ) { update ->
+            passthroughPlan.originalIndexFor(update.index)?.let { originalIndex ->
+                onUpdate(
+                    update.copy(
+                        index = originalIndex,
+                        text = update.text?.let { normalizePlain(it, enriched) },
+                    )
+                )
+            }
+        }
+        val normalizedResults = normalizeBatch(
+            texts = rawResults,
             settings = enriched,
             stage = "batch"
         )
+        return passthroughPlan.merge(normalizedResults)
     }
 
     override suspend fun testConnection(settings: Settings): TestResult =
@@ -199,6 +247,15 @@ class RoutingTranslator @Inject constructor(
             total,
             preview(before),
             preview(after)
+        )
+    }
+
+    private fun logNumericPassthrough(stage: String, count: Int, total: Int) {
+        Timber.tag("TranslationPolicy").i(
+            "numeric passthrough stage=%s count=%d total=%d",
+            stage,
+            count,
+            total,
         )
     }
 

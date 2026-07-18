@@ -76,20 +76,39 @@ abstract class LocalLlamaTranslator(
 
     override val prefersBatch: Boolean get() = BuildConfig.LOCAL_LLM_BATCH_SIZE > 1
 
-    override suspend fun translateBatch(sources: List<String>, settings: Settings): List<String?> {
+    override suspend fun translateBatch(
+        sources: List<String>,
+        settings: Settings,
+    ): List<String?> = translateBatchIncremental(sources, settings) { }
+
+    override suspend fun translateBatchIncremental(
+        sources: List<String>,
+        settings: Settings,
+        onUpdate: (BatchTranslationUpdate) -> Unit,
+    ): List<String?> {
         if (sources.isEmpty()) return emptyList()
 
         val results = MutableList<String?>(sources.size) { null }
+        val emitted = BooleanArray(sources.size)
+        fun publish(index: Int, text: String?) {
+            if (index !in results.indices || emitted[index]) return
+            emitted[index] = true
+            onUpdate(BatchTranslationUpdate(index = index, text = text))
+        }
         val pendingByKey = linkedMapOf<String, BatchPending>()
         var cacheHits = 0
         sources.forEachIndexed { index, source ->
-            if (source.isBlank()) return@forEachIndexed
+            if (source.isBlank()) {
+                publish(index, null)
+                return@forEachIndexed
+            }
             val individualPrompt = runtimePrompt(buildUserPrompt(source, settings), settings)
             val key = cacheKey(source, settings, individualPrompt)
             val cached = cache.get(key, settings)
             if (cached != null) {
                 results[index] = cached
                 cacheHits += 1
+                publish(index, cached)
             } else {
                 pendingByKey.getOrPut(key) {
                     BatchPending(
@@ -112,7 +131,10 @@ abstract class LocalLlamaTranslator(
                 if (cached == null) {
                     true
                 } else {
-                    item.resultIndexes.forEach { results[it] = cached }
+                    item.resultIndexes.forEach {
+                        results[it] = cached
+                        publish(it, cached)
+                    }
                     cacheHits += item.resultIndexes.size
                     false
                 }
@@ -175,7 +197,7 @@ abstract class LocalLlamaTranslator(
                         modelReadyMs = requestModelReadyMs,
                         queuedAt = requestQueuedAt,
                     )
-                    applyBatchResult(item, translated, results, settings)
+                    applyBatchResult(item, translated, results, settings, ::publish)
                     return@forEachIndexed
                 }
 
@@ -201,7 +223,7 @@ abstract class LocalLlamaTranslator(
                 )
                 if (outputs != null) {
                     plan.items.zip(outputs).forEach { (item, translated) ->
-                        applyBatchResult(item, translated, results, settings)
+                        applyBatchResult(item, translated, results, settings, ::publish)
                     }
                 } else {
                     Timber.tag(PERF_TAG).w(
@@ -220,7 +242,7 @@ abstract class LocalLlamaTranslator(
                             modelReadyMs = 0L,
                             queuedAt = SystemClock.elapsedRealtime(),
                         )
-                        applyBatchResult(item, translated, results, settings)
+                        applyBatchResult(item, translated, results, settings, ::publish)
                     }
                 }
             }
@@ -373,9 +395,13 @@ abstract class LocalLlamaTranslator(
         translated: String?,
         results: MutableList<String?>,
         settings: Settings,
+        publish: (Int, String?) -> Unit,
     ) {
-        item.resultIndexes.forEach { results[it] = translated }
         translated?.let { cache.put(item.cacheKey, it, settings) }
+        localLlmBatchResultUpdates(item.resultIndexes, translated).forEach { update ->
+            results[update.index] = update.text
+            publish(update.index, update.text)
+        }
     }
 
     private fun logGeneration(
