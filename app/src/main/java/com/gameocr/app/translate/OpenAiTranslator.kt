@@ -6,6 +6,7 @@ import com.gameocr.app.data.Languages
 import com.gameocr.app.data.Settings
 import com.gameocr.app.data.withApiTimeout
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.net.URI
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
@@ -16,6 +17,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -241,7 +243,8 @@ class OpenAiTranslator @Inject constructor(
             ),
             temperature = 0.0,
             stream = false,
-            maxTokens = 600
+            maxTokens = 600,
+            responseFormat = dictionaryJsonResponseFormatOrNull(settings.baseUrl),
         )
         val payload = json.encodeToString(reqBody)
         val request = Request.Builder()
@@ -268,7 +271,18 @@ class OpenAiTranslator @Inject constructor(
             }
         }.getOrNull() ?: return null
 
-        return parseWordResult(raw, json)
+        return parseWordResult(raw, json).also { result ->
+            Timber.i(
+                "translateWord parsed=%s rawLength=%d phonetic=%s pos=%d definitions=%d notes=%d examples=%d",
+                result != null,
+                raw.length,
+                result?.phonetic?.isNotBlank() == true,
+                result?.pos?.size ?: 0,
+                result?.definitions?.size ?: 0,
+                result?.difficultyNotes?.size ?: 0,
+                result?.examples?.size ?: 0,
+            )
+        }
     }
 
     private fun buildRequest(text: String, settings: Settings, stream: Boolean): Request {
@@ -328,30 +342,117 @@ internal fun String.withDifficultyNotesContract(targetDisplay: String): String {
     return trimEnd() + "\n\n" + requirement
 }
 
+internal fun dictionaryJsonResponseFormatOrNull(baseUrl: String): ChatResponseFormat? {
+    val host = runCatching { URI(baseUrl.trim()).host }.getOrNull()
+    return if (host.equals("api.deepseek.com", ignoreCase = true)) {
+        ChatResponseFormat(type = "json_object")
+    } else {
+        null
+    }
+}
+
 internal fun parseWordResult(raw: String, json: Json): WordResult? {
     val jsonText = extractJsonObject(raw) ?: return null
     return runCatching {
-        val obj = json.parseToJsonElement(jsonText) as? JsonObject ?: return@runCatching null
-        val examples = (obj["examples"] as? JsonArray)?.mapNotNull { element ->
-            val example = element as? JsonObject ?: return@mapNotNull null
-            val src = (example["src"] as? JsonPrimitive)?.contentOrNull.orEmpty()
-            val dst = (example["dst"] as? JsonPrimitive)?.contentOrNull.orEmpty()
-            if (src.isBlank() && dst.isBlank()) null else ExamplePair(src, dst)
-        }.orEmpty()
+        val root = json.parseToJsonElement(jsonText) as? JsonObject ?: return@runCatching null
+        val obj = root.dictionaryPayload()
         WordResult(
-            phonetic = (obj["phonetic"] as? JsonPrimitive)?.contentOrNull.orEmpty(),
-            pos = obj.stringList("pos"),
-            definitions = obj.stringList("definitions"),
-            difficultyNotes = obj.stringList("difficulty_notes"),
-            examples = examples
+            phonetic = obj.firstString("phonetic", "pronunciation", "ipa", "reading"),
+            pos = obj.stringList(
+                keys = listOf("pos", "part_of_speech", "partOfSpeech", "word_class", "wordClass"),
+                objectValueKeys = listOf("pos", "type", "name", "label", "value", "text"),
+            ),
+            definitions = obj.stringList(
+                keys = listOf("definitions", "definition", "meanings", "meaning", "translations"),
+                objectValueKeys = listOf("definition", "meaning", "translation", "text", "value"),
+            ),
+            difficultyNotes = obj.stringList(
+                keys = listOf(
+                    "difficulty_notes",
+                    "difficultyNotes",
+                    "usage_notes",
+                    "usageNotes",
+                    "notes",
+                ),
+                objectValueKeys = listOf("note", "description", "text", "value"),
+            ),
+            examples = obj.examplePairs(),
+            fallbackTranslation = obj.firstString(
+                "fallback_translation",
+                "fallbackTranslation",
+                "translation",
+            ).takeIf(String::isNotBlank),
         ).takeUnless(WordResult::isEmpty)
     }.getOrNull()
 }
 
-private fun JsonObject.stringList(key: String): List<String> =
-    (this[key] as? JsonArray)?.mapNotNull { element ->
-        (element as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
-    }.orEmpty()
+private fun JsonObject.dictionaryPayload(): JsonObject {
+    val directKeys = setOf(
+        "phonetic",
+        "pronunciation",
+        "ipa",
+        "pos",
+        "part_of_speech",
+        "partOfSpeech",
+        "definitions",
+        "definition",
+        "meanings",
+        "meaning",
+    )
+    if (keys.any { it in directKeys }) return this
+    return listOf("data", "result", "word", "entry")
+        .firstNotNullOfOrNull { key -> this[key] as? JsonObject }
+        ?: this
+}
+
+private fun JsonObject.firstString(vararg keys: String): String = keys
+    .firstNotNullOfOrNull { key ->
+        (this[key] as? JsonPrimitive)?.contentOrNull?.takeIf(String::isNotBlank)
+    }
+    .orEmpty()
+
+private fun JsonObject.stringList(
+    keys: List<String>,
+    objectValueKeys: List<String>,
+): List<String> {
+    val value = keys.firstNotNullOfOrNull { key -> this[key] } ?: return emptyList()
+    return value.stringValues(objectValueKeys)
+}
+
+private fun JsonElement.stringValues(objectValueKeys: List<String>): List<String> = when (this) {
+    is JsonPrimitive -> listOfNotNull(contentOrNull?.takeIf(String::isNotBlank))
+    is JsonArray -> mapNotNull { element ->
+        when (element) {
+            is JsonPrimitive -> element.contentOrNull?.takeIf(String::isNotBlank)
+            is JsonObject -> objectValueKeys.firstNotNullOfOrNull { key ->
+                (element[key] as? JsonPrimitive)?.contentOrNull?.takeIf(String::isNotBlank)
+            }
+            else -> null
+        }
+    }
+    is JsonObject -> objectValueKeys.mapNotNull { key ->
+        (this[key] as? JsonPrimitive)?.contentOrNull?.takeIf(String::isNotBlank)
+    }.take(1)
+    else -> emptyList()
+}
+
+private fun JsonObject.examplePairs(): List<ExamplePair> {
+    val value = this["examples"] ?: this["example"] ?: return emptyList()
+    val items = if (value is JsonArray) value else JsonArray(listOf(value))
+    return items.mapNotNull { element ->
+        when (element) {
+            is JsonPrimitive -> element.contentOrNull
+                ?.takeIf(String::isNotBlank)
+                ?.let { ExamplePair(src = it, dst = "") }
+            is JsonObject -> {
+                val src = element.firstString("src", "source", "original", "example")
+                val dst = element.firstString("dst", "target", "translation", "translated")
+                if (src.isBlank() && dst.isBlank()) null else ExamplePair(src, dst)
+            }
+            else -> null
+        }
+    }
+}
 
 /** Extracts the first complete JSON object from optional prose or a fenced response. */
 private fun extractJsonObject(raw: String): String? {

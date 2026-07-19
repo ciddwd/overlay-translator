@@ -1,5 +1,7 @@
 package com.gameocr.app.translate
 
+import com.gameocr.app.data.TranslatorEngine
+
 /** Normalizes short OCR selections and decides whether dictionary mode should be attempted. */
 object WordHeuristic {
     private val sentencePunctuation = setOf(
@@ -19,7 +21,44 @@ object WordHeuristic {
     fun isWord(text: String, sourceLang: String): Boolean =
         dictionaryTermOrNull(text, sourceLang) != null
 
+    fun structuredDictionaryTermOrNull(
+        text: String,
+        sourceLang: String,
+        translatorEngine: TranslatorEngine,
+    ): String? {
+        if (translatorEngine != TranslatorEngine.OPENAI) return null
+        return dictionaryTermOrNull(text, sourceLang)
+    }
+
+    fun manuallySelectedDictionaryTermOrNull(
+        text: String,
+        sourceLang: String,
+        translatorEngine: TranslatorEngine,
+    ): String? {
+        if (translatorEngine != TranslatorEngine.OPENAI) return null
+        return dictionaryTermOrNull(
+            text = text,
+            sourceLang = sourceLang,
+            maxCjkLength = 12,
+            maxLatinTokens = 5,
+        )
+    }
+
     fun dictionaryTermOrNull(text: String, sourceLang: String): String? {
+        return dictionaryTermOrNull(
+            text = text,
+            sourceLang = sourceLang,
+            maxCjkLength = 4,
+            maxLatinTokens = 2,
+        )
+    }
+
+    private fun dictionaryTermOrNull(
+        text: String,
+        sourceLang: String,
+        maxCjkLength: Int,
+        maxLatinTokens: Int,
+    ): String? {
         val singleLine = text.trim()
         if (singleLine.isEmpty() || singleLine.contains('\n') || singleLine.contains('\r')) {
             return null
@@ -37,14 +76,16 @@ object WordHeuristic {
             val normalized = unwrapped.filter {
                 !it.isWhitespace() && it !in boundaryPunctuation
             }
-            return normalized.takeIf { it.length in 1..4 }
+            return normalized.takeIf { it.length in 1..maxCjkLength }
         }
 
         val normalized = unwrapped.replace(Regex("\\s+"), " ")
         if (normalized.any { it in sentencePunctuation }) return null
         val tokens = normalized.split(' ').filter(String::isNotBlank)
         return normalized.takeIf {
-            tokens.size in 1..2 && tokens.all { token -> token.length <= 32 }
+            tokens.size in 1..maxLatinTokens &&
+                normalized.length <= 80 &&
+                tokens.all { token -> token.length <= 32 }
         }
     }
 
