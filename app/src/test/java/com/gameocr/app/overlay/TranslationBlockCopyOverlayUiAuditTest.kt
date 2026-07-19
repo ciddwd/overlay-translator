@@ -29,7 +29,17 @@ class TranslationBlockCopyOverlayUiAuditTest {
             Case("fixed action row", overlaySource, "panel.addView(actionRow)"),
             Case("focusable dialog selection host", overlaySource, "window.clearFlags("),
             Case("service owns dedicated overlay", serviceSource, "translationBlockCopyOverlay: TranslationBlockCopyOverlay?"),
-            Case("service opens dedicated overlay", serviceSource, "copyOverlay.show(source, translation, settings)"),
+            Case("service opens dedicated overlay", serviceSource, "copyOverlay.show("),
+            Case("source selection speech callback", overlaySource, "onSpeakSourceSelection"),
+            Case("translation selection speech callback", overlaySource, "onSpeakTranslationSelection"),
+            Case("selection speech follows TTS enabled state", serviceSource, "if (!settings.ttsEnabled) return null"),
+            Case("source selection uses source language", serviceSource, "settings.copy(targetLang = settings.sourceLang)"),
+            Case("translation selection uses target language", serviceSource, "role = \"block_translation_selection\""),
+            Case("source title speaker reads the full source", overlaySource, "speechText = sourceText"),
+            Case("translation title speaker reads the full translation", overlaySource, "speechText = translation"),
+            Case("title speakers use the compact shared metrics", overlaySource, "translationCardSpeechButtonMetrics(density)"),
+            Case("title speakers use the verified Material icon", overlaySource, "R.drawable.ic_volume_up"),
+            Case("title speakers bind live playback state", overlaySource, "bindTtsPlaybackState(action"),
         ).forEach { case ->
             assertTrue(case.name, case.source.contains(case.marker))
         }
@@ -37,6 +47,10 @@ class TranslationBlockCopyOverlayUiAuditTest {
         assertTrue(
             "source and translation are independently selectable",
             overlaySource.countOccurrences("setTextIsSelectable(true)") >= 2,
+        )
+        assertTrue(
+            "source and translation each use a section header",
+            overlaySource.countOccurrences("sectionHeader(") >= 3,
         )
         assertTrue(
             "copy actions remain below the scrolling text",

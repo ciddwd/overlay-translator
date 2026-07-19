@@ -90,6 +90,7 @@ import com.gameocr.app.overlay.PresetQuickSwitchOverlay
 import com.gameocr.app.overlay.RegionPickerOverlay
 import com.gameocr.app.overlay.TranslationBlockCopyOverlay
 import com.gameocr.app.overlay.TranslationCardOverlay
+import com.gameocr.app.overlay.TtsPlaybackAction
 import com.gameocr.app.overlay.WordSelectOverlay
 import com.gameocr.app.ui.MainActivity
 import com.gameocr.app.translate.BatchTranslationProgressState
@@ -101,6 +102,7 @@ import com.gameocr.app.translate.WordHeuristic
 import com.gameocr.app.translate.WordResult
 import com.gameocr.app.translate.WordSelectTranslationCoordinator
 import com.gameocr.app.translate.WordSelectTranslationStage
+import com.gameocr.app.tts.TtsEngine
 import com.gameocr.app.util.InferenceTiming
 import com.gameocr.app.util.VerticalDiagnosticLog
 import com.gameocr.app.util.physicalDisplaySize
@@ -181,6 +183,7 @@ class CaptureService : Service() {
     // 用于路由层判断"manga-ocr 模型是否已下载"——未下载时 (VERTICAL_RTL, ja) 不会被路由到 manga
     @Inject lateinit var mangaOcrModelInstaller: MangaOcrModelInstaller
     @Inject lateinit var mangaOcrEngine: MangaOcrEngine
+    @Inject lateinit var ttsEngine: TtsEngine
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -731,21 +734,51 @@ class CaptureService : Service() {
                 elapsedMs = elapsedSince(ocrStartedAt)
             )
 
-            val dictionaryTerm = WordHeuristic.dictionaryTermOrNull(text, settings.sourceLang)
+            val dictionaryCandidate = WordHeuristic.dictionaryTermOrNull(text, settings.sourceLang)
             // 词典化：只在「单词 + OpenAI 兼容引擎」时尝试 LLM JSON prompt；其他全部走纯翻译
-            val shouldRequestDictionary = dictionaryTerm != null &&
-                settings.translatorEngine == com.gameocr.app.data.TranslatorEngine.OPENAI
+            val dictionaryTerm = WordHeuristic.structuredDictionaryTermOrNull(
+                text = text,
+                sourceLang = settings.sourceLang,
+                translatorEngine = settings.translatorEngine,
+            )
             logVerticalDiag(
                 diagId,
-                "wordSelect dictionary eligible=${dictionaryTerm != null} " +
-                    "request=$shouldRequestDictionary engine=${settings.translatorEngine.name} " +
-                    "term=${dictionaryTerm?.toDiagText() ?: "none"}"
+                "wordSelect dictionary eligible=${dictionaryCandidate != null} " +
+                    "request=${dictionaryTerm != null} engine=${settings.translatorEngine.name} " +
+                "term=${dictionaryTerm?.toDiagText() ?: "none"}"
+            )
+            val sourceSpeech = wordSelectTtsAction(
+                settings = settings.copy(targetLang = settings.sourceLang),
+                diagId = diagId,
+                role = "source",
+                playbackId = "word-select:$diagId:source",
+            )
+            val translationSpeech = wordSelectTtsAction(
+                settings = settings,
+                diagId = diagId,
+                role = "translation",
+                playbackId = "word-select:$diagId:translation",
+            )
+            val dictionarySpeech = wordSelectTtsAction(
+                settings = settings,
+                diagId = diagId,
+                role = "dictionary",
+                playbackId = "word-select:$diagId:dictionary",
             )
             val card = withContext(Dispatchers.Main) {
                 (translationCard ?: TranslationCardOverlay(this@CaptureService).also {
                     translationCard = it
                 }).also {
-                    it.show(text, null, null, settings, loading = true)
+                    it.show(
+                        sourceText = text,
+                        translation = null,
+                        wordResult = null,
+                        settings = settings,
+                        loading = true,
+                        onSpeakSource = sourceSpeech,
+                        onSpeakTranslation = translationSpeech,
+                        onSpeakDictionary = dictionarySpeech,
+                    )
                 }
             }
             logWordSelectPerf("card_visible")
@@ -756,7 +789,7 @@ class CaptureService : Service() {
             val outcome = WordSelectTranslationCoordinator(translator).execute(
                 source = text,
                 settings = settings,
-                dictionaryTerm = dictionaryTerm.takeIf { shouldRequestDictionary },
+                dictionaryTerm = dictionaryTerm,
                 onPartialTranslation = { partial ->
                     withContext(Dispatchers.Main) { card.updateTranslation(partial) }
                 },
@@ -1042,13 +1075,30 @@ class CaptureService : Service() {
     private fun showTranslationBlockCopyPanel(source: String, translation: String) {
         scope.launch {
             val settings = settingsRepository.get()
+            val diagId = ++captureSequence
             mainScope.launch {
                 translationCard?.dismiss()
                 val copyOverlay = translationBlockCopyOverlay
                     ?: TranslationBlockCopyOverlay(this@CaptureService).also {
                         translationBlockCopyOverlay = it
                     }
-                copyOverlay.show(source, translation, settings)
+                copyOverlay.show(
+                    sourceText = source,
+                    translation = translation,
+                    settings = settings,
+                    onSpeakSourceSelection = wordSelectTtsAction(
+                        settings = settings.copy(targetLang = settings.sourceLang),
+                        diagId = diagId,
+                        role = "block_source_selection",
+                        playbackId = "translation-block:$diagId:source",
+                    ),
+                    onSpeakTranslationSelection = wordSelectTtsAction(
+                        settings = settings,
+                        diagId = diagId,
+                        role = "block_translation_selection",
+                        playbackId = "translation-block:$diagId:translation",
+                    ),
+                )
             }
         }
     }
@@ -3059,6 +3109,60 @@ class CaptureService : Service() {
         VerticalDiagnosticLog.w(t, "capture#$diagId $message")
     }
 
+    private fun wordSelectTtsAction(
+        settings: Settings,
+        diagId: Long,
+        role: String,
+        playbackId: String,
+    ): TtsPlaybackAction? {
+        if (!settings.ttsEnabled) return null
+        fun dispatch(text: String, toggle: Boolean) {
+            mainScope.launch {
+                speakWordSelectText(
+                    text = text,
+                    settings = settings,
+                    diagId = diagId,
+                    role = role,
+                    playbackId = playbackId,
+                    toggle = toggle,
+                )
+            }
+        }
+        return TtsPlaybackAction(
+            playbackId = playbackId,
+            playbackState = ttsEngine.playbackState,
+            onToggle = { text -> dispatch(text, true) },
+            onStart = { text -> dispatch(text, false) },
+        )
+    }
+
+    private suspend fun speakWordSelectText(
+        text: String,
+        settings: Settings,
+        diagId: Long,
+        role: String,
+        playbackId: String,
+        toggle: Boolean,
+    ) {
+        if (!settings.ttsEnabled) return
+        runCatching {
+            if (toggle) {
+                ttsEngine.toggle(text, settings, playbackId)
+            } else {
+                ttsEngine.speak(text, settings, playbackId)
+            }
+        }
+            .onFailure { error ->
+                if (error is CancellationException) throw error
+                Timber.w(error, "Word-select %s TTS failed", role)
+                logVerticalDiag(error, diagId, "wordSelect $role tts failed")
+                logRepository.warn(
+                    LogRepository.Category.TRANSLATE,
+                    "TTS failed: ${error.javaClass.simpleName}: ${error.message.orEmpty().take(160)}"
+                )
+            }
+    }
+
     private fun logBlankLikeFrame(diagId: Long, label: String, stats: BitmapFrameStats) {
         if (!stats.blankLike) return
         logVerticalDiag(
@@ -3286,6 +3390,7 @@ class CaptureService : Service() {
         translationCard = null
         translationBlockCopyOverlay?.dismiss()
         translationBlockCopyOverlay = null
+        ttsEngine.stop()
         screenshotter?.release()
         screenshotter = null
         projection?.stop()
