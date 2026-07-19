@@ -239,19 +239,19 @@ class SettingsScreenModelStatusTest {
             Case(
                 name = "default English summary",
                 resourcePath = "src/main/res/values/strings.xml",
-                expected = "OCR: %1\$s\\nTranslator: %2\$s\\nLanguages: %3\$s → %4\$s",
+                expected = "OCR: %1\$s\\nTranslator: %2\$s\\nLanguages: %3\$s → %4\$s\\nTTS: %5\$s",
             ),
             Case(
                 name = "Simplified Chinese summary",
                 resourcePath = "src/main/res/values-zh-rCN/strings.xml",
-                expected = "OCR：%1\$s\\n翻译：%2\$s\\n语言：%3\$s → %4\$s",
+                expected = "OCR：%1\$s\\n翻译：%2\$s\\n语言：%3\$s → %4\$s\\nTTS：%5\$s",
             ),
         )
 
         cases.forEach { case ->
             val summary = stringResourceValue(case.resourcePath, "preset_quick_summary_format")
             assertEquals(case.name, case.expected, summary)
-            assertEquals(case.name, 3, summary.split("\\n").size)
+            assertEquals(case.name, 4, summary.split("\\n").size)
             assertFalse(case.name, summary.contains(" · "))
         }
     }
@@ -1529,6 +1529,10 @@ class SettingsScreenModelStatusTest {
             val hosts: List<String>,
             val umiUrl: String,
             val lunaUrl: String,
+            val ttsUrl: String = "",
+            val miniMaxTtsUrl: String = "",
+            val mimoTtsUrl: String = "",
+            val volcengineTtsUrl: String = "",
             val expected: List<String>,
         )
 
@@ -1555,6 +1559,14 @@ class SettingsScreenModelStatusTest {
                 expected = listOf("luna-pc"),
             ),
             Case(
+                name = "tts http hostname is appended",
+                hosts = emptyList(),
+                umiUrl = "",
+                lunaUrl = "",
+                ttsUrl = "http://tts-pc:2333/api/tts",
+                expected = listOf("tts-pc"),
+            ),
+            Case(
                 name = "both local OCR hosts are appended",
                 hosts = listOf("nas.local"),
                 umiUrl = "http://umi-pc:1224/api/ocr",
@@ -1562,10 +1574,28 @@ class SettingsScreenModelStatusTest {
                 expected = listOf("nas.local", "umi-pc", "luna-pc"),
             ),
             Case(
+                name = "custom cloud TTS http hosts are appended",
+                hosts = emptyList(),
+                umiUrl = "",
+                lunaUrl = "",
+                miniMaxTtsUrl = "http://minimax-proxy:8080/v1",
+                mimoTtsUrl = "http://mimo-proxy:8081/v1",
+                expected = listOf("minimax-proxy", "mimo-proxy"),
+            ),
+            Case(
+                name = "custom Volcengine HTTP host is appended",
+                hosts = emptyList(),
+                umiUrl = "",
+                lunaUrl = "",
+                volcengineTtsUrl = "http://volc-proxy:8082",
+                expected = listOf("volc-proxy"),
+            ),
+            Case(
                 name = "duplicate hosts are deduped case insensitively",
                 hosts = listOf("PC-NAME"),
                 umiUrl = "http://pc-name:1224/api/ocr",
                 lunaUrl = "http://pc-name:3456/api/ocr",
+                ttsUrl = "http://pc-name:2333/api/tts",
                 expected = listOf("PC-NAME"),
             ),
             Case(
@@ -1573,6 +1603,7 @@ class SettingsScreenModelStatusTest {
                 hosts = listOf("pc-name"),
                 umiUrl = "https://ocr.example.com/api/ocr",
                 lunaUrl = "https://luna.example.com/api/ocr",
+                ttsUrl = "https://tts.example.com/api/tts",
                 expected = listOf("pc-name"),
             ),
             Case(
@@ -1580,6 +1611,7 @@ class SettingsScreenModelStatusTest {
                 hosts = listOf("pc-name", " "),
                 umiUrl = "not a url",
                 lunaUrl = "also not a url",
+                ttsUrl = "bad tts url",
                 expected = listOf("pc-name"),
             ),
         )
@@ -1588,7 +1620,15 @@ class SettingsScreenModelStatusTest {
             assertEquals(
                 case.name,
                 case.expected,
-                cleartextHostsWithLocalOcrUrls(case.hosts, case.umiUrl, case.lunaUrl)
+                cleartextHostsWithLocalOcrUrls(
+                    case.hosts,
+                    case.umiUrl,
+                    case.lunaUrl,
+                    case.ttsUrl,
+                    case.miniMaxTtsUrl,
+                    case.mimoTtsUrl,
+                    case.volcengineTtsUrl,
+                )
             )
         }
     }

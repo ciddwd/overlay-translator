@@ -4,7 +4,17 @@ import androidx.annotation.StringRes
 import com.gameocr.app.R
 import com.gameocr.app.capture.CaptureRegion
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.KSerializer
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
 import java.security.MessageDigest
+
+const val DEFAULT_MINIMAX_TTS_BASE_URL = "https://api.minimaxi.com"
+const val DEFAULT_MIMO_TTS_BASE_URL = "https://api.xiaomimimo.com/v1"
+const val DEFAULT_VOLCENGINE_TTS_BASE_URL = "https://openspeech.bytedance.com"
 
 /** 用户配置：OCR / 翻译后端相关。 */
 @Serializable
@@ -46,6 +56,38 @@ data class Settings(
     val overlayFonts: List<OverlayFontEntry> = emptyList(),
     val streamingTranslate: Boolean = true,
     val retryEmptyTranslation: Boolean = false,
+    val ttsEnabled: Boolean = false,
+    val ttsProvider: TtsProvider = TtsProvider.SYSTEM,
+    val ttsVoice: String = "",
+    val ttsEmotion: String = "",
+    val ttsSpeed: Float = 1.0f,
+    val ttsPitch: Float = 1.0f,
+    val ttsHttpBaseUrl: String = "",
+    val ttsHttpBearerToken: String = "",
+    val ttsHttpResponseMode: TtsHttpResponseMode = TtsHttpResponseMode.BINARY_AUDIO,
+    val ttsVolcengineResource: VolcengineTtsResource = VolcengineTtsResource.PRESET_VOICE_2_0,
+    val ttsVolcengineBaseUrl: String = DEFAULT_VOLCENGINE_TTS_BASE_URL,
+    val ttsVolcengineApiKey: String = "",
+    val ttsVolcengineSpeaker: String = "zh_female_vv_uranus_bigtts",
+    val ttsVolcengineModel: String = "seed-tts-2.0-standard",
+    val ttsVolcengineContext: String = "",
+    val ttsVolcenginePitch: Int = 0,
+    val ttsVolcengineToneFidelity: Boolean = false,
+    val ttsMiniMaxModel: MiniMaxTtsModel = MiniMaxTtsModel.SPEECH_2_8_HD,
+    val ttsMiniMaxBaseUrl: String = DEFAULT_MINIMAX_TTS_BASE_URL,
+    val ttsMiniMaxApiKey: String = "",
+    val ttsMiniMaxVoice: String = "male-qn-qingse",
+    val ttsMiniMaxEmotion: String = "",
+    val ttsMiniMaxSpeed: Float = 1.0f,
+    val ttsMiniMaxPitch: Int = 0,
+    val ttsMimoModel: MimoTtsModel = MimoTtsModel.PRESET,
+    val ttsMimoBaseUrl: String = DEFAULT_MIMO_TTS_BASE_URL,
+    val ttsMimoApiKey: String = "",
+    val ttsMimoVoice: String = "mimo_default",
+    val ttsMimoInstruction: String = "",
+    val ttsMimoVoiceDesignPrompt: String = "",
+    val ttsMimoVoiceCloneInstruction: String = "",
+    val ttsMimoVoiceSampleUri: String = "builtin:mimo_voice_reference_1",
     val renderMode: RenderMode = RenderMode.BLOCKS,
     val translationBlockInteractionMode: TranslationBlockInteractionMode =
         TranslationBlockInteractionMode.COPY_BUTTON,
@@ -385,6 +427,8 @@ data class TranslationPreset(
     val overlayAvoidCollision: Boolean = true,
     val streamingTranslate: Boolean = true,
     val retryEmptyTranslation: Boolean = false,
+    val ttsEnabled: Boolean = false,
+    val ttsProvider: TtsProvider = TtsProvider.SYSTEM,
     val translatorEngine: TranslatorEngine = TranslatorEngine.OPENAI,
     val deeplPro: Boolean = false,
     val deeplProtocol: DeeplProtocol = DeeplProtocol.OFFICIAL,
@@ -459,6 +503,8 @@ data class TranslationPreset(
         overlayAvoidCollision = overlayAvoidCollision,
         streamingTranslate = streamingTranslate,
         retryEmptyTranslation = retryEmptyTranslation,
+        ttsEnabled = ttsEnabled,
+        ttsProvider = ttsProvider,
         translatorEngine = translatorEngine,
         deeplPro = deeplPro,
         deeplProtocol = deeplProtocol,
@@ -571,6 +617,8 @@ object TranslationPresetCatalog {
             overlayAvoidCollision = settings.overlayAvoidCollision,
             streamingTranslate = settings.streamingTranslate,
             retryEmptyTranslation = settings.retryEmptyTranslation,
+            ttsEnabled = settings.ttsEnabled,
+            ttsProvider = settings.ttsProvider,
             translatorEngine = settings.translatorEngine,
             deeplPro = settings.deeplPro,
             deeplProtocol = settings.deeplProtocol,
@@ -683,6 +731,8 @@ object TranslationPresetCatalog {
             preset.overlayAvoidCollision,
             preset.streamingTranslate,
             preset.retryEmptyTranslation,
+            preset.ttsEnabled,
+            preset.ttsProvider.name,
             preset.translatorEngine.name,
             preset.deeplPro,
             preset.deeplProtocol.name,
@@ -1016,6 +1066,62 @@ enum class TranslatorEngine {
      * 仅 Android 13+ 可用；语言方向跟随 [sourceLang] / [targetLang]。
      */
     LOCAL_HY_MT2
+}
+
+@Serializable(with = TtsProviderSerializer::class)
+enum class TtsProvider {
+    SYSTEM,
+    GENERIC_HTTP,
+    VOLCENGINE,
+    MINIMAX,
+    MIMO,
+}
+
+object TtsProviderSerializer : KSerializer<TtsProvider> {
+    override val descriptor: SerialDescriptor =
+        PrimitiveSerialDescriptor("TtsProvider", PrimitiveKind.STRING)
+
+    override fun serialize(encoder: Encoder, value: TtsProvider) = encoder.encodeString(value.name)
+
+    override fun deserialize(decoder: Decoder): TtsProvider = parseTtsProvider(decoder.decodeString())
+}
+
+internal fun parseTtsProvider(raw: String, fallback: TtsProvider = TtsProvider.SYSTEM): TtsProvider =
+    when (raw.trim()) {
+        "VOLCENGINE_GATEWAY" -> TtsProvider.VOLCENGINE
+        "ALIYUN_GATEWAY" -> TtsProvider.SYSTEM
+        else -> runCatching { TtsProvider.valueOf(raw.trim()) }.getOrDefault(fallback)
+    }
+
+@Serializable
+enum class VolcengineTtsResource(val apiId: String) {
+    PRESET_VOICE_2_0("seed-tts-2.0"),
+    VOICE_CLONE_2_0("seed-icl-2.0"),
+}
+
+@Serializable
+enum class TtsHttpResponseMode {
+    BINARY_AUDIO,
+    JSON_BASE64,
+}
+
+@Serializable
+enum class MiniMaxTtsModel(val apiId: String) {
+    SPEECH_2_8_HD("speech-2.8-hd"),
+    SPEECH_2_8_TURBO("speech-2.8-turbo"),
+    SPEECH_2_6_HD("speech-2.6-hd"),
+    SPEECH_2_6_TURBO("speech-2.6-turbo"),
+    SPEECH_02_HD("speech-02-hd"),
+    SPEECH_02_TURBO("speech-02-turbo"),
+    SPEECH_01_HD("speech-01-hd"),
+    SPEECH_01_TURBO("speech-01-turbo"),
+}
+
+@Serializable
+enum class MimoTtsModel(val apiId: String) {
+    PRESET("mimo-v2.5-tts"),
+    VOICE_DESIGN("mimo-v2.5-tts-voicedesign"),
+    VOICE_CLONE("mimo-v2.5-tts-voiceclone"),
 }
 
 /** 端侧 LLM 下载源选择。see [Settings.localLlmMirror]。 */

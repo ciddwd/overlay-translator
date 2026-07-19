@@ -12,6 +12,8 @@ import com.gameocr.app.ocr.RoutingOcrEngine
 import com.gameocr.app.translate.RoutingTranslator
 import com.gameocr.app.translate.TranslationCache
 import com.gameocr.app.translate.Translator
+import com.gameocr.app.tts.RoutingTtsEngine
+import com.gameocr.app.tts.TtsEngine
 import dagger.Binds
 import dagger.Module
 import dagger.Provides
@@ -89,6 +91,10 @@ abstract class EngineBindings {
     @Binds
     @Singleton
     abstract fun bindTranslator(impl: RoutingTranslator): Translator
+
+    @Binds
+    @Singleton
+    abstract fun bindTtsEngine(impl: RoutingTtsEngine): TtsEngine
 
     @Binds
     @Singleton

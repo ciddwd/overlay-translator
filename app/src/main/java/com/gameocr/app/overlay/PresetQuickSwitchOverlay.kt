@@ -24,6 +24,7 @@ import com.gameocr.app.data.Settings
 import com.gameocr.app.data.TranslationPreset
 import com.gameocr.app.data.TranslationPresetCatalog
 import com.gameocr.app.data.TranslatorEngine
+import com.gameocr.app.tts.ttsPresetSummaryLabelRes
 
 class PresetQuickSwitchOverlay(private val context: Context) {
 
@@ -230,11 +231,12 @@ class PresetQuickSwitchOverlay(private val context: Context) {
                 ocrName(preset.ocrEngine),
                 presetLlmName(preset),
                 Languages.nameOf(context, preset.sourceLang),
-                Languages.nameOf(context, preset.targetLang)
+                Languages.nameOf(context, preset.targetLang),
+                context.getString(ttsPresetSummaryLabelRes(preset.ttsEnabled, preset.ttsProvider)),
             )
             setTextColor(mutedColor)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            maxLines = 3
+            maxLines = 4
             ellipsize = TextUtils.TruncateAt.END
         }
         textCol.addView(title)
