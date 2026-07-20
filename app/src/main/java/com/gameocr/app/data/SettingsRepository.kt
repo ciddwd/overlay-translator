@@ -72,6 +72,7 @@ class SettingsRepository @Inject constructor(
         val TtsEmotion = stringPreferencesKey("tts_emotion")
         val TtsSpeed = floatPreferencesKey("tts_speed")
         val TtsPitch = floatPreferencesKey("tts_pitch")
+        val TtsGainDb = intPreferencesKey("tts_gain_db")
         val TtsHttpBaseUrl = stringPreferencesKey("tts_http_base_url")
         val TtsHttpBearerToken = stringPreferencesKey("tts_http_bearer_token")
         val TtsHttpResponseMode = stringPreferencesKey("tts_http_response_mode")
@@ -419,6 +420,10 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.TtsEmotion] = next.ttsEmotion
             prefs[Keys.TtsSpeed] = next.ttsSpeed.coerceIn(0.25f, 4.0f)
             prefs[Keys.TtsPitch] = next.ttsPitch.coerceIn(0.25f, 4.0f)
+            prefs[Keys.TtsGainDb] = next.ttsGainDb.coerceIn(
+                MIN_TTS_PLAYBACK_GAIN_DB,
+                MAX_TTS_PLAYBACK_GAIN_DB,
+            )
             prefs.putSecure(Keys.TtsHttpBaseUrl, next.ttsHttpBaseUrl)
             prefs.putSecure(Keys.TtsHttpBearerToken, next.ttsHttpBearerToken)
             prefs[Keys.TtsHttpResponseMode] = next.ttsHttpResponseMode.name
@@ -664,6 +669,10 @@ class SettingsRepository @Inject constructor(
             ttsEmotion = this[Keys.TtsEmotion] ?: default.ttsEmotion,
             ttsSpeed = (this[Keys.TtsSpeed] ?: default.ttsSpeed).coerceIn(0.25f, 4.0f),
             ttsPitch = (this[Keys.TtsPitch] ?: default.ttsPitch).coerceIn(0.25f, 4.0f),
+            ttsGainDb = (this[Keys.TtsGainDb] ?: default.ttsGainDb).coerceIn(
+                MIN_TTS_PLAYBACK_GAIN_DB,
+                MAX_TTS_PLAYBACK_GAIN_DB,
+            ),
             ttsHttpBaseUrl = secureString(Keys.TtsHttpBaseUrl, default.ttsHttpBaseUrl),
             ttsHttpBearerToken = secureString(Keys.TtsHttpBearerToken, default.ttsHttpBearerToken),
             ttsHttpResponseMode = runCatching {

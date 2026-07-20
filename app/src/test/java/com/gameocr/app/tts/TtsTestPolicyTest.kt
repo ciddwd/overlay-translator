@@ -51,4 +51,38 @@ class TtsTestPolicyTest {
             assertFalse(shouldResetTtsTestFeedback(current, current))
         }
     }
+
+    @Test
+    fun costWarning_tableDriven_isHiddenForSystemTtsOnly() {
+        data class Case(val provider: TtsProvider, val expected: Boolean)
+
+        listOf(
+            Case(TtsProvider.SYSTEM, false),
+            Case(TtsProvider.GENERIC_HTTP, true),
+            Case(TtsProvider.VOLCENGINE, true),
+            Case(TtsProvider.MINIMAX, true),
+            Case(TtsProvider.MIMO, true),
+        ).forEach { case ->
+            assertEquals(
+                case.provider.name,
+                case.expected,
+                ttsTestMayIncurCharges(case.provider),
+            )
+        }
+    }
+
+    @Test
+    fun providerGroup_tableDriven_separatesOnDeviceLocalAndOnlineEngines() {
+        data class Case(val provider: TtsProvider, val expected: TtsProviderGroup)
+
+        listOf(
+            Case(TtsProvider.SYSTEM, TtsProviderGroup.ON_DEVICE),
+            Case(TtsProvider.GENERIC_HTTP, TtsProviderGroup.LOCAL),
+            Case(TtsProvider.VOLCENGINE, TtsProviderGroup.ONLINE),
+            Case(TtsProvider.MINIMAX, TtsProviderGroup.ONLINE),
+            Case(TtsProvider.MIMO, TtsProviderGroup.ONLINE),
+        ).forEach { case ->
+            assertEquals(case.provider.name, case.expected, ttsProviderGroup(case.provider))
+        }
+    }
 }

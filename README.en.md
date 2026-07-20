@@ -74,6 +74,7 @@ Not just full-screen translation. Draw a rectangle around a single word or phras
 - **Adapt to screen**: when translations are shown over the original screen, it chooses colors, background, and text size for each text area and places the translation back over the source; turning it off restores the previous display settings
 - **Unified layout and reading order**: translated text follows OCR-detected horizontal / vertical layout and reading order by default; when disabled, both the layout and LTR / RTL direction must be selected manually, and OCR sorting uses the same resolved direction as rendering
 - **Selectable translation blocks**: long-press a block for system text selection, or choose tap-to-open panel mode to select a range or copy the full source / translation
+- **Translation speech (TTS)**: read a translation, word-lookup result, or selected passage aloud; tap again to pause / resume, and any problem is shown directly
 - **5 color themes + visual color picker**: choose background, text, border color, and opacity directly instead of typing ARGB; the picker scrolls on short landscape screens
 - **Full text styling**: bold, italic, underline, letter spacing, line spacing, alignment, outline, and shadow can be tuned independently, with a live preview
 - **Comic / subtitle optimizations**: sentences split across multiple OCR boxes get merged before translating; vertical Japanese is read right-to-left; tiny ruby-text columns (furigana) next to kanji are filtered out so you don't get duplicate translations; vertical scenes can use vertical translation layout
@@ -150,6 +151,10 @@ It is intended for users who want to choose their own OCR and translation method
 | <img src="docs/screenshots/settings-arc-menu.png" width="280" alt="Arc-menu button settings" /> | <img src="docs/screenshots/settings-display-floating.png" width="280" alt="Floating-window mode settings" /> |
 | **Box merge / floating ball** | **Smart loop translation** |
 | <img src="docs/screenshots/settings-floating.png" width="280" alt="Box merge & floating ball settings" /> | <img src="docs/screenshots/settings-loop-translation.png" width="280" alt="Smart loop translation settings" /> |
+
+| **TTS speech settings** |
+|---|
+| <img src="docs/screenshots/settings-tts.png" width="280" alt="TTS engine, system voice, speed, pitch, and test-text settings" /> |
 
 **Floating-window mode** — collects all source / translated lines into one draggable, resizable overlay so translations don't cover game controls (joysticks, action buttons, dialog-advance keys). The window can be **locked**: unlocked shows a close button + bottom resize handle and accepts drag / pinch; locked strips them away, leaving only the text and ignoring every gesture — no more accidental drags during gameplay.
 
@@ -326,6 +331,24 @@ Every online engine has a **Test connection** action. Use it before switching to
 
 </details>
 
+### Translation speech (TTS)
+
+To hear translations aloud, enable TTS in Settings and choose a voice option:
+
+| Option | Best for | What to know |
+|---|---|---|
+| **Phone system voice** | Using the voices already on your phone | No account or service charge is required. You can choose an installed voice and adjust its speed and pitch |
+| **Self-hosted voice service** | People already running a voice service on a PC or local network | Enter the service address to use it; this is useful when you prefer to manage the service yourself |
+| **Volcengine** | People with an active Volcengine speech account | Enter your account details and choose a voice. Provider usage may incur charges |
+| **MiniMax** | Finding more voices or cloning and designing your own | Search, preview, and select voices; upload a recording to clone a voice, or describe the new voice you want |
+| **MiMo** | People already using the MiMo speech service | Supports built-in and cloned voices, plus plain-language instructions for the speaking style |
+
+- **How to speak text**: tap the play button beside a translation or word-lookup result. After selecting horizontal translation text, you can also choose Speak from the popup menu. Vertical translations cannot be selected directly by long-press; use the tap-to-select copy mode instead
+- **Pause and resume**: tap the same text again to pause, then tap once more to continue from that position. Tapping different text starts reading the new content
+- **When voices are too quiet**: self-hosted services, Volcengine, MiniMax, and MiMo can be boosted by `0–24 dB`. Very high values may sound distorted. Phone system voices do not support this setting
+- **Charges and problems**: phone system voices are free. The app warns before using other services that may charge. Missing voices, incorrect account settings, and playback failures are explained on screen
+- **MiniMax voices**: the voice page has Find, Clone, and Design tabs. Search by language or voice name; tapping a voice asks for confirmation before selecting it. Creating, using, and deleting voices also require confirmation
+
 ### Terminology and app context
 
 - **Terminology library**: store a source term, preferred translation, language pair, category, case rule, and enabled state, scoped globally or to one app; filters cover source, translation, app, and category
@@ -396,6 +419,7 @@ Every online engine has a **Test connection** action. Use it before switching to
 | **Horizontal and vertical text** | Detect rotated, horizontal, and vertical manga text; follow the recognized layout or manually choose layout and reading direction |
 | **Multiple translators** | Use OpenAI-compatible services, DeepL, Google, Volcengine, Baidu, Tencent, Youdao PicTrans, or offline Sakura / Hy-MT2 models |
 | **Copy translations** | Long-press to select a range, or tap a block to open a panel and copy part of the text, the full source, or the full translation |
+| **Translation speech (TTS)** | Read translations aloud with phone system voices, a self-hosted service, Volcengine, MiniMax, or MiMo; pause / resume, speak selected text, boost quiet voices, and manage MiniMax voices |
 | **Word lookup** | Select a word or phrase for a translation; LLM engines can also return pronunciation, part of speech, definitions, examples, and usage notes |
 | **Consistent names and terms** | Save global or per-game names, places, and terminology so wording stays consistent across scenes |
 | **Model downloads** | Download on-device models in the background, view progress in the app and notification, cancel, retry, or resume interrupted files |
@@ -409,11 +433,13 @@ These are user-facing improvements we want to continue working on, not a fixed r
 
 | Direction | Intended experience |
 |---|---|
-| **Translation speech (TTS)** | Play a translation directly from each block with clear play / stop state |
 | **Translation history** | Revisit previously translated screens and dialogue instead of losing the last line after switching scenes |
 | **Offline dictionary** | Show basic definitions and examples without a network connection or an LLM translator |
-| **Continue improving local translation** | Further reduce waiting, heat, and battery use during long sessions |
+| **Long-term on-device model improvements** | Keep improving downloads, startup time, memory use, heat, battery life, and device compatibility across all on-device models, while exploring speech and more features that can run locally on phones |
+| **System assistant and agent integration** | Track [Android AppFunctions](https://developer.android.com/ai/appfunctions) and [A2A](https://a2a-protocol.org/latest/), then explore starting translation, speech, and common actions through system assistants or other agents as platform support matures |
 | **Deeper accessibility** | Make full-screen OCR text and dynamic translations individually navigable with a screen reader |
+
+On-device model improvements are an ongoing plan that will progress over time as models and phones change, rather than a one-release task.
 
 ## 🤝 Contributing
 

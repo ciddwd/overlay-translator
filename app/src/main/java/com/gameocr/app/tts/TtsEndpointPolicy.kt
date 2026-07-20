@@ -188,6 +188,23 @@ internal fun settingsForTtsTest(text: String, settings: Settings): Settings = se
 internal fun shouldResetTtsTestFeedback(current: TtsProvider, next: TtsProvider): Boolean =
     current != next
 
+internal fun ttsTestMayIncurCharges(provider: TtsProvider): Boolean =
+    provider != TtsProvider.SYSTEM
+
+internal enum class TtsProviderGroup {
+    ON_DEVICE,
+    LOCAL,
+    ONLINE,
+}
+
+internal fun ttsProviderGroup(provider: TtsProvider): TtsProviderGroup = when (provider) {
+    TtsProvider.SYSTEM -> TtsProviderGroup.ON_DEVICE
+    TtsProvider.GENERIC_HTTP -> TtsProviderGroup.LOCAL
+    TtsProvider.VOLCENGINE,
+    TtsProvider.MINIMAX,
+    TtsProvider.MIMO -> TtsProviderGroup.ONLINE
+}
+
 internal fun miniMaxLanguageBoost(raw: String, model: MiniMaxTtsModel? = null): String {
     val boost = when (
     spokenTtsLanguageTag(raw).substringBefore('-').lowercase()
@@ -574,6 +591,11 @@ internal fun decodeHexAudio(raw: String): ByteArray {
             ?: throw RuntimeException("MiniMax TTS response contains invalid hex audio")
     }
 }
+
+internal fun decodeMiniMaxTrialAudio(raw: String): TtsAudioPayload = TtsAudioPayload(
+    bytes = decodeHexAudio(raw),
+    mimeType = "audio/mpeg",
+)
 
 internal fun mimoVoiceSampleMimeType(contentType: String?, displayName: String?): String? {
     val normalized = contentType?.substringBefore(';')?.trim()?.lowercase()

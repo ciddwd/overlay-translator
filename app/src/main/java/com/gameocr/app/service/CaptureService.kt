@@ -80,6 +80,7 @@ import com.gameocr.app.ocr.shouldRerunLowQualityChinesePaddleOcr
 import com.gameocr.app.ocr.sortTextBlocksForReading
 import com.gameocr.app.data.resolveTranslationOutputSettings
 import com.gameocr.app.data.FloatingSkill
+import com.gameocr.app.tts.ttsFailureMessage
 import com.gameocr.app.overlay.FloatingButtonManager
 import com.gameocr.app.overlay.AdaptiveOverlayStyle
 import com.gameocr.app.overlay.AdaptiveOverlayStyleAnalyzer
@@ -3160,6 +3161,7 @@ class CaptureService : Service() {
                     LogRepository.Category.TRANSLATE,
                     "TTS failed: ${error.javaClass.simpleName}: ${error.message.orEmpty().take(160)}"
                 )
+                overlay?.showErrorHint(ttsFailureMessage(error), durationMs = 6000L)
             }
     }
 
@@ -3330,6 +3332,12 @@ class CaptureService : Service() {
                 allowWrap = effectiveOverlaySettings.overlayAllowWrap
                 avoidCollision = effectiveOverlaySettings.overlayAvoidCollision
                 translationBlockInteractionMode = settings.translationBlockInteractionMode
+                translationBlockSelectionSpeechAction = wordSelectTtsAction(
+                    settings = settings,
+                    diagId = captureSequence,
+                    role = "block_translation_direct_selection",
+                    playbackId = "translation-block:$captureSequence:direct-selection",
+                )
                 floatingWindowContentMode = settings.floatingWindowContentMode
                 customBorderStyle = settings.customBorderStyle
                 overlayTypeface = typeface

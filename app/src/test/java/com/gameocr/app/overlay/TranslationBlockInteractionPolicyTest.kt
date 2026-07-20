@@ -14,19 +14,21 @@ class TranslationBlockInteractionPolicyTest {
         data class Case(
             val mode: TranslationBlockInteractionMode,
             val nativeSelection: Boolean,
+            val selectedTextSpeech: Boolean,
             val openPanelOnTap: Boolean,
             val focusableWindow: Boolean,
             val decorViewActionModeHost: Boolean,
         )
 
         val cases = listOf(
-            Case(TranslationBlockInteractionMode.COPY_BUTTON, true, false, true, true),
-            Case(TranslationBlockInteractionMode.OPEN_COPY_PANEL, false, true, false, false),
+            Case(TranslationBlockInteractionMode.COPY_BUTTON, true, true, false, true, true),
+            Case(TranslationBlockInteractionMode.OPEN_COPY_PANEL, false, false, true, false, false),
         )
 
         cases.forEach { case ->
             val actual = translationBlockInteractionPlan(case.mode)
             assertEquals(case.mode.name, case.nativeSelection, actual.enableNativeTextSelection)
+            assertEquals(case.mode.name, case.selectedTextSpeech, actual.enableSelectedTextSpeech)
             assertEquals(case.mode.name, case.openPanelOnTap, actual.openCopyPanelOnBlockTap)
             assertEquals(case.mode.name, case.focusableWindow, actual.windowFocusable)
             assertEquals(case.mode.name, case.decorViewActionModeHost, actual.useDecorViewActionModeHost)
@@ -40,6 +42,9 @@ class TranslationBlockInteractionPolicyTest {
         data class Case(val name: String, val marker: String)
         val required = listOf(
             Case("native text selection", "setTextIsSelectable(true)"),
+            Case("native selection adds app speech action", "enableSelectionSpeech("),
+            Case("speech action follows live TTS state", "translationBlockSelectionSpeechAction != null"),
+            Case("speech action reads selected text", "onStart?.invoke(selectedText)"),
             Case("selection view takes focus on touch", "MotionEvent.ACTION_DOWN ->"),
             Case("focusable result window", "newLayoutParams(focusable = interactionPlan.windowFocusable)"),
             Case("native selection uses a DecorView action mode host", "showBlocksInActionModeDialog(root, params)"),

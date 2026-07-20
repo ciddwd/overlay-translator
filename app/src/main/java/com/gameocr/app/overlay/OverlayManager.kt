@@ -71,6 +71,7 @@ class OverlayManager(
         FloatingWindowContentMode.SRC_AND_DST,
     @Volatile var translationBlockInteractionMode: TranslationBlockInteractionMode =
         TranslationBlockInteractionMode.COPY_BUTTON,
+    @Volatile var translationBlockSelectionSpeechAction: TtsPlaybackAction? = null,
     /** CUSTOM 主题的边框样式（仅 CUSTOM 主题生效）。CaptureService 同步。 */
     @Volatile var customBorderStyle: BorderStyle = BorderStyle.SOLID,
     @Volatile var overlayTypeface: Typeface? = null,
@@ -883,11 +884,12 @@ class OverlayManager(
                     }
                     if (allowWrap) {
                         setSingleLine(false)
-                        // maxLines 固定 10 行：showBlocks 时 dst 是占位"…"无法算最终行数；
-                        // updateBlockText 又只更新 text 不动 maxLines；用大值保证段落聚类
-                        // 多行译文不被截断。代价是可能盖到下方相邻原文 box，但比"看到 …"好。
-                        maxLines = 10
-                        // 不显示省略号——即使超过 10 行也直接截，省略号在 OCR 场景看着像 bug
+                        // 自适应模式必须由实际 viewport 限制高度；固定行数会让框架 auto-size
+                        // 在仍有可用高度时误判为不适配并降到最小字号。非自适应模式保留旧上限。
+                        maxLines = horizontalOverlayMaxLines(
+                            allowWrap = true,
+                            adaptiveTextFitEnabled = adaptiveStyle != null,
+                        )
                         ellipsize = null
                     } else {
                         // 强制单行模式：长译文不再显示"…"截断，改用 MARQUEE 跑马灯——文本超
@@ -895,7 +897,10 @@ class OverlayManager(
                         // marquee 需要 view 拿到 focus 或 isSelected=true 才会启动；overlay 窗
                         // 口拿不到 focus（我们设的 FLAG_NOT_FOCUSABLE），所以靠 isSelected。
                         setSingleLine(true)
-                        maxLines = 1
+                        maxLines = horizontalOverlayMaxLines(
+                            allowWrap = false,
+                            adaptiveTextFitEnabled = adaptiveStyle != null,
+                        )
                         ellipsize = android.text.TextUtils.TruncateAt.MARQUEE
                         marqueeRepeatLimit = -1
                         isSelected = true
@@ -1125,6 +1130,15 @@ class OverlayManager(
         if (nativeSelectionEnabled) {
             (view as TextView).apply {
                 setTextIsSelectable(true)
+                if (plan.enableSelectedTextSpeech) {
+                    enableSelectionSpeech(
+                        label = context.getString(R.string.word_card_speak_selection),
+                        isEnabled = { translationBlockSelectionSpeechAction != null },
+                        onSpeak = { selectedText ->
+                            translationBlockSelectionSpeechAction?.onStart?.invoke(selectedText)
+                        },
+                    )
+                }
                 isFocusableInTouchMode = true
                 setOnTouchListener { touchedView, event ->
                     when (event.actionMasked) {

@@ -55,6 +55,94 @@ class TtsUiResourceContractTest {
     }
 
     @Test
+    fun playbackGainControl_isWiredAndLocalizedForOnlineProviders() {
+        val source = sourceFile("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
+        data class MarkerCase(val name: String, val marker: String)
+
+        listOf(
+            MarkerCase("persisted draft value", "gainDb = ttsGainDb"),
+            MarkerCase("provider capability gate", "supportsTtsPlaybackGain(provider)"),
+            MarkerCase("discrete gain slider", "onGainDbChange(it.roundToInt())"),
+            MarkerCase("bounded minimum", "MIN_TTS_PLAYBACK_GAIN_DB.toFloat()"),
+            MarkerCase("bounded maximum", "MAX_TTS_PLAYBACK_GAIN_DB.toFloat()"),
+            MarkerCase("distortion help", "R.string.settings_tts_gain_hint"),
+        ).forEach { case -> assertTrue(case.name, source.contains(case.marker)) }
+
+        listOf(
+            "src/main/res/values/strings.xml",
+            "src/main/res/values-zh-rCN/strings.xml",
+        ).forEach { path ->
+            val strings = stringResources(sourceFile(path))
+            listOf("settings_tts_gain_format", "settings_tts_gain_hint").forEach { key ->
+                assertTrue("$path missing $key", strings[key].orEmpty().isNotBlank())
+            }
+        }
+    }
+
+    @Test
+    fun speechTestCostWarning_isVisibleAndLocalized() {
+        val source = sourceFile("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
+        assertTrue(
+            "speech test cost warning must be limited to providers that can charge",
+            source.contains("if (ttsTestMayIncurCharges(provider))") &&
+                source.contains("stringResource(R.string.settings_tts_test_cost_hint)"),
+        )
+
+        data class Case(val path: String, val expected: String)
+        listOf(
+            Case(
+                "src/main/res/values/strings.xml",
+                "Speech tests call the selected TTS service and may incur usage charges.",
+            ),
+            Case(
+                "src/main/res/values-zh-rCN/strings.xml",
+                "朗读测试会调用当前选择的 TTS 服务，并可能产生费用。",
+            ),
+        ).forEach { case ->
+            val strings = stringResources(sourceFile(case.path))
+            assertEquals(case.path, case.expected, strings["settings_tts_test_cost_hint"])
+        }
+    }
+
+    @Test
+    fun providerSelector_matchesOcrStyleWithOnDeviceLocalAndOnlineGroups() {
+        val source = sourceFile("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
+        data class MarkerCase(val name: String, val marker: String)
+        listOf(
+            MarkerCase("all groups rendered in policy order", "TtsProviderGroup.entries.forEach"),
+            MarkerCase("providers filtered by group", ".filter { ttsProviderGroup(it) == group }"),
+            MarkerCase("group headings use OCR label style", "style = MaterialTheme.typography.labelSmall"),
+            MarkerCase("providers retain responsive chip rows", "ttsProviderLabelRes(option)"),
+        ).forEach { case -> assertTrue(case.name, source.contains(case.marker)) }
+
+        data class ResourceCase(
+            val path: String,
+            val onDevice: String,
+            val local: String,
+            val online: String,
+        )
+        listOf(
+            ResourceCase(
+                "src/main/res/values/strings.xml",
+                "On-device (system engine, no API charge)",
+                "Local (PC/LAN HTTP service)",
+                "Online (provider API, may incur charges)",
+            ),
+            ResourceCase(
+                "src/main/res/values-zh-rCN/strings.xml",
+                "端侧（系统引擎，无 API 费用）",
+                "本地（电脑 / 局域网 HTTP 服务）",
+                "联网（厂商 API，可能产生费用）",
+            ),
+        ).forEach { case ->
+            val strings = stringResources(sourceFile(case.path))
+            assertEquals(case.path, case.onDevice, strings["settings_tts_group_on_device"])
+            assertEquals(case.path, case.local, strings["settings_tts_group_local"])
+            assertEquals(case.path, case.online, strings["settings_tts_group_online"])
+        }
+    }
+
+    @Test
     fun mimoTokenPlanSelector_listsAllClustersAndShowsUsageRestriction() {
         val source = sourceFile("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
         data class Case(val name: String, val marker: String)
@@ -132,7 +220,7 @@ class TtsUiResourceContractTest {
             MarkerCase("preset style has independent value", "value = mimoInstruction"),
             MarkerCase("voice design has independent value", "value = mimoVoiceDesignPrompt"),
             MarkerCase("voice clone style has independent value", "value = mimoVoiceCloneInstruction"),
-            MarkerCase("AI action requires a non-blank prompt", "canGenerateMimoVoiceDesignPrompt("),
+            MarkerCase("AI action requires a non-blank prompt", "canGenerateVoiceDesignPrompt("),
             MarkerCase("style AI action requires a non-blank intent", "canPolishMimoStyleInstruction("),
             MarkerCase("style fields share an editor but not state", "MimoStyleInstructionEditor("),
             MarkerCase("style help uses a dialog", "SettingHelpDialogButton("),

@@ -30,6 +30,10 @@ internal enum class SystemTtsTerminalAction {
     FINISH,
 }
 
+internal class SystemTtsLanguageUnavailableException(
+    val languageTag: String,
+) : IllegalStateException("System TTS language is not supported: $languageTag")
+
 internal fun systemTtsTerminalAction(
     utteranceStarted: Boolean,
     startAttempt: Int,
@@ -202,7 +206,7 @@ class SystemTtsEngine @Inject constructor(
             languageResult == TextToSpeech.LANG_MISSING_DATA ||
             languageResult == TextToSpeech.LANG_NOT_SUPPORTED
         ) {
-            throw IllegalStateException("System TTS language is not supported: $languageTag")
+            throw SystemTtsLanguageUnavailableException(languageTag)
         }
         val requestedVoiceName = selectSystemTtsVoiceForLanguage(
             voices = engine.voices.orEmpty().map { voice ->

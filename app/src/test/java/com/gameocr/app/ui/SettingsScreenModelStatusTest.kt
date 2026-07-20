@@ -228,6 +228,44 @@ class SettingsScreenModelStatusTest {
     }
 
     @Test
+    fun translationBlockInteractionHelp_explainsVerticalSelectionLimitInEveryLocale() {
+        data class Case(
+            val name: String,
+            val resourcePath: String,
+            val expectedFragment: String,
+        )
+
+        val cases = listOf(
+            Case(
+                name = "English vertical limitation",
+                resourcePath = "src/main/res/values/strings.xml",
+                expectedFragment = "Vertical translation blocks do not support direct long-press text selection",
+            ),
+            Case(
+                name = "Simplified Chinese vertical limitation",
+                resourcePath = "src/main/res/values-zh-rCN/strings.xml",
+                expectedFragment = "竖排译文块不支持直接长按选中复制",
+            ),
+        )
+
+        cases.forEach { case ->
+            val value = stringResourceValue(
+                case.resourcePath,
+                "settings_translation_block_interaction_vertical_help",
+            )
+            assertTrue(case.name, value.contains(case.expectedFragment))
+        }
+
+        val source = File("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
+        assertTrue(
+            "translation block title has an adjacent help tooltip",
+            Regex(
+                """settings_translation_block_interaction_label[\s\S]*?SettingHelpTooltip\([\s\S]*?settings_translation_block_interaction_vertical_help"""
+            ).containsMatchIn(source),
+        )
+    }
+
+    @Test
     fun translationPresetSummaryFormat_usesOneReadableFieldPerLine() {
         data class Case(
             val name: String,

@@ -13,6 +13,7 @@ import com.gameocr.app.data.SettingsRepository
 import com.gameocr.app.overlay.TranslationCardOverlay
 import com.gameocr.app.overlay.TtsPlaybackAction
 import com.gameocr.app.tts.TtsEngine
+import com.gameocr.app.tts.ttsFailureMessage
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
@@ -98,6 +99,11 @@ class ProcessTextTranslateActivity : ComponentActivity() {
                                 "TTS failed: ${error.javaClass.simpleName}: " +
                                     error.message.orEmpty().take(160),
                             )
+                            Toast.makeText(
+                                app,
+                                app.ttsFailureMessage(error),
+                                Toast.LENGTH_LONG,
+                            ).show()
                         }
                     }
                 }

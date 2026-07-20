@@ -52,6 +52,17 @@ internal data class PaddleRecognitionCandidate(
     val elapsedMs: Long = 0L,
 )
 
+internal data class PaddleRecognizedText(
+    val text: String,
+    val confidence: Float,
+)
+
+internal fun paddleRecognizedText(candidate: PaddleRecognitionCandidate?): PaddleRecognizedText =
+    PaddleRecognizedText(
+        text = candidate?.text.orEmpty(),
+        confidence = candidate?.score?.coerceIn(0f, 1f) ?: 0f,
+    )
+
 internal data class PaddleProbMapStats(
     val width: Int,
     val height: Int,
@@ -449,7 +460,8 @@ class PaddleOcrEngine @Inject constructor(
         }
         val tRecStart = System.currentTimeMillis()
         val results = sorted.mapIndexedNotNull { i, quad ->
-            val text = recognizeQuad(bitmap, quad, runId, i).trim()
+            val recognition = paddleRecognizedText(recognizeQuad(bitmap, quad, runId, i))
+            val text = recognition.text.trim()
             val bounds = quad.axisAlignedBounds()
             val rect = Rect(
                 bounds[0].coerceAtLeast(0),
@@ -458,10 +470,11 @@ class PaddleOcrEngine @Inject constructor(
                 bounds[3].coerceAtMost(bitmap.height)
             )
             Timber.i(
-                "PaddleOCR run#%d result[%d] rect=%s textStats=%s text='%s'",
+                "PaddleOCR run#%d result[%d] rect=%s recScore=%.3f textStats=%s text='%s'",
                 runId,
                 i,
                 rect.toPaddleLogString(),
+                recognition.confidence,
                 paddleLogTextStats(text).toLogString(),
                 text.forPaddleOcrLog(),
             )
@@ -469,7 +482,12 @@ class PaddleOcrEngine @Inject constructor(
                 Timber.i("PaddleOCR run#%d result[%d] dropped empty text rect=%s", runId, i, rect.toPaddleLogString())
                 null
             } else {
-                TextBlock(text = text, boundingBox = rect, confidence = 1f, recognizedLanguage = "auto")
+                TextBlock(
+                    text = text,
+                    boundingBox = rect,
+                    confidence = recognition.confidence,
+                    recognizedLanguage = "auto",
+                )
             }
         }
         val tRec = System.currentTimeMillis() - tRecStart
@@ -771,18 +789,23 @@ class PaddleOcrEngine @Inject constructor(
     /**
      * CRNN 识别：用 [Matrix.setPolyToPoly] 把 Quad 4 点透视矫正到水平矩形 → resize 到 H=48 → 跑 onnx → CTC decode。
      */
-    private fun recognizeQuad(src: Bitmap, quad: DBPostprocessor.Quad, runId: Long, boxIndex: Int): String {
+    private fun recognizeQuad(
+        src: Bitmap,
+        quad: DBPostprocessor.Quad,
+        runId: Long,
+        boxIndex: Int,
+    ): PaddleRecognitionCandidate? {
         val session = recSession ?: run {
             Timber.w("PaddleOCR run#%d rec[%d] skipped: recSession=null", runId, boxIndex)
-            return ""
+            return null
         }
         val e = env ?: run {
             Timber.w("PaddleOCR run#%d rec[%d] skipped: env=null", runId, boxIndex)
-            return ""
+            return null
         }
         val crop = warpCropQuad(src, quad) ?: run {
             Timber.w("PaddleOCR run#%d rec[%d] warp failed quad=%s", runId, boxIndex, quad.toPaddleLogString())
-            return ""
+            return null
         }
         return try {
             val rotationDegrees = paddleVerticalCropRotationDegrees(crop.width, crop.height)
@@ -832,7 +855,7 @@ class PaddleOcrEngine @Inject constructor(
                 best?.toPaddleLogString() ?: "NONE",
                 candidates.joinToString(" || ") { it.toPaddleLogString() },
             )
-            best?.text.orEmpty()
+            best
         } finally {
             crop.recycle()
         }

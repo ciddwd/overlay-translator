@@ -3,6 +3,7 @@ package com.gameocr.app.tts
 import android.content.Context
 import android.database.Cursor
 import android.media.MediaPlayer
+import android.media.audiofx.LoudnessEnhancer
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -33,6 +34,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.ResponseBody
+import timber.log.Timber
 
 private const val MAX_TTS_AUDIO_BYTES = 20L * 1024L * 1024L
 private const val MAX_TTS_JSON_BYTES = 48L * 1024L * 1024L
@@ -51,6 +53,7 @@ class HttpTtsEngine @Inject constructor(
     private val activeCall = AtomicReference<Call?>()
     private val activeToken = AtomicReference<Long?>()
     private var player: MediaPlayer? = null
+    private var playerLoudnessEnhancer: LoudnessEnhancer? = null
     private var playerFile: File? = null
     private var playerToken: Long? = null
 
@@ -91,7 +94,7 @@ class HttpTtsEngine @Inject constructor(
                 }
             } ?: return
             if (generation != requestGeneration.get()) return
-            play(responsePayload, generation, token)
+            play(responsePayload, generation, token, settings.ttsGainDb)
         } catch (error: Throwable) {
             activeToken.compareAndSet(token, null)
             playbackCoordinator.finish(token)
@@ -285,7 +288,12 @@ class HttpTtsEngine @Inject constructor(
         return mimoVoiceSampleDataUrl(bytes, mimeType)
     }
 
-    private suspend fun play(payload: TtsAudioPayload, generation: Long, token: Long) {
+    private suspend fun play(
+        payload: TtsAudioPayload,
+        generation: Long,
+        token: Long,
+        gainDb: Int,
+    ) {
         val extension = ttsAudioExtension(payload.mimeType)
         val file = withContext(Dispatchers.IO) {
             val dir = File(appContext.cacheDir, "tts").apply { mkdirs() }
@@ -310,8 +318,12 @@ class HttpTtsEngine @Inject constructor(
                 try {
                     nextPlayer.setDataSource(file.absolutePath)
                     nextPlayer.setOnCompletionListener { completed ->
+                        if (player === completed) {
+                            runCatching { playerLoudnessEnhancer?.release() }
+                            playerLoudnessEnhancer = null
+                            player = null
+                        }
                         completed.release()
-                        if (player === completed) player = null
                         if (playerFile == file) playerFile = null
                         if (playerToken == token) playerToken = null
                         activeToken.compareAndSet(token, null)
@@ -319,8 +331,12 @@ class HttpTtsEngine @Inject constructor(
                         file.delete()
                     }
                     nextPlayer.setOnErrorListener { failed, _, _ ->
+                        if (player === failed) {
+                            runCatching { playerLoudnessEnhancer?.release() }
+                            playerLoudnessEnhancer = null
+                            player = null
+                        }
                         failed.release()
-                        if (player === failed) player = null
                         if (playerFile == file) playerFile = null
                         if (playerToken == token) playerToken = null
                         activeToken.compareAndSet(token, null)
@@ -329,7 +345,9 @@ class HttpTtsEngine @Inject constructor(
                         true
                     }
                     nextPlayer.prepare()
+                    val nextEnhancer = createPlaybackGain(nextPlayer, gainDb)
                     player = nextPlayer
+                    playerLoudnessEnhancer = nextEnhancer
                     playerFile = file
                     playerToken = token
                     if (playbackCoordinator.state.value.phase != TtsPlaybackPhase.PAUSED) {
@@ -337,7 +355,11 @@ class HttpTtsEngine @Inject constructor(
                         playbackCoordinator.transition(token, TtsPlaybackPhase.PLAYING)
                     }
                 } catch (error: Throwable) {
-                    runCatching { nextPlayer.release() }
+                    if (player === nextPlayer) {
+                        stopPlayerOnMain()
+                    } else {
+                        runCatching { nextPlayer.release() }
+                    }
                     file.delete()
                     throw error
                 }
@@ -347,15 +369,63 @@ class HttpTtsEngine @Inject constructor(
 
     private fun stopPlayerOnMain() {
         val current = player
+        val currentEnhancer = playerLoudnessEnhancer
         val currentFile = playerFile
         val currentToken = playerToken
         player = null
+        playerLoudnessEnhancer = null
         playerFile = null
         playerToken = null
+        runCatching { currentEnhancer?.release() }
         runCatching { current?.stop() }
         runCatching { current?.release() }
         currentFile?.delete()
         currentToken?.let(playbackCoordinator::finish)
+    }
+
+    private fun createPlaybackGain(player: MediaPlayer, gainDb: Int): LoudnessEnhancer? {
+        val normalizedGainDb = normalizedTtsPlaybackGainDb(gainDb)
+        if (normalizedGainDb == 0) {
+            Timber.i("TTS HTTP playback gain=0dB effect=disabled")
+            return null
+        }
+        val enhancer = LoudnessEnhancer(player.audioSessionId)
+        return try {
+            enhancer.setTargetGain(ttsPlaybackGainMillibels(normalizedGainDb))
+            enhancer.enabled = true
+            Timber.i(
+                "TTS HTTP playback gain=%ddB sessionId=%d",
+                normalizedGainDb,
+                player.audioSessionId,
+            )
+            enhancer
+        } catch (error: Throwable) {
+            runCatching { enhancer.release() }
+            throw error
+        }
+    }
+
+    internal suspend fun playAudio(
+        payload: TtsAudioPayload,
+        playbackId: String,
+        gainDb: Int,
+    ) {
+        require(payload.bytes.isNotEmpty()) { "TTS preview audio is empty" }
+        require(payload.bytes.size <= MAX_TTS_AUDIO_BYTES) { "TTS preview audio exceeds 20 MB" }
+        val generation = requestGeneration.incrementAndGet()
+        activeCall.getAndSet(null)?.cancel()
+        activeToken.getAndSet(null)?.let(playbackCoordinator::finish)
+        withContext(Dispatchers.Main.immediate) { stopPlayerOnMain() }
+        if (generation != requestGeneration.get()) return
+        val token = playbackCoordinator.begin(playbackId, TtsPlaybackBackend.HTTP)
+        activeToken.set(token)
+        try {
+            play(payload, generation, token, gainDb)
+        } catch (error: Throwable) {
+            activeToken.compareAndSet(token, null)
+            playbackCoordinator.finish(token)
+            throw error
+        }
     }
 
     private fun runOnMain(action: () -> Unit) {

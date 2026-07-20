@@ -205,6 +205,8 @@ import com.gameocr.app.data.MimoTtsModel
 import com.gameocr.app.data.DEFAULT_MIMO_TTS_BASE_URL
 import com.gameocr.app.data.DEFAULT_MINIMAX_TTS_BASE_URL
 import com.gameocr.app.data.DEFAULT_VOLCENGINE_TTS_BASE_URL
+import com.gameocr.app.data.MAX_TTS_PLAYBACK_GAIN_DB
+import com.gameocr.app.data.MIN_TTS_PLAYBACK_GAIN_DB
 import com.gameocr.app.tts.SystemTtsVoiceOption
 import com.gameocr.app.tts.shouldLoadSystemTtsVoices
 import com.gameocr.app.tts.MINIMAX_CN_LOW_LATENCY_BASE_URL
@@ -215,14 +217,23 @@ import com.gameocr.app.tts.MIMO_TOKEN_PLAN_EU_BASE_URL
 import com.gameocr.app.tts.MIMO_TOKEN_PLAN_SGP_BASE_URL
 import com.gameocr.app.tts.MIMO_BUILTIN_VOICE_REFERENCE_1
 import com.gameocr.app.tts.MIMO_BUILTIN_VOICE_REFERENCE_2
+import com.gameocr.app.tts.MiniMaxManagedVoice
+import com.gameocr.app.tts.MiniMaxVoiceCloneRequest
+import com.gameocr.app.tts.MiniMaxVoiceCreationResult
+import com.gameocr.app.tts.MiniMaxVoiceDesignRequest
 import com.gameocr.app.tts.isMimoTokenPlanBaseUrl
 import com.gameocr.app.tts.miniMaxTtsEndpointUrlOrNull
 import com.gameocr.app.tts.mimoTtsEndpointUrlOrNull
-import com.gameocr.app.tts.canGenerateMimoVoiceDesignPrompt
+import com.gameocr.app.tts.canGenerateVoiceDesignPrompt
 import com.gameocr.app.tts.canPolishMimoStyleInstruction
+import com.gameocr.app.tts.normalizedTtsPlaybackGainDb
 import com.gameocr.app.tts.shouldResetTtsTestFeedback
+import com.gameocr.app.tts.supportsTtsPlaybackGain
 import com.gameocr.app.tts.volcengineTtsEndpointUrlOrNull
 import com.gameocr.app.tts.ttsPresetSummaryLabelRes
+import com.gameocr.app.tts.ttsTestMayIncurCharges
+import com.gameocr.app.tts.TtsProviderGroup
+import com.gameocr.app.tts.ttsProviderGroup
 import com.gameocr.app.data.resolveTranslationOutputSettings
 import com.gameocr.app.data.manualOverlayLayoutControlsEnabled
 import com.gameocr.app.data.settingsSearchEntryId
@@ -492,6 +503,7 @@ fun SettingsScreen(
     var ttsEmotion by remember { mutableStateOf("") }
     var ttsSpeed by remember { mutableStateOf(1.0f) }
     var ttsPitch by remember { mutableStateOf(1.0f) }
+    var ttsGainDb by remember { mutableStateOf(0) }
     var ttsHttpBaseUrl by remember { mutableStateOf("") }
     var ttsHttpBearerToken by remember { mutableStateOf("") }
     var ttsHttpResponseMode by remember { mutableStateOf(TtsHttpResponseMode.BINARY_AUDIO) }
@@ -1130,6 +1142,7 @@ fun SettingsScreen(
         ttsEmotion = ttsEmotion,
         ttsSpeed = ttsSpeed,
         ttsPitch = ttsPitch,
+        ttsGainDb = ttsGainDb,
         ttsHttpBaseUrl = ttsHttpBaseUrl,
         ttsHttpBearerToken = ttsHttpBearerToken,
         ttsHttpResponseMode = ttsHttpResponseMode,
@@ -1332,6 +1345,7 @@ fun SettingsScreen(
             ttsEmotion = ttsEmotion,
             ttsSpeed = ttsSpeed,
             ttsPitch = ttsPitch,
+            ttsGainDb = ttsGainDb,
             ttsHttpBaseUrl = ttsHttpBaseUrl,
             ttsHttpBearerToken = ttsHttpBearerToken,
             ttsHttpResponseMode = ttsHttpResponseMode,
@@ -2297,6 +2311,7 @@ fun SettingsScreen(
             ttsEmotion = s.ttsEmotion
             ttsSpeed = s.ttsSpeed
             ttsPitch = s.ttsPitch
+            ttsGainDb = s.ttsGainDb
             ttsHttpBaseUrl = s.ttsHttpBaseUrl
             ttsHttpBearerToken = s.ttsHttpBearerToken
             ttsHttpResponseMode = s.ttsHttpResponseMode
@@ -3246,6 +3261,7 @@ fun SettingsScreen(
                             systemVoicesError = systemTtsVoicesError,
                             onRefreshSystemVoices = { systemTtsVoiceRefreshRequest++ },
                             testText = ttsTestText,
+                            previewLanguageTag = targetLang,
                             onTestTextChange = {
                                 ttsTestText = it
                                 ttsTestMessage = null
@@ -3291,6 +3307,8 @@ fun SettingsScreen(
                             onSpeedChange = { ttsSpeed = it },
                             pitch = ttsPitch,
                             onPitchChange = { ttsPitch = it },
+                            gainDb = ttsGainDb,
+                            onGainDbChange = { ttsGainDb = it },
                             httpBaseUrl = ttsHttpBaseUrl,
                             onHttpBaseUrlChange = { ttsHttpBaseUrl = it },
                             httpBearerToken = ttsHttpBearerToken,
@@ -3321,6 +3339,31 @@ fun SettingsScreen(
                             onMiniMaxApiKeyChange = { ttsMiniMaxApiKey = it },
                             miniMaxVoice = ttsMiniMaxVoice,
                             onMiniMaxVoiceChange = { ttsMiniMaxVoice = it },
+                            onLoadMiniMaxManagedVoices = viewModel::loadMiniMaxManagedVoices,
+                            onCloneMiniMaxVoice = viewModel::cloneMiniMaxVoice,
+                            onDesignMiniMaxVoice = viewModel::designMiniMaxVoice,
+                            onPlayMiniMaxTrialAudio = { audioHex ->
+                                viewModel.playMiniMaxTrialAudio(audioHex, ttsGainDb)
+                            },
+                            onGenerateMiniMaxVoiceDescription = { draft ->
+                                viewModel.generateMiniMaxVoiceDescription(
+                                    draft = draft,
+                                    settings = buildSnapshot(),
+                                    outputLanguageTag = context.resources.configuration.locales[0]
+                                        .toLanguageTag(),
+                                )
+                            },
+                            onPreviewMiniMaxVoice = { voiceId, previewText ->
+                                viewModel.testTts(
+                                    previewText,
+                                    buildSnapshot().copy(
+                                        ttsEnabled = true,
+                                        ttsProvider = TtsProvider.MINIMAX,
+                                        ttsMiniMaxVoice = voiceId,
+                                    ),
+                                )
+                            },
+                            onDeleteMiniMaxVoice = viewModel::deleteMiniMaxVoice,
                             miniMaxEmotion = ttsMiniMaxEmotion,
                             onMiniMaxEmotionChange = { ttsMiniMaxEmotion = it },
                             miniMaxSpeed = ttsMiniMaxSpeed,
@@ -4320,10 +4363,18 @@ fun SettingsScreen(
                 }
 
                 if (renderMode == RenderMode.BLOCKS) {
-                    Text(
-                        stringResource(R.string.settings_translation_block_interaction_label),
-                        style = MaterialTheme.typography.labelLarge,
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            stringResource(R.string.settings_translation_block_interaction_label),
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                        SettingHelpTooltip(
+                            text = stringResource(
+                                R.string.settings_translation_block_interaction_vertical_help
+                            ),
+                            modifier = Modifier.padding(start = 4.dp),
+                        )
+                    }
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -5048,6 +5099,20 @@ private fun rememberUsageAccessGranted(context: Context): Boolean {
     return granted
 }
 
+private fun ttsProviderGroupLabelRes(group: TtsProviderGroup): Int = when (group) {
+    TtsProviderGroup.ON_DEVICE -> R.string.settings_tts_group_on_device
+    TtsProviderGroup.LOCAL -> R.string.settings_tts_group_local
+    TtsProviderGroup.ONLINE -> R.string.settings_tts_group_online
+}
+
+private fun ttsProviderLabelRes(provider: TtsProvider): Int = when (provider) {
+    TtsProvider.SYSTEM -> R.string.settings_tts_provider_system
+    TtsProvider.GENERIC_HTTP -> R.string.settings_tts_provider_generic_http
+    TtsProvider.VOLCENGINE -> R.string.settings_tts_provider_volc
+    TtsProvider.MINIMAX -> R.string.settings_tts_provider_minimax
+    TtsProvider.MIMO -> R.string.settings_tts_provider_mimo
+}
+
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 private fun TtsSettings(
@@ -5062,6 +5127,7 @@ private fun TtsSettings(
     systemVoicesError: String?,
     onRefreshSystemVoices: () -> Unit,
     testText: String,
+    previewLanguageTag: String,
     onTestTextChange: (String) -> Unit,
     testRunning: Boolean,
     testMessage: String?,
@@ -5073,6 +5139,8 @@ private fun TtsSettings(
     onSpeedChange: (Float) -> Unit,
     pitch: Float,
     onPitchChange: (Float) -> Unit,
+    gainDb: Int,
+    onGainDbChange: (Int) -> Unit,
     httpBaseUrl: String,
     onHttpBaseUrlChange: (String) -> Unit,
     httpBearerToken: String,
@@ -5103,6 +5171,13 @@ private fun TtsSettings(
     onMiniMaxApiKeyChange: (String) -> Unit,
     miniMaxVoice: String,
     onMiniMaxVoiceChange: (String) -> Unit,
+    onLoadMiniMaxManagedVoices: suspend (String, String) -> List<MiniMaxManagedVoice>,
+    onCloneMiniMaxVoice: suspend (MiniMaxVoiceCloneRequest) -> MiniMaxVoiceCreationResult,
+    onDesignMiniMaxVoice: suspend (MiniMaxVoiceDesignRequest) -> MiniMaxVoiceCreationResult,
+    onPlayMiniMaxTrialAudio: suspend (String) -> Unit,
+    onGenerateMiniMaxVoiceDescription: suspend (String) -> String,
+    onPreviewMiniMaxVoice: suspend (String, String) -> Unit,
+    onDeleteMiniMaxVoice: suspend (String, String, MiniMaxManagedVoice) -> Unit,
     miniMaxEmotion: String,
     onMiniMaxEmotionChange: (String) -> Unit,
     miniMaxSpeed: Float,
@@ -5157,16 +5232,28 @@ private fun TtsSettings(
             stringResource(R.string.settings_tts_provider_label),
             style = MaterialTheme.typography.labelLarge,
         )
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            EngineChip(provider, TtsProvider.SYSTEM, stringResource(R.string.settings_tts_provider_system), onSelect = onProviderChange)
-            EngineChip(provider, TtsProvider.GENERIC_HTTP, stringResource(R.string.settings_tts_provider_generic_http), onSelect = onProviderChange)
-            EngineChip(provider, TtsProvider.VOLCENGINE, stringResource(R.string.settings_tts_provider_volc), onSelect = onProviderChange)
-            EngineChip(provider, TtsProvider.MINIMAX, stringResource(R.string.settings_tts_provider_minimax), onSelect = onProviderChange)
-            EngineChip(provider, TtsProvider.MIMO, stringResource(R.string.settings_tts_provider_mimo), onSelect = onProviderChange)
+        TtsProviderGroup.entries.forEach { group ->
+            Text(
+                stringResource(ttsProviderGroupLabelRes(group)),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                TtsProvider.entries
+                    .filter { ttsProviderGroup(it) == group }
+                    .forEach { option ->
+                        EngineChip(
+                            provider,
+                            option,
+                            stringResource(ttsProviderLabelRes(option)),
+                            onSelect = onProviderChange,
+                        )
+                    }
+            }
         }
         Text(
             stringResource(
@@ -5356,13 +5443,20 @@ private fun TtsSettings(
                     placeholder = stringResource(R.string.settings_tts_api_key_placeholder),
                     modifier = Modifier.fillMaxWidth(),
                 )
-                OutlinedTextField(
+                MiniMaxVoiceField(
                     value = miniMaxVoice,
                     onValueChange = onMiniMaxVoiceChange,
-                    label = { Text(stringResource(R.string.settings_tts_voice_id)) },
-                    placeholder = { Text("male-qn-qingse") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
+                    baseUrl = miniMaxBaseUrl,
+                    apiKey = miniMaxApiKey,
+                    onLoadManagedVoices = onLoadMiniMaxManagedVoices,
+                    onCloneVoice = onCloneMiniMaxVoice,
+                    onDesignVoice = onDesignMiniMaxVoice,
+                    onPlayTrialAudio = onPlayMiniMaxTrialAudio,
+                    onGenerateVoiceDescription = onGenerateMiniMaxVoiceDescription,
+                    onDeleteVoice = onDeleteMiniMaxVoice,
+                    previewLanguageTag = previewLanguageTag,
+                    onTestTextChange = onTestTextChange,
+                    onPreviewVoice = onPreviewMiniMaxVoice,
                 )
                 TtsEmotionField(miniMaxEmotion, onMiniMaxEmotionChange)
                 Text(
@@ -5482,7 +5576,7 @@ private fun TtsSettings(
                         ) {
                             OutlinedButton(
                                 onClick = { onGenerateMimoVoiceDesign(mimoVoiceDesignPrompt) },
-                                enabled = canGenerateMimoVoiceDesignPrompt(
+                                enabled = canGenerateVoiceDesignPrompt(
                                     mimoVoiceDesignPrompt,
                                     mimoVoiceDesignGenerating,
                                 ),
@@ -5602,7 +5696,35 @@ private fun TtsSettings(
                 }
             }
         }
+        if (supportsTtsPlaybackGain(provider)) {
+            val normalizedGainDb = normalizedTtsPlaybackGainDb(gainDb)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    stringResource(R.string.settings_tts_gain_format, normalizedGainDb),
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                SettingHelpTooltip(text = stringResource(R.string.settings_tts_gain_hint))
+            }
+            Slider(
+                value = normalizedGainDb.toFloat(),
+                onValueChange = { onGainDbChange(it.roundToInt()) },
+                valueRange = MIN_TTS_PLAYBACK_GAIN_DB.toFloat()..
+                    MAX_TTS_PLAYBACK_GAIN_DB.toFloat(),
+                steps = MAX_TTS_PLAYBACK_GAIN_DB - MIN_TTS_PLAYBACK_GAIN_DB - 1,
+            )
+        }
         HorizontalDivider()
+        if (ttsTestMayIncurCharges(provider)) {
+            Text(
+                stringResource(R.string.settings_tts_test_cost_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
         OutlinedTextField(
             value = testText,
             onValueChange = onTestTextChange,
@@ -8046,7 +8168,7 @@ private fun SectionCard(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SettingHelpTooltip(
+internal fun SettingHelpTooltip(
     text: String,
     modifier: Modifier = Modifier
 ) {

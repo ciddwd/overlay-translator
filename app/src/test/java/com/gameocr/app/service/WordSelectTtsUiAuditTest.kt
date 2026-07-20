@@ -39,6 +39,10 @@ class WordSelectTtsUiAuditTest {
         assertTrue("Persistent buttons toggle playback", speaker.contains("ttsEngine.toggle("))
         assertTrue("Selection toolbar starts new playback", speaker.contains("ttsEngine.speak("))
         assertFalse("Toggle must not discard resumable progress", speaker.contains("ttsEngine.stop()"))
+        assertTrue(
+            "TTS failures must be visible instead of log-only",
+            speaker.contains("overlay?.showErrorHint(ttsFailureMessage(error)"),
+        )
 
         val actionFactory = source.substring(
             source.indexOf("private fun wordSelectTtsAction"),

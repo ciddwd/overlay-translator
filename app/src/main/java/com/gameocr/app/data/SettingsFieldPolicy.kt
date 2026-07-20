@@ -129,6 +129,7 @@ object SettingsFieldPolicy {
         portable("ttsEmotion", R.string.settings_search_item_tts_provider),
         portable("ttsSpeed", R.string.settings_search_item_tts_provider),
         portable("ttsPitch", R.string.settings_search_item_tts_provider),
+        portable("ttsGainDb", R.string.settings_search_item_tts_provider),
         privateConnection("ttsHttpBaseUrl", R.string.settings_search_item_tts_http),
         credential("ttsHttpBearerToken", R.string.settings_search_item_tts_http),
         portable("ttsHttpResponseMode", R.string.settings_search_item_tts_http),

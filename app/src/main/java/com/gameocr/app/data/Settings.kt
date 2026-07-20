@@ -15,6 +15,8 @@ import java.security.MessageDigest
 const val DEFAULT_MINIMAX_TTS_BASE_URL = "https://api.minimaxi.com"
 const val DEFAULT_MIMO_TTS_BASE_URL = "https://api.xiaomimimo.com/v1"
 const val DEFAULT_VOLCENGINE_TTS_BASE_URL = "https://openspeech.bytedance.com"
+const val MIN_TTS_PLAYBACK_GAIN_DB = 0
+const val MAX_TTS_PLAYBACK_GAIN_DB = 24
 
 /** 用户配置：OCR / 翻译后端相关。 */
 @Serializable
@@ -62,6 +64,7 @@ data class Settings(
     val ttsEmotion: String = "",
     val ttsSpeed: Float = 1.0f,
     val ttsPitch: Float = 1.0f,
+    val ttsGainDb: Int = 0,
     val ttsHttpBaseUrl: String = "",
     val ttsHttpBearerToken: String = "",
     val ttsHttpResponseMode: TtsHttpResponseMode = TtsHttpResponseMode.BINARY_AUDIO,

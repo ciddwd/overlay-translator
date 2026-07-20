@@ -204,6 +204,16 @@ class AdaptiveOverlayStylePolicyTest {
                 expectedReasons = setOf(AdaptiveTextOverflowReason.MAX_LINES),
             ),
             Case(
+                name = "logcat seventeen lines fit expanded adaptive viewport without artificial limit",
+                textLength = 163,
+                visibleTextEnd = 163,
+                layoutHeightPx = 339,
+                contentHeightPx = 1494,
+                lineCount = 17,
+                maxLines = Int.MAX_VALUE,
+                expected = false,
+            ),
+            Case(
                 name = "ellipsis reported",
                 ellipsized = true,
                 expected = true,
@@ -253,6 +263,36 @@ class AdaptiveOverlayStylePolicyTest {
                     maxLines = case.maxLines,
                     ellipsized = case.ellipsized,
                 ),
+            )
+        }
+    }
+
+    @Test
+    fun horizontalOverlayMaxLines_tableDriven_limitsOnlyNonAdaptiveWrapping() {
+        data class Case(
+            val name: String,
+            val allowWrap: Boolean,
+            val adaptiveTextFitEnabled: Boolean,
+            val expected: Int,
+        )
+
+        val cases = listOf(
+            Case("single line remains one", allowWrap = false, adaptiveTextFitEnabled = false, expected = 1),
+            Case("single line adaptive remains one", allowWrap = false, adaptiveTextFitEnabled = true, expected = 1),
+            Case("legacy wrapping keeps ten line cap", allowWrap = true, adaptiveTextFitEnabled = false, expected = 10),
+            Case(
+                "adaptive wrapping uses the measured viewport instead of an artificial line cap",
+                allowWrap = true,
+                adaptiveTextFitEnabled = true,
+                expected = Int.MAX_VALUE,
+            ),
+        )
+
+        cases.forEach { case ->
+            assertEquals(
+                case.name,
+                case.expected,
+                horizontalOverlayMaxLines(case.allowWrap, case.adaptiveTextFitEnabled),
             )
         }
     }

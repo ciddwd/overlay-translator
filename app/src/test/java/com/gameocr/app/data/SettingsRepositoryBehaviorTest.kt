@@ -13,6 +13,25 @@ import org.junit.Test
 class SettingsRepositoryBehaviorTest {
 
     @Test
+    fun ttsPlaybackGain_tableDriven_isClampedWhenPersisted() = runBlocking {
+        data class Case(val name: String, val requestedDb: Int, val expectedDb: Int)
+
+        val repository = fileBackedRepository(
+            Files.createTempDirectory("settings-tts-gain-test").toFile()
+        )
+        listOf(
+            Case("below minimum", -1, 0),
+            Case("disabled", 0, 0),
+            Case("middle", 12, 12),
+            Case("maximum", 24, 24),
+            Case("above maximum", 30, 24),
+        ).forEach { case ->
+            repository.update { Settings(ttsGainDb = case.requestedDb) }
+            assertEquals(case.name, case.expectedDb, repository.get().ttsGainDb)
+        }
+    }
+
+    @Test
     fun rescaleCaptureRegion_tableDriven_migratesWorkspaceAndOrientationCoordinates() = runBlocking {
         data class Case(
             val name: String,
@@ -135,6 +154,7 @@ class SettingsRepositoryBehaviorTest {
             overlayFonts = listOf(OverlayFontEntry(fontName, "Roundtrip.ttf")),
             streamingTranslate = false,
             retryEmptyTranslation = true,
+            ttsGainDb = 7,
             renderMode = RenderMode.FLOATING_WINDOW,
             translationBlockInteractionMode = TranslationBlockInteractionMode.OPEN_COPY_PANEL,
             overlayPlacement = OverlayPlacement.ABOVE,

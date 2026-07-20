@@ -535,6 +535,36 @@ class TtsEndpointPolicyTest {
     }
 
     @Test
+    fun decodeMiniMaxTrialAudio_convertsDocumentedHexAndRejectsInvalidValues() {
+        data class Case(
+            val name: String,
+            val raw: String,
+            val expected: ByteArray?,
+            val errorContains: String? = null,
+        )
+
+        listOf(
+            Case("MP3 bytes", "494433", byteArrayOf(0x49, 0x44, 0x33)),
+            Case("whitespace is ignored", "49 44\n33", byteArrayOf(0x49, 0x44, 0x33)),
+            Case("empty audio", "", null, "invalid hex"),
+            Case("odd number of digits", "123", null, "invalid hex"),
+            Case("non-hex character", "zz", null, "invalid hex"),
+        ).forEach { case ->
+            val result = runCatching { decodeMiniMaxTrialAudio(case.raw) }
+            if (case.expected != null) {
+                val payload = result.getOrThrow()
+                assertArrayEquals(case.name, case.expected, payload.bytes)
+                assertEquals(case.name, "audio/mpeg", payload.mimeType)
+            } else {
+                assertTrue(
+                    case.name,
+                    result.exceptionOrNull()?.message.orEmpty().contains(case.errorContains.orEmpty()),
+                )
+            }
+        }
+    }
+
+    @Test
     fun decodeMimoTtsPayload_handlesNestedAudioAndErrors() {
         val audio = Base64.getEncoder().encodeToString("wav".toByteArray())
         data class Case(val name: String, val raw: String, val errorContains: String?)

@@ -35,6 +35,8 @@ import com.gameocr.app.data.TtsProvider
 import com.gameocr.app.data.VolcengineTtsResource
 import com.gameocr.app.data.MiniMaxTtsModel
 import com.gameocr.app.data.MimoTtsModel
+import com.gameocr.app.data.MAX_TTS_PLAYBACK_GAIN_DB
+import com.gameocr.app.data.MIN_TTS_PLAYBACK_GAIN_DB
 import com.gameocr.app.download.ModelDownloadManager
 import com.gameocr.app.download.ModelDownloadSpec
 import com.gameocr.app.glossary.TranslationGlossaryRepository
@@ -53,7 +55,14 @@ import com.gameocr.app.tts.SystemTtsEngine
 import com.gameocr.app.tts.SystemTtsVoiceOption
 import com.gameocr.app.tts.settingsForTtsTest
 import com.gameocr.app.tts.TtsEngine
+import com.gameocr.app.tts.HttpTtsEngine
 import com.gameocr.app.tts.VoiceDesignPromptGenerator
+import com.gameocr.app.tts.MiniMaxManagedVoice
+import com.gameocr.app.tts.MiniMaxVoiceCloneRequest
+import com.gameocr.app.tts.MiniMaxVoiceCreationResult
+import com.gameocr.app.tts.MiniMaxVoiceDesignRequest
+import com.gameocr.app.tts.MiniMaxVoiceManager
+import com.gameocr.app.tts.decodeMiniMaxTrialAudio
 import androidx.work.WorkInfo
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -78,7 +87,9 @@ class SettingsViewModel @Inject constructor(
     private val modelDownloadManager: ModelDownloadManager,
     private val systemTtsEngine: SystemTtsEngine,
     private val ttsEngine: TtsEngine,
+    private val httpTtsEngine: HttpTtsEngine,
     private val voiceDesignPromptGenerator: VoiceDesignPromptGenerator,
+    private val miniMaxVoiceManager: MiniMaxVoiceManager,
 ) : ViewModel() {
 
     val modelDownloadWorkInfos: Flow<List<WorkInfo>> = modelDownloadManager.workInfos
@@ -96,11 +107,50 @@ class SettingsViewModel @Inject constructor(
 
     fun stopTts() = ttsEngine.stop()
 
+    internal suspend fun loadMiniMaxManagedVoices(
+        baseUrl: String,
+        apiKey: String,
+    ): List<MiniMaxManagedVoice> = miniMaxVoiceManager.loadVoices(baseUrl, apiKey)
+
+    internal suspend fun cloneMiniMaxVoice(
+        request: MiniMaxVoiceCloneRequest,
+    ): MiniMaxVoiceCreationResult = miniMaxVoiceManager.cloneVoice(request)
+
+    internal suspend fun designMiniMaxVoice(
+        request: MiniMaxVoiceDesignRequest,
+    ): MiniMaxVoiceCreationResult = miniMaxVoiceManager.designVoice(request)
+
+    internal suspend fun playMiniMaxTrialAudio(audioHex: String, gainDb: Int) {
+        val payload = decodeMiniMaxTrialAudio(audioHex)
+        ttsEngine.stop()
+        httpTtsEngine.playAudio(
+            payload = payload,
+            playbackId = "minimax-voice-design-trial",
+            gainDb = gainDb,
+        )
+    }
+
+    internal suspend fun deleteMiniMaxVoice(
+        baseUrl: String,
+        apiKey: String,
+        voice: MiniMaxManagedVoice,
+    ) = miniMaxVoiceManager.deleteVoice(baseUrl, apiKey, voice)
+
     suspend fun generateMimoVoiceDesign(
         draft: String,
         settings: Settings,
         outputLanguageTag: String,
     ): String = voiceDesignPromptGenerator.generate(draft, settings, outputLanguageTag)
+
+    suspend fun generateMiniMaxVoiceDescription(
+        draft: String,
+        settings: Settings,
+        outputLanguageTag: String,
+    ): String = voiceDesignPromptGenerator.generateMiniMaxDescription(
+        draft,
+        settings,
+        outputLanguageTag,
+    )
 
     suspend fun polishMimoStyleInstruction(
         draft: String,
@@ -257,6 +307,7 @@ class SettingsViewModel @Inject constructor(
         ttsEmotion: String,
         ttsSpeed: Float,
         ttsPitch: Float,
+        ttsGainDb: Int,
         ttsHttpBaseUrl: String,
         ttsHttpBearerToken: String,
         ttsHttpResponseMode: TtsHttpResponseMode,
@@ -368,6 +419,10 @@ class SettingsViewModel @Inject constructor(
                 ttsEmotion = ttsEmotion.trim(),
                 ttsSpeed = ttsSpeed.coerceIn(0.25f, 4.0f),
                 ttsPitch = ttsPitch.coerceIn(0.25f, 4.0f),
+                ttsGainDb = ttsGainDb.coerceIn(
+                    MIN_TTS_PLAYBACK_GAIN_DB,
+                    MAX_TTS_PLAYBACK_GAIN_DB,
+                ),
                 ttsHttpBaseUrl = ttsHttpBaseUrl.trim(),
                 ttsHttpBearerToken = ttsHttpBearerToken.trim(),
                 ttsHttpResponseMode = ttsHttpResponseMode,

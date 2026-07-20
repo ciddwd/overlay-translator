@@ -4,6 +4,7 @@ import com.gameocr.app.data.TranslationBlockInteractionMode
 
 internal data class TranslationBlockInteractionPlan(
     val enableNativeTextSelection: Boolean,
+    val enableSelectedTextSpeech: Boolean,
     val openCopyPanelOnBlockTap: Boolean,
     val windowFocusable: Boolean,
     val useDecorViewActionModeHost: Boolean,
@@ -14,6 +15,7 @@ internal fun translationBlockInteractionPlan(
 ): TranslationBlockInteractionPlan = when (mode) {
     TranslationBlockInteractionMode.COPY_BUTTON -> TranslationBlockInteractionPlan(
         enableNativeTextSelection = true,
+        enableSelectedTextSpeech = true,
         openCopyPanelOnBlockTap = false,
         windowFocusable = true,
         useDecorViewActionModeHost = true,
@@ -21,6 +23,7 @@ internal fun translationBlockInteractionPlan(
 
     TranslationBlockInteractionMode.OPEN_COPY_PANEL -> TranslationBlockInteractionPlan(
         enableNativeTextSelection = false,
+        enableSelectedTextSpeech = false,
         openCopyPanelOnBlockTap = true,
         windowFocusable = false,
         useDecorViewActionModeHost = false,

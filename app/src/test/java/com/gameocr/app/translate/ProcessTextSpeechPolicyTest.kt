@@ -58,6 +58,8 @@ class ProcessTextSpeechPolicyTest {
         assertTrue(source.contains("speechEngine.speak("))
         assertTrue(source.contains("playbackState = speechEngine.playbackState"))
         assertTrue(source.contains("appScope.launch(Dispatchers.Main.immediate)"))
+        assertTrue(source.contains("app.ttsFailureMessage(error)"))
+        assertTrue(source.contains("Toast.LENGTH_LONG"))
         assertTrue(source.contains("WordSelectTranslationCoordinator(translator).execute("))
         assertTrue(source.contains("wordResult = outcome.wordResult"))
     }
