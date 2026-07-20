@@ -417,7 +417,7 @@ Sakura 的首批显示快约 0.11 秒，全部完成快约 0.54 秒；Hy-MT2 的
 | **自动循环** | 固定间隔翻译，或等报幕文字显示完整后再翻；相同画面自动跳过，也可优先识别下半屏对话框 |
 | **多种 OCR** | 使用手机端 ML Kit / PaddleOCR / 日漫 OCR，也能连接局域网 OCR 或百度、腾讯、有道、PP-OCRv6 在线服务 |
 | **横排与竖排** | 自动识别旋转画面、横排和竖排日漫；译文可以跟随识别结果，也能手动指定排列和阅读方向 |
-| **多种翻译方式** | 使用 OpenAI 兼容接口、DeepL、Google、火山、百度、腾讯、有道图翻，或 Sakura / Hy-MT2 离线模型 |
+| **多种翻译方式** | 使用 Google ML Kit 端侧翻译、OpenAI 兼容接口、DeepL、Google、火山、百度、腾讯、有道图翻，或 Sakura / Hy-MT2 离线模型 |
 | **复制译文** | 长按译文自由选择复制，或点击译文块打开面板，复制部分文字、整段原文或整段译文 |
 | **译文朗读（TTS）** | 使用手机系统语音、自建语音服务、火山、MiniMax 或 MiMo 朗读译文；支持暂停 / 继续、选中文字朗读、调大音量和管理 MiniMax 音色 |
 | **划词查词** | 框选一个词或短语查看译文；使用大语言模型时还能显示音标、词性、释义、例句和难点说明 |
@@ -519,7 +519,7 @@ i18n: 翻译相关
 - [SakuraLLM/SakuraLLM](https://github.com/SakuraLLM/SakuraLLM) · Sakura 日译中模型
 - [Tencent-Hunyuan/HY-MT](https://github.com/Tencent-Hunyuan/HY-MT) · Hy-MT 翻译模型
 - [Shizuku](https://github.com/RikkaApps/Shizuku) · 免 ROOT 的高权限通道
-- [ML Kit](https://developers.google.com/ml-kit) · Google 端侧 OCR
+- [ML Kit](https://developers.google.com/ml-kit) · Google 端侧 OCR 与翻译
 - [ONNX Runtime](https://onnxruntime.ai/) · 端侧推理引擎
 - [Jetpack Compose](https://developer.android.com/jetpack/compose) / [Material 3](https://m3.material.io/) · UI 体系
 - [Hilt](https://dagger.dev/hilt/) · 依赖注入

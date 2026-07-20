@@ -54,6 +54,7 @@ internal fun supportsTranslationPromptContext(engine: TranslatorEngine): Boolean
     TranslatorEngine.DEEPL,
     TranslatorEngine.YOUDAO_PICTRANS,
     TranslatorEngine.GOOGLE,
+    TranslatorEngine.GOOGLE_ML_KIT,
     TranslatorEngine.VOLC,
     TranslatorEngine.BAIDU_FANYI,
     TranslatorEngine.TENCENT -> false

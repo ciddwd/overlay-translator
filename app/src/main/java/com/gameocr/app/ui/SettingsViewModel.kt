@@ -96,6 +96,20 @@ class SettingsViewModel @Inject constructor(
 
     suspend fun load(): Settings = repo.get()
 
+    suspend fun downloadMlKitLanguagePair(sourceLang: String, targetLang: String) {
+        routingTranslator.downloadMlKitLanguagePair(sourceLang, targetLang)
+    }
+
+    suspend fun areMlKitLanguagePairModelsDownloaded(
+        sourceLang: String,
+        targetLang: String,
+    ): Boolean = routingTranslator.areMlKitLanguagePairModelsDownloaded(sourceLang, targetLang)
+
+    suspend fun getMissingMlKitLanguageModels(
+        sourceLang: String,
+        targetLang: String,
+    ): Set<String> = routingTranslator.getMissingMlKitLanguageModels(sourceLang, targetLang)
+
     suspend fun loadSystemTtsVoices(preferredLanguageTag: String): List<SystemTtsVoiceOption> =
         systemTtsEngine.availableVoices(preferredLanguageTag)
 

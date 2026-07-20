@@ -1036,6 +1036,11 @@ enum class TranslatorEngine {
      */
     GOOGLE,
     /**
+     * 端侧翻译的内部路由值，UI 仅显示拉丁 / 中文 / 日文 / 韩文四个源语言入口。
+     * 底层使用 Google ML Kit，要求明确的 sourceLang；首次实际翻译时按需下载模型。
+     */
+    GOOGLE_ML_KIT,
+    /**
      * 火山引擎机器翻译（open.volcengineapi.com）。原生支持 TextList 批量；走 Volcengine SignV4
      * 鉴权（service=translate / region=cn-north-1）。需要在火山控制台开通"机器翻译"并拿 AK/SK。
      */

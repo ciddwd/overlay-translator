@@ -182,6 +182,7 @@
     <string name="settings_engine_deepl">DeepL</string>
     <string name="settings_engine_youdao_pictrans">有道图翻</string>
     <string name="settings_engine_google">Google</string>
+    <string name="settings_on_device_translation_latin">拉丁</string>
     <string name="settings_engine_volc">火山引擎</string>
     <string name="settings_engine_baidu_fanyi">百度翻译</string>
     <string name="settings_engine_tencent">腾讯云翻译</string>
@@ -199,6 +200,15 @@
     <string name="settings_tencent_region">腾讯云 Region</string>
     <string name="settings_tencent_trans_tip">与腾讯云 OCR 共用 SecretId / SecretKey / Region —— 此处修改会同步到 OCR 配置。默认 ap-guangzhou。一次调用走 TextTranslateBatch 批量翻译（≤ 2000 字符/次）。首次使用须先到 console.cloud.tencent.com/tmt 开通「机器翻译」。</string>
     <string name="settings_google_tip">无需配置，谷歌可能随时限流 / 改端点，仅供学习。国内必须代理。</string>
+    <string name="settings_google_mlkit_tip">语言模型下载后完全在设备端翻译。需要下载 30 MB 的语言模型。无需 API Key。</string>
+    <string name="settings_mlkit_download_pair">下载 %1$s → %2$s 模型</string>
+    <string name="settings_mlkit_model_downloading">正在下载模型…</string>
+    <string name="settings_mlkit_model_ready">当前语言模型已就绪，可以离线翻译。</string>
+    <string name="settings_mlkit_model_download_failed">模型下载失败：%1$s</string>
+    <string name="mlkit_missing_models_dialog_title">端侧语言模型未就绪</string>
+    <string name="mlkit_missing_models_dialog_message">「%1$s」→「%2$s」所需的端侧语言模型尚未下载完整。缺少：%3$s。\n\n模型按语言复用，下载后可与其他已就绪语言双向离线翻译。</string>
+    <string name="mlkit_missing_models_dialog_download">下载所需模型</string>
+    <string name="mlkit_missing_models_dialog_switch_llm">切换到云端 LLM</string>
     <string name="settings_youdao_app_key">有道 应用 ID（API Key）</string>
     <string name="settings_youdao_app_secret">有道 应用密钥（App Secret）</string>
     <string name="settings_youdao_app_key_placeholder">控制台「应用管理」→ 应用 ID</string>
@@ -689,6 +699,7 @@
     <string name="settings_search_item_api_timeout">API 请求超时</string>
     <string name="settings_search_item_youdao_pictrans">有道图片翻译（AppKey / Secret）</string>
     <string name="settings_search_item_google">谷歌翻译</string>
+    <string name="settings_search_item_google_mlkit">端侧翻译</string>
     <string name="settings_search_item_volc">火山引擎翻译（AK / SK / 区域）</string>
     <string name="settings_search_item_baidu_fanyi">百度翻译开放平台（APPID / 密钥）</string>
     <string name="settings_search_item_tencent_translator">腾讯云翻译（TMT）</string>
@@ -1010,6 +1021,7 @@
     <string name="settings_manga_crop_padding_desc">只给 Manga OCR 的识别裁剪增加四周留白，不扩大红框或译文布局框。DBNet 外扩已经足够时保持 0；发生首尾字符被裁切时再逐步增加。</string>
     <string name="settings_engine_local_sakura">Sakura（日→简中）</string>
     <string name="settings_engine_local_hymt2">Hy-MT2</string>
+    <string name="settings_translator_group_on_device">端侧翻译</string>
     <string name="settings_translator_group_local_llm">端侧 LLM（无网，按需下载模型）</string>
     <string name="settings_translator_group_cloud_llm">云端 LLM</string>
     <string name="settings_translator_group_cloud">云端翻译</string>

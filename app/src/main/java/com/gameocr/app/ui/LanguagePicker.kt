@@ -67,6 +67,7 @@ fun LanguagePicker(
     onSelect: (String) -> Unit,
     pinned: List<String> = emptyList(),
     onTogglePin: ((String) -> Unit)? = null,
+    allowAuto: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -116,6 +117,7 @@ fun LanguagePicker(
         LanguagePickerSheet(
             currentCode = currentCode,
             pinned = pinned,
+            allowAuto = allowAuto,
             onSelect = { code ->
                 onSelect(code)
                 expanded = false
@@ -131,6 +133,7 @@ fun LanguagePicker(
 private fun LanguagePickerSheet(
     currentCode: String,
     pinned: List<String>,
+    allowAuto: Boolean,
     onSelect: (String) -> Unit,
     onTogglePin: ((String) -> Unit)?,
     onDismiss: () -> Unit
@@ -143,8 +146,10 @@ private fun LanguagePickerSheet(
     val listState = rememberLazyListState()
 
     // 搜索后拆成两段：pinned 命中的按收藏顺序排前；其余按 Languages.ALL 顺序排后。
-    val (pinnedResults, otherResults) = remember(query, pinned) {
-        val matched = Languages.search(context, query)
+    val (pinnedResults, otherResults) = remember(query, pinned, allowAuto) {
+        val matched = Languages.search(context, query).filter { language ->
+            allowAuto || !language.code.equals(Languages.AUTO.code, ignoreCase = true)
+        }
         val matchedCodes = matched.map { it.code }.toSet()
         val pinnedHit = pinned
             .filter { it in matchedCodes }

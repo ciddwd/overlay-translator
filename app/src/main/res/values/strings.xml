@@ -182,6 +182,7 @@
     <string name="settings_engine_deepl">DeepL</string>
     <string name="settings_engine_youdao_pictrans">Youdao PicTrans</string>
     <string name="settings_engine_google">Google</string>
+    <string name="settings_on_device_translation_latin">Latin</string>
     <string name="settings_engine_volc">Volcengine</string>
     <string name="settings_engine_baidu_fanyi">Baidu Translate</string>
     <string name="settings_engine_tencent">Tencent Cloud Translate</string>
@@ -199,6 +200,15 @@
     <string name="settings_tencent_region">Tencent Cloud Region</string>
     <string name="settings_tencent_trans_tip">Shares SecretId / SecretKey / Region with Tencent Cloud OCR — edits here sync to the OCR section. Default ap-guangzhou. Native batch via TextTranslateBatch (≤ 2000 chars / call). First-time setup requires opening Machine Translation at console.cloud.tencent.com/tmt.</string>
     <string name="settings_google_tip">No config needed. Google may rate-limit or change the endpoint any time — for learning only. Proxy required inside mainland China.</string>
+    <string name="settings_google_mlkit_tip">Translation runs entirely on the device after the language model is downloaded. A 30 MB language model is required. No API key is needed.</string>
+    <string name="settings_mlkit_download_pair">Download %1$s → %2$s models</string>
+    <string name="settings_mlkit_model_downloading">Downloading models…</string>
+    <string name="settings_mlkit_model_ready">The current language models are ready. Offline translation is available.</string>
+    <string name="settings_mlkit_model_download_failed">Model download failed: %1$s</string>
+    <string name="mlkit_missing_models_dialog_title">On-device language models not ready</string>
+    <string name="mlkit_missing_models_dialog_message">The on-device models required for %1$s → %2$s have not all been downloaded. Missing: %3$s.\n\nModels are reusable per language. After downloading, the language can be translated offline in either direction with other ready languages.</string>
+    <string name="mlkit_missing_models_dialog_download">Download required models</string>
+    <string name="mlkit_missing_models_dialog_switch_llm">Switch to cloud LLM</string>
     <string name="settings_youdao_app_key">Youdao App ID (API Key)</string>
     <string name="settings_youdao_app_secret">Youdao App Secret</string>
     <string name="settings_youdao_app_key_placeholder">Console → Applications → App ID</string>
@@ -690,6 +700,7 @@
     <string name="settings_search_item_api_timeout">API request timeout</string>
     <string name="settings_search_item_youdao_pictrans">Youdao image translation (AppKey / Secret)</string>
     <string name="settings_search_item_google">Google Translate</string>
+    <string name="settings_search_item_google_mlkit">On-device translation</string>
     <string name="settings_search_item_volc">Volcengine translation (AK / SK / region)</string>
     <string name="settings_search_item_baidu_fanyi">Baidu Translate Open API (AppID / Secret)</string>
     <string name="settings_search_item_tencent_translator">Tencent Cloud translation (TMT)</string>
@@ -1011,6 +1022,7 @@
     <string name="settings_manga_crop_padding_desc">Adds margin only to the Manga OCR recognition crop; it does not enlarge red boxes or translation layout. Keep 0 when DBNet unclip is sufficient, and increase only if edge characters are clipped.</string>
     <string name="settings_engine_local_sakura">Sakura (JA→zh-CN)</string>
     <string name="settings_engine_local_hymt2">Hy-MT2</string>
+    <string name="settings_translator_group_on_device">On-device translation</string>
     <string name="settings_translator_group_local_llm">On-device LLM (no network, model downloaded on demand)</string>
     <string name="settings_translator_group_cloud_llm">Cloud LLM</string>
     <string name="settings_translator_group_cloud">Cloud translator</string>

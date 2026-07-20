@@ -455,6 +455,14 @@ fun SettingsScreen(
     var testRunning by remember { mutableStateOf(false) }
     var testMessage by remember { mutableStateOf<String?>(null) }
     var testSuccess by remember { mutableStateOf(false) }
+    var mlKitModelDownloadRunning by remember { mutableStateOf(false) }
+    var mlKitModelDownloadMessage by remember { mutableStateOf<String?>(null) }
+    var mlKitModelStatePair by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var mlKitModelsReady by remember { mutableStateOf<Boolean?>(null) }
+    var mlKitMissingModelsPrompt by remember { mutableStateOf<MlKitMissingModelsPrompt?>(null) }
+    var mlKitModelPromptDismissedPair by remember {
+        mutableStateOf<Pair<String, String>?>(null)
+    }
     var fetchedModels by remember { mutableStateOf<List<String>>(emptyList()) }
     var modelPickerExpanded by remember { mutableStateOf(false) }
     var textSize by remember { mutableStateOf(14f) }
@@ -775,6 +783,36 @@ fun SettingsScreen(
         translatorEngine = engine
         if (engine == TranslatorEngine.LOCAL_SAKURA && !supportsSakuraLanguagePair(sourceLang, targetLang)) {
             showSakuraFallbackDialog = true
+        }
+    }
+
+    fun startMlKitModelDownload(pair: Pair<String, String>) {
+        if (mlKitModelDownloadRunning) return
+        mlKitMissingModelsPrompt = null
+        mlKitModelPromptDismissedPair = pair
+        mlKitModelDownloadRunning = true
+        mlKitModelDownloadMessage = null
+        scope.launch {
+            val result = runCatching {
+                viewModel.downloadMlKitLanguagePair(pair.first, pair.second)
+            }
+            mlKitModelDownloadRunning = false
+            if (translatorEngine != TranslatorEngine.GOOGLE_ML_KIT ||
+                (sourceLang to targetLang) != pair
+            ) {
+                return@launch
+            }
+            result.onSuccess {
+                mlKitModelStatePair = pair
+                mlKitModelsReady = true
+                mlKitModelDownloadMessage = null
+            }.onFailure { error ->
+                mlKitModelsReady = false
+                mlKitModelDownloadMessage = context.getString(
+                    R.string.settings_mlkit_model_download_failed,
+                    error.message ?: error.javaClass.simpleName,
+                )
+            }
         }
     }
 
@@ -1875,6 +1913,45 @@ fun SettingsScreen(
         )
     }
 
+    mlKitMissingModelsPrompt?.let { prompt ->
+        val sourceName = Languages.nameOf(context, prompt.pair.first)
+        val targetName = Languages.nameOf(context, prompt.pair.second)
+        val missingNames = prompt.missingLanguages.joinToString(", ") { languageTag ->
+            Languages.nameOf(context, languageTag)
+        }
+        AlertDialog(
+            onDismissRequest = {
+                mlKitModelPromptDismissedPair = prompt.pair
+                mlKitMissingModelsPrompt = null
+            },
+            title = { Text(stringResource(R.string.mlkit_missing_models_dialog_title)) },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.mlkit_missing_models_dialog_message,
+                        sourceName,
+                        targetName,
+                        missingNames,
+                    )
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { startMlKitModelDownload(prompt.pair) }) {
+                    Text(stringResource(R.string.mlkit_missing_models_dialog_download))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    mlKitModelPromptDismissedPair = prompt.pair
+                    mlKitMissingModelsPrompt = null
+                    translatorEngine = TranslatorEngine.OPENAI
+                }) {
+                    Text(stringResource(R.string.mlkit_missing_models_dialog_switch_llm))
+                }
+            },
+        )
+    }
+
     if (showSakuraFallbackDialog) {
         val sourceName = com.gameocr.app.data.Languages.nameOf(context, sourceLang)
         val targetName = com.gameocr.app.data.Languages.nameOf(context, targetLang)
@@ -2425,6 +2502,41 @@ fun SettingsScreen(
 
     // paddleStatus 独立异步加载：file.exists() / file.length() 走 IO 线程，避免阻塞首帧。
     val settingsLoaded = initialSettings != null
+    LaunchedEffect(settingsLoaded, translatorEngine, sourceLang, targetLang) {
+        if (
+            !settingsLoaded ||
+            translatorEngine != TranslatorEngine.GOOGLE_ML_KIT ||
+            sourceLang.isBlank() ||
+            sourceLang.equals(Languages.AUTO.code, ignoreCase = true) ||
+            targetLang.isBlank() ||
+            targetLang.equals(Languages.AUTO.code, ignoreCase = true)
+        ) {
+            mlKitModelStatePair = null
+            mlKitModelsReady = null
+            mlKitMissingModelsPrompt = null
+            return@LaunchedEffect
+        }
+        val pair = sourceLang to targetLang
+        mlKitModelStatePair = null
+        mlKitModelsReady = null
+        mlKitMissingModelsPrompt = null
+        val missingResult = runCatching {
+            viewModel.getMissingMlKitLanguageModels(pair.first, pair.second)
+        }
+        val missingLanguages = missingResult.getOrDefault(emptySet())
+        mlKitModelsReady = missingResult.isSuccess && missingLanguages.isEmpty()
+        mlKitModelStatePair = pair
+        if (
+            missingResult.isSuccess &&
+            missingLanguages.isNotEmpty() &&
+            mlKitModelPromptDismissedPair != pair
+        ) {
+            mlKitMissingModelsPrompt = MlKitMissingModelsPrompt(
+                pair = pair,
+                missingLanguages = missingLanguages,
+            )
+        }
+    }
     LaunchedEffect(
         settingsLoaded,
         ttsEnabled,
@@ -2653,8 +2765,7 @@ fun SettingsScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(stringResource(R.string.settings_label_translator_engine), style = MaterialTheme.typography.labelLarge)
 
-                // 与 OCR 一样分组：端侧 LLM / 云端 LLM / 云端翻译。chip 多了平铺 FlowRow 也能换行，
-                // 但用户难以一眼区分 LLM 类（重质量、配 prompt）与传统翻译 API 类（重稳定性、限频）。
+                // All on-device options share one group; cloud engines remain split by API type.
                 Text(
                     stringResource(R.string.settings_translator_group_local_llm),
                     style = MaterialTheme.typography.labelSmall,
@@ -2665,6 +2776,21 @@ fun SettingsScreen(
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
+                    MlKitQuickSourceLanguage.entries.forEach { option ->
+                        FilterChip(
+                            selected = translatorEngine == TranslatorEngine.GOOGLE_ML_KIT &&
+                                option.matches(sourceLang),
+                            onClick = {
+                                timber.log.Timber.tag("MlKitTrans").i(
+                                    "[select-on-device-source] %s -> %s", sourceLang, option.languageTag
+                                )
+                                sourceLang = option.languageTag
+                                mlKitModelDownloadMessage = null
+                                selectTranslatorEngine(TranslatorEngine.GOOGLE_ML_KIT)
+                            },
+                            label = { Text(stringResource(option.labelRes)) },
+                        )
+                    }
                     EngineChip(
                         translatorEngine,
                         TranslatorEngine.LOCAL_SAKURA,
@@ -3032,6 +3158,70 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     }
+                } else if (translatorEngine == TranslatorEngine.GOOGLE_ML_KIT) {
+                    SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_google_mlkit) {
+                    Text(
+                        stringResource(R.string.settings_google_mlkit_tip),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    val sourceSelected = sourceLang.isNotBlank() &&
+                        !sourceLang.equals(Languages.AUTO.code, ignoreCase = true)
+                    val targetSelected = targetLang.isNotBlank() &&
+                        !targetLang.equals(Languages.AUTO.code, ignoreCase = true)
+                    val currentPair = sourceLang to targetLang
+                    val currentPairReady = mlKitModelStatePair == currentPair &&
+                        mlKitModelsReady == true
+                    val currentPairChecked = mlKitModelStatePair == currentPair &&
+                        mlKitModelsReady != null
+                    when {
+                        !sourceSelected || !targetSelected || !currentPairChecked -> {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                            )
+                        }
+                        currentPairReady -> Text(
+                            text = stringResource(R.string.settings_mlkit_model_ready),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        else -> Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            OutlinedButton(
+                                enabled = !mlKitModelDownloadRunning,
+                                onClick = { startMlKitModelDownload(currentPair) },
+                            ) {
+                                Text(
+                                    if (mlKitModelDownloadRunning) {
+                                        stringResource(R.string.settings_mlkit_model_downloading)
+                                    } else {
+                                        stringResource(
+                                            R.string.settings_mlkit_download_pair,
+                                            Languages.nameOf(context, sourceLang),
+                                            Languages.nameOf(context, targetLang),
+                                        )
+                                    }
+                                )
+                            }
+                            if (mlKitModelDownloadRunning) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                )
+                            }
+                        }
+                    }
+                    mlKitModelDownloadMessage?.let { message ->
+                        Text(
+                            text = message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    }
                 } else if (translatorEngine == TranslatorEngine.GOOGLE) {
                     SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_google) {
                     // GOOGLE：无 key，仅提示风险。改 else if 明确匹配——避免后续新增枚举（如 LOCAL_*）
@@ -3047,6 +3237,7 @@ fun SettingsScreen(
                 // —— 测试连接 ——
                 // 验证 baseUrl/key/model（或 DeepL key/endpoint）能不能用；DeepL 顺便返回剩余额度，
                 // OpenAI 顺便拉 model 列表回填到上方下拉。状态文字按成功/失败着色，下次点击覆盖。
+                if (translatorEngine != TranslatorEngine.GOOGLE_ML_KIT) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -3109,6 +3300,7 @@ fun SettingsScreen(
                         else MaterialTheme.colorScheme.error
                     )
                 }
+                }
                     // 乐观更新本地 + 异步落盘。togglePinLanguage 内部用 repo.update 是原子的。
                 // Prompt / 流式开关只对 LLM 类（OpenAI 兼容）翻译引擎有意义；
                 // DeepL 是机器翻译 API，不读 prompt、也不走 SSE，隐藏避免误导。
@@ -3131,6 +3323,7 @@ fun SettingsScreen(
                             "[user-select-source] %s -> %s", sourceLang, it
                         )
                         sourceLang = it
+                        mlKitModelDownloadMessage = null
                         if (
                             translatorEngine == TranslatorEngine.LOCAL_SAKURA &&
                             !supportsSakuraLanguagePair(it, targetLang)
@@ -3140,6 +3333,7 @@ fun SettingsScreen(
                     },
                     pinned = pinnedLanguages,
                     onTogglePin = onTogglePin,
+                    allowAuto = translatorEngine != TranslatorEngine.GOOGLE_ML_KIT,
                 )
                 }
                 SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_TARGET_LANGUAGE) {
@@ -3148,6 +3342,7 @@ fun SettingsScreen(
                     currentCode = targetLang,
                     onSelect = {
                         targetLang = it
+                        mlKitModelDownloadMessage = null
                         if (
                             translatorEngine == TranslatorEngine.LOCAL_SAKURA &&
                             !supportsSakuraLanguagePair(sourceLang, it)
@@ -3157,6 +3352,7 @@ fun SettingsScreen(
                     },
                     pinned = pinnedLanguages,
                     onTogglePin = onTogglePin,
+                    allowAuto = translatorEngine != TranslatorEngine.GOOGLE_ML_KIT,
                 )
                 }
                 SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_TRANSLATION_ASSISTANCE) {
@@ -6947,6 +7143,7 @@ private val SEARCH_TARGET_TRANSLATOR_PROVIDERS = intArrayOf(
     R.string.settings_search_item_deepl_advanced,
     R.string.settings_search_item_youdao_pictrans,
     R.string.settings_search_item_google,
+    R.string.settings_search_item_google_mlkit,
     R.string.settings_search_item_volc,
     R.string.settings_search_item_baidu_fanyi,
     R.string.settings_search_item_tencent_translator,
@@ -7257,6 +7454,10 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
             R.string.settings_engine_deepl,
             R.string.settings_engine_youdao_pictrans,
             R.string.settings_engine_google,
+            R.string.settings_on_device_translation_latin,
+            R.string.settings_ocr_chip_chinese,
+            R.string.settings_ocr_chip_japanese,
+            R.string.settings_ocr_chip_korean,
             R.string.settings_engine_volc,
             R.string.settings_engine_baidu_fanyi,
             R.string.settings_engine_tencent,
@@ -7272,6 +7473,7 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_deepl_advanced, listOf("deeplx", "bearer", "official", "protocol", "自架", "高级", "协议", "deepl base url"), requiredTranslatorEngine = TranslatorEngine.DEEPL),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_youdao_pictrans, listOf("youdao", "有道", "图片翻译", "pictrans", "ocrtransapi", "端到端"), requiredTranslatorEngine = TranslatorEngine.YOUDAO_PICTRANS),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_google, listOf("google", "谷歌", "translate"), requiredTranslatorEngine = TranslatorEngine.GOOGLE),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_google_mlkit, listOf("google ml kit", "mlkit", "on-device", "offline", "端侧", "离线"), requiredTranslatorEngine = TranslatorEngine.GOOGLE_ML_KIT),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_volc, listOf("volc", "volcengine", "火山", "字节", "doubao", "bytedance", "access key", "AK", "SK", "region", "区域"), requiredTranslatorEngine = TranslatorEngine.VOLC),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_baidu_fanyi, listOf("baidu fanyi", "百度翻译", "fanyi-api", "appid", "开放平台"), requiredTranslatorEngine = TranslatorEngine.BAIDU_FANYI),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_tencent_translator, listOf("tencent", "腾讯", "tmt", "tmtcloud", "腾讯云翻译"), requiredTranslatorEngine = TranslatorEngine.TENCENT),
@@ -8017,6 +8219,10 @@ private fun presetLlmLabel(preset: TranslationPreset): String = when (preset.tra
     TranslatorEngine.OPENAI -> preset.model.ifBlank { stringResource(R.string.settings_engine_openai_llm) }
     TranslatorEngine.LOCAL_SAKURA -> stringResource(R.string.settings_engine_local_sakura)
     TranslatorEngine.LOCAL_HY_MT2 -> stringResource(R.string.settings_engine_local_hymt2)
+    TranslatorEngine.GOOGLE_ML_KIT -> stringResource(
+        MlKitQuickSourceLanguage.fromLanguageTag(preset.sourceLang)?.labelRes
+            ?: R.string.settings_translator_group_on_device
+    )
     else -> translatorEngineLabel(preset.translatorEngine)
 }
 
@@ -8046,6 +8252,7 @@ private fun translatorEngineLabel(engine: TranslatorEngine): String = stringReso
         TranslatorEngine.DEEPL -> R.string.settings_engine_deepl
         TranslatorEngine.YOUDAO_PICTRANS -> R.string.settings_engine_youdao_pictrans
         TranslatorEngine.GOOGLE -> R.string.settings_engine_google
+        TranslatorEngine.GOOGLE_ML_KIT -> R.string.settings_translator_group_on_device
         TranslatorEngine.VOLC -> R.string.settings_engine_volc
         TranslatorEngine.BAIDU_FANYI -> R.string.settings_engine_baidu_fanyi
         TranslatorEngine.TENCENT -> R.string.settings_engine_tencent
@@ -8600,6 +8807,38 @@ private sealed class OcrLangIssue {
         val recommendedSourceCode: String
     ) : OcrLangIssue()
 }
+
+/** Four OCR-oriented shortcuts for the explicit source required by on-device translation. */
+internal enum class MlKitQuickSourceLanguage(
+    val languageTag: String,
+    @androidx.annotation.StringRes val labelRes: Int,
+) {
+    LATIN("en", R.string.settings_on_device_translation_latin),
+    CHINESE("zh-CN", R.string.settings_ocr_chip_chinese),
+    JAPANESE("ja", R.string.settings_ocr_chip_japanese),
+    KOREAN("ko", R.string.settings_ocr_chip_korean);
+
+    fun matches(languageTag: String): Boolean = when (this) {
+        LATIN -> languageTag.equals("en", ignoreCase = true) ||
+            languageTag.startsWith("en-", ignoreCase = true)
+        CHINESE -> languageTag.equals("zh", ignoreCase = true) ||
+            languageTag.startsWith("zh-", ignoreCase = true)
+        JAPANESE -> languageTag.equals("ja", ignoreCase = true) ||
+            languageTag.startsWith("ja-", ignoreCase = true)
+        KOREAN -> languageTag.equals("ko", ignoreCase = true) ||
+            languageTag.startsWith("ko-", ignoreCase = true)
+    }
+
+    companion object {
+        fun fromLanguageTag(languageTag: String): MlKitQuickSourceLanguage? =
+            entries.firstOrNull { it.matches(languageTag) }
+    }
+}
+
+internal data class MlKitMissingModelsPrompt(
+    val pair: Pair<String, String>,
+    val missingLanguages: Set<String>,
+)
 
 internal enum class OpenAiFallbackField {
     BASE_URL,

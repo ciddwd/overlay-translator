@@ -417,7 +417,7 @@ To hear translations aloud, enable TTS in Settings and choose a voice option:
 | **Automatic loop** | Translate at a fixed interval or wait for dialogue to finish typing; skip unchanged screens and optionally prioritize lower-screen dialogue boxes |
 | **Multiple OCR choices** | Use on-device ML Kit / PaddleOCR / manga OCR, connect to OCR on your LAN, or use Baidu, Tencent, Youdao, and PP-OCRv6 Online |
 | **Horizontal and vertical text** | Detect rotated, horizontal, and vertical manga text; follow the recognized layout or manually choose layout and reading direction |
-| **Multiple translators** | Use OpenAI-compatible services, DeepL, Google, Volcengine, Baidu, Tencent, Youdao PicTrans, or offline Sakura / Hy-MT2 models |
+| **Multiple translators** | Use Google ML Kit on-device translation, OpenAI-compatible services, DeepL, Google, Volcengine, Baidu, Tencent, Youdao PicTrans, or offline Sakura / Hy-MT2 models |
 | **Copy translations** | Long-press to select a range, or tap a block to open a panel and copy part of the text, the full source, or the full translation |
 | **Translation speech (TTS)** | Read translations aloud with phone system voices, a self-hosted service, Volcengine, MiniMax, or MiMo; pause / resume, speak selected text, boost quiet voices, and manage MiniMax voices |
 | **Word lookup** | Select a word or phrase for a translation; LLM engines can also return pronunciation, part of speech, definitions, examples, and usage notes |
@@ -519,7 +519,7 @@ Write the subject in either English or Chinese — **don't mix in one line**. Ke
 - [SakuraLLM/SakuraLLM](https://github.com/SakuraLLM/SakuraLLM) · Sakura Japanese-to-Chinese translation model
 - [Tencent-Hunyuan/HY-MT](https://github.com/Tencent-Hunyuan/HY-MT) · Hy-MT translation model
 - [Shizuku](https://github.com/RikkaApps/Shizuku) · privileged channel without ROOT
-- [ML Kit](https://developers.google.com/ml-kit) · Google's on-device OCR
+- [ML Kit](https://developers.google.com/ml-kit) · Google's on-device OCR and translation
 - [ONNX Runtime](https://onnxruntime.ai/) · on-device inference engine
 - [Jetpack Compose](https://developer.android.com/jetpack/compose) / [Material 3](https://m3.material.io/) · UI stack
 - [Hilt](https://dagger.dev/hilt/) · dependency injection
