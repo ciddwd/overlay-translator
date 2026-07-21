@@ -26,9 +26,9 @@ import java.io.RandomAccessFile
 /**
  * PaddleOCR PP-OCRv5 mobile 模型安装器。
  *
- * 三个文件 ([FILE_DET]/[FILE_REC]/[FILE_KEYS]) 按下载源列表依次尝试：
+ * 三个文件 ([FILE_DET]/[FILE_REC]/[FILE_KEYS_YAML]) 按下载源列表依次尝试：
  * - 1. 用户在 settings 自定义的镜像 URL（如果填了）
- * - 2. 内置社区镜像（HuggingFace / ghproxy / jsdelivr）
+ * - 2. PaddlePaddle 官方 Hugging Face 仓库及其 hf-mirror 镜像
  *
  * 每个文件独立 fallback，第一个 HTTP 200 的源就用。所有源都挂才报错。
  *
@@ -43,11 +43,9 @@ class PaddleModelInstaller @Inject constructor(
 
     val modelsDir: File by lazy { File(context.filesDir, "models/paddle").apply { mkdirs() } }
 
-    /** 按版本返回模型子目录。v5 用 modelsDir 根目录（向后兼容旧用户），v6tiny 用子目录。 */
-    private fun dirFor(version: PaddleModelVersion): File = when (version) {
-        PaddleModelVersion.V5_MOBILE -> modelsDir
-        else -> File(modelsDir, version.dirName).apply { mkdirs() }
-    }
+    /** 每个版本使用独立子目录；v5 迁入子目录以避免继续复用旧社区模型。 */
+    private fun dirFor(version: PaddleModelVersion): File =
+        File(modelsDir, modelDirectoryName(version)).apply { mkdirs() }
 
     data class InstalledFiles(val det: File, val rec: File, val keys: File) {
         val allReady: Boolean get() = det.exists() && rec.exists() && keys.exists()
@@ -123,6 +121,7 @@ class PaddleModelInstaller @Inject constructor(
                 )
             }
         }
+        if (version == PaddleModelVersion.V5_MOBILE) deleteLegacyV5Files()
     }.flowOn(Dispatchers.IO)
 
     private suspend fun downloadOne(
@@ -185,12 +184,18 @@ class PaddleModelInstaller @Inject constructor(
         }
     }
 
+    private fun deleteLegacyV5Files() {
+        listOf(FILE_DET, FILE_REC, LEGACY_FILE_KEYS).forEach { name ->
+            File(modelsDir, name).delete()
+            File(modelsDir, "$name.tmp").delete()
+        }
+    }
+
     /**
      * 从用户选的本地文件 Uri 导入模型。按文件名自动识别：
      * - 名字含 `det` + 扩展名 .onnx → 检测模型
      * - 名字含 `rec` + 扩展名 .onnx → 识别模型
-     * - v5 扩展名 .txt → keys.txt
-     * - v6 扩展名 .yml/.yaml → keys.yml（官方 inference.yml 内嵌 character_dict）
+     * - 所有版本的 .yml/.yaml → keys.yml（官方 inference.yml 内嵌 character_dict）
      *
      * 识别不出来就跳过。返回已成功导入的文件数。
      */
@@ -215,6 +220,9 @@ class PaddleModelInstaller @Inject constructor(
                 Timber.w(t, "Import failed: $name")
             }
         }
+        if (version == PaddleModelVersion.V5_MOBILE && checkInstalled(version) != null) {
+            deleteLegacyV5Files()
+        }
         imported
     }
 
@@ -227,41 +235,38 @@ class PaddleModelInstaller @Inject constructor(
     companion object {
         const val FILE_DET = "det.onnx"
         const val FILE_REC = "rec.onnx"
-        const val FILE_KEYS = "keys.txt"
-        /** PP-OCRv6 字典内嵌在 inference.yml 里，下载整个 yml 文件代替 keys.txt */
-        const val FILE_KEYS_V6 = "keys.yml"
+        /** PaddleOCR 官方字典内嵌在 inference.yml，下载后统一保存为 keys.yml。 */
+        const val FILE_KEYS_YAML = "keys.yml"
+        private const val LEGACY_FILE_KEYS = "keys.txt"
 
         internal fun localImportTargetFileName(displayName: String, version: PaddleModelVersion): String? {
             val lower = displayName.lowercase()
             return when {
                 lower.endsWith(".onnx") && "det" in lower -> FILE_DET
                 lower.endsWith(".onnx") && "rec" in lower -> FILE_REC
-                version == PaddleModelVersion.V5_MOBILE && lower.endsWith(".txt") -> FILE_KEYS
-                version != PaddleModelVersion.V5_MOBILE && (lower.endsWith(".yml") || lower.endsWith(".yaml")) ->
-                    FILE_KEYS_V6
+                lower.endsWith(".yml") || lower.endsWith(".yaml") -> FILE_KEYS_YAML
                 else -> null
             }
         }
 
         /**
-         * 内置 PP-OCRv5 mobile 真实可用的下载源（已 adb 真机 200 OK 验证）：
-         * - det: HuggingFace bukuroo/PPOCRv5-ONNX 的 mobile det (4.5MB)
-         * - rec: HuggingFace bukuroo/PPOCRv5-ONNX 的 mobile rec (15.7MB)
-         * - keys: HuggingFace bukuroo/PPOCRv5-ONNX 的 v5 字典 (90KB，v5 词表跟 v4 不同)
-         *
-         * v5 mobile 比 v4 mobile 准确率有明显提升，特别是密集排版和复杂背景。
+         * PaddlePaddle 官方 PP-OCRv5 mobile ONNX 下载源，固定到已验证的仓库提交：
+         * - det: PaddlePaddle/PP-OCRv5_mobile_det_onnx
+         * - rec + keys: PaddlePaddle/PP-OCRv5_mobile_rec_onnx
          */
+        private const val V5_DET_REVISION = "e6f4fa85f00e168c862bc462aebca69eef9b3d3d"
+        private const val V5_REC_REVISION = "ed152b8b495f84de93cda5709d768548a9127622"
         private val DEFAULT_DET_URLS = listOf(
-            "https://huggingface.co/bukuroo/PPOCRv5-ONNX/resolve/main/ppocrv5-mobile-det.onnx",
-            "https://hf-mirror.com/bukuroo/PPOCRv5-ONNX/resolve/main/ppocrv5-mobile-det.onnx"
+            "https://huggingface.co/PaddlePaddle/PP-OCRv5_mobile_det_onnx/resolve/$V5_DET_REVISION/inference.onnx",
+            "https://hf-mirror.com/PaddlePaddle/PP-OCRv5_mobile_det_onnx/resolve/$V5_DET_REVISION/inference.onnx"
         )
         private val DEFAULT_REC_URLS = listOf(
-            "https://huggingface.co/bukuroo/PPOCRv5-ONNX/resolve/main/ppocrv5-mobile-rec.onnx",
-            "https://hf-mirror.com/bukuroo/PPOCRv5-ONNX/resolve/main/ppocrv5-mobile-rec.onnx"
+            "https://huggingface.co/PaddlePaddle/PP-OCRv5_mobile_rec_onnx/resolve/$V5_REC_REVISION/inference.onnx",
+            "https://hf-mirror.com/PaddlePaddle/PP-OCRv5_mobile_rec_onnx/resolve/$V5_REC_REVISION/inference.onnx"
         )
         private val DEFAULT_KEYS_URLS = listOf(
-            "https://huggingface.co/bukuroo/PPOCRv5-ONNX/resolve/main/ppocrv5_dict.txt",
-            "https://hf-mirror.com/bukuroo/PPOCRv5-ONNX/resolve/main/ppocrv5_dict.txt"
+            "https://huggingface.co/PaddlePaddle/PP-OCRv5_mobile_rec_onnx/resolve/$V5_REC_REVISION/inference.yml",
+            "https://hf-mirror.com/PaddlePaddle/PP-OCRv5_mobile_rec_onnx/resolve/$V5_REC_REVISION/inference.yml"
         )
 
         /**
@@ -317,10 +322,9 @@ class PaddleModelInstaller @Inject constructor(
             val keys: List<String>,
         )
 
-        internal fun keysFileName(version: PaddleModelVersion): String = when (version) {
-            PaddleModelVersion.V5_MOBILE -> FILE_KEYS
-            else -> FILE_KEYS_V6
-        }
+        internal fun keysFileName(@Suppress("UNUSED_PARAMETER") version: PaddleModelVersion): String = FILE_KEYS_YAML
+
+        internal fun modelDirectoryName(version: PaddleModelVersion): String = version.dirName
 
         internal fun defaultModelUrls(version: PaddleModelVersion): ModelUrls = when (version) {
             PaddleModelVersion.V5_MOBILE -> ModelUrls(DEFAULT_DET_URLS, DEFAULT_REC_URLS, DEFAULT_KEYS_URLS)

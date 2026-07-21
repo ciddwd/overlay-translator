@@ -154,8 +154,10 @@ to downloading, using, modifying and redistributing those weights.
   https://creativecommons.org/licenses/by-nc-sa/4.0/
 - PaddleOCR v6 models are published by PaddlePaddle under Apache License 2.0.
   https://huggingface.co/collections/PaddlePaddle/pp-ocrv6
-- The current PaddleOCR v5 download source is:
-  https://huggingface.co/bukuroo/PPOCRv5-ONNX
+- PaddleOCR v5 mobile detection and recognition ONNX models are downloaded
+  from PaddlePaddle's official repositories under Apache License 2.0:
+  https://huggingface.co/PaddlePaddle/PP-OCRv5_mobile_det_onnx
+  https://huggingface.co/PaddlePaddle/PP-OCRv5_mobile_rec_onnx
 - The current manga-ocr ONNX download source does not declare license metadata
   on its model card as of July 21, 2026. It must not be described as open-source
   or redistributed without separate permission or an upstream license update.

@@ -111,7 +111,7 @@
     <string name="btn_paddle_download">下载 PaddleOCR 模型</string>
     <string name="btn_paddle_delete">删除已下载模型</string>
     <string name="btn_paddle_import">从手机文件导入</string>
-    <string name="settings_paddle_help">推荐：下载 det.onnx / rec.onnx，再按版本准备字典文件：v5 用 keys.txt，v6 用 inference.yml。然后点下面的「从手机文件导入」一次选三个文件。</string>
+    <string name="settings_paddle_help">本地导入：分别下载官方检测、识别仓库的 inference.onnx，重命名为 det.onnx、rec.onnx；再下载识别仓库的 inference.yml。然后点下面的「从手机文件导入」一次选三个文件。</string>
     <string name="settings_baidu_key">百度 OCR API Key</string>
     <string name="settings_baidu_secret">百度 OCR Secret Key</string>
     <string name="settings_preprocess">图像预处理（OCR 前）</string>
@@ -659,7 +659,7 @@
     <string name="paddle_version_v6_full_languages">简体中文、繁体中文、英文、日文、法文、德文、意大利文、西班牙文、葡萄牙文、荷兰文、波兰文、罗马尼亚文、捷克文、瑞典文、挪威文、丹麦文、芬兰文、匈牙利文、土耳其文、越南文、印度尼西亚文、马来文、阿塞拜疆文、南非荷兰文、波斯尼亚文、克罗地亚文、威尔士文、爱沙尼亚文、爱尔兰文、冰岛文、库尔德文、立陶宛文、拉脱维亚文、马耳他文、毛利文、欧西坦文、斯洛伐克文、斯洛文尼亚文、阿尔巴尼亚文、斯瓦希里文、塔加洛文、乌兹别克文、拉丁文、塞尔维亚文（拉丁字母）、加泰罗尼亚文、巴斯克文、加利西亚文、卢森堡文、罗曼什文、克丘亚文</string>
     <string name="settings_paddle_supported_languages_button">查看支持语言（%1$d 种）</string>
     <string name="settings_paddle_supported_languages_title">%1$s 支持的语言</string>
-    <string name="settings_paddle_desc">PaddleOCR 端侧模型。可选 v5 mobile、v6 tiny、v6 small 或 v6 medium。首选「自动下载」；下不动就本地导入 det.onnx / rec.onnx，v5 再选 keys.txt，v6 再选 inference.yml。</string>
+    <string name="settings_paddle_desc">PaddleOCR 端侧模型。可选 v5 mobile、v6 tiny、v6 small 或 v6 medium。「自动下载」使用 PaddlePaddle 官方 ONNX 仓库；本地导入请选择 det.onnx、rec.onnx 和识别仓库的 inference.yml。</string>
     <string name="settings_paddle_btn_processing">处理中…</string>
     <string name="settings_paddle_btn_auto_download">自动下载</string>
     <string name="settings_paddle_btn_local_import">本地导入</string>

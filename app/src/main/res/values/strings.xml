@@ -111,7 +111,7 @@
     <string name="btn_paddle_download">Download PaddleOCR model</string>
     <string name="btn_paddle_delete">Delete downloaded model</string>
     <string name="btn_paddle_import">Import from device files</string>
-    <string name="settings_paddle_help">Tip: download det.onnx / rec.onnx plus keys.txt for v5 or inference.yml for v6, then tap \"Import from device files\" and pick all three at once.</string>
+    <string name="settings_paddle_help">Tip: download the official detection and recognition inference.onnx files, rename them to det.onnx / rec.onnx, and also download the recognition repository’s inference.yml. Then tap \"Import from device files\" and pick all three at once.</string>
     <string name="settings_baidu_key">Baidu OCR API Key</string>
     <string name="settings_baidu_secret">Baidu OCR Secret Key</string>
     <string name="settings_preprocess">Image preprocessing (before OCR)</string>
@@ -660,7 +660,7 @@
     <string name="paddle_version_v6_full_languages">Simplified Chinese, Traditional Chinese, English, Japanese, French, German, Italian, Spanish, Portuguese, Dutch, Polish, Romanian, Czech, Swedish, Norwegian, Danish, Finnish, Hungarian, Turkish, Vietnamese, Indonesian, Malay, Azerbaijani, Afrikaans, Bosnian, Croatian, Welsh, Estonian, Irish, Icelandic, Kurdish, Lithuanian, Latvian, Maltese, Maori, Occitan, Slovak, Slovenian, Albanian, Swahili, Tagalog, Uzbek, Latin, Serbian (Latin), Catalan, Basque, Galician, Luxembourgish, Romansh, Quechua</string>
     <string name="settings_paddle_supported_languages_button">View supported languages (%1$d)</string>
     <string name="settings_paddle_supported_languages_title">Languages supported by %1$s</string>
-    <string name="settings_paddle_desc">PaddleOCR on-device model. Choose v5 mobile, v6 tiny, v6 small, or v6 medium. Try \"Auto download\" first; if it fails, import det.onnx / rec.onnx plus keys.txt for v5 or inference.yml for v6.</string>
+    <string name="settings_paddle_desc">PaddleOCR on-device model. Choose v5 mobile, v6 tiny, v6 small, or v6 medium. Auto download uses PaddlePaddle’s official ONNX repositories. For local import, select det.onnx, rec.onnx, and the recognition repository’s inference.yml.</string>
     <string name="settings_paddle_btn_processing">Working…</string>
     <string name="settings_paddle_btn_auto_download">Auto download</string>
     <string name="settings_paddle_btn_local_import">Import locally</string>

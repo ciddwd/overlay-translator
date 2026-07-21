@@ -71,7 +71,16 @@ class LegalNoticeAssetsTest {
                     "Commercial use is not permitted",
                 ),
             ),
-            Case("PaddleOCR downloads", listOf("PaddleOCR v6", "PaddleOCR v5")),
+            Case(
+                "PaddleOCR downloads",
+                listOf(
+                    "PaddleOCR v6",
+                    "PaddleOCR v5 mobile detection and recognition ONNX models",
+                    "PaddlePaddle's official repositories",
+                    "PaddlePaddle/PP-OCRv5_mobile_det_onnx",
+                    "PaddlePaddle/PP-OCRv5_mobile_rec_onnx",
+                ),
+            ),
             Case("manga-ocr caveat", listOf("manga-ocr ONNX", "does not declare license metadata", "must not be described as open-source")),
         ).forEach { case ->
             case.requiredMarkers.forEach { marker ->
@@ -181,6 +190,7 @@ class LegalNoticeAssetsTest {
                 notice.contains("${case.noticePrefix} $version"),
             )
         }
+        assertFalse("community PaddleOCR v5 source must not remain", notice.contains("bukuroo/PPOCRv5-ONNX"))
     }
 
     @Test
