@@ -107,7 +107,7 @@ android {
 
     packaging {
         resources {
-            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            excludes += "/META-INF/AL2.0"
         }
         // 必须开启：:llama-android 引入的 llama.cpp 用 GGML_BACKEND_DL=ON 模式，启动时
         // ggml_backend_load_all_from_path() 用 readdir 扫 nativeLibraryDir 找

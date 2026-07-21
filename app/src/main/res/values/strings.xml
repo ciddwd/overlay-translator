@@ -151,6 +151,9 @@
     <string name="settings_about_licenses_page_title">Open-source licenses and third-party notices</string>
     <string name="settings_about_app_license_title">Application license</string>
     <string name="settings_about_third_party_notices_title">Third-party notices</string>
+    <string name="settings_about_onnxruntime_notices_title">ONNX Runtime third-party notices</string>
+    <string name="settings_about_hy_mt_notice_title">Hy-MT2 model notice</string>
+    <string name="settings_about_sakura_notice_title">SakuraLLM model notice</string>
     <string name="settings_about_licenses_unavailable">The bundled license notices could not be loaded.</string>
     <string name="settings_section_app_lang">App language</string>
     <string name="settings_app_lang_follow_system">Follow system</string>
@@ -179,6 +182,7 @@
     <string name="settings_cleartext_hosts_hint">Only private/loopback addresses are allowed over cleartext by default. Hosts added here also permit http:// access. ⚠ Cleartext can be intercepted/tampered — only enable when the link is trusted.</string>
     <string name="settings_label_translator_engine">Translator engine</string>
     <string name="settings_engine_openai_llm">OpenAI-compatible LLM</string>
+    <string name="settings_engine_anthropic_llm">Anthropic-compatible LLM</string>
     <string name="settings_engine_deepl">DeepL</string>
     <string name="settings_engine_youdao_pictrans">Youdao PicTrans</string>
     <string name="settings_engine_google">Google</string>
@@ -203,7 +207,8 @@
     <string name="settings_tencent_region">Tencent Cloud Region</string>
     <string name="settings_tencent_trans_tip">Shares SecretId / SecretKey / Region with Tencent Cloud OCR — edits here sync to the OCR section. Default ap-guangzhou. Native batch via TextTranslateBatch (≤ 2000 chars / call). First-time setup requires opening Machine Translation at console.cloud.tencent.com/tmt.</string>
     <string name="settings_google_tip">No config needed. Google may rate-limit or change the endpoint any time — for learning only. Proxy required inside mainland China.</string>
-    <string name="settings_google_mlkit_tip">Translation runs entirely on the device after the language model is downloaded. A 30 MB language model is required. No API key is needed.</string>
+    <string name="settings_google_mlkit_tip">Translation content is processed entirely on the device after the language model is downloaded. A 30 MB language model is required. No API key is needed.</string>
+    <string name="settings_mlkit_data_disclosure">ML Kit may contact Google to download or update models and compatibility data, and may send performance and usage metrics. Captured images, source text, and translations are not sent to Google.</string>
     <string name="settings_mlkit_download_pair">Download %1$s → %2$s models</string>
     <string name="settings_mlkit_model_downloading">Downloading models…</string>
     <string name="settings_mlkit_model_ready">The current language models are ready. Offline translation is available.</string>
@@ -223,6 +228,10 @@
     <string name="settings_base_url_placeholder">https://api.siliconflow.cn/v1/  /  https://api.deepseek.com/v1/</string>
     <string name="settings_api_key_placeholder">sk-...</string>
     <string name="settings_model_placeholder">deepseek-v4-flash / gpt-4o-mini / glm-4-flash</string>
+    <string name="settings_anthropic_base_url_placeholder">https://api.deepseek.com/anthropic</string>
+    <string name="settings_anthropic_api_key_placeholder">sk-...</string>
+    <string name="settings_anthropic_model_placeholder">deepseek-v4-flash</string>
+    <string name="settings_anthropic_compatibility_hint">Uses the Anthropic Messages API (/v1/messages) with x-api-key. Provider-specific Bedrock and Vertex authentication is not supported.</string>
     <string name="settings_deepl_api_key">DeepL API Key</string>
     <string name="settings_deepl_key_placeholder">Free plan ends with :fx; Pro does not</string>
     <string name="settings_deepl_use_pro">Use Pro endpoint (api.deepl.com)</string>
@@ -421,6 +430,8 @@
     <string name="settings_test_ok_deepl_custom_format">OK · custom endpoint reachable, sample: %1$s</string>
     <string name="settings_test_ok_openai_models_format">OK · fetched %1$d models — tap to fill model name</string>
     <string name="settings_test_ok_openai_chat_format">OK · model=%1$s · %2$d ms</string>
+    <string name="settings_test_ok_anthropic_models_format">OK · fetched %1$d Anthropic models — tap to fill model name</string>
+    <string name="settings_test_ok_anthropic_message_format">OK · Anthropic model=%1$s · %2$d ms</string>
     <string name="settings_test_deepl_403_hint">check Free/Pro endpoint toggle matches your key</string>
     <string name="settings_test_pick_model">Pick a model from the list</string>
 
@@ -457,7 +468,7 @@
     <string name="settings_paddle_ai_studio_description">PP-OCRv6 Online uses the PaddleOCR AI Studio asynchronous OCR service. Get an Access Token from the page below, then enter it here.</string>
     <string name="settings_paddle_ai_studio_open_page">Open PaddleOCR AI Studio in an external browser</string>
     <string name="settings_external_browser_unavailable">No browser is available to open this link.</string>
-    <string name="settings_ocr_intro">Pick the OCR engine for the text type:\n• Auto / Japanese / Korean / Chinese / Latin: Google ML Kit on-device (free, offline). \"Auto\" picks the model by detecting Hangul / kana; pinning a specific language slightly improves accuracy.\n• PaddleOCR: on-device multilingual; better on complex layouts. First use downloads ~20MB models. (Korean dict not bundled — use ML Kit or cloud for Korean.)\n• Manga-OCR (Japanese manga, on-device, ≈ 160 MB; encoder + decoder + tokenizer files)\n• Baidu / Tencent Cloud: cloud OCR with API key (pay-as-you-go); pick Korean / Japanese etc. under \"Recognition language\" as a fallback.</string>
+    <string name="settings_ocr_intro">Pick the OCR engine for the text type:\n• Auto / Japanese / Korean / Chinese / Latin: Google ML Kit on-device (free; captured images and recognized text are not uploaded. The SDK may connect for updates and performance / usage metrics). \"Auto\" picks the model by detecting Hangul / kana; pinning a specific language slightly improves accuracy.\n• PaddleOCR: on-device multilingual; better on complex layouts. First use downloads ~20MB models. (Korean dict not bundled — use ML Kit or cloud for Korean.)\n• Manga-OCR (Japanese manga, on-device, ≈ 160 MB; encoder + decoder + tokenizer files)\n• Baidu / Tencent Cloud: cloud OCR with API key (pay-as-you-go); pick Korean / Japanese etc. under \"Recognition language\" as a fallback.</string>
     <string name="settings_baidu_api_key">Baidu API Key</string>
     <string name="settings_baidu_secret_key">Baidu Secret Key</string>
     <string name="settings_baidu_endpoint_label">Endpoint type (each has its own free quota on the Baidu console)</string>
@@ -663,6 +674,9 @@
     <!-- Settings search index labels -->
     <string name="settings_search_item_translator_engine">Translator engine</string>
     <string name="settings_search_item_base_url">Base URL</string>
+    <string name="settings_search_item_anthropic_base_url">Anthropic Base URL</string>
+    <string name="settings_search_item_anthropic_api_key">Anthropic API Key</string>
+    <string name="settings_search_item_anthropic_model">Anthropic model name</string>
     <string name="settings_search_item_api_key">API Key</string>
     <string name="settings_search_item_model_name">Model name</string>
     <string name="settings_search_item_tts_enable">TTS output</string>
@@ -951,6 +965,11 @@
     <string name="err_openai_no_api_key">API Key not configured</string>
     <string name="err_openai_parse_failed_format">Failed to parse response: %1$s</string>
     <string name="err_openai_no_choices">Response has no choices.message.content</string>
+    <string name="err_anthropic_no_base_url">Anthropic Base URL is not configured</string>
+    <string name="err_anthropic_no_api_key">Anthropic API Key is not configured</string>
+    <string name="err_anthropic_no_model">Anthropic model is not configured</string>
+    <string name="err_anthropic_no_text">Anthropic response has no text content block</string>
+    <string name="err_anthropic_empty_body">Anthropic response body is empty</string>
     <string name="err_deepl_no_api_key">DeepL API Key not configured</string>
     <string name="err_deepl_parse_failed_format">DeepL parse failed: %1$s</string>
     <string name="err_deepl_no_translation">DeepL response has no translations.text</string>

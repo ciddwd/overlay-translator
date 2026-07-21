@@ -15,6 +15,8 @@ import java.security.MessageDigest
 const val DEFAULT_MINIMAX_TTS_BASE_URL = "https://api.minimaxi.com"
 const val DEFAULT_MIMO_TTS_BASE_URL = "https://api.xiaomimimo.com/v1"
 const val DEFAULT_VOLCENGINE_TTS_BASE_URL = "https://openspeech.bytedance.com"
+const val DEFAULT_ANTHROPIC_BASE_URL = "https://api.deepseek.com/anthropic"
+const val DEFAULT_ANTHROPIC_MODEL = "deepseek-v4-flash"
 const val MIN_TTS_PLAYBACK_GAIN_DB = 0
 const val MAX_TTS_PLAYBACK_GAIN_DB = 24
 
@@ -24,6 +26,9 @@ data class Settings(
     val baseUrl: String = "https://api.deepseek.com/v1/",
     val apiKey: String = "",
     val model: String = "deepseek-v4-flash",
+    val anthropicBaseUrl: String = DEFAULT_ANTHROPIC_BASE_URL,
+    val anthropicApiKey: String = "",
+    val anthropicModel: String = DEFAULT_ANTHROPIC_MODEL,
     /** BCP-47 源语言代码（如 "auto"/"ja"/"zh-CN"）。从全部 [Languages.ALL] 中选取。 */
     val sourceLang: String = Languages.AUTO.code,
     val targetLang: String = "zh-CN",
@@ -406,6 +411,8 @@ data class TranslationPreset(
     val shortName: String = name.take(8),
     val baseUrl: String = "https://api.deepseek.com/v1/",
     val model: String = "deepseek-v4-flash",
+    val anthropicBaseUrl: String = DEFAULT_ANTHROPIC_BASE_URL,
+    val anthropicModel: String = DEFAULT_ANTHROPIC_MODEL,
     val sourceLang: String = Languages.AUTO.code,
     val targetLang: String = "zh-CN",
     val promptTemplate: String = Settings.DEFAULT_PROMPT,
@@ -483,6 +490,8 @@ data class TranslationPreset(
         return settings.copy(
         baseUrl = baseUrl,
         model = model,
+        anthropicBaseUrl = anthropicBaseUrl,
+        anthropicModel = anthropicModel,
         sourceLang = sourceLang,
         targetLang = targetLang,
         promptTemplate = promptTemplate,
@@ -597,6 +606,8 @@ object TranslationPresetCatalog {
             shortName = shortName,
             baseUrl = settings.baseUrl,
             model = settings.model,
+            anthropicBaseUrl = settings.anthropicBaseUrl,
+            anthropicModel = settings.anthropicModel,
             sourceLang = settings.sourceLang,
             targetLang = settings.targetLang,
             promptTemplate = settings.promptTemplate,
@@ -696,6 +707,8 @@ object TranslationPresetCatalog {
         return sha256(
             preset.baseUrl,
             preset.model,
+            preset.anthropicBaseUrl,
+            preset.anthropicModel,
             preset.sourceLang,
             preset.targetLang,
             preset.promptTemplate,
@@ -986,7 +999,7 @@ enum class PaddleModelVersion(
     /** modelsDir 下的子目录名 */
     val dirName: String
 ) {
-    /** PP-OCRv5 mobile（det 4.5MB + rec 15.7MB + dict 90KB，~20MB 总计） */
+    /** 官方 PP-OCRv5 mobile（det 4.6MiB + rec 15.8MiB + inference.yml 145KiB，约 20.5MiB） */
     V5_MOBILE(
         R.string.paddle_version_v5_mobile,
         R.string.paddle_version_v5_mobile_desc,
@@ -1028,6 +1041,8 @@ enum class PaddleModelVersion(
 enum class TranslatorEngine {
     /** OpenAI 兼容 LLM（DeepSeek / SiliconFlow / GPT / 自架 Ollama 等）。 */
     OPENAI,
+    /** Anthropic Messages API 兼容 LLM（官方 Claude / 标准兼容网关）。 */
+    ANTHROPIC,
     /** DeepL 翻译 API（专业翻译质量，对日/英/中等 30+ 语言对）。 */
     DEEPL,
     /**

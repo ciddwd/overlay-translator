@@ -11,6 +11,7 @@ class TranslationPresetTest {
     fun mangaBuiltInPresetAppliesOfflineJapaneseMangaModeAndKeepsSecrets() {
         val base = Settings(
             apiKey = "openai-key",
+            anthropicApiKey = "anthropic-key",
             baiduOcrApiKey = "baidu-key",
             baiduOcrSecretKey = "baidu-secret",
             paddleAiStudioToken = "paddle-ai-studio-token",
@@ -63,6 +64,7 @@ class TranslationPresetTest {
         }
 
         assertEquals(base.apiKey, applied.apiKey)
+        assertEquals(base.anthropicApiKey, applied.anthropicApiKey)
         assertEquals(base.baiduOcrApiKey, applied.baiduOcrApiKey)
         assertEquals(base.baiduOcrSecretKey, applied.baiduOcrSecretKey)
         assertEquals(base.paddleAiStudioToken, applied.paddleAiStudioToken)
@@ -109,6 +111,7 @@ class TranslationPresetTest {
         val fieldNames = TranslationPreset::class.java.declaredFields.map { it.name }.toSet()
         val forbidden = setOf(
             "apiKey",
+            "anthropicApiKey",
             "baiduOcrApiKey",
             "baiduOcrSecretKey",
             "paddleAiStudioToken",

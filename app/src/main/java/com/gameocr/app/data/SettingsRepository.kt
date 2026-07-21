@@ -37,6 +37,9 @@ class SettingsRepository @Inject constructor(
         val BaseUrl = stringPreferencesKey("base_url")
         val ApiKey = stringPreferencesKey("api_key")
         val Model = stringPreferencesKey("model")
+        val AnthropicBaseUrl = stringPreferencesKey("anthropic_base_url")
+        val AnthropicApiKey = stringPreferencesKey("anthropic_api_key")
+        val AnthropicModel = stringPreferencesKey("anthropic_model")
         val SourceLang = stringPreferencesKey("source_lang")
         val TargetLang = stringPreferencesKey("target_lang")
         val Prompt = stringPreferencesKey("prompt")
@@ -384,6 +387,9 @@ class SettingsRepository @Inject constructor(
             prefs.putSecure(Keys.BaseUrl, next.baseUrl)
             prefs.putSecure(Keys.ApiKey, next.apiKey)
             prefs[Keys.Model] = next.model
+            prefs.putSecure(Keys.AnthropicBaseUrl, next.anthropicBaseUrl)
+            prefs.putSecure(Keys.AnthropicApiKey, next.anthropicApiKey)
+            prefs[Keys.AnthropicModel] = next.anthropicModel
             prefs[Keys.SourceLang] = next.sourceLang
             prefs[Keys.TargetLang] = next.targetLang
             prefs.putSecure(Keys.Prompt, next.promptTemplate)
@@ -595,6 +601,9 @@ class SettingsRepository @Inject constructor(
             baseUrl = secureString(Keys.BaseUrl, default.baseUrl),
             apiKey = secureString(Keys.ApiKey, default.apiKey),
             model = this[Keys.Model] ?: default.model,
+            anthropicBaseUrl = secureString(Keys.AnthropicBaseUrl, default.anthropicBaseUrl),
+            anthropicApiKey = secureString(Keys.AnthropicApiKey, default.anthropicApiKey),
+            anthropicModel = this[Keys.AnthropicModel] ?: default.anthropicModel,
             // 兼容 0.1.x 旧用户：那时 sourceLang 用 enum.name（"AUTO"/"JA"/...）保存。
             // 新版改为 BCP-47 tag（"auto"/"ja"/...）。读出时若是旧大写值，按 mapping 转回。
             sourceLang = (this[Keys.SourceLang] ?: default.sourceLang).let { raw ->

@@ -53,12 +53,14 @@ class WordHeuristicTest {
         )
 
         val cases = buildList {
-            add(Case("OpenAI English word", "update", "en", TranslatorEngine.OPENAI, "update"))
-            add(Case("OpenAI English phrase", "release notes", "en", TranslatorEngine.OPENAI, "release notes"))
-            add(Case("OpenAI Japanese term", "更新", "ja", TranslatorEngine.OPENAI, "更新"))
-            add(Case("OpenAI sentence", "please update this", "en", TranslatorEngine.OPENAI, null))
+            listOf(TranslatorEngine.OPENAI, TranslatorEngine.ANTHROPIC).forEach { engine ->
+                add(Case("$engine English word", "update", "en", engine, "update"))
+                add(Case("$engine English phrase", "release notes", "en", engine, "release notes"))
+                add(Case("$engine Japanese term", "更新", "ja", engine, "更新"))
+                add(Case("$engine sentence", "please update this", "en", engine, null))
+            }
             TranslatorEngine.entries
-                .filterNot { it == TranslatorEngine.OPENAI }
+                .filterNot { it == TranslatorEngine.OPENAI || it == TranslatorEngine.ANTHROPIC }
                 .forEach { engine ->
                     add(Case("$engine has no structured dictionary", "update", "en", engine, null))
                 }

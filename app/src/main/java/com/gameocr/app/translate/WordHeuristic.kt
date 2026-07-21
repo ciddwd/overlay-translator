@@ -26,7 +26,7 @@ object WordHeuristic {
         sourceLang: String,
         translatorEngine: TranslatorEngine,
     ): String? {
-        if (translatorEngine != TranslatorEngine.OPENAI) return null
+        if (translatorEngine !in structuredDictionaryEngines) return null
         return dictionaryTermOrNull(text, sourceLang)
     }
 
@@ -35,7 +35,7 @@ object WordHeuristic {
         sourceLang: String,
         translatorEngine: TranslatorEngine,
     ): String? {
-        if (translatorEngine != TranslatorEngine.OPENAI) return null
+        if (translatorEngine !in structuredDictionaryEngines) return null
         return dictionaryTermOrNull(
             text = text,
             sourceLang = sourceLang,
@@ -101,4 +101,9 @@ object WordHeuristic {
             block == Character.UnicodeBlock.HANGUL_JAMO ||
             block == Character.UnicodeBlock.HANGUL_COMPATIBILITY_JAMO
     }
+
+    private val structuredDictionaryEngines = setOf(
+        TranslatorEngine.OPENAI,
+        TranslatorEngine.ANTHROPIC,
+    )
 }

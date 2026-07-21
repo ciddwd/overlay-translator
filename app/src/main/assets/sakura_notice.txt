@@ -2,13 +2,18 @@ SakuraLLM Model Notice
 ======================
 
 The optional on-device Japanese-to-Chinese translation model used by this app
-is Sakura-1.5B-Qwen2.5-v1.0, distributed as a GGUF quantization:
+is Sakura-1.5B-Qwen2.5-v1.0, published by the SakuraLLM project:
 https://github.com/SakuraLLM/SakuraLLM
+https://huggingface.co/SakuraLLM/Sakura-1.5B-Qwen2.5-v1.0-GGUF
+
+The application downloads the Q5_K_S GGUF quantization prepared by
+Hugging Face user shing3232 without further modification:
 https://huggingface.co/shing3232/Sakura-1.5B-Qwen2.5-v1.0-GGUF-IMX
 
 The Sakura model is distributed under Creative Commons
 Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0).
-Commercial use is not permitted by that model license:
+The GGUF quantization is a modification of the official model and remains under
+the same license. Commercial use is not permitted by that model license:
 https://creativecommons.org/licenses/by-nc-sa/4.0/
 
 The underlying Qwen2.5-1.5B base model is licensed under the Apache License,

@@ -423,6 +423,9 @@ fun SettingsScreen(
     var baseUrl by remember { mutableStateOf("") }
     var apiKey by remember { mutableStateOf("") }
     var model by remember { mutableStateOf("") }
+    var anthropicBaseUrl by remember { mutableStateOf("") }
+    var anthropicApiKey by remember { mutableStateOf("") }
+    var anthropicModel by remember { mutableStateOf("") }
     var prompt by remember { mutableStateOf("") }
     var targetLang by remember { mutableStateOf("zh-CN") }
     var sourceLang by remember { mutableStateOf("auto") }
@@ -841,6 +844,9 @@ fun SettingsScreen(
         baseUrl = s.baseUrl
         apiKey = s.apiKey
         model = s.model
+        anthropicBaseUrl = s.anthropicBaseUrl
+        anthropicApiKey = s.anthropicApiKey
+        anthropicModel = s.anthropicModel
         prompt = s.promptTemplate
         sourceLang = s.sourceLang
         targetLang = s.targetLang
@@ -1174,6 +1180,9 @@ fun SettingsScreen(
         baseUrl = baseUrl,
         apiKey = apiKey,
         model = model,
+        anthropicBaseUrl = anthropicBaseUrl,
+        anthropicApiKey = anthropicApiKey,
+        anthropicModel = anthropicModel,
         sourceLang = sourceLang,
         targetLang = targetLang,
         mlKitRecentSourceLanguages = mlKitRecentSources,
@@ -1384,6 +1393,9 @@ fun SettingsScreen(
     val doSave: suspend () -> Unit = {
         viewModel.save(
             baseUrl = baseUrl, apiKey = apiKey, model = model,
+            anthropicBaseUrl = anthropicBaseUrl,
+            anthropicApiKey = anthropicApiKey,
+            anthropicModel = anthropicModel,
             targetLang = targetLang, sourceLang = sourceLang, prompt = prompt,
             textSize = textSize.toInt(), alpha = alpha,
             overlayTextStyle = overlayTextStyle,
@@ -2364,6 +2376,9 @@ fun SettingsScreen(
             baseUrl = s.baseUrl
             apiKey = s.apiKey
             model = s.model
+            anthropicBaseUrl = s.anthropicBaseUrl
+            anthropicApiKey = s.anthropicApiKey
+            anthropicModel = s.anthropicModel
             prompt = migratedPrompt
             targetLang = s.targetLang
             sourceLang = s.sourceLang
@@ -2891,6 +2906,7 @@ fun SettingsScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     EngineChip(translatorEngine, TranslatorEngine.OPENAI, stringResource(R.string.settings_engine_openai_llm)) { translatorEngine = it }
+                    EngineChip(translatorEngine, TranslatorEngine.ANTHROPIC, stringResource(R.string.settings_engine_anthropic_llm)) { translatorEngine = it }
                 }
                 Text(
                     stringResource(R.string.settings_translator_group_cloud),
@@ -3027,6 +3043,76 @@ fun SettingsScreen(
                                             model = id
                                             modelPickerExpanded = false
                                         }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    }
+                } else if (translatorEngine == TranslatorEngine.ANTHROPIC) {
+                    SettingsSearchTarget(
+                        searchTargetRegistry,
+                        R.string.settings_search_item_anthropic_base_url,
+                        R.string.settings_search_item_anthropic_api_key,
+                        R.string.settings_search_item_anthropic_model,
+                    ) {
+                    OutlinedTextField(
+                        value = anthropicBaseUrl,
+                        onValueChange = { anthropicBaseUrl = it },
+                        label = { Text(stringResource(R.string.settings_base_url)) },
+                        placeholder = { Text(stringResource(R.string.settings_anthropic_base_url_placeholder)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
+                    SecretTextField(
+                        value = anthropicApiKey,
+                        onValueChange = { anthropicApiKey = it },
+                        label = stringResource(R.string.settings_api_key),
+                        placeholder = stringResource(R.string.settings_anthropic_api_key_placeholder),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = anthropicModel,
+                        onValueChange = { anthropicModel = it },
+                        label = { Text(stringResource(R.string.settings_model)) },
+                        placeholder = { Text(stringResource(R.string.settings_anthropic_model_placeholder)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
+                    Text(
+                        stringResource(R.string.settings_anthropic_compatibility_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (fetchedModels.isNotEmpty()) {
+                        ExposedDropdownMenuBox(
+                            expanded = modelPickerExpanded,
+                            onExpandedChange = { modelPickerExpanded = !modelPickerExpanded },
+                        ) {
+                            OutlinedTextField(
+                                value = "",
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text(stringResource(R.string.settings_test_pick_model)) },
+                                placeholder = { Text("${fetchedModels.size} models") },
+                                trailingIcon = {
+                                    ExposedDropdownMenuDefaults.TrailingIcon(
+                                        expanded = modelPickerExpanded
+                                    )
+                                },
+                                modifier = Modifier.menuAnchor().fillMaxWidth(),
+                            )
+                            ExposedDropdownMenu(
+                                expanded = modelPickerExpanded,
+                                onDismissRequest = { modelPickerExpanded = false },
+                            ) {
+                                fetchedModels.forEach { id ->
+                                    DropdownMenuItem(
+                                        text = { Text(id) },
+                                        onClick = {
+                                            anthropicModel = id
+                                            modelPickerExpanded = false
+                                        },
                                     )
                                 }
                             }
@@ -3241,6 +3327,11 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    Text(
+                        stringResource(R.string.settings_mlkit_data_disclosure),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                     val sourceSelected = sourceLang.isNotBlank() &&
                         !sourceLang.equals(Languages.AUTO.code, ignoreCase = true)
                     val targetSelected = targetLang.isNotBlank() &&
@@ -3349,6 +3440,9 @@ fun SettingsScreen(
                                     baseUrl = baseUrl,
                                     apiKey = apiKey,
                                     model = model,
+                                    anthropicBaseUrl = anthropicBaseUrl,
+                                    anthropicApiKey = anthropicApiKey,
+                                    anthropicModel = anthropicModel,
                                     deeplKey = deeplKey,
                                     deeplPro = deeplPro,
                                     deeplProtocol = deeplProtocol,
@@ -3521,7 +3615,9 @@ fun SettingsScreen(
                     onRetryEmptyTranslationChange = { retryEmptyTranslation = it },
                 )
                 }
-                if (translatorEngine == TranslatorEngine.OPENAI) {
+                if (translatorEngine == TranslatorEngine.OPENAI ||
+                    translatorEngine == TranslatorEngine.ANTHROPIC
+                ) {
                     SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_PROMPTS) {
                     OpenAiPromptSettings(
                         prompt = prompt,
@@ -6518,7 +6614,9 @@ private fun TranslationAssistanceSettings(
     retryEmptyTranslation: Boolean,
     onRetryEmptyTranslationChange: (Boolean) -> Unit,
 ) {
-    if (translatorEngine == TranslatorEngine.OPENAI) {
+    if (translatorEngine == TranslatorEngine.OPENAI ||
+        translatorEngine == TranslatorEngine.ANTHROPIC
+    ) {
         SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_streaming) {
         SwitchRow(stringResource(R.string.settings_streaming), streaming, onChange = onStreamingChange)
         }
@@ -7258,6 +7356,9 @@ private val SEARCH_TARGET_TRANSLATOR_PROVIDERS = intArrayOf(
     R.string.settings_search_item_base_url,
     R.string.settings_search_item_api_key,
     R.string.settings_search_item_model_name,
+    R.string.settings_search_item_anthropic_base_url,
+    R.string.settings_search_item_anthropic_api_key,
+    R.string.settings_search_item_anthropic_model,
     R.string.settings_search_item_deepl_api_key,
     R.string.settings_search_item_deepl_pro,
     R.string.settings_search_item_deepl_advanced,
@@ -7574,6 +7675,7 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
         listOf("OpenAI", "DeepL", "LLM", "翻译引擎"),
         optionLabelResIds = listOf(
             R.string.settings_engine_openai_llm,
+            R.string.settings_engine_anthropic_llm,
             R.string.settings_engine_deepl,
             R.string.settings_engine_youdao_pictrans,
             R.string.settings_engine_google,
@@ -7591,6 +7693,9 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_base_url, listOf("base url"), requiredTranslatorEngine = TranslatorEngine.OPENAI),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_api_key, listOf("api key"), requiredTranslatorEngine = TranslatorEngine.OPENAI),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_model_name, listOf("model", "模型名"), requiredTranslatorEngine = TranslatorEngine.OPENAI),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_anthropic_base_url, listOf("anthropic", "claude", "messages api", "base url"), requiredTranslatorEngine = TranslatorEngine.ANTHROPIC),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_anthropic_api_key, listOf("anthropic", "claude", "x-api-key"), requiredTranslatorEngine = TranslatorEngine.ANTHROPIC),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_anthropic_model, listOf("anthropic", "claude", "model", "模型名"), requiredTranslatorEngine = TranslatorEngine.ANTHROPIC),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_deepl_api_key, listOf("deepl"), requiredTranslatorEngine = TranslatorEngine.DEEPL),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_deepl_pro, listOf("deepl pro"), requiredTranslatorEngine = TranslatorEngine.DEEPL),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_deepl_advanced, listOf("deeplx", "bearer", "official", "protocol", "自架", "高级", "协议", "deepl base url"), requiredTranslatorEngine = TranslatorEngine.DEEPL),
@@ -8341,6 +8446,9 @@ private fun translationPresetSummary(preset: TranslationPreset): String {
 @Composable
 private fun presetLlmLabel(preset: TranslationPreset): String = when (preset.translatorEngine) {
     TranslatorEngine.OPENAI -> preset.model.ifBlank { stringResource(R.string.settings_engine_openai_llm) }
+    TranslatorEngine.ANTHROPIC -> preset.anthropicModel.ifBlank {
+        stringResource(R.string.settings_engine_anthropic_llm)
+    }
     TranslatorEngine.LOCAL_SAKURA -> stringResource(R.string.settings_engine_local_sakura)
     TranslatorEngine.LOCAL_HY_MT2 -> stringResource(R.string.settings_engine_local_hymt2)
     TranslatorEngine.GOOGLE_ML_KIT -> stringResource(
@@ -8373,6 +8481,7 @@ private fun ocrEngineLabel(engine: OcrEngineKind): String = stringResource(
 private fun translatorEngineLabel(engine: TranslatorEngine): String = stringResource(
     when (engine) {
         TranslatorEngine.OPENAI -> R.string.settings_engine_openai_llm
+        TranslatorEngine.ANTHROPIC -> R.string.settings_engine_anthropic_llm
         TranslatorEngine.DEEPL -> R.string.settings_engine_deepl
         TranslatorEngine.YOUDAO_PICTRANS -> R.string.settings_engine_youdao_pictrans
         TranslatorEngine.GOOGLE -> R.string.settings_engine_google

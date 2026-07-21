@@ -9,21 +9,21 @@ The complete license text is distributed in the repository as LICENSE and in
 the Android application as apache_license_2_0.txt.
 
 Project license source:
-https://github.com/ciddwd/overlay-translator/blob/dev/LICENSE
+https://github.com/ciddwd/overlay-translator/blob/main/LICENSE
 
 Third-party runtime software
 ============================
 
 The Android release runtime dependency graph and the native code built into the
-application include the projects below. Version numbers refer to the v0.3.9
-build configuration. Transitive modules belonging to the same project family
-are grouped together.
+application include the principal projects below. Version numbers refer to the
+v0.4.0 build configuration. Transitive modules belonging to the same project
+family are grouped together.
 
 Apache License 2.0
 ------------------
 
 - AndroidX: Activity, AppCompat, Compose, Core, DataStore, DynamicAnimation,
-  Hilt integration, Lifecycle, Room and WorkManager
+  Hilt integration, Lifecycle, Navigation, Room and WorkManager
   https://github.com/androidx/androidx
 - Material Components for Android 1.12.0
   https://github.com/material-components/material-components-android
@@ -34,6 +34,14 @@ Apache License 2.0
 - Dagger and Hilt 2.53.1, including the injection and annotation support used
   by their runtime dependency graph
   https://github.com/google/dagger
+- Google support libraries used transitively by ML Kit, including
+  Android Data Transport and Firebase Components / Encoders
+  https://github.com/firebase/firebase-android-sdk
+- Apache-licensed annotation and injection support used transitively, including
+  Error Prone Annotations, JSpecify, JSR-305, javax.inject and Jakarta Inject
+  https://github.com/google/error-prone
+  https://github.com/jspecify/jspecify
+  https://github.com/javax-inject/javax-inject
 - Retrofit 2.11.0, OkHttp 4.12.0 and Okio
   https://github.com/square/retrofit
   https://github.com/square/okhttp
@@ -42,7 +50,7 @@ Apache License 2.0
   https://github.com/JakeWharton/retrofit2-kotlinx-serialization-converter
 - Timber 5.0.1
   https://github.com/JakeWharton/timber
-- Vulkan-Headers, used by the optional llama.cpp Vulkan build
+- Vulkan-Headers 1.3.275, used by the bundled llama.cpp Vulkan backend
   https://github.com/KhronosGroup/Vulkan-Headers
 
 The complete Apache License 2.0 text is provided with this application in
@@ -54,8 +62,9 @@ MIT License
 
 - Shizuku API 13.1.5 — Copyright (c) 2021 RikkaW
   https://github.com/RikkaApps/Shizuku-API
-- ONNX Runtime Android 1.20.0 — Copyright (c) Microsoft Corporation
-  https://github.com/microsoft/onnxruntime
+- ONNX Runtime Android 1.20.0 — Copyright (c) Microsoft Corporation.
+  All rights reserved.
+  https://github.com/microsoft/onnxruntime/blob/v1.20.0/LICENSE
 - llama.cpp — Copyright (c) 2023-2026 The ggml authors
   https://github.com/ggml-org/llama.cpp
 - nlohmann/json — Copyright (c) 2013-2026 Niels Lohmann
@@ -82,19 +91,36 @@ COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
 IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+ONNX Runtime third-party notices
+================================
+
+The complete, unmodified ONNX Runtime 1.20.0 third-party notices are distributed
+with the Android application as onnxruntime_third_party_notices_1_20_0.txt.
+SHA-256 CF7342F7BA482EF715AE58F5F497A8D3564FA255164175AEA324CD293C5701A0
+Official source:
+https://github.com/microsoft/onnxruntime/blob/v1.20.0/ThirdPartyNotices.txt
+
 Google ML Kit
 =============
 
 The application uses Google ML Kit Text Recognition 16.0.1 for Latin, Chinese,
-Japanese and Korean text. ML Kit is a Google SDK governed by the ML Kit Terms,
-and is not represented here as open-source software:
+Japanese and Korean text, and ML Kit Translation 17.0.3 with language models
+downloaded on demand. ML Kit is a Google SDK governed by the ML Kit Terms and
+is not represented here as open-source software.
+
+Input images and text are processed on-device and are not sent to Google. The
+SDK may contact Google for model or compatibility updates and may send
+performance and utilization metrics that do not contain the input or output.
+This data-processing disclosure is also shown in the ML Kit settings. Terms and
+privacy details:
 https://developers.google.com/ml-kit/terms
 
 Bundled model assets
 ====================
 
 The APK contains the following PaddlePaddle PP-LCNet orientation models under
-the Apache License 2.0:
+the Apache License 2.0. Copyright (c) 2020 PaddlePaddle Authors. All Rights
+Reserved.
 
 - models/doc_orientation/doc_ori.onnx
   SHA-256 AF9A0A4F317FF0709CE752067807F819CB15D883F8ECAD89F28DF1C6EE2D9C92
@@ -111,13 +137,18 @@ after a user selects the corresponding model. Their upstream terms still apply
 to downloading, using, modifying and redistributing those weights.
 
 - Tencent Hy-MT2-1.8B-GGUF is licensed under Apache License 2.0.
-  Copyright 2026 Tencent.
+  Copyright (C) 2026 Tencent. All rights reserved.
   https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF
-- Sakura-1.5B-Qwen2.5-v1.0 is distributed by the SakuraLLM project under
-  Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International
-  (CC BY-NC-SA 4.0). Commercial use is not permitted by that model license.
-  Its Qwen2.5-1.5B base model is licensed under Apache License 2.0.
+- Sakura-1.5B-Qwen2.5-v1.0 is published by the SakuraLLM project under Creative
+  Commons Attribution-NonCommercial-ShareAlike 4.0 International
+  (CC BY-NC-SA 4.0). The application downloads an unmodified Q5_K_S GGUF
+  quantization prepared by Hugging Face user shing3232.
+  Quantization is a modification of the official model; the same
+  CC BY-NC-SA 4.0 terms apply.
+  Commercial use is not permitted by that model license. Its Qwen2.5-1.5B base
+  model is licensed under Apache License 2.0.
   https://github.com/SakuraLLM/SakuraLLM
+  https://huggingface.co/SakuraLLM/Sakura-1.5B-Qwen2.5-v1.0-GGUF
   https://huggingface.co/shing3232/Sakura-1.5B-Qwen2.5-v1.0-GGUF-IMX
   https://huggingface.co/Qwen/Qwen2.5-1.5B/blob/main/LICENSE
   https://creativecommons.org/licenses/by-nc-sa/4.0/
@@ -126,7 +157,7 @@ to downloading, using, modifying and redistributing those weights.
 - The current PaddleOCR v5 download source is:
   https://huggingface.co/bukuroo/PPOCRv5-ONNX
 - The current manga-ocr ONNX download source does not declare license metadata
-  on its model card as of July 15, 2026. It must not be described as open-source
+  on its model card as of July 21, 2026. It must not be described as open-source
   or redistributed without separate permission or an upstream license update.
   https://huggingface.co/l0wgear/manga-ocr-2025-onnx
 
@@ -139,7 +170,8 @@ General notices
 
 This product includes software developed by The Android Open Source Project,
 JetBrains s.r.o., Square, Inc., Google LLC, Microsoft Corporation, The Khronos
-Group Inc., the ggml authors and other open-source contributors.
+Group Inc., the Firebase project, the ggml authors and other open-source
+contributors.
 
 Names and trademarks remain the property of their respective owners. Listing a
 project above does not imply affiliation with or endorsement of Screen

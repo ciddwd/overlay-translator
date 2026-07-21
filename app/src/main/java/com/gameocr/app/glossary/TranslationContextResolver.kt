@@ -49,6 +49,7 @@ internal object TranslationPromptContextBuilder {
 
 internal fun supportsTranslationPromptContext(engine: TranslatorEngine): Boolean = when (engine) {
     TranslatorEngine.OPENAI,
+    TranslatorEngine.ANTHROPIC,
     TranslatorEngine.LOCAL_SAKURA,
     TranslatorEngine.LOCAL_HY_MT2 -> true
     TranslatorEngine.DEEPL,

@@ -7,6 +7,25 @@ import org.junit.Test
 class SettingsDefaultsTest {
 
     @Test
+    fun anthropicDefaults_areStableAcrossSettingsAndPresets() {
+        data class Case(val name: String, val baseUrl: String, val model: String)
+
+        val cases = listOf(
+            Case("settings", Settings().anthropicBaseUrl, Settings().anthropicModel),
+            Case(
+                "translation preset",
+                TranslationPreset(id = "test", name = "test").anthropicBaseUrl,
+                TranslationPreset(id = "test", name = "test").anthropicModel,
+            ),
+        )
+
+        cases.forEach { case ->
+            assertEquals(case.name, DEFAULT_ANTHROPIC_BASE_URL, case.baseUrl)
+            assertEquals(case.name, DEFAULT_ANTHROPIC_MODEL, case.model)
+        }
+    }
+
+    @Test
     fun developerDiagnostics_defaultToOff() {
         data class Case(val name: String, val actual: Boolean)
 

@@ -15,6 +15,9 @@ class SettingsFieldPolicyTest {
             Settings(
                 baseUrl = "https://private.example/v1/",
                 apiKey = "secret",
+                anthropicBaseUrl = "https://anthropic-private.example/v1/",
+                anthropicApiKey = "anthropic-secret",
+                anthropicModel = "claude-portable",
                 umiOcrBaseUrl = "http://192.168.1.5:1224/api/ocr",
                 cleartextAllowedHosts = listOf("192.168.1.5"),
                 floatingWindowX = 123,
@@ -26,6 +29,7 @@ class SettingsFieldPolicyTest {
 
         assertTrue("portable prompt", "promptTemplate" in encoded)
         assertTrue("portable pinned languages", "pinnedLanguages" in encoded)
+        assertEquals(JsonPrimitive("claude-portable"), encoded["anthropicModel"])
         SettingsFieldPolicy.protectedFieldNames.forEach { field ->
             assertFalse("protected export field: $field", field in encoded)
         }
@@ -36,6 +40,9 @@ class SettingsFieldPolicyTest {
         val current = Settings(
             baseUrl = "https://local.example/v1/",
             apiKey = "local-secret",
+            anthropicBaseUrl = "https://anthropic-local.example/v1/",
+            anthropicApiKey = "anthropic-local-secret",
+            anthropicModel = "claude-local",
             cleartextAllowedHosts = listOf("local.example"),
             floatingWindowX = 99,
             targetLang = "en",
@@ -43,6 +50,9 @@ class SettingsFieldPolicyTest {
         val imported = Settings(
             baseUrl = "https://must-not-import.example/v1/",
             apiKey = "must-not-import",
+            anthropicBaseUrl = "https://anthropic-must-not-import.example/v1/",
+            anthropicApiKey = "anthropic-must-not-import",
+            anthropicModel = "claude-imported",
             cleartextAllowedHosts = listOf("must-not-import.example"),
             floatingWindowX = 500,
             targetLang = "zh-TW",
@@ -53,6 +63,9 @@ class SettingsFieldPolicyTest {
 
         assertEquals(current.baseUrl, merged.baseUrl)
         assertEquals(current.apiKey, merged.apiKey)
+        assertEquals(current.anthropicBaseUrl, merged.anthropicBaseUrl)
+        assertEquals(current.anthropicApiKey, merged.anthropicApiKey)
+        assertEquals(imported.anthropicModel, merged.anthropicModel)
         assertEquals(current.cleartextAllowedHosts, merged.cleartextAllowedHosts)
         assertEquals(current.floatingWindowX, merged.floatingWindowX)
         assertEquals(imported.targetLang, merged.targetLang)

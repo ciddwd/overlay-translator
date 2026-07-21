@@ -16,12 +16,17 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -31,6 +36,9 @@ import com.gameocr.app.R
 
 internal const val THIRD_PARTY_NOTICES_ASSET = "third_party_notices.txt"
 internal const val APACHE_LICENSE_ASSET = "apache_license_2_0.txt"
+internal const val ONNXRUNTIME_NOTICES_ASSET = "onnxruntime_third_party_notices_1_20_0.txt"
+internal const val HY_MT_NOTICE_ASSET = "hy_mt_license.txt"
+internal const val SAKURA_NOTICE_ASSET = "sakura_notice.txt"
 
 internal data class LegalNoticeSection(
     @StringRes val titleRes: Int,
@@ -40,6 +48,9 @@ internal data class LegalNoticeSection(
 internal val LEGAL_NOTICE_SECTIONS = listOf(
     LegalNoticeSection(R.string.settings_about_app_license_title, APACHE_LICENSE_ASSET),
     LegalNoticeSection(R.string.settings_about_third_party_notices_title, THIRD_PARTY_NOTICES_ASSET),
+    LegalNoticeSection(R.string.settings_about_onnxruntime_notices_title, ONNXRUNTIME_NOTICES_ASSET),
+    LegalNoticeSection(R.string.settings_about_hy_mt_notice_title, HY_MT_NOTICE_ASSET),
+    LegalNoticeSection(R.string.settings_about_sakura_notice_title, SAKURA_NOTICE_ASSET),
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -47,22 +58,32 @@ internal val LEGAL_NOTICE_SECTIONS = listOf(
 fun LegalNoticesScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val unavailable = stringResource(R.string.settings_about_licenses_unavailable)
-    val sections = remember(context, unavailable) {
-        LEGAL_NOTICE_SECTIONS.map { section ->
-            section to runCatching {
+    var selectedAssetName by rememberSaveable { mutableStateOf<String?>(null) }
+    val selectedSection = LEGAL_NOTICE_SECTIONS.firstOrNull { it.assetName == selectedAssetName }
+    val selectedText = remember(context, unavailable, selectedSection) {
+        selectedSection?.let { section ->
+            runCatching {
                 context.assets.open(section.assetName).bufferedReader().use { it.readText() }
             }.getOrDefault(unavailable)
         }
     }
+    val navigateBack = {
+        if (selectedSection != null) selectedAssetName = null else onBack()
+    }
 
-    BackHandler(onBack = onBack)
+    BackHandler(onBack = navigateBack)
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.settings_about_licenses_page_title)) },
+                title = {
+                    Text(
+                        selectedSection?.let { stringResource(it.titleRes) }
+                            ?: stringResource(R.string.settings_about_licenses_page_title),
+                    )
+                },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = navigateBack) {
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = stringResource(R.string.common_back),
@@ -75,28 +96,45 @@ fun LegalNoticesScreen(onBack: () -> Unit) {
             )
         },
     ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text(
-                text = stringResource(R.string.settings_about_third_party_notice_summary),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            sections.forEach { (section, text) ->
+        if (selectedSection == null) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
                 Text(
-                    text = stringResource(section.titleRes),
+                    text = stringResource(R.string.settings_about_third_party_notice_summary),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                LEGAL_NOTICE_SECTIONS.forEach { section ->
+                    OutlinedButton(
+                        onClick = { selectedAssetName = section.assetName },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(stringResource(section.titleRes))
+                    }
+                }
+            }
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+            ) {
+                Text(
+                    text = stringResource(selectedSection.titleRes),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
                 SelectionContainer {
                     Text(
-                        text = text,
+                        text = selectedText ?: unavailable,
                         modifier = Modifier.fillMaxWidth(),
                         style = MaterialTheme.typography.bodySmall,
                     )

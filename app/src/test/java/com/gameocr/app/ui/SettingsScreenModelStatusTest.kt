@@ -18,6 +18,63 @@ import javax.xml.parsers.DocumentBuilderFactory
 class SettingsScreenModelStatusTest {
 
     @Test
+    fun anthropicCompatibleLlm_hasDedicatedCloudConfigurationAndSearchTargets() {
+        val source = File("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
+        data class Case(val name: String, val marker: String)
+
+        listOf(
+            Case(
+                "cloud LLM engine chip",
+                "EngineChip(translatorEngine, TranslatorEngine.ANTHROPIC",
+            ),
+            Case("test connection receives Anthropic base URL", "anthropicBaseUrl = anthropicBaseUrl"),
+            Case("test connection receives Anthropic API key", "anthropicApiKey = anthropicApiKey"),
+            Case("test connection receives Anthropic model", "anthropicModel = anthropicModel"),
+            Case(
+                "Anthropic search switches to Anthropic engine",
+                "requiredTranslatorEngine = TranslatorEngine.ANTHROPIC",
+            ),
+        ).forEach { case ->
+            assertTrue(case.name, source.contains(case.marker))
+        }
+
+        val openAiConfigStart = source.indexOf("if (translatorEngine == TranslatorEngine.OPENAI) {")
+        val anthropicConfigStart = source.indexOf(
+            "} else if (translatorEngine == TranslatorEngine.ANTHROPIC)",
+            startIndex = openAiConfigStart,
+        )
+        val nextConfigStart = source.indexOf(
+            "} else if (translatorEngine == TranslatorEngine.DEEPL)",
+            startIndex = anthropicConfigStart,
+        )
+        assertTrue("OpenAI configuration branch", openAiConfigStart >= 0)
+        assertTrue("reachable Anthropic configuration branch", anthropicConfigStart > openAiConfigStart)
+        assertTrue("Anthropic configuration branch end", nextConfigStart > anthropicConfigStart)
+
+        val openAiConfig = source.substring(openAiConfigStart, anthropicConfigStart)
+        val anthropicConfig = source.substring(anthropicConfigStart, nextConfigStart)
+        assertFalse("OpenAI branch must not consume Anthropic", openAiConfig.contains("TranslatorEngine.ANTHROPIC"))
+        listOf(
+            Case("dedicated base URL state", "value = anthropicBaseUrl"),
+            Case("dedicated API key state", "value = anthropicApiKey"),
+            Case("dedicated model state", "value = anthropicModel"),
+            Case("Anthropic compatibility hint", "settings_anthropic_compatibility_hint"),
+        ).forEach { case ->
+            assertTrue(case.name, anthropicConfig.contains(case.marker))
+        }
+
+        val promptCall = source.indexOf("OpenAiPromptSettings(")
+        val promptCondition = source.substring(
+            source.lastIndexOf("if (translatorEngine", startIndex = promptCall),
+            promptCall,
+        )
+        assertTrue(
+            "Anthropic shares cloud LLM prompt settings",
+            promptCondition.contains("TranslatorEngine.ANTHROPIC"),
+        )
+    }
+
+    @Test
     fun translatorSection_placesLanguageAndContextControlsAfterEngineConfiguration() {
         val source = File("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
         val sectionStart = source.indexOf(

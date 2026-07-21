@@ -136,6 +136,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import timber.log.Timber
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicLong
 
 internal fun allowsFrequentTextStabilityProbe(
     ocrEngine: OcrEngineKind,
@@ -195,6 +196,7 @@ class CaptureService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val captureLock = Mutex()
+    private val translationBatchGate = TranslationBatchGate()
 
     private var screenshotter: Screenshotter? = null
     private var projection: MediaProjection? = null
@@ -208,6 +210,7 @@ class CaptureService : Service() {
     private var translationBlockCopyOverlay: TranslationBlockCopyOverlay? = null
 
     private var loopJob: Job? = null
+    private var translationRenderJob: Job? = null
     private var ocrWarmupJob: Job? = null
     private var localLlmWarmupJob: Job? = null
     private var previousLoopFingerprint: LoopFrameFingerprint? = null
@@ -223,7 +226,7 @@ class CaptureService : Service() {
     // 时读 settings，导致用户必须停止/重启服务或触发一次截屏才能看到改动。
     private var settingsCollectJob: Job? = null
     @Volatile private var loopMode: Boolean = false
-    private var captureSequence: Long = 0L
+    private val captureSequence = AtomicLong(0L)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -484,6 +487,7 @@ class CaptureService : Service() {
     private suspend fun prepareCleanCaptureFrame(
         hideFloatingButton: Boolean
     ) {
+        cancelActiveTranslationBatch("prepareCleanCaptureFrame")
         mainScope.launch {
             overlay?.clear()
             translationCard?.dismiss()
@@ -615,7 +619,8 @@ class CaptureService : Service() {
             mainScope.launch { overlay?.dismissLoading() }
             return
         }
-        val diagId = ++captureSequence
+        val diagId = captureSequence.incrementAndGet()
+        beginTranslationBatch(diagId)
         val perfStartedAt = SystemClock.elapsedRealtime()
         fun logWordSelectPerf(stage: String, details: String = "") {
             Timber.tag("WordSelectPerf").i(
@@ -1082,7 +1087,7 @@ class CaptureService : Service() {
     private fun showTranslationBlockCopyPanel(source: String, translation: String) {
         scope.launch {
             val settings = settingsRepository.get()
-            val diagId = ++captureSequence
+            val diagId = captureSequence.incrementAndGet()
             mainScope.launch {
                 translationCard?.dismiss()
                 val copyOverlay = translationBlockCopyOverlay
@@ -1125,6 +1130,40 @@ class CaptureService : Service() {
         loopSessionId += 1L
         loopTranslationInFlight = false
         lastLoopRuntimeLogState = null
+    }
+
+    private fun beginTranslationBatch(batchId: Long) {
+        val previousBatchId = translationBatchGate.activate(batchId)
+        translationRenderJob?.cancel()
+        translationRenderJob = null
+        logVerticalDiag(
+            batchId,
+            "translation batch activated previous=${previousBatchId ?: "none"}",
+        )
+    }
+
+    private fun cancelActiveTranslationBatch(reason: String) {
+        val previousBatchId = translationBatchGate.invalidate()
+        translationRenderJob?.cancel()
+        translationRenderJob = null
+        previousBatchId?.let {
+            logVerticalDiag(it, "translation batch invalidated reason=$reason")
+        }
+    }
+
+    private fun ensureCurrentTranslationBatch(batchId: Long?) {
+        if (!translationBatchGate.accepts(batchId)) {
+            throw CancellationException("Stale translation batch")
+        }
+    }
+
+    private fun launchTranslationBatch(
+        batchId: Long?,
+        block: suspend CoroutineScope.() -> Unit,
+    ) {
+        if (!translationBatchGate.accepts(batchId)) return
+        translationRenderJob?.cancel()
+        translationRenderJob = scope.launch(block = block)
     }
 
     private fun beginLoopTranslation(diagId: Long?): Long? {
@@ -1403,7 +1442,7 @@ class CaptureService : Service() {
             mainScope.launch { overlay?.dismissLoading() }
             return
         }
-        val diagId = ++captureSequence
+        val diagId = captureSequence.incrementAndGet()
         var captureAttemptStarted = false
         var captureChromeRestored = false
         fun restoreCaptureChromeOnce(showLoading: Boolean) {
@@ -1444,6 +1483,7 @@ class CaptureService : Service() {
                 }
             }
             captureAttemptStarted = true
+            beginTranslationBatch(diagId)
             logVerticalDiag(diagId, "start loopMode=$loopMode")
             val shotter = screenshotter ?: run {
                 restoreCaptureChromeOnce(showLoading = false)
@@ -2512,7 +2552,7 @@ class CaptureService : Service() {
         }
         val loopSession = beginLoopTranslation(diagId)
         if (useBatch) {
-            scope.launch {
+            launchTranslationBatch(diagId) {
                 try {
                     batchTranslateBlocks(blocks, translationUnits, settings, diagId)
                 } finally {
@@ -2520,7 +2560,7 @@ class CaptureService : Service() {
                 }
             }
         } else {
-            scope.launch {
+            launchTranslationBatch(diagId) {
                 try {
                     translationUnits.mapIndexed { idx, unit ->
                         async {
@@ -2532,6 +2572,7 @@ class CaptureService : Service() {
                                         translatedText = partial,
                                         settings = settings,
                                         phase = phase,
+                                        translationBatchId = diagId,
                                     )
                                 }
                             }
@@ -2605,6 +2646,7 @@ class CaptureService : Service() {
             consumer.cancel()
             throw ce
         } catch (t: Throwable) {
+            ensureCurrentTranslationBatch(diagId)
             updates.close()
             consumer.join()
             val translateElapsedMs = elapsedSince(translateStartedAt)
@@ -2625,6 +2667,7 @@ class CaptureService : Service() {
                         translatedText = "[!] " + (t.message ?: ""),
                         settings = settings,
                         phase = AdaptiveTextLayoutPhase.FINAL,
+                        translationBatchId = diagId,
                     )
                 }
             }
@@ -2659,6 +2702,7 @@ class CaptureService : Service() {
         elapsedMs: Long,
         phase: String,
     ) {
+        ensureCurrentTranslationBatch(diagId)
         val src = unit.sourceText
         val display = resolveTranslationOutput(
             initialOutput = initialOutput,
@@ -2667,6 +2711,7 @@ class CaptureService : Service() {
             diagId = diagId,
             label = "batch#${index + 1}",
         )
+        ensureCurrentTranslationBatch(diagId)
         val finalText = display.text
         diagId?.let {
             logVerticalDiag(
@@ -2682,8 +2727,10 @@ class CaptureService : Service() {
                 translatedText = finalText,
                 settings = settings,
                 phase = AdaptiveTextLayoutPhase.FINAL,
+                translationBatchId = diagId,
             )
         }
+        ensureCurrentTranslationBatch(diagId)
         if (!display.failed) {
             logRepository.pair(
                 LogRepository.Category.TRANSLATE,
@@ -2706,7 +2753,9 @@ class CaptureService : Service() {
         translatedText: String,
         settings: Settings,
         phase: AdaptiveTextLayoutPhase,
+        translationBatchId: Long?,
     ) {
+        if (!translationBatchGate.accepts(translationBatchId)) return
         val chunks = reflowCrossLineTranslation(
             translatedText = translatedText,
             unit = unit,
@@ -2725,8 +2774,11 @@ class CaptureService : Service() {
     ) = coroutineScope {
         val sources = translationUnits.map { it.sourceText }
         withContext(Dispatchers.Main) {
-            overlay?.prepareFloatingWindow(sources)
+            if (translationBatchGate.accepts(diagId)) {
+                overlay?.prepareFloatingWindow(sources)
+            }
         }
+        ensureCurrentTranslationBatch(diagId)
         diagId?.let {
             sources.forEachIndexed { idx, source ->
                 logVerticalDiag(it, "floatingBatch src#${idx + 1} ${source.toDiagText()}")
@@ -2776,6 +2828,7 @@ class CaptureService : Service() {
             consumer.cancel()
             throw ce
         } catch (t: Throwable) {
+            ensureCurrentTranslationBatch(diagId)
             updates.close()
             consumer.join()
             val translateElapsedMs = elapsedSince(translateStartedAt)
@@ -2793,8 +2846,10 @@ class CaptureService : Service() {
                 elapsedMs = translateElapsedMs
             )
             withContext(Dispatchers.Main) {
-                progress.pendingIndexes().forEach { idx ->
-                    overlay?.updateFloatingWindowText(idx, "[!] " + (t.message ?: ""))
+                if (translationBatchGate.accepts(diagId)) {
+                    progress.pendingIndexes().forEach { idx ->
+                        overlay?.updateFloatingWindowText(idx, "[!] " + (t.message ?: ""))
+                    }
                 }
             }
             return@coroutineScope
@@ -2826,6 +2881,7 @@ class CaptureService : Service() {
         elapsedMs: Long,
         phase: String,
     ) {
+        ensureCurrentTranslationBatch(diagId)
         val display = resolveTranslationOutput(
             initialOutput = initialOutput,
             source = unit.sourceText,
@@ -2833,6 +2889,7 @@ class CaptureService : Service() {
             diagId = diagId,
             label = "floatingBatch#${index + 1}",
         )
+        ensureCurrentTranslationBatch(diagId)
         val finalText = display.text
         diagId?.let {
             logVerticalDiag(
@@ -2842,8 +2899,11 @@ class CaptureService : Service() {
             )
         }
         withContext(Dispatchers.Main) {
-            overlay?.updateFloatingWindowText(index, finalText)
+            if (translationBatchGate.accepts(diagId)) {
+                overlay?.updateFloatingWindowText(index, finalText)
+            }
         }
+        ensureCurrentTranslationBatch(diagId)
         if (display.failed) {
             logRepository.warn(
                 LogRepository.Category.TRANSLATE,
@@ -2917,13 +2977,15 @@ class CaptureService : Service() {
             overlay?.prepareFloatingWindow(translationUnits.map { it.sourceText })
         }
         val loopSession = beginLoopTranslation(diagId)
-        scope.launch {
+        launchTranslationBatch(diagId) {
             try {
                 translationUnits.mapIndexed { idx, unit ->
                     async {
                         translateOne(unit.sourceText, settings, diagId, idx) { partial, phase ->
                             withContext(Dispatchers.Main) {
-                                overlay?.updateFloatingWindowText(idx, partial, phase)
+                                if (translationBatchGate.accepts(diagId)) {
+                                    overlay?.updateFloatingWindowText(idx, partial, phase)
+                                }
                             }
                         }
                     }
@@ -2941,6 +3003,7 @@ class CaptureService : Service() {
         blockIndex: Int? = null,
         onUpdate: suspend (String, AdaptiveTextLayoutPhase) -> Unit
     ) {
+        ensureCurrentTranslationBatch(diagId)
         diagId?.let {
             logVerticalDiag(
                 it,
@@ -2957,6 +3020,7 @@ class CaptureService : Service() {
                 var streamFailed = false
                 translator.translateStream(text, settings)
                     .catch { e ->
+                        ensureCurrentTranslationBatch(diagId)
                         streamFailed = true
                         diagId?.let {
                             logVerticalDiag(e, it, "translateStream failed ${blockIndex.toDiagBlockLabel()}")
@@ -2973,10 +3037,12 @@ class CaptureService : Service() {
                         )
                     }
                     .onEach {
+                        ensureCurrentTranslationBatch(diagId)
                         lastPartial = it
                         onUpdate(it, AdaptiveTextLayoutPhase.STREAMING)
                     }
                     .collect()
+                ensureCurrentTranslationBatch(diagId)
                 if (streamFailed) {
                     return
                 }
@@ -2987,9 +3053,11 @@ class CaptureService : Service() {
                     diagId = diagId,
                     label = blockIndex.toDiagBlockLabel(),
                 )
+                ensureCurrentTranslationBatch(diagId)
                 // The final update is intentional even when the text is unchanged: Overlay uses
                 // this phase transition to emit exactly one resolved-size diagnostic snapshot.
                 onUpdate(display.text, AdaptiveTextLayoutPhase.FINAL)
+                ensureCurrentTranslationBatch(diagId)
                 if (!display.failed) {
                     diagId?.let {
                         logVerticalDiag(
@@ -3014,6 +3082,7 @@ class CaptureService : Service() {
                     )
                 }
             } else {
+                ensureCurrentTranslationBatch(diagId)
                 val display = resolveTranslationOutput(
                     initialOutput = translator.translate(text, settings),
                     source = text,
@@ -3021,6 +3090,7 @@ class CaptureService : Service() {
                     diagId = diagId,
                     label = blockIndex.toDiagBlockLabel(),
                 )
+                ensureCurrentTranslationBatch(diagId)
                 val dst = display.text
                 diagId?.let {
                     logVerticalDiag(
@@ -3029,6 +3099,7 @@ class CaptureService : Service() {
                     )
                 }
                 onUpdate(dst, AdaptiveTextLayoutPhase.FINAL)
+                ensureCurrentTranslationBatch(diagId)
                 if (display.failed) {
                     logRepository.warn(
                         LogRepository.Category.TRANSLATE,
@@ -3044,7 +3115,10 @@ class CaptureService : Service() {
                     )
                 }
             }
+        } catch (ce: CancellationException) {
+            throw ce
         } catch (e: TranslationException) {
+            ensureCurrentTranslationBatch(diagId)
             diagId?.let {
                 logVerticalDiag(e, it, "translateOne translation error ${blockIndex.toDiagBlockLabel()}")
             }
@@ -3059,6 +3133,7 @@ class CaptureService : Service() {
                 elapsedMs = elapsedSince(translateStartedAt)
             )
         } catch (t: Throwable) {
+            ensureCurrentTranslationBatch(diagId)
             Timber.w(t, "Translate unexpected error")
             diagId?.let {
                 logVerticalDiag(t, it, "translateOne unexpected error ${blockIndex.toDiagBlockLabel()}")
@@ -3080,6 +3155,7 @@ class CaptureService : Service() {
         diagId: Long?,
         label: String,
     ): TranslationOutputDecision {
+        ensureCurrentTranslationBatch(diagId)
         val failureText = "[!] " + getString(R.string.process_text_translate_failed)
         if (
             TranslationOutputPolicy.action(
@@ -3107,6 +3183,7 @@ class CaptureService : Service() {
             null
         }
         val display = TranslationOutputPolicy.resolve(retryOutput, failureText)
+        ensureCurrentTranslationBatch(diagId)
         diagId?.let {
             logVerticalDiag(
                 it,
@@ -3425,9 +3502,9 @@ class CaptureService : Service() {
                 translationBlockInteractionMode = settings.translationBlockInteractionMode
                 translationBlockSelectionSpeechAction = wordSelectTtsAction(
                     settings = settings,
-                    diagId = captureSequence,
+                    diagId = captureSequence.get(),
                     role = "block_translation_direct_selection",
-                    playbackId = "translation-block:$captureSequence:direct-selection",
+                    playbackId = "translation-block:${captureSequence.get()}:direct-selection",
                 )
                 floatingWindowContentMode = settings.floatingWindowContentMode
                 customBorderStyle = settings.customBorderStyle
@@ -3462,6 +3539,7 @@ class CaptureService : Service() {
 
     /** 释放截屏相关资源（不停 Service），用于 handleStart 重入时去重 + onDestroy 兜底。 */
     private fun cleanupCapture() {
+        cancelActiveTranslationBatch("cleanupCapture")
         loopMode = false
         loopJob?.cancel()
         loopJob = null

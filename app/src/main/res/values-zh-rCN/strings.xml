@@ -151,6 +151,9 @@
     <string name="settings_about_licenses_page_title">开源许可证与第三方声明</string>
     <string name="settings_about_app_license_title">本应用开源许可证</string>
     <string name="settings_about_third_party_notices_title">第三方声明</string>
+    <string name="settings_about_onnxruntime_notices_title">ONNX Runtime 第三方声明</string>
+    <string name="settings_about_hy_mt_notice_title">Hy-MT2 模型声明</string>
+    <string name="settings_about_sakura_notice_title">SakuraLLM 模型声明</string>
     <string name="settings_about_licenses_unavailable">无法读取随应用提供的许可证声明。</string>
     <string name="settings_section_app_lang">应用语言</string>
     <string name="settings_app_lang_follow_system">跟随系统</string>
@@ -179,6 +182,7 @@
     <string name="settings_cleartext_hosts_hint">默认仅允许私有/回环地址走明文。这里追加的 host 也允许 http:// 访问。⚠ 明文可被中间人窃听/篡改，仅在你确认链路可信时启用。</string>
     <string name="settings_label_translator_engine">翻译引擎</string>
     <string name="settings_engine_openai_llm">OpenAI 兼容 LLM</string>
+    <string name="settings_engine_anthropic_llm">Anthropic 兼容 LLM</string>
     <string name="settings_engine_deepl">DeepL</string>
     <string name="settings_engine_youdao_pictrans">有道图翻</string>
     <string name="settings_engine_google">Google</string>
@@ -203,7 +207,8 @@
     <string name="settings_tencent_region">腾讯云 Region</string>
     <string name="settings_tencent_trans_tip">与腾讯云 OCR 共用 SecretId / SecretKey / Region —— 此处修改会同步到 OCR 配置。默认 ap-guangzhou。一次调用走 TextTranslateBatch 批量翻译（≤ 2000 字符/次）。首次使用须先到 console.cloud.tencent.com/tmt 开通「机器翻译」。</string>
     <string name="settings_google_tip">无需配置，谷歌可能随时限流 / 改端点，仅供学习。国内必须代理。</string>
-    <string name="settings_google_mlkit_tip">语言模型下载后完全在设备端翻译。需要下载 30 MB 的语言模型。无需 API Key。</string>
+    <string name="settings_google_mlkit_tip">语言模型下载后，翻译内容完全在设备端处理。需要下载 30 MB 的语言模型。无需 API Key。</string>
+    <string name="settings_mlkit_data_disclosure">ML Kit 可能连接 Google 下载或更新模型及兼容性信息，并发送性能与使用指标；截屏、原文和译文不会发送给 Google。</string>
     <string name="settings_mlkit_download_pair">下载 %1$s → %2$s 模型</string>
     <string name="settings_mlkit_model_downloading">正在下载模型…</string>
     <string name="settings_mlkit_model_ready">当前语言模型已就绪，可以离线翻译。</string>
@@ -223,6 +228,10 @@
     <string name="settings_base_url_placeholder">https://api.siliconflow.cn/v1/  /  https://api.deepseek.com/v1/</string>
     <string name="settings_api_key_placeholder">sk-...</string>
     <string name="settings_model_placeholder">deepseek-v4-flash / gpt-4o-mini / glm-4-flash</string>
+    <string name="settings_anthropic_base_url_placeholder">https://api.deepseek.com/anthropic</string>
+    <string name="settings_anthropic_api_key_placeholder">sk-...</string>
+    <string name="settings_anthropic_model_placeholder">deepseek-v4-flash</string>
+    <string name="settings_anthropic_compatibility_hint">使用 Anthropic Messages API（/v1/messages）和 x-api-key；不支持 Bedrock / Vertex 专有鉴权。</string>
     <string name="settings_deepl_api_key">DeepL API Key</string>
     <string name="settings_deepl_key_placeholder">Free 版末尾带 :fx，Pro 版没有</string>
     <string name="settings_deepl_use_pro">使用 Pro 版端点 (api.deepl.com)</string>
@@ -420,6 +429,8 @@
     <string name="settings_test_ok_deepl_custom_format">OK · 自定义端点连通，样例译文：%1$s</string>
     <string name="settings_test_ok_openai_models_format">OK · 已拉到 %1$d 个 model，点选即填入模型名</string>
     <string name="settings_test_ok_openai_chat_format">OK · model=%1$s · %2$d ms</string>
+    <string name="settings_test_ok_anthropic_models_format">OK · 已拉到 %1$d 个 Anthropic model，点选即填入模型名</string>
+    <string name="settings_test_ok_anthropic_message_format">OK · Anthropic model=%1$s · %2$d ms</string>
     <string name="settings_test_deepl_403_hint">检查 Free/Pro 端点开关是否与 Key 匹配</string>
     <string name="settings_test_pick_model">从列表选择 model</string>
 
@@ -456,7 +467,7 @@
     <string name="settings_paddle_ai_studio_description">PP-OCRv6 在线使用 PaddleOCR AI Studio 的异步 OCR 服务。请先在下方页面获取 Access Token，再填入此处。</string>
     <string name="settings_paddle_ai_studio_open_page">在外部浏览器打开 PaddleOCR AI Studio</string>
     <string name="settings_external_browser_unavailable">没有可用于打开此链接的浏览器。</string>
-    <string name="settings_ocr_intro">选择 OCR 引擎，决定识别哪种文字：\n• 自动 / 日文 / 韩文 / 中文 / 拉丁：Google ML Kit 端侧（免费、离线）。\"自动\"按谚文 / 假名命中切换识别器；如果你确定原文是某种语言，固定选对应项能略提精度\n• PaddleOCR：端侧多语种识别，复杂排版更稳，首次使用要下载 ~20MB 模型（暂不含韩文字典，韩文请用 ML Kit 或云端）\n• 日漫专用端侧 OCR（约 160 MB；含 encoder / decoder / 分词器共 7 个文件）\n• 百度云 / 腾讯云：云端 OCR，需 API Key 按量计费；展开后可在「识别语种」里切到韩 / 日等小语种作为漏检兜底</string>
+    <string name="settings_ocr_intro">选择 OCR 引擎，决定识别哪种文字：\n• 自动 / 日文 / 韩文 / 中文 / 拉丁：Google ML Kit 端侧（免费；截屏和识别文字不会上传，SDK 可能联网更新并发送性能 / 使用指标）。\"自动\"按谚文 / 假名命中切换识别器；如果你确定原文是某种语言，固定选对应项能略提精度\n• PaddleOCR：端侧多语种识别，复杂排版更稳，首次使用要下载 ~20MB 模型（暂不含韩文字典，韩文请用 ML Kit 或云端）\n• 日漫专用端侧 OCR（约 160 MB；含 encoder / decoder / 分词器共 7 个文件）\n• 百度云 / 腾讯云：云端 OCR，需 API Key 按量计费；展开后可在「识别语种」里切到韩 / 日等小语种作为漏检兜底</string>
     <string name="settings_baidu_api_key">百度 API Key</string>
     <string name="settings_baidu_secret_key">百度 Secret Key</string>
     <string name="settings_baidu_endpoint_label">接口类型（每个 endpoint 在百度控制台有独立的免费配额）</string>
@@ -662,6 +673,9 @@
     <!-- 设置搜索索引：itemLabel / 关键词。section 标签复用上面 settings_section_* 即可。 -->
     <string name="settings_search_item_translator_engine">翻译引擎</string>
     <string name="settings_search_item_base_url">Base URL</string>
+    <string name="settings_search_item_anthropic_base_url">Anthropic Base URL</string>
+    <string name="settings_search_item_anthropic_api_key">Anthropic API Key</string>
+    <string name="settings_search_item_anthropic_model">Anthropic 模型名</string>
     <string name="settings_search_item_api_key">API Key</string>
     <string name="settings_search_item_model_name">模型名</string>
     <string name="settings_search_item_tts_enable">TTS 朗读</string>
@@ -950,6 +964,11 @@
     <string name="err_openai_no_api_key">API Key 未配置</string>
     <string name="err_openai_parse_failed_format">解析响应失败: %1$s</string>
     <string name="err_openai_no_choices">响应里没有 choices.message.content</string>
+    <string name="err_anthropic_no_base_url">Anthropic Base URL 未配置</string>
+    <string name="err_anthropic_no_api_key">Anthropic API Key 未配置</string>
+    <string name="err_anthropic_no_model">Anthropic 模型名未配置</string>
+    <string name="err_anthropic_no_text">Anthropic 响应里没有 text 内容块</string>
+    <string name="err_anthropic_empty_body">Anthropic 响应体为空</string>
     <string name="err_deepl_no_api_key">DeepL API Key 未配置</string>
     <string name="err_deepl_parse_failed_format">DeepL 解析失败: %1$s</string>
     <string name="err_deepl_no_translation">DeepL 响应无 translations.text</string>
