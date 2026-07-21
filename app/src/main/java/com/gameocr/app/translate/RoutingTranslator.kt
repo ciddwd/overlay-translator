@@ -76,6 +76,9 @@ class RoutingTranslator @Inject constructor(
         targetLang: String,
     ): Set<String> = googleMlKit.getMissingLanguageModels(sourceLang, targetLang)
 
+    suspend fun getDownloadedMlKitLanguageModels(): Set<String> =
+        googleMlKit.getDownloadedLanguageModels()
+
     internal suspend fun prewarmLocalModel(settings: Settings): LocalLlmPrewarmResult {
         val local = engineFor(settings) as? LocalLlamaTranslator
         val installed = local?.isPrewarmModelInstalled() == true

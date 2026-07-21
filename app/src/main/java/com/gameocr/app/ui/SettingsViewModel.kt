@@ -110,6 +110,9 @@ class SettingsViewModel @Inject constructor(
         targetLang: String,
     ): Set<String> = routingTranslator.getMissingMlKitLanguageModels(sourceLang, targetLang)
 
+    suspend fun getDownloadedMlKitLanguageModels(): Set<String> =
+        routingTranslator.getDownloadedMlKitLanguageModels()
+
     suspend fun loadSystemTtsVoices(preferredLanguageTag: String): List<SystemTtsVoiceOption> =
         systemTtsEngine.availableVoices(preferredLanguageTag)
 
@@ -383,6 +386,7 @@ class SettingsViewModel @Inject constructor(
         apiTimeoutSeconds: Int,
         mergeAdjacentBlocks: Boolean,
         mergeStrength: com.gameocr.app.data.MergeStrength,
+        disableCrossLineContextTranslation: Boolean,
         cleartextAllowedHosts: List<String>,
         translatorEngine: TranslatorEngine,
         deeplKey: String,
@@ -500,6 +504,7 @@ class SettingsViewModel @Inject constructor(
                 apiTimeoutSeconds = apiTimeoutSeconds.coerceIn(5, 300),
                 mergeAdjacentBlocks = mergeAdjacentBlocks,
                 mergeStrength = mergeStrength,
+                disableCrossLineContextTranslation = disableCrossLineContextTranslation,
                 cleartextAllowedHosts = cleartextHostsWithLocalOcrUrls(
                     cleartextAllowedHosts,
                     umiOcrBaseUrl,

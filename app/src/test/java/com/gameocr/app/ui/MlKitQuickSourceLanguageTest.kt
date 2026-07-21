@@ -10,7 +10,7 @@ class MlKitQuickSourceLanguageTest {
     @Test
     fun quickSources_tableDrivenMapToExplicitTranslationLanguages() {
         val expected = listOf(
-            "LATIN" to "en",
+            "ENGLISH" to "en",
             "CHINESE" to "zh-CN",
             "JAPANESE" to "ja",
             "KOREAN" to "ko",
@@ -31,8 +31,8 @@ class MlKitQuickSourceLanguageTest {
         )
 
         val cases = listOf(
-            Case("en", MlKitQuickSourceLanguage.LATIN),
-            Case("en-US", MlKitQuickSourceLanguage.LATIN),
+            Case("en", MlKitQuickSourceLanguage.ENGLISH),
+            Case("en-US", MlKitQuickSourceLanguage.ENGLISH),
             Case("zh-TW", MlKitQuickSourceLanguage.CHINESE),
             Case("ja-JP", MlKitQuickSourceLanguage.JAPANESE),
             Case("ko-KR", MlKitQuickSourceLanguage.KOREAN),
@@ -60,13 +60,29 @@ class MlKitQuickSourceLanguageTest {
         assertTrue("local on-device group", start >= 0 && end > start)
         val group = source.substring(start, end)
 
-        assertTrue("four translation choices", group.contains("MlKitQuickSourceLanguage.entries"))
+        assertTrue("four recent translation choices", group.contains("mlKitRecentSourceLanguages("))
+        assertTrue("more language action", group.contains("settings_on_device_translation_more"))
+        assertTrue("downloaded status", group.contains("settings_mlkit_model_downloaded_short"))
+        assertTrue("download status", group.contains("settings_mlkit_model_download_short"))
         assertTrue("Sakura shares the group", group.contains("TranslatorEngine.LOCAL_SAKURA"))
         assertTrue("HY-MT2 shares the group", group.contains("TranslatorEngine.LOCAL_HY_MT2"))
         assertFalse("no separate on-device translation heading", group.contains("settings_translator_group_on_device"))
         assertTrue(
             "manual model download action",
             source.contains("R.string.settings_mlkit_download_pair"),
+        )
+        assertTrue(
+            "ML Kit language picker is filtered",
+            source.contains("allowedLanguageCodes = if (translatorEngine == TranslatorEngine.GOOGLE_ML_KIT)") &&
+                source.contains("mlKitLanguagePickerCodes"),
+        )
+        assertTrue(
+            "unsupported source is shown instead of a download action",
+            source.contains("R.string.settings_mlkit_unsupported_source_language"),
+        )
+        assertTrue(
+            "unsupported target is shown instead of a download action",
+            source.contains("R.string.settings_mlkit_unsupported_target_language"),
         )
         assertTrue(
             "ready state replaces download action",

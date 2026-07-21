@@ -32,3 +32,6 @@ internal fun translationBlockInteractionPlan(
 
 internal fun isTranslationBlockTextActionable(text: String?): Boolean =
     !text.isNullOrBlank() && text != "..." && text != "…"
+
+internal fun canSelectFloatingWindowText(locked: Boolean, text: String?): Boolean =
+    !locked && isTranslationBlockTextActionable(text)

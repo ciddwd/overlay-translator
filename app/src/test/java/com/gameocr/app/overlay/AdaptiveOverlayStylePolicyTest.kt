@@ -268,22 +268,27 @@ class AdaptiveOverlayStylePolicyTest {
     }
 
     @Test
-    fun horizontalOverlayMaxLines_tableDriven_limitsOnlyNonAdaptiveWrapping() {
+    fun horizontalOverlayMaxLines_tableDriven_usesAvailableHeightForNonAdaptiveWrapping() {
         data class Case(
             val name: String,
             val allowWrap: Boolean,
             val adaptiveTextFitEnabled: Boolean,
+            val availableHeightPx: Int,
+            val estimatedLineHeightPx: Int,
             val expected: Int,
         )
 
         val cases = listOf(
-            Case("single line remains one", allowWrap = false, adaptiveTextFitEnabled = false, expected = 1),
-            Case("single line adaptive remains one", allowWrap = false, adaptiveTextFitEnabled = true, expected = 1),
-            Case("legacy wrapping keeps ten line cap", allowWrap = true, adaptiveTextFitEnabled = false, expected = 10),
+            Case("single line remains one", false, false, 2_134, 55, 1),
+            Case("single line adaptive remains one", false, true, 2_134, 55, 1),
+            Case("merged block uses its tall viewport", true, false, 2_134, 55, 38),
+            Case("small block uses only its available rows", true, false, 120, 48, 2),
             Case(
                 "adaptive wrapping uses the measured viewport instead of an artificial line cap",
                 allowWrap = true,
                 adaptiveTextFitEnabled = true,
+                availableHeightPx = 2_134,
+                estimatedLineHeightPx = 55,
                 expected = Int.MAX_VALUE,
             ),
         )
@@ -292,7 +297,12 @@ class AdaptiveOverlayStylePolicyTest {
             assertEquals(
                 case.name,
                 case.expected,
-                horizontalOverlayMaxLines(case.allowWrap, case.adaptiveTextFitEnabled),
+                horizontalOverlayMaxLines(
+                    allowWrap = case.allowWrap,
+                    adaptiveTextFitEnabled = case.adaptiveTextFitEnabled,
+                    availableHeightPx = case.availableHeightPx,
+                    estimatedLineHeightPx = case.estimatedLineHeightPx,
+                ),
             )
         }
     }

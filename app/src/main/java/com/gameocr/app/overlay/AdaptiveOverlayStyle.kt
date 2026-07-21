@@ -125,10 +125,13 @@ internal fun adaptiveAutoSizeMaxSp(
 internal fun horizontalOverlayMaxLines(
     allowWrap: Boolean,
     adaptiveTextFitEnabled: Boolean,
+    availableHeightPx: Int,
+    estimatedLineHeightPx: Int,
 ): Int = when {
     !allowWrap -> 1
     adaptiveTextFitEnabled -> Int.MAX_VALUE
-    else -> 10
+    else -> (availableHeightPx.coerceAtLeast(1) / estimatedLineHeightPx.coerceAtLeast(1))
+        .coerceAtLeast(1)
 }
 
 internal fun adaptiveTextLayoutOverflowReasons(

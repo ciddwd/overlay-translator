@@ -296,7 +296,7 @@ class PresetQuickSwitchOverlay(private val context: Context) {
         languageTag.equals("ko", ignoreCase = true) || languageTag.startsWith("ko-", ignoreCase = true) ->
             context.getString(R.string.settings_ocr_chip_korean)
         languageTag.equals("en", ignoreCase = true) || languageTag.startsWith("en-", ignoreCase = true) ->
-            context.getString(R.string.settings_on_device_translation_latin)
+            context.getString(R.string.settings_on_device_translation_english)
         else -> context.getString(R.string.settings_translator_group_on_device)
     }
 

@@ -51,6 +51,8 @@ class SettingsRepository @Inject constructor(
         val DeveloperOptionsEnabled = booleanPreferencesKey("developer_options_enabled")
         val OcrScreenshotSavingEnabled = booleanPreferencesKey("ocr_screenshot_saving_enabled")
         val DisableTranslationCache = booleanPreferencesKey("disable_translation_cache")
+        val DisableCrossLineContextTranslation =
+            booleanPreferencesKey("disable_cross_line_context_translation")
         val OcrRedBoxModeEnabled = booleanPreferencesKey("ocr_red_box_mode_enabled")
         val OcrRedBoxShowSourceText = booleanPreferencesKey("ocr_red_box_show_source_text")
         val OcrRedBoxShowTranslation = booleanPreferencesKey("ocr_red_box_show_translation")
@@ -150,6 +152,7 @@ class SettingsRepository @Inject constructor(
         val LegacyFloatingWindowBorderStyle = stringPreferencesKey("floating_window_border_style")
         // 收藏的语言代码列表，逗号分隔（"ja,zh-CN,en"）。逗号不可能出现在 BCP-47 tag 里，分隔安全。
         val PinnedLangs = stringPreferencesKey("pinned_languages")
+        val MlKitRecentSourceLanguages = stringPreferencesKey("mlkit_recent_source_languages")
         val OverlayWrap = booleanPreferencesKey("overlay_allow_wrap")
         val OverlayCollision = booleanPreferencesKey("overlay_avoid_collision")
         val BaiduEndpoint = stringPreferencesKey("baidu_ocr_endpoint")
@@ -397,6 +400,7 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.DeveloperOptionsEnabled] = next.developerOptionsEnabled
             prefs[Keys.OcrScreenshotSavingEnabled] = next.ocrScreenshotSavingEnabled
             prefs[Keys.DisableTranslationCache] = next.disableTranslationCache
+            prefs[Keys.DisableCrossLineContextTranslation] = next.disableCrossLineContextTranslation
             prefs[Keys.OcrRedBoxModeEnabled] = next.ocrRedBoxModeEnabled
             prefs[Keys.OcrRedBoxShowSourceText] = next.ocrRedBoxShowSourceText
             prefs[Keys.OcrRedBoxShowTranslation] = next.ocrRedBoxShowTranslation
@@ -500,6 +504,7 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.FloatingWindowLocked] = next.floatingWindowLocked
             prefs[Keys.CustomBorderStyle] = next.customBorderStyle.name
             prefs[Keys.PinnedLangs] = next.pinnedLanguages.joinToString(",")
+            prefs[Keys.MlKitRecentSourceLanguages] = next.mlKitRecentSourceLanguages.joinToString(",")
             prefs[Keys.OverlayWrap] = next.overlayAllowWrap
             prefs[Keys.OverlayCollision] = next.overlayAvoidCollision
             prefs[Keys.BaiduEndpoint] = next.baiduOcrEndpoint.name
@@ -627,6 +632,8 @@ class SettingsRepository @Inject constructor(
                 ?: default.ocrScreenshotSavingEnabled,
             disableTranslationCache = this[Keys.DisableTranslationCache]
                 ?: default.disableTranslationCache,
+            disableCrossLineContextTranslation = this[Keys.DisableCrossLineContextTranslation]
+                ?: default.disableCrossLineContextTranslation,
             ocrRedBoxModeEnabled = this[Keys.OcrRedBoxModeEnabled]
                 ?: default.ocrRedBoxModeEnabled,
             ocrRedBoxShowSourceText = this[Keys.OcrRedBoxShowSourceText]
@@ -801,6 +808,11 @@ class SettingsRepository @Inject constructor(
                 ?.map { it.trim() }
                 ?.filter { it.isNotEmpty() }
                 ?: default.pinnedLanguages,
+            mlKitRecentSourceLanguages = this[Keys.MlKitRecentSourceLanguages]
+                ?.split(',')
+                ?.map { it.trim() }
+                ?.filter { it.isNotEmpty() }
+                ?: default.mlKitRecentSourceLanguages,
             overlayAllowWrap = this[Keys.OverlayWrap] ?: default.overlayAllowWrap,
             overlayAvoidCollision = this[Keys.OverlayCollision] ?: default.overlayAvoidCollision,
             baiduOcrEndpoint = runCatching { BaiduOcrEndpoint.valueOf(this[Keys.BaiduEndpoint] ?: "") }

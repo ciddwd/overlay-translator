@@ -166,6 +166,7 @@ import com.gameocr.app.appcontext.isUsageAccessGranted
 import com.gameocr.app.data.FloatingMenu
 import com.gameocr.app.data.FloatingSkill
 import com.gameocr.app.data.Languages
+import com.gameocr.app.translate.MlKitLanguagePolicy
 import com.gameocr.app.data.LoopTriggerMode
 import com.gameocr.app.data.LoopTextRegionMode
 import com.gameocr.app.data.MangaOcrAdvancedSettingsPolicy
@@ -459,6 +460,8 @@ fun SettingsScreen(
     var mlKitModelDownloadMessage by remember { mutableStateOf<String?>(null) }
     var mlKitModelStatePair by remember { mutableStateOf<Pair<String, String>?>(null) }
     var mlKitModelsReady by remember { mutableStateOf<Boolean?>(null) }
+    var mlKitDownloadedLanguageModels by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var showMlKitMoreLanguages by remember { mutableStateOf(false) }
     var mlKitMissingModelsPrompt by remember { mutableStateOf<MlKitMissingModelsPrompt?>(null) }
     var mlKitModelPromptDismissedPair by remember {
         mutableStateOf<Pair<String, String>?>(null)
@@ -628,6 +631,7 @@ fun SettingsScreen(
     var apiTimeoutSec by remember { mutableStateOf(30f) }
     var mergeAdjacent by remember { mutableStateOf(true) }
     var mergeStrength by remember { mutableStateOf(com.gameocr.app.data.MergeStrength.STANDARD) }
+    var disableCrossLineContextTranslation by remember { mutableStateOf(false) }
     // 文本方向自动判别：默认关；改动后即时落盘（走 viewModel.saveTextOrientationAutoDetect），不进 buildSnapshot
     var textOrientAutoDetect by remember { mutableStateOf(false) }
     // DBNet / 气泡聚类阈值。Slider 切换即时落盘（saveDbnetThresholds），下次截屏立即生效。
@@ -670,6 +674,9 @@ fun SettingsScreen(
     // 星标语言：本地镜像。togglePinLanguage 立即落盘，下次 ON_RESUME / load() 拉回最新；
     // 这里也乐观更新一份本地状态，UI 立刻反映。
     var pinnedLanguages by remember { mutableStateOf<List<String>>(emptyList()) }
+    var mlKitRecentSources by remember {
+        mutableStateOf(DEFAULT_ML_KIT_RECENT_SOURCE_LANGUAGES)
+    }
 
     // dirty 检测：load 时 capture 一份初始 Settings，之后跟 buildSnapshot() 比 equals。
     // 旧版手写两份 List<Any?>，每加 Settings 字段都要在两个 list 同步加，反复犯"忘改一边"的 bug。
@@ -786,6 +793,16 @@ fun SettingsScreen(
         }
     }
 
+    fun selectMlKitSourceLanguage(languageTag: String) {
+        timber.log.Timber.tag("MlKitTrans").i(
+            "[select-on-device-source] %s -> %s", sourceLang, languageTag
+        )
+        sourceLang = languageTag
+        mlKitRecentSources = mlKitRecentSourceLanguages(mlKitRecentSources, languageTag)
+        mlKitModelDownloadMessage = null
+        selectTranslatorEngine(TranslatorEngine.GOOGLE_ML_KIT)
+    }
+
     fun startMlKitModelDownload(pair: Pair<String, String>) {
         if (mlKitModelDownloadRunning) return
         mlKitMissingModelsPrompt = null
@@ -802,11 +819,15 @@ fun SettingsScreen(
             ) {
                 return@launch
             }
-            result.onSuccess {
+            if (result.isSuccess) {
                 mlKitModelStatePair = pair
                 mlKitModelsReady = true
                 mlKitModelDownloadMessage = null
-            }.onFailure { error ->
+                mlKitDownloadedLanguageModels = runCatching {
+                    viewModel.getDownloadedMlKitLanguageModels()
+                }.getOrDefault(mlKitDownloadedLanguageModels)
+            } else {
+                val error = checkNotNull(result.exceptionOrNull())
                 mlKitModelsReady = false
                 mlKitModelDownloadMessage = context.getString(
                     R.string.settings_mlkit_model_download_failed,
@@ -912,6 +933,7 @@ fun SettingsScreen(
         apiTimeoutSec = s.apiTimeoutSeconds.toFloat()
         mergeAdjacent = s.mergeAdjacentBlocks
         mergeStrength = s.mergeStrength
+        disableCrossLineContextTranslation = s.disableCrossLineContextTranslation
         textOrientAutoDetect = s.textOrientationAutoDetect
         manualTextOrient = s.manualTextOrientation
         resolveTranslationOutputSettings(
@@ -931,6 +953,7 @@ fun SettingsScreen(
         translationPresets = s.translationPresets
         activeTranslationPresetId = s.activeTranslationPresetId
         pinnedLanguages = s.pinnedLanguages
+        mlKitRecentSources = mlKitRecentSourceLanguages(s.mlKitRecentSourceLanguages)
         cleartextHostsText = s.cleartextAllowedHosts.joinToString("\n")
     }
     fun presetDisplayNameForMessage(preset: TranslationPreset): String = when (preset.id) {
@@ -1153,6 +1176,7 @@ fun SettingsScreen(
         model = model,
         sourceLang = sourceLang,
         targetLang = targetLang,
+        mlKitRecentSourceLanguages = mlKitRecentSources,
         promptTemplate = prompt,
         ocrEngine = ocrEngine,
         captureLoopIntervalMs = loopInterval.toLongOrNull() ?: 2000L,
@@ -1255,6 +1279,7 @@ fun SettingsScreen(
         apiTimeoutSeconds = apiTimeoutSec.toInt(),
         mergeAdjacentBlocks = mergeAdjacent,
         mergeStrength = mergeStrength,
+        disableCrossLineContextTranslation = disableCrossLineContextTranslation,
         cleartextAllowedHosts = cleartextHostsWithLocalOcrUrls(
             parseCleartextHosts(cleartextHostsText),
             umiOcrBaseUrl,
@@ -1438,6 +1463,7 @@ fun SettingsScreen(
             apiTimeoutSeconds = apiTimeoutSec.toInt(),
             mergeAdjacentBlocks = mergeAdjacent,
             mergeStrength = mergeStrength,
+            disableCrossLineContextTranslation = disableCrossLineContextTranslation,
             cleartextAllowedHosts = parseCleartextHosts(cleartextHostsText),
             translatorEngine = effectiveTranslatorEngine(),
             deeplKey = deeplKey,
@@ -2468,11 +2494,13 @@ fun SettingsScreen(
             translationPresets = s.translationPresets
             activeTranslationPresetId = s.activeTranslationPresetId
             pinnedLanguages = s.pinnedLanguages
+            mlKitRecentSources = mlKitRecentSourceLanguages(s.mlKitRecentSourceLanguages)
             allowWrap = s.overlayAllowWrap
             avoidCollision = s.overlayAvoidCollision
             apiTimeoutSec = s.apiTimeoutSeconds.toFloat()
             mergeAdjacent = s.mergeAdjacentBlocks
             mergeStrength = s.mergeStrength
+            disableCrossLineContextTranslation = s.disableCrossLineContextTranslation
             textOrientAutoDetect = s.textOrientationAutoDetect
             dbnetProb = s.dbnetProbThresh
             dbnetScore = s.dbnetBoxScoreThresh
@@ -2503,13 +2531,23 @@ fun SettingsScreen(
     // paddleStatus 独立异步加载：file.exists() / file.length() 走 IO 线程，避免阻塞首帧。
     val settingsLoaded = initialSettings != null
     LaunchedEffect(settingsLoaded, translatorEngine, sourceLang, targetLang) {
+        if (!settingsLoaded || translatorEngine != TranslatorEngine.GOOGLE_ML_KIT) {
+            mlKitModelStatePair = null
+            mlKitModelsReady = null
+            mlKitMissingModelsPrompt = null
+            mlKitDownloadedLanguageModels = emptySet()
+            return@LaunchedEffect
+        }
+        mlKitDownloadedLanguageModels = runCatching {
+            viewModel.getDownloadedMlKitLanguageModels()
+        }.getOrDefault(emptySet())
         if (
-            !settingsLoaded ||
-            translatorEngine != TranslatorEngine.GOOGLE_ML_KIT ||
             sourceLang.isBlank() ||
             sourceLang.equals(Languages.AUTO.code, ignoreCase = true) ||
             targetLang.isBlank() ||
-            targetLang.equals(Languages.AUTO.code, ignoreCase = true)
+            targetLang.equals(Languages.AUTO.code, ignoreCase = true) ||
+            !MlKitLanguagePolicy.isSupportedLanguageTag(sourceLang) ||
+            !MlKitLanguagePolicy.isSupportedLanguageTag(targetLang)
         ) {
             mlKitModelStatePair = null
             mlKitModelsReady = null
@@ -2771,26 +2809,46 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                val quickMlKitSources = mlKitRecentSourceLanguages(
+                    stored = mlKitRecentSources,
+                    selected = sourceLang.takeIf {
+                        translatorEngine == TranslatorEngine.GOOGLE_ML_KIT
+                    },
+                )
+                val downloadedMlKitPickerCodes = mlKitDownloadedPickerLanguageCodes(
+                    mlKitDownloadedLanguageModels
+                )
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    MlKitQuickSourceLanguage.entries.forEach { option ->
+                    quickMlKitSources.forEach { languageTag ->
+                        val defaultOption = MlKitQuickSourceLanguage.fromLanguageTag(languageTag)
                         FilterChip(
                             selected = translatorEngine == TranslatorEngine.GOOGLE_ML_KIT &&
-                                option.matches(sourceLang),
-                            onClick = {
-                                timber.log.Timber.tag("MlKitTrans").i(
-                                    "[select-on-device-source] %s -> %s", sourceLang, option.languageTag
+                                mlKitLanguageTagsMatch(languageTag, sourceLang),
+                            onClick = { selectMlKitSourceLanguage(languageTag) },
+                            label = {
+                                Text(
+                                    defaultOption?.let { stringResource(it.labelRes) }
+                                        ?: Languages.nameOf(context, languageTag)
                                 )
-                                sourceLang = option.languageTag
-                                mlKitModelDownloadMessage = null
-                                selectTranslatorEngine(TranslatorEngine.GOOGLE_ML_KIT)
                             },
-                            label = { Text(stringResource(option.labelRes)) },
                         )
                     }
+                    FilterChip(
+                        selected = false,
+                        onClick = {
+                            showMlKitMoreLanguages = true
+                            scope.launch {
+                                mlKitDownloadedLanguageModels = runCatching {
+                                    viewModel.getDownloadedMlKitLanguageModels()
+                                }.getOrDefault(mlKitDownloadedLanguageModels)
+                            }
+                        },
+                        label = { Text(stringResource(R.string.settings_on_device_translation_more)) },
+                    )
                     EngineChip(
                         translatorEngine,
                         TranslatorEngine.LOCAL_SAKURA,
@@ -2803,6 +2861,24 @@ fun SettingsScreen(
                         stringResource(R.string.settings_engine_local_hymt2),
                         enabled = localLlmDeviceCapable
                     ) { selectTranslatorEngine(it) }
+                }
+                if (showMlKitMoreLanguages) {
+                    LanguagePickerSheet(
+                        currentCode = sourceLang,
+                        pinned = pinnedLanguages,
+                        allowAuto = false,
+                        allowedLanguageCodes = mlKitLanguagePickerCodes,
+                        priorityCodes = downloadedMlKitPickerCodes,
+                        badgedLanguageCodes = downloadedMlKitPickerCodes.toSet(),
+                        badgeLabel = stringResource(R.string.settings_mlkit_model_downloaded_short),
+                        unbadgedStatusLabel = stringResource(R.string.settings_mlkit_model_download_short),
+                        onSelect = { languageTag ->
+                            selectMlKitSourceLanguage(languageTag)
+                            showMlKitMoreLanguages = false
+                        },
+                        onTogglePin = null,
+                        onDismiss = { showMlKitMoreLanguages = false },
+                    )
                 }
                 Text(
                     stringResource(R.string.settings_translator_group_cloud_llm),
@@ -3169,13 +3245,33 @@ fun SettingsScreen(
                         !sourceLang.equals(Languages.AUTO.code, ignoreCase = true)
                     val targetSelected = targetLang.isNotBlank() &&
                         !targetLang.equals(Languages.AUTO.code, ignoreCase = true)
+                    val sourceSupported = sourceSelected &&
+                        MlKitLanguagePolicy.isSupportedLanguageTag(sourceLang)
+                    val targetSupported = targetSelected &&
+                        MlKitLanguagePolicy.isSupportedLanguageTag(targetLang)
                     val currentPair = sourceLang to targetLang
                     val currentPairReady = mlKitModelStatePair == currentPair &&
                         mlKitModelsReady == true
                     val currentPairChecked = mlKitModelStatePair == currentPair &&
                         mlKitModelsReady != null
                     when {
-                        !sourceSelected || !targetSelected || !currentPairChecked -> {
+                        !sourceSupported -> Text(
+                            text = stringResource(
+                                R.string.settings_mlkit_unsupported_source_language,
+                                Languages.nameOf(context, sourceLang),
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        !targetSupported -> Text(
+                            text = stringResource(
+                                R.string.settings_mlkit_unsupported_target_language,
+                                Languages.nameOf(context, targetLang),
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        !currentPairChecked -> {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(18.dp),
                                 strokeWidth = 2.dp,
@@ -3319,21 +3415,30 @@ fun SettingsScreen(
                     label = stringResource(R.string.settings_source_lang),
                     currentCode = sourceLang,
                     onSelect = {
-                        timber.log.Timber.tag("OcrLangLink").i(
-                            "[user-select-source] %s -> %s", sourceLang, it
-                        )
-                        sourceLang = it
-                        mlKitModelDownloadMessage = null
-                        if (
-                            translatorEngine == TranslatorEngine.LOCAL_SAKURA &&
-                            !supportsSakuraLanguagePair(it, targetLang)
-                        ) {
-                            showSakuraFallbackDialog = true
+                        if (translatorEngine == TranslatorEngine.GOOGLE_ML_KIT) {
+                            selectMlKitSourceLanguage(it)
+                        } else {
+                            timber.log.Timber.tag("OcrLangLink").i(
+                                "[user-select-source] %s -> %s", sourceLang, it
+                            )
+                            sourceLang = it
+                            mlKitModelDownloadMessage = null
+                            if (
+                                translatorEngine == TranslatorEngine.LOCAL_SAKURA &&
+                                !supportsSakuraLanguagePair(it, targetLang)
+                            ) {
+                                showSakuraFallbackDialog = true
+                            }
                         }
                     },
                     pinned = pinnedLanguages,
                     onTogglePin = onTogglePin,
                     allowAuto = translatorEngine != TranslatorEngine.GOOGLE_ML_KIT,
+                    allowedLanguageCodes = if (translatorEngine == TranslatorEngine.GOOGLE_ML_KIT) {
+                        mlKitLanguagePickerCodes
+                    } else {
+                        null
+                    },
                 )
                 }
                 SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_TARGET_LANGUAGE) {
@@ -3353,6 +3458,11 @@ fun SettingsScreen(
                     pinned = pinnedLanguages,
                     onTogglePin = onTogglePin,
                     allowAuto = translatorEngine != TranslatorEngine.GOOGLE_ML_KIT,
+                    allowedLanguageCodes = if (translatorEngine == TranslatorEngine.GOOGLE_ML_KIT) {
+                        mlKitLanguagePickerCodes
+                    } else {
+                        null
+                    },
                 )
                 }
                 SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_TRANSLATION_ASSISTANCE) {
@@ -5033,6 +5143,16 @@ fun SettingsScreen(
                             checked = disableTranslationCache,
                             helpText = stringResource(R.string.settings_disable_translation_cache_hint),
                         ) { disableTranslationCache = it }
+                        SettingsSearchTarget(
+                            searchTargetRegistry,
+                            R.string.settings_search_item_cross_line_context,
+                        ) {
+                            SwitchRow(
+                                label = stringResource(R.string.settings_cross_line_context_translation),
+                                checked = disableCrossLineContextTranslation,
+                                helpText = stringResource(R.string.settings_cross_line_context_translation_hint),
+                            ) { disableCrossLineContextTranslation = it }
+                        }
                         SwitchRow(
                             label = stringResource(R.string.settings_ocr_red_box_mode_label),
                             checked = ocrRedBoxModeEnabled,
@@ -7242,7 +7362,10 @@ private val SEARCH_TARGET_TRIGGER = intArrayOf(
     R.string.settings_search_item_loop_region,
     R.string.settings_search_item_a11y_volume,
 )
-private val SEARCH_TARGET_DEVELOPER = intArrayOf(R.string.settings_search_item_developer_ocr)
+private val SEARCH_TARGET_DEVELOPER = intArrayOf(
+    R.string.settings_search_item_developer_ocr,
+    R.string.settings_search_item_cross_line_context,
+)
 private val SEARCH_TARGET_NETWORK = intArrayOf(
     R.string.settings_search_item_api_timeout,
     R.string.settings_search_item_llm_mirror,
@@ -7454,7 +7577,7 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
             R.string.settings_engine_deepl,
             R.string.settings_engine_youdao_pictrans,
             R.string.settings_engine_google,
-            R.string.settings_on_device_translation_latin,
+            R.string.settings_on_device_translation_english,
             R.string.settings_ocr_chip_chinese,
             R.string.settings_ocr_chip_japanese,
             R.string.settings_ocr_chip_korean,
@@ -7482,6 +7605,7 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_prompt, listOf("prompt", "提示词", "system")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_dictionary_prompt, listOf("dictionary", "词典", "划词", "word select", "phonetic", "音标", "释义", "definition", "prompt")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_streaming, listOf("streaming", "流式")),
+    SearchEntry(SectionKeys.DEVELOPER, R.string.settings_section_developer, R.string.settings_search_item_cross_line_context, listOf("disable context", "cross line", "禁用跨行", "上下文", "段落", "diagnostic", "诊断")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_glossary_enabled, listOf("name consistency", "term memory", "译名一致性", "人名", "专名")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_send_app_name, listOf("send app name", "prompt app context", "发送应用名称", "模型应用名称")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_foreground_app_detection, listOf("app detection", "foreground app", "accessibility", "usage access", "应用识别", "前台应用")),
@@ -8813,13 +8937,13 @@ internal enum class MlKitQuickSourceLanguage(
     val languageTag: String,
     @androidx.annotation.StringRes val labelRes: Int,
 ) {
-    LATIN("en", R.string.settings_on_device_translation_latin),
+    ENGLISH("en", R.string.settings_on_device_translation_english),
     CHINESE("zh-CN", R.string.settings_ocr_chip_chinese),
     JAPANESE("ja", R.string.settings_ocr_chip_japanese),
     KOREAN("ko", R.string.settings_ocr_chip_korean);
 
     fun matches(languageTag: String): Boolean = when (this) {
-        LATIN -> languageTag.equals("en", ignoreCase = true) ||
+        ENGLISH -> languageTag.equals("en", ignoreCase = true) ||
             languageTag.startsWith("en-", ignoreCase = true)
         CHINESE -> languageTag.equals("zh", ignoreCase = true) ||
             languageTag.startsWith("zh-", ignoreCase = true)
@@ -8834,6 +8958,12 @@ internal enum class MlKitQuickSourceLanguage(
             entries.firstOrNull { it.matches(languageTag) }
     }
 }
+
+internal val mlKitLanguagePickerCodes: Set<String> = Languages.ALL
+    .asSequence()
+    .map { it.code }
+    .filter(MlKitLanguagePolicy::isSupportedLanguageTag)
+    .toSet()
 
 internal data class MlKitMissingModelsPrompt(
     val pair: Pair<String, String>,

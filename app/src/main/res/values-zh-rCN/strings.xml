@@ -182,7 +182,10 @@
     <string name="settings_engine_deepl">DeepL</string>
     <string name="settings_engine_youdao_pictrans">有道图翻</string>
     <string name="settings_engine_google">Google</string>
-    <string name="settings_on_device_translation_latin">拉丁</string>
+    <string name="settings_on_device_translation_english">英语</string>
+    <string name="settings_on_device_translation_more">更多</string>
+    <string name="settings_mlkit_model_downloaded_short">已下载</string>
+    <string name="settings_mlkit_model_download_short">下载</string>
     <string name="settings_engine_volc">火山引擎</string>
     <string name="settings_engine_baidu_fanyi">百度翻译</string>
     <string name="settings_engine_tencent">腾讯云翻译</string>
@@ -205,6 +208,8 @@
     <string name="settings_mlkit_model_downloading">正在下载模型…</string>
     <string name="settings_mlkit_model_ready">当前语言模型已就绪，可以离线翻译。</string>
     <string name="settings_mlkit_model_download_failed">模型下载失败：%1$s</string>
+    <string name="settings_mlkit_unsupported_source_language">ML Kit 不支持所选源语言：%1$s</string>
+    <string name="settings_mlkit_unsupported_target_language">ML Kit 不支持所选目标语言：%1$s</string>
     <string name="mlkit_missing_models_dialog_title">端侧语言模型未就绪</string>
     <string name="mlkit_missing_models_dialog_message">「%1$s」→「%2$s」所需的端侧语言模型尚未下载完整。缺少：%3$s。\n\n模型按语言复用，下载后可与其他已就绪语言双向离线翻译。</string>
     <string name="mlkit_missing_models_dialog_download">下载所需模型</string>
@@ -578,6 +583,8 @@
     <string name="settings_merge_strength_conservative_hint">严格阈值，少误合但段落容易拆开。适合视觉小说 / 长段密集场景。</string>
     <string name="settings_merge_strength_standard_hint">默认平衡阈值，适合大多数场景。</string>
     <string name="settings_merge_strength_aggressive_hint">宽松阈值，更容易合并多行气泡。漫画 / 短句场景推荐；可能误合相邻气泡。</string>
+    <string name="settings_cross_line_context_translation">禁用跨行上下文翻译</string>
+    <string name="settings_cross_line_context_translation_hint">仅用于诊断。禁用后，OCR 截断的段落会被逐行翻译，可能因缺失上下文导致译文不准确。</string>
     <string name="settings_floating_size_format">悬浮按钮大小: %1$d dp</string>
     <string name="settings_loop_trigger_mode_label">循环触发方式</string>
     <string name="settings_loop_trigger_fixed">固定间隔</string>
@@ -717,6 +724,7 @@
     <string name="settings_search_item_allow_wrap">译文允许换行</string>
     <string name="settings_search_item_avoid_collision">避免 box 碰撞</string>
     <string name="settings_search_item_merge_strength">合并强度（保守 / 标准 / 激进）</string>
+    <string name="settings_search_item_cross_line_context">禁用跨行上下文翻译</string>
     <string name="settings_search_item_floating_snap">悬浮按钮贴边</string>
     <string name="settings_search_item_floating_auto_dock">悬浮按钮自动停靠</string>
     <string name="settings_search_item_floating_dock_inset">悬浮按钮贴边距离</string>
@@ -808,7 +816,7 @@
     <string name="toast_capture_failed">截屏失败：未拿到画面，建议重新启动捕获</string>
     <string name="toast_shizuku_dry_run_failed">Shizuku 截屏不可用——大概率没通过 ADB 配对。请打开 Shizuku 应用，用 ADB / 无线调试启动，或在主屏切换到 MediaProjection 启动方式。</string>
     <string name="toast_ocr_failed_format">OCR 失败 [%1$s]：%2$s</string>
-    <string name="toast_ocr_unreliable_result">OCR 结果置信度过低。请调整截取区域，或换一个 OCR 引擎再试。</string>
+    <string name="toast_ocr_unreliable_result">OCR 置信度过低，未识别到有效文字。请调整截取区域；若截屏空白、黑屏或模糊，请检查是否开启了屏幕共享防护。</string>
 
     <!-- 悬浮球弧形菜单（长按弹出） -->
     <string name="menu_loop_translate">循环翻译</string>

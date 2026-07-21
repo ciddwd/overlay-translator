@@ -54,6 +54,54 @@ class SettingsScreenModelStatusTest {
     }
 
     @Test
+    fun crossLineContextTranslation_isADeveloperDiagnosticOptOut() {
+        val source = File("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
+        val assistanceStart = source.indexOf("private fun TranslationAssistanceSettings(")
+        val assistanceEnd = source.indexOf(
+            "private fun OpenAiPromptSettings(",
+            startIndex = assistanceStart,
+        )
+        val developerStart = source.indexOf("item(key = SectionKeys.DEVELOPER)")
+        val developerEnd = source.indexOf(
+            "item(key = SectionKeys.NETWORK)",
+            startIndex = developerStart,
+        )
+        val crossLineIndex = source.indexOf(
+            "label = stringResource(R.string.settings_cross_line_context_translation)",
+            startIndex = developerStart,
+        )
+
+        assertTrue("translation assistance function exists", assistanceStart >= 0)
+        assertTrue("translation assistance function end exists", assistanceEnd > assistanceStart)
+        assertFalse(
+            "normal translation settings should not expose the diagnostic switch",
+            source.substring(assistanceStart, assistanceEnd)
+                .contains("settings_cross_line_context_translation"),
+        )
+        assertTrue("developer section exists", developerStart >= 0)
+        assertTrue("developer section end exists", developerEnd > developerStart)
+        assertTrue("diagnostic switch is inside developer section", crossLineIndex in developerStart until developerEnd)
+        assertTrue(
+            "diagnostic switch is hidden behind developer mode",
+            source.substring(developerStart, crossLineIndex).contains("if (developerOptionsEnabled)"),
+        )
+        assertTrue(
+            "settings search should route the diagnostic switch to Developer",
+            source.contains(
+                "SearchEntry(SectionKeys.DEVELOPER, R.string.settings_section_developer, " +
+                    "R.string.settings_search_item_cross_line_context"
+            ),
+        )
+        assertFalse(
+            "settings search should no longer route cross-line context to Translation",
+            source.contains(
+                "SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, " +
+                    "R.string.settings_search_item_cross_line_context"
+            ),
+        )
+    }
+
+    @Test
     fun settingsSearchMatches_normalizesMultipleTermsAndPunctuation() {
         data class Case(
             val name: String,

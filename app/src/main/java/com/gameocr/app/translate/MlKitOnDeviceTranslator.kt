@@ -170,6 +170,9 @@ class MlKitOnDeviceTranslator @Inject constructor(
         targetTag: String,
     ): Boolean = getMissingLanguageModels(sourceTag, targetTag).isEmpty()
 
+    suspend fun getDownloadedLanguageModels(): Set<String> =
+        downloadedLanguageProvider.getDownloadedLanguages()
+
     /** Returns canonical ML Kit language tags for models still missing from this device. */
     suspend fun getMissingLanguageModels(sourceTag: String, targetTag: String): Set<String> {
         val sourceLanguage = MlKitLanguagePolicy.resolveConfiguredSource(sourceTag)
@@ -223,6 +226,22 @@ class MlKitOnDeviceTranslator @Inject constructor(
 }
 
 internal object MlKitLanguagePolicy {
+    val supportedLanguageTags: Set<String> = setOf(
+        "af", "ar", "be", "bg", "bn", "ca", "cs", "cy", "da", "de", "el", "en",
+        "eo", "es", "et", "fa", "fi", "fr", "ga", "gl", "gu", "he", "hi", "hr",
+        "ht", "hu", "id", "is", "it", "ja", "ka", "kn", "ko", "lt", "lv", "mk",
+        "mr", "ms", "mt", "nl", "no", "pl", "pt", "ro", "ru", "sk", "sl", "sq",
+        "sv", "sw", "ta", "te", "th", "tl", "tr", "uk", "ur", "vi", "zh",
+    )
+
+    fun isSupportedLanguageTag(languageTag: String): Boolean {
+        val normalized = normalize(languageTag)
+        if (normalized.isEmpty() || normalized == "auto") return false
+        val canonicalTag = canonicalize(normalized)
+        return canonicalTag in supportedLanguageTags &&
+            TranslateLanguage.fromLanguageTag(canonicalTag) != null
+    }
+
     fun resolveConfiguredSource(languageTag: String): String {
         val normalized = normalize(languageTag)
         if (normalized.isEmpty() || normalized == "auto") {
@@ -250,16 +269,22 @@ internal object MlKitLanguagePolicy {
         }
 
     private fun requireSupported(normalizedTag: String, role: String): String {
-        val canonicalTag = when (normalizedTag) {
+        val canonicalTag = canonicalize(normalizedTag)
+        if (canonicalTag !in supportedLanguageTags) {
+            throw TranslationException("ML Kit 不支持${role}语言: $normalizedTag")
+        }
+        return TranslateLanguage.fromLanguageTag(canonicalTag)
+            ?: throw TranslationException("ML Kit 不支持${role}语言: $normalizedTag")
+    }
+
+    private fun canonicalize(normalizedTag: String): String =
+        when (normalizedTag) {
             "nb", "nn" -> "no"
             "fil" -> "tl"
             "iw" -> "he"
             "zh-cn", "zh-tw", "zh-hans", "zh-hant" -> "zh"
             else -> normalizedTag.substringBefore('-')
         }
-        return TranslateLanguage.fromLanguageTag(canonicalTag)
-            ?: throw TranslationException("ML Kit 不支持${role}语言: $normalizedTag")
-    }
 
     private fun normalize(languageTag: String): String = languageTag
         .trim()

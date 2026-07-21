@@ -39,6 +39,8 @@ data class Settings(
     val developerOptionsEnabled: Boolean = false,
     val ocrScreenshotSavingEnabled: Boolean = false,
     val disableTranslationCache: Boolean = false,
+    /** 仅供开发者诊断；关闭开发者选项时不会影响正常的跨行上下文翻译。 */
+    val disableCrossLineContextTranslation: Boolean = false,
     val ocrRedBoxModeEnabled: Boolean = false,
     val ocrRedBoxShowSourceText: Boolean = true,
     val ocrRedBoxShowTranslation: Boolean = false,
@@ -263,6 +265,8 @@ data class Settings(
      * 列表里在最前，源语言 / 目标语言两个选择器共享同一份。
      */
     val pinnedLanguages: List<String> = emptyList(),
+    /** ML Kit 端侧翻译最近使用的源语言，按最近使用顺序保存，最多四个。 */
+    val mlKitRecentSourceLanguages: List<String> = listOf("en", "zh-CN", "ja", "ko"),
     /**
      * 明文 HTTP 白名单 host 列表（仅 hostname / IP，不含 scheme / port / path）。
      * 默认严格模式仅放行私有/回环地址；这里追加的 host 也允许明文访问，用于无 HTTPS 的可信外网服务。

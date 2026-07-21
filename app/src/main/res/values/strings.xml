@@ -182,7 +182,10 @@
     <string name="settings_engine_deepl">DeepL</string>
     <string name="settings_engine_youdao_pictrans">Youdao PicTrans</string>
     <string name="settings_engine_google">Google</string>
-    <string name="settings_on_device_translation_latin">Latin</string>
+    <string name="settings_on_device_translation_english">English</string>
+    <string name="settings_on_device_translation_more">More</string>
+    <string name="settings_mlkit_model_downloaded_short">Downloaded</string>
+    <string name="settings_mlkit_model_download_short">Download</string>
     <string name="settings_engine_volc">Volcengine</string>
     <string name="settings_engine_baidu_fanyi">Baidu Translate</string>
     <string name="settings_engine_tencent">Tencent Cloud Translate</string>
@@ -205,6 +208,8 @@
     <string name="settings_mlkit_model_downloading">Downloading models…</string>
     <string name="settings_mlkit_model_ready">The current language models are ready. Offline translation is available.</string>
     <string name="settings_mlkit_model_download_failed">Model download failed: %1$s</string>
+    <string name="settings_mlkit_unsupported_source_language">ML Kit does not support the selected source language: %1$s</string>
+    <string name="settings_mlkit_unsupported_target_language">ML Kit does not support the selected target language: %1$s</string>
     <string name="mlkit_missing_models_dialog_title">On-device language models not ready</string>
     <string name="mlkit_missing_models_dialog_message">The on-device models required for %1$s → %2$s have not all been downloaded. Missing: %3$s.\n\nModels are reusable per language. After downloading, the language can be translated offline in either direction with other ready languages.</string>
     <string name="mlkit_missing_models_dialog_download">Download required models</string>
@@ -579,6 +584,8 @@
     <string name="settings_merge_strength_conservative_hint">Strict thresholds: rarely over-merges but paragraphs may stay split. Suits visual novels / dense long passages.</string>
     <string name="settings_merge_strength_standard_hint">Balanced default, suits most scenarios.</string>
     <string name="settings_merge_strength_aggressive_hint">Loose thresholds: merges multi-line bubbles more readily. Recommended for comics / short bubbles; may merge adjacent bubbles by accident.</string>
+    <string name="settings_cross_line_context_translation">Disable cross-line context translation</string>
+    <string name="settings_cross_line_context_translation_hint">For diagnostics only. When disabled, OCR-split paragraphs are translated line by line and may be inaccurate because context is missing.</string>
     <string name="settings_floating_size_format">Floating button size: %1$d dp</string>
     <string name="settings_loop_trigger_mode_label">Loop trigger mode</string>
     <string name="settings_loop_trigger_fixed">Fixed interval</string>
@@ -718,6 +725,7 @@
     <string name="settings_search_item_allow_wrap">Allow translation wrap</string>
     <string name="settings_search_item_avoid_collision">Avoid box collision</string>
     <string name="settings_search_item_merge_strength">Merge strength (conservative / standard / aggressive)</string>
+    <string name="settings_search_item_cross_line_context">Disable cross-line context translation</string>
     <string name="settings_search_item_floating_snap">Floating button snap-to-edge</string>
     <string name="settings_search_item_floating_auto_dock">Floating button auto-dock</string>
     <string name="settings_search_item_floating_dock_inset">Floating button dock inset</string>
@@ -809,7 +817,7 @@
     <string name="toast_capture_failed">Capture failed: no frame. Try restarting capture.</string>
     <string name="toast_shizuku_dry_run_failed">Shizuku capture isn\'t working — likely not paired via ADB. Open the Shizuku app and start it with ADB / wireless debug, or switch to MediaProjection on the main screen.</string>
     <string name="toast_ocr_failed_format">OCR failed [%1$s]: %2$s</string>
-    <string name="toast_ocr_unreliable_result">OCR result looks unreliable. Adjust the capture region or try another OCR engine.</string>
+    <string name="toast_ocr_unreliable_result">OCR confidence is too low to detect valid text. Adjust the capture region. If the captured image is blank, black, or blurred, check whether screen-sharing protection is enabled.</string>
 
     <!-- Floating button arc menu (long press) -->
     <string name="menu_loop_translate">Loop</string>
