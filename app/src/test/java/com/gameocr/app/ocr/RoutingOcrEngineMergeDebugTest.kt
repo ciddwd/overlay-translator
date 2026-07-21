@@ -344,6 +344,169 @@ class RoutingOcrEngineMergeDebugTest {
     }
 
     @Test
+    fun mergeVerticalTerminalPunctuation_tableDriven_attachesOnlyTerminalFullStops() {
+        data class Case(
+            val name: String,
+            val columnText: String,
+            val columnRect: MergeDebugRect = MergeDebugRect(421, 30, 481, 465),
+            val punctuationText: String,
+            val punctuationRect: MergeDebugRect,
+            val punctuationConfidence: Float = 1f,
+            val expectedAttached: Boolean,
+            val expectedMergedText: String? = null,
+        )
+
+        val cases = listOf(
+            Case(
+                name = "logcat 7o full stop joins vertical column",
+                columnText = "也曾經是其中的一員",
+                punctuationText = "7o",
+                punctuationRect = MergeDebugRect(448, 442, 475, 477),
+                punctuationConfidence = 0.20f,
+                expectedAttached = true,
+                expectedMergedText = "也曾經是其中的一員。",
+            ),
+            Case(
+                name = "logcat o full stop joins vertical column",
+                columnText = "以期能夠取得優異的成績",
+                columnRect = MergeDebugRect(761, 29, 824, 557),
+                punctuationText = "o",
+                punctuationRect = MergeDebugRect(795, 543, 815, 569),
+                punctuationConfidence = 0.16f,
+                expectedAttached = true,
+                expectedMergedText = "以期能夠取得優異的成績。",
+            ),
+            Case(
+                name = "already punctuated column does not duplicate full stop",
+                columnText = "但部員們的士氣並不低落。",
+                columnRect = MergeDebugRect(873, 30, 935, 564),
+                punctuationText = "o",
+                punctuationRect = MergeDebugRect(907, 543, 924, 565),
+                punctuationConfidence = 0.16f,
+                expectedAttached = true,
+                expectedMergedText = "但部員們的士氣並不低落。",
+            ),
+            Case(
+                name = "native ideographic full stop also joins",
+                columnText = "也曾經是其中的一員",
+                punctuationText = "。",
+                punctuationRect = MergeDebugRect(448, 442, 475, 477),
+                expectedAttached = true,
+                expectedMergedText = "也曾經是其中的一員。",
+            ),
+            Case(
+                name = "logcat low confidence 8 joins as geometric full stop",
+                columnText = "以期能夠取得優異的成績",
+                columnRect = MergeDebugRect(772, 47, 835, 578),
+                punctuationText = "8",
+                punctuationRect = MergeDebugRect(806, 560, 826, 587),
+                punctuationConfidence = 0.112f,
+                expectedAttached = true,
+                expectedMergedText = "以期能夠取得優異的成績。",
+            ),
+            Case(
+                name = "high confidence real 8 stays independent",
+                columnText = "以期能夠取得優異的成績",
+                columnRect = MergeDebugRect(772, 47, 835, 578),
+                punctuationText = "8",
+                punctuationRect = MergeDebugRect(806, 560, 826, 587),
+                punctuationConfidence = 0.92f,
+                expectedAttached = false,
+            ),
+            Case(
+                name = "high confidence real o stays independent",
+                columnText = "以期能夠取得優異的成績",
+                columnRect = MergeDebugRect(772, 47, 835, 578),
+                punctuationText = "o",
+                punctuationRect = MergeDebugRect(806, 560, 826, 587),
+                punctuationConfidence = 0.92f,
+                expectedAttached = false,
+            ),
+            Case(
+                name = "circle away from column end stays independent",
+                columnText = "也曾經是其中的一員",
+                punctuationText = "o",
+                punctuationRect = MergeDebugRect(448, 300, 475, 335),
+                punctuationConfidence = 0.16f,
+                expectedAttached = false,
+            ),
+            Case(
+                name = "circle outside column axis stays independent",
+                columnText = "也曾經是其中的一員",
+                punctuationText = "o",
+                punctuationRect = MergeDebugRect(500, 442, 527, 477),
+                punctuationConfidence = 0.16f,
+                expectedAttached = false,
+            ),
+            Case(
+                name = "normal ascii word is never normalized as punctuation",
+                columnText = "也曾經是其中的一員",
+                punctuationText = "go",
+                punctuationRect = MergeDebugRect(448, 442, 475, 477),
+                expectedAttached = false,
+            ),
+            Case(
+                name = "normal sized ascii box stays independent",
+                columnText = "也曾經是其中的一員",
+                punctuationText = "o",
+                punctuationRect = MergeDebugRect(430, 400, 480, 470),
+                punctuationConfidence = 0.16f,
+                expectedAttached = false,
+            ),
+            Case(
+                name = "ascii column does not absorb circle",
+                columnText = "OPENAI",
+                punctuationText = "o",
+                punctuationRect = MergeDebugRect(448, 442, 475, 477),
+                punctuationConfidence = 0.16f,
+                expectedAttached = false,
+            ),
+        )
+
+        cases.forEach { case ->
+            val blocks = listOf(
+                VerticalTerminalPunctuationBlock(case.columnText, case.columnRect),
+                VerticalTerminalPunctuationBlock(
+                    case.punctuationText,
+                    case.punctuationRect,
+                    case.punctuationConfidence,
+                ),
+            )
+
+            val result = verticalTerminalPunctuationAttachments(blocks, baseColumnWidth = 60)
+
+            val expected = if (case.expectedAttached) mapOf(0 to listOf(1)) else emptyMap()
+            assertEquals(case.name, expected, result)
+            case.expectedMergedText?.let { expectedText ->
+                assertEquals(case.name, expectedText, mergeVerticalTerminalPunctuationText(case.columnText))
+            }
+        }
+    }
+
+    @Test
+    fun mergeVerticalTerminalPunctuation_logcatRegression_mergesThreePeriodBoxesIntoColumns() {
+        val blocks = listOf(
+            VerticalTerminalPunctuationBlock("也曾經是其中的一員", MergeDebugRect(421, 30, 481, 465)),
+            VerticalTerminalPunctuationBlock("以期能夠取得優異的成績", MergeDebugRect(761, 29, 824, 557)),
+            VerticalTerminalPunctuationBlock("但部員們的士氣並不低落。", MergeDebugRect(873, 30, 935, 564)),
+            VerticalTerminalPunctuationBlock("7o", MergeDebugRect(448, 442, 475, 477), confidence = 0.20f),
+            VerticalTerminalPunctuationBlock("o", MergeDebugRect(795, 543, 815, 569), confidence = 0.16f),
+            VerticalTerminalPunctuationBlock("o", MergeDebugRect(907, 543, 924, 565), confidence = 0.16f),
+        )
+
+        val result = verticalTerminalPunctuationAttachments(blocks, baseColumnWidth = 60)
+
+        assertEquals(
+            mapOf(
+                0 to listOf(3),
+                1 to listOf(4),
+                2 to listOf(5),
+            ),
+            result,
+        )
+    }
+
+    @Test
     fun detectMergeOrientation_tableDriven_prefersStrongVerticalTextOverUiNoise() {
         data class Case(
             val name: String,

@@ -4,7 +4,21 @@ import androidx.annotation.StringRes
 import com.gameocr.app.R
 import com.gameocr.app.capture.CaptureRegion
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.KSerializer
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
 import java.security.MessageDigest
+
+const val DEFAULT_MINIMAX_TTS_BASE_URL = "https://api.minimaxi.com"
+const val DEFAULT_MIMO_TTS_BASE_URL = "https://api.xiaomimimo.com/v1"
+const val DEFAULT_VOLCENGINE_TTS_BASE_URL = "https://openspeech.bytedance.com"
+const val DEFAULT_ANTHROPIC_BASE_URL = "https://api.deepseek.com/anthropic"
+const val DEFAULT_ANTHROPIC_MODEL = "deepseek-v4-flash"
+const val MIN_TTS_PLAYBACK_GAIN_DB = 0
+const val MAX_TTS_PLAYBACK_GAIN_DB = 24
 
 /** 用户配置：OCR / 翻译后端相关。 */
 @Serializable
@@ -12,6 +26,9 @@ data class Settings(
     val baseUrl: String = "https://api.deepseek.com/v1/",
     val apiKey: String = "",
     val model: String = "deepseek-v4-flash",
+    val anthropicBaseUrl: String = DEFAULT_ANTHROPIC_BASE_URL,
+    val anthropicApiKey: String = "",
+    val anthropicModel: String = DEFAULT_ANTHROPIC_MODEL,
     /** BCP-47 源语言代码（如 "auto"/"ja"/"zh-CN"）。从全部 [Languages.ALL] 中选取。 */
     val sourceLang: String = Languages.AUTO.code,
     val targetLang: String = "zh-CN",
@@ -27,6 +44,8 @@ data class Settings(
     val developerOptionsEnabled: Boolean = false,
     val ocrScreenshotSavingEnabled: Boolean = false,
     val disableTranslationCache: Boolean = false,
+    /** 兼容旧版持久化字段；界面以正向的“跨上下文翻译”开关展示。false 表示默认开启。 */
+    val disableCrossLineContextTranslation: Boolean = false,
     val ocrRedBoxModeEnabled: Boolean = false,
     val ocrRedBoxShowSourceText: Boolean = true,
     val ocrRedBoxShowTranslation: Boolean = false,
@@ -46,6 +65,39 @@ data class Settings(
     val overlayFonts: List<OverlayFontEntry> = emptyList(),
     val streamingTranslate: Boolean = true,
     val retryEmptyTranslation: Boolean = false,
+    val ttsEnabled: Boolean = false,
+    val ttsProvider: TtsProvider = TtsProvider.SYSTEM,
+    val ttsVoice: String = "",
+    val ttsEmotion: String = "",
+    val ttsSpeed: Float = 1.0f,
+    val ttsPitch: Float = 1.0f,
+    val ttsGainDb: Int = 0,
+    val ttsHttpBaseUrl: String = "",
+    val ttsHttpBearerToken: String = "",
+    val ttsHttpResponseMode: TtsHttpResponseMode = TtsHttpResponseMode.BINARY_AUDIO,
+    val ttsVolcengineResource: VolcengineTtsResource = VolcengineTtsResource.PRESET_VOICE_2_0,
+    val ttsVolcengineBaseUrl: String = DEFAULT_VOLCENGINE_TTS_BASE_URL,
+    val ttsVolcengineApiKey: String = "",
+    val ttsVolcengineSpeaker: String = "zh_female_vv_uranus_bigtts",
+    val ttsVolcengineModel: String = "seed-tts-2.0-standard",
+    val ttsVolcengineContext: String = "",
+    val ttsVolcenginePitch: Int = 0,
+    val ttsVolcengineToneFidelity: Boolean = false,
+    val ttsMiniMaxModel: MiniMaxTtsModel = MiniMaxTtsModel.SPEECH_2_8_HD,
+    val ttsMiniMaxBaseUrl: String = DEFAULT_MINIMAX_TTS_BASE_URL,
+    val ttsMiniMaxApiKey: String = "",
+    val ttsMiniMaxVoice: String = "male-qn-qingse",
+    val ttsMiniMaxEmotion: String = "",
+    val ttsMiniMaxSpeed: Float = 1.0f,
+    val ttsMiniMaxPitch: Int = 0,
+    val ttsMimoModel: MimoTtsModel = MimoTtsModel.PRESET,
+    val ttsMimoBaseUrl: String = DEFAULT_MIMO_TTS_BASE_URL,
+    val ttsMimoApiKey: String = "",
+    val ttsMimoVoice: String = "mimo_default",
+    val ttsMimoInstruction: String = "",
+    val ttsMimoVoiceDesignPrompt: String = "",
+    val ttsMimoVoiceCloneInstruction: String = "",
+    val ttsMimoVoiceSampleUri: String = "builtin:mimo_voice_reference_1",
     val renderMode: RenderMode = RenderMode.BLOCKS,
     val translationBlockInteractionMode: TranslationBlockInteractionMode =
         TranslationBlockInteractionMode.COPY_BUTTON,
@@ -218,6 +270,8 @@ data class Settings(
      * 列表里在最前，源语言 / 目标语言两个选择器共享同一份。
      */
     val pinnedLanguages: List<String> = emptyList(),
+    /** ML Kit 端侧翻译最近使用的源语言，按最近使用顺序保存，最多四个。 */
+    val mlKitRecentSourceLanguages: List<String> = listOf("en", "zh-CN", "ja", "ko"),
     /**
      * 明文 HTTP 白名单 host 列表（仅 hostname / IP，不含 scheme / port / path）。
      * 默认严格模式仅放行私有/回环地址；这里追加的 host 也允许明文访问，用于无 HTTPS 的可信外网服务。
@@ -357,6 +411,8 @@ data class TranslationPreset(
     val shortName: String = name.take(8),
     val baseUrl: String = "https://api.deepseek.com/v1/",
     val model: String = "deepseek-v4-flash",
+    val anthropicBaseUrl: String = DEFAULT_ANTHROPIC_BASE_URL,
+    val anthropicModel: String = DEFAULT_ANTHROPIC_MODEL,
     val sourceLang: String = Languages.AUTO.code,
     val targetLang: String = "zh-CN",
     val promptTemplate: String = Settings.DEFAULT_PROMPT,
@@ -385,6 +441,8 @@ data class TranslationPreset(
     val overlayAvoidCollision: Boolean = true,
     val streamingTranslate: Boolean = true,
     val retryEmptyTranslation: Boolean = false,
+    val ttsEnabled: Boolean = false,
+    val ttsProvider: TtsProvider = TtsProvider.SYSTEM,
     val translatorEngine: TranslatorEngine = TranslatorEngine.OPENAI,
     val deeplPro: Boolean = false,
     val deeplProtocol: DeeplProtocol = DeeplProtocol.OFFICIAL,
@@ -432,6 +490,8 @@ data class TranslationPreset(
         return settings.copy(
         baseUrl = baseUrl,
         model = model,
+        anthropicBaseUrl = anthropicBaseUrl,
+        anthropicModel = anthropicModel,
         sourceLang = sourceLang,
         targetLang = targetLang,
         promptTemplate = promptTemplate,
@@ -459,6 +519,8 @@ data class TranslationPreset(
         overlayAvoidCollision = overlayAvoidCollision,
         streamingTranslate = streamingTranslate,
         retryEmptyTranslation = retryEmptyTranslation,
+        ttsEnabled = ttsEnabled,
+        ttsProvider = ttsProvider,
         translatorEngine = translatorEngine,
         deeplPro = deeplPro,
         deeplProtocol = deeplProtocol,
@@ -544,6 +606,8 @@ object TranslationPresetCatalog {
             shortName = shortName,
             baseUrl = settings.baseUrl,
             model = settings.model,
+            anthropicBaseUrl = settings.anthropicBaseUrl,
+            anthropicModel = settings.anthropicModel,
             sourceLang = settings.sourceLang,
             targetLang = settings.targetLang,
             promptTemplate = settings.promptTemplate,
@@ -571,6 +635,8 @@ object TranslationPresetCatalog {
             overlayAvoidCollision = settings.overlayAvoidCollision,
             streamingTranslate = settings.streamingTranslate,
             retryEmptyTranslation = settings.retryEmptyTranslation,
+            ttsEnabled = settings.ttsEnabled,
+            ttsProvider = settings.ttsProvider,
             translatorEngine = settings.translatorEngine,
             deeplPro = settings.deeplPro,
             deeplProtocol = settings.deeplProtocol,
@@ -641,6 +707,8 @@ object TranslationPresetCatalog {
         return sha256(
             preset.baseUrl,
             preset.model,
+            preset.anthropicBaseUrl,
+            preset.anthropicModel,
             preset.sourceLang,
             preset.targetLang,
             preset.promptTemplate,
@@ -683,6 +751,8 @@ object TranslationPresetCatalog {
             preset.overlayAvoidCollision,
             preset.streamingTranslate,
             preset.retryEmptyTranslation,
+            preset.ttsEnabled,
+            preset.ttsProvider.name,
             preset.translatorEngine.name,
             preset.deeplPro,
             preset.deeplProtocol.name,
@@ -929,7 +999,7 @@ enum class PaddleModelVersion(
     /** modelsDir 下的子目录名 */
     val dirName: String
 ) {
-    /** PP-OCRv5 mobile（det 4.5MB + rec 15.7MB + dict 90KB，~20MB 总计） */
+    /** 官方 PP-OCRv5 mobile（det 4.6MiB + rec 15.8MiB + inference.yml 145KiB，约 20.5MiB） */
     V5_MOBILE(
         R.string.paddle_version_v5_mobile,
         R.string.paddle_version_v5_mobile_desc,
@@ -971,6 +1041,8 @@ enum class PaddleModelVersion(
 enum class TranslatorEngine {
     /** OpenAI 兼容 LLM（DeepSeek / SiliconFlow / GPT / 自架 Ollama 等）。 */
     OPENAI,
+    /** Anthropic Messages API 兼容 LLM（官方 Claude / 标准兼容网关）。 */
+    ANTHROPIC,
     /** DeepL 翻译 API（专业翻译质量，对日/英/中等 30+ 语言对）。 */
     DEEPL,
     /**
@@ -982,6 +1054,11 @@ enum class TranslatorEngine {
      * Google 翻译（非官方端点，无需 key）。谷歌可能随时限流 / 改端点 / 拒绝。国内需代理。
      */
     GOOGLE,
+    /**
+     * 端侧翻译的内部路由值，UI 仅显示拉丁 / 中文 / 日文 / 韩文四个源语言入口。
+     * 底层使用 Google ML Kit，要求明确的 sourceLang；首次实际翻译时按需下载模型。
+     */
+    GOOGLE_ML_KIT,
     /**
      * 火山引擎机器翻译（open.volcengineapi.com）。原生支持 TextList 批量；走 Volcengine SignV4
      * 鉴权（service=translate / region=cn-north-1）。需要在火山控制台开通"机器翻译"并拿 AK/SK。
@@ -1016,6 +1093,62 @@ enum class TranslatorEngine {
      * 仅 Android 13+ 可用；语言方向跟随 [sourceLang] / [targetLang]。
      */
     LOCAL_HY_MT2
+}
+
+@Serializable(with = TtsProviderSerializer::class)
+enum class TtsProvider {
+    SYSTEM,
+    GENERIC_HTTP,
+    VOLCENGINE,
+    MINIMAX,
+    MIMO,
+}
+
+object TtsProviderSerializer : KSerializer<TtsProvider> {
+    override val descriptor: SerialDescriptor =
+        PrimitiveSerialDescriptor("TtsProvider", PrimitiveKind.STRING)
+
+    override fun serialize(encoder: Encoder, value: TtsProvider) = encoder.encodeString(value.name)
+
+    override fun deserialize(decoder: Decoder): TtsProvider = parseTtsProvider(decoder.decodeString())
+}
+
+internal fun parseTtsProvider(raw: String, fallback: TtsProvider = TtsProvider.SYSTEM): TtsProvider =
+    when (raw.trim()) {
+        "VOLCENGINE_GATEWAY" -> TtsProvider.VOLCENGINE
+        "ALIYUN_GATEWAY" -> TtsProvider.SYSTEM
+        else -> runCatching { TtsProvider.valueOf(raw.trim()) }.getOrDefault(fallback)
+    }
+
+@Serializable
+enum class VolcengineTtsResource(val apiId: String) {
+    PRESET_VOICE_2_0("seed-tts-2.0"),
+    VOICE_CLONE_2_0("seed-icl-2.0"),
+}
+
+@Serializable
+enum class TtsHttpResponseMode {
+    BINARY_AUDIO,
+    JSON_BASE64,
+}
+
+@Serializable
+enum class MiniMaxTtsModel(val apiId: String) {
+    SPEECH_2_8_HD("speech-2.8-hd"),
+    SPEECH_2_8_TURBO("speech-2.8-turbo"),
+    SPEECH_2_6_HD("speech-2.6-hd"),
+    SPEECH_2_6_TURBO("speech-2.6-turbo"),
+    SPEECH_02_HD("speech-02-hd"),
+    SPEECH_02_TURBO("speech-02-turbo"),
+    SPEECH_01_HD("speech-01-hd"),
+    SPEECH_01_TURBO("speech-01-turbo"),
+}
+
+@Serializable
+enum class MimoTtsModel(val apiId: String) {
+    PRESET("mimo-v2.5-tts"),
+    VOICE_DESIGN("mimo-v2.5-tts-voicedesign"),
+    VOICE_CLONE("mimo-v2.5-tts-voiceclone"),
 }
 
 /** 端侧 LLM 下载源选择。see [Settings.localLlmMirror]。 */

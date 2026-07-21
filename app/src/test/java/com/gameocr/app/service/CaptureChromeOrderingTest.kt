@@ -207,7 +207,7 @@ class CaptureChromeOrderingTest {
             Case(
                 "block overlay partial update",
                 "private suspend fun renderBlocks(",
-                "overlay?.updateBlockText(idx, partial, phase)"
+                "updateTranslationUnit("
             ),
             Case(
                 "floating window partial update",
@@ -241,6 +241,35 @@ class CaptureChromeOrderingTest {
                 "mainScope.launch { ${case.updateCall} }" in snippet
             )
         }
+        val blockUpdateSnippet = functionSnippet(source, "private fun updateTranslationUnit(")
+        assertTrue(
+            "cross-line reflow should still update each original overlay block with its layout phase",
+            "overlay?.updateBlockText(blockIndex, chunk, phase)" in blockUpdateSnippet,
+        )
+    }
+
+    @Test
+    fun floatingWindowTranslation_usesCrossLineUnitsForBatchAndStreaming() {
+        val source = captureServiceSource()
+        val renderSnippet = functionSnippet(source, "private suspend fun renderFloatingWindow(")
+        val batchSnippet = functionSnippet(source, "private suspend fun batchTranslateFloatingWindow(")
+
+        assertTrue(
+            "floating window should plan context units from OCR blocks",
+            "planCrossLineTranslationUnits(blocks, settings.sourceLang)" in renderSnippet,
+        )
+        assertTrue(
+            "floating window placeholders should use complete context-unit sources",
+            "overlay?.prepareFloatingWindow(translationUnits.map { it.sourceText })" in renderSnippet,
+        )
+        assertTrue(
+            "streaming translation should translate each complete context unit",
+            "translateOne(unit.sourceText, settings, diagId, idx)" in renderSnippet,
+        )
+        assertTrue(
+            "batch translation should submit the same complete context-unit sources",
+            "val sources = translationUnits.map { it.sourceText }" in batchSnippet,
+        )
     }
 
     private fun captureServiceSource(): String =

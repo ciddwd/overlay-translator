@@ -2,6 +2,7 @@ package com.gameocr.app.overlay
 
 import android.app.Dialog
 import android.content.Context
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
@@ -20,6 +21,7 @@ import android.view.Window
 import android.view.WindowInsets
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -56,7 +58,10 @@ private data class TranslationCardWindowArea(
  * 一致，五种内置主题 + CUSTOM。**主题取色函数与 DraggableOverlayWindow 内的实现保持同步**，
  * 未来改主题色需要两边一起改。
  */
-class TranslationCardOverlay(private val context: Context) {
+class TranslationCardOverlay(
+    private val context: Context,
+    private val onDismissed: () -> Unit = {},
+) {
 
     private val overlayType: Int = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
         WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -70,6 +75,7 @@ class TranslationCardOverlay(private val context: Context) {
     private var rootView: View? = null
     private var translationView: StyledTranslationTextView? = null
     private var copyTranslationButton: TextView? = null
+    private var speakTranslationButton: View? = null
     private var currentTranslation: String = ""
     private var renderWordResult: ((WordResult?) -> Unit)? = null
 
@@ -80,11 +86,17 @@ class TranslationCardOverlay(private val context: Context) {
         val currentDialog = dialog
         dialog = null
         if (currentDialog != null) {
-            runCatching { currentDialog.dismiss() }
+            performPlaybackOverlayDismiss(
+                stopPlayback = onDismissed,
+                clearOverlay = { runCatching { currentDialog.dismiss() } },
+            ).onFailure { error ->
+                VerticalDiagnosticLog.w(error, "Failed to stop TTS when translation card was dismissed")
+            }
         }
         rootView = null
         translationView = null
         copyTranslationButton = null
+        speakTranslationButton = null
         currentTranslation = ""
         renderWordResult = null
     }
@@ -97,6 +109,13 @@ class TranslationCardOverlay(private val context: Context) {
             visibility = if (normalized.isBlank()) View.GONE else View.VISIBLE
         }
         copyTranslationButton?.visibility = if (normalized.isBlank()) View.GONE else View.VISIBLE
+        speakTranslationButton?.visibility = if (
+            shouldShowTranslationCardSpeechButton(speechEnabled = true, text = normalized)
+        ) {
+            View.VISIBLE
+        } else {
+            View.GONE
+        }
     }
 
     fun updateWordResult(wordResult: WordResult?) {
@@ -118,6 +137,9 @@ class TranslationCardOverlay(private val context: Context) {
         wordResult: WordResult?,
         settings: Settings,
         loading: Boolean = false,
+        onSpeakSource: TtsPlaybackAction? = null,
+        onSpeakTranslation: TtsPlaybackAction? = null,
+        onSpeakDictionary: TtsPlaybackAction? = null,
     ) {
         dismiss()
         val density = context.resources.displayMetrics.density
@@ -174,18 +196,16 @@ class TranslationCardOverlay(private val context: Context) {
             orientation = LinearLayout.VERTICAL
         }
 
-        // 顶部行：原文（weight=1）+ 「✕」关闭键
+        // Keep the close action fixed while the three content sections scroll below it.
         val topRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
         val srcLabel = TextView(context).apply {
-            text = sourceText
-            setTextColor(mutedColor)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-            maxLines = 2
-            ellipsize = android.text.TextUtils.TruncateAt.END
-            setTextIsSelectable(true)
+            text = context.getString(R.string.word_card_section_source)
+            setTextColor(accentColor)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
         }
         val closeBtn = TextView(context).apply {
             text = "✕"
@@ -200,21 +220,94 @@ class TranslationCardOverlay(private val context: Context) {
             srcLabel,
             LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         )
+        onSpeakSource?.takeIf {
+            shouldShowTranslationCardSpeechButton(speechEnabled = true, text = sourceText)
+        }?.let { action ->
+            topRow.addView(
+                buildSpeakButton(
+                    accentColor = accentColor,
+                    density = density,
+                    contentDescription = context.getString(R.string.word_card_speak_source),
+                    action = action,
+                    onClick = { action.onToggle(sourceText) },
+                )
+            )
+        }
         topRow.addView(closeBtn)
         card.addView(topRow)
 
+        val sourceTv = StyledTranslationTextView(context).apply {
+            text = sourceText
+            setTextColor(fgColor)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+            setPadding(0, (4 * density).toInt(), 0, (6 * density).toInt())
+            setLineSpacing(2f, 1.08f)
+            setTextIsSelectable(true)
+            onSpeakSource?.let { action ->
+                enableSelectionSpeech(
+                    label = context.getString(R.string.word_card_speak_selection),
+                    onSpeak = action.onStart,
+                )
+            }
+        }
+        scrollContent.addView(sourceTv)
+        scrollContent.addView(buildDivider(density, mutedColor))
+
         // 主区始终创建一次，流式分片只更新文字，不重建 Dialog。
         currentTranslation = translation.orEmpty()
+        val translationHeader = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(
+                TextView(context).apply {
+                    text = context.getString(R.string.word_card_section_translation)
+                    setTextColor(accentColor)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                    setTypeface(typeface, android.graphics.Typeface.BOLD)
+                },
+                LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+            )
+            onSpeakTranslation?.let { action ->
+                val speakButton = buildSpeakButton(
+                    accentColor = accentColor,
+                    density = density,
+                    contentDescription = context.getString(R.string.word_card_speak_translation),
+                    action = action,
+                ) {
+                    currentTranslation.takeIf { it.isNotBlank() }?.let(action.onToggle)
+                }.apply {
+                    visibility = if (
+                        shouldShowTranslationCardSpeechButton(
+                            speechEnabled = true,
+                            text = currentTranslation,
+                        )
+                    ) {
+                        View.VISIBLE
+                    } else {
+                        View.GONE
+                    }
+                }
+                speakTranslationButton = speakButton
+                addView(speakButton)
+            }
+        }
+        scrollContent.addView(translationHeader)
         val translationTv = StyledTranslationTextView(context).apply {
             text = translation ?: if (loading) context.getString(R.string.word_card_loading) else ""
             visibility = if (text.isBlank()) View.GONE else View.VISIBLE
             setTextColor(fgColor)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
             applyOverlayTextStyle(settings.overlayTextStyle, settingsTypeface(settings))
-            val mt = (10 * density).toInt()
-            setPadding(0, mt, 0, (8 * density).toInt())
+            setPadding(0, (4 * density).toInt(), 0, (8 * density).toInt())
             setLineSpacing(2f, 1.1f)
             setTextIsSelectable(true)
+            onSpeakTranslation?.let { action ->
+                enableSelectionSpeech(
+                    label = context.getString(R.string.word_card_speak_selection),
+                    isEnabled = { currentTranslation.isNotBlank() },
+                    onSpeak = action.onStart,
+                )
+            }
         }
         translationView = translationTv
         scrollContent.addView(translationTv)
@@ -225,7 +318,15 @@ class TranslationCardOverlay(private val context: Context) {
         renderWordResult = { result ->
             val hasDictionaryContent = result != null && !result.isEmpty()
             dictionarySection.visibility = if (hasDictionaryContent) View.VISIBLE else View.GONE
-            populateWordResult(dictionarySection, result, density, fgColor, mutedColor, accentColor)
+            populateWordResult(
+                container = dictionarySection,
+                wordResult = result,
+                density = density,
+                fgColor = fgColor,
+                mutedColor = mutedColor,
+                accentColor = accentColor,
+                onSpeakDictionary = onSpeakDictionary,
+            )
             dictionarySection.requestLayout()
             scrollContent.requestLayout()
             card.requestLayout()
@@ -453,11 +554,40 @@ class TranslationCardOverlay(private val context: Context) {
         fgColor: Int,
         mutedColor: Int,
         accentColor: Int,
+        onSpeakDictionary: TtsPlaybackAction?,
     ) {
         container.removeAllViews()
         if (wordResult == null || wordResult.isEmpty()) return
+        val labels = dictionaryTextLabels()
+        val speechText = dictionaryPlainText(wordResult, labels)
         container.addView(buildDivider(density, mutedColor))
-        container.addView(TextView(context).apply {
+        container.addView(LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(
+                TextView(context).apply {
+                    text = context.getString(R.string.word_card_section_dictionary)
+                    setTextColor(accentColor)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                    setTypeface(typeface, android.graphics.Typeface.BOLD)
+                },
+                LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+            )
+            onSpeakDictionary?.takeIf {
+                shouldShowTranslationCardSpeechButton(speechEnabled = true, text = speechText)
+            }?.let { action ->
+                addView(
+                    buildSpeakButton(
+                        accentColor = accentColor,
+                        density = density,
+                        contentDescription = context.getString(R.string.word_card_speak_dictionary),
+                        action = action,
+                        onClick = { action.onToggle(speechText) },
+                    )
+                )
+            }
+        })
+        container.addView(StyledTranslationTextView(context).apply {
             text = buildSelectableDictionaryText(wordResult, fgColor, mutedColor, accentColor)
             setTextColor(fgColor)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
@@ -465,6 +595,12 @@ class TranslationCardOverlay(private val context: Context) {
             setPadding(0, pad, 0, pad)
             setLineSpacing(2f, 1.08f)
             setTextIsSelectable(true)
+            onSpeakDictionary?.let { action ->
+                enableSelectionSpeech(
+                    label = context.getString(R.string.word_card_speak_selection),
+                    onSpeak = action.onStart,
+                )
+            }
         })
         container.requestLayout()
     }
@@ -475,13 +611,7 @@ class TranslationCardOverlay(private val context: Context) {
         mutedColor: Int,
         accentColor: Int,
     ): CharSequence {
-        val labels = DictionaryTextLabels(
-            phonetic = context.getString(R.string.word_card_label_phonetic),
-            partOfSpeech = context.getString(R.string.word_card_label_pos),
-            definitions = context.getString(R.string.word_card_label_definitions),
-            difficultyNotes = context.getString(R.string.word_card_label_difficulty_notes),
-            examples = context.getString(R.string.word_card_label_examples),
-        )
+        val labels = dictionaryTextLabels()
         return SpannableStringBuilder().apply {
             dictionaryTextSegments(wordResult, labels).forEach { segment ->
                 val start = length
@@ -510,6 +640,14 @@ class TranslationCardOverlay(private val context: Context) {
         }
     }
 
+    private fun dictionaryTextLabels(): DictionaryTextLabels = DictionaryTextLabels(
+            phonetic = context.getString(R.string.word_card_label_phonetic),
+            partOfSpeech = context.getString(R.string.word_card_label_pos),
+            definitions = context.getString(R.string.word_card_label_definitions),
+            difficultyNotes = context.getString(R.string.word_card_label_difficulty_notes),
+            examples = context.getString(R.string.word_card_label_examples),
+        )
+
     private fun buildDivider(density: Float, color: Int): View = View(context).apply {
         // divider 用 muted 的更淡变体——alpha 减半 → 与卡片背景柔和过渡
         val a = ((color shr 24) and 0xFF) / 2
@@ -537,6 +675,34 @@ class TranslationCardOverlay(private val context: Context) {
             setStroke((1f * density).toInt(), accentColor)
         }
         isClickable = true
+    }
+
+    private fun buildSpeakButton(
+        accentColor: Int,
+        density: Float,
+        contentDescription: String,
+        action: TtsPlaybackAction,
+        onClick: () -> Unit,
+    ): ImageButton = ImageButton(context).apply {
+        setImageResource(R.drawable.ic_volume_up)
+        imageTintList = ColorStateList.valueOf(accentColor)
+        val metrics = translationCardSpeechButtonMetrics(density)
+        layoutParams = LinearLayout.LayoutParams(metrics.sizePx, metrics.sizePx)
+        setPadding(metrics.paddingPx, metrics.paddingPx, metrics.paddingPx, metrics.paddingPx)
+        val backgroundValue = TypedValue()
+        if (
+            context.theme.resolveAttribute(
+                android.R.attr.selectableItemBackgroundBorderless,
+                backgroundValue,
+                true,
+            )
+        ) {
+            setBackgroundResource(backgroundValue.resourceId)
+        } else {
+            setBackgroundColor(Color.TRANSPARENT)
+        }
+        bindTtsPlaybackState(action, contentDescription)
+        setOnClickListener { onClick() }
     }
 
     /** 点了「复制」后短暂把按钮文字换成「已复制 ✓」，1.2s 后恢复。 */

@@ -76,7 +76,12 @@ object BubbleClusterer {
         // 两两判断是否在允许的边缘距离内。
         for (i in 0 until n) {
             for (j in i + 1 until n) {
-                if (rectsWithinGap(rects[i], rects[j], maximumEdgeGap)) union(i, j)
+                if (
+                    rectsWithinGap(rects[i], rects[j], maximumEdgeGap) &&
+                    !formsPerpendicularScaleBridge(rects[i], rects[j])
+                ) {
+                    union(i, j)
+                }
             }
         }
 
@@ -120,6 +125,31 @@ object BubbleClusterer {
     private fun rectsWithinGap(a: IntRect, b: IntRect, maximumGap: Int): Boolean =
         axisGap(a.left, a.right, b.left, b.right) <= maximumGap &&
             axisGap(a.top, a.bottom, b.top, b.bottom) <= maximumGap
+
+    /**
+     * A coarse, wide detection can slightly overlap a narrow vertical text column (and vice versa
+     * for horizontal text) even though they belong to separate speech bubbles. Do not let that
+     * disproportionately large perpendicular box become a bridge between otherwise valid lines.
+     */
+    private fun formsPerpendicularScaleBridge(a: IntRect, b: IntRect): Boolean =
+        isWideBridgeForVerticalLine(candidate = a, line = b) ||
+            isWideBridgeForVerticalLine(candidate = b, line = a) ||
+            isTallBridgeForHorizontalLine(candidate = a, line = b) ||
+            isTallBridgeForHorizontalLine(candidate = b, line = a)
+
+    private fun isWideBridgeForVerticalLine(candidate: IntRect, line: IntRect): Boolean =
+        isStronglyVertical(line) &&
+            !isStronglyVertical(candidate) &&
+            candidate.width * 2 >= line.width * 5
+
+    private fun isTallBridgeForHorizontalLine(candidate: IntRect, line: IntRect): Boolean =
+        isStronglyHorizontal(line) &&
+            !isStronglyHorizontal(candidate) &&
+            candidate.height * 2 >= line.height * 5
+
+    private fun isStronglyVertical(rect: IntRect): Boolean = rect.height >= rect.width * 2
+
+    private fun isStronglyHorizontal(rect: IntRect): Boolean = rect.width >= rect.height * 2
 
     private fun axisGap(aStart: Int, aEnd: Int, bStart: Int, bEnd: Int): Int =
         when {

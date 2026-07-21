@@ -1,23 +1,35 @@
 package com.gameocr.app.overlay
 
 import android.annotation.SuppressLint
+import android.app.Dialog
 import android.content.Context
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
+import android.text.Selection
+import android.text.Spannable
+import android.view.ActionMode
 import android.view.Gravity
+import android.view.Menu
+import android.view.MenuItem
 import android.view.MotionEvent
 import android.view.View
+import android.view.Window
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.TextView
+import androidx.core.view.WindowCompat
+import com.gameocr.app.R
 import com.gameocr.app.data.BorderStyle
 import com.gameocr.app.data.OverlayTheme
 import com.gameocr.app.data.Settings
 import com.gameocr.app.data.SettingsRepository
+import java.util.WeakHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -73,8 +85,11 @@ class DraggableOverlayWindow(
     private val wm: WindowManager by lazy { createDisplayBoundWm() }
 
     private var rootView: View? = null
+    private var dialog: Dialog? = null
     private var layoutParams: WindowManager.LayoutParams? = null
     private var contentSlot: FrameLayout? = null
+    private var activeSelectionActionMode: ActionMode? = null
+    private val selectableTextViews: MutableMap<TextView, () -> Boolean> = WeakHashMap()
     /** show / 旋转后缓存的屏幕尺寸——给 onConfigurationChanged 做 ratio 重算的基准。
      *  Google 推荐做法：存 x/screenW 的 ratio 而不是绝对像素。 */
     private var lastKnownScreenW: Int = 0
@@ -138,7 +153,15 @@ class DraggableOverlayWindow(
             y = finalY
         }
 
-        runCatching { wm.addView(root, params) }
+        val showResult = showDialogHost(root, params)
+        if (showResult.isFailure) {
+            contentSlot = null
+            headerView = null
+            footerView = null
+            lockButtonView = null
+            this.onDismiss = null
+            return
+        }
         rootView = root
         layoutParams = params
         lastKnownScreenW = screenW
@@ -151,7 +174,7 @@ class DraggableOverlayWindow(
      * 重算悬浮窗位置，避免竖屏 y=200 旋转到横屏后落到状态栏后。Google 官方推荐做法。
      */
     fun onConfigurationChanged() {
-        val v = rootView ?: return
+        rootView ?: return
         val params = layoutParams ?: return
         val (newScreenW, newScreenH) = currentScreenSize()
         if (newScreenW <= 0 || newScreenH <= 0) return
@@ -180,7 +203,7 @@ class DraggableOverlayWindow(
         params.y = newY
         params.width = w
         params.height = h
-        runCatching { wm.updateViewLayout(v, params) }
+        updateWindowLayout(params)
         lastKnownScreenW = newScreenW
         lastKnownScreenH = newScreenH
         initialX = newX
@@ -191,6 +214,7 @@ class DraggableOverlayWindow(
     /** 替换内容区 View。不重建 window，避免每次切换内容都触发闪烁。 */
     fun setContent(content: View) {
         val slot = contentSlot ?: return
+        endActiveSelection()
         slot.removeAllViews()
         slot.addView(
             content,
@@ -199,11 +223,152 @@ class DraggableOverlayWindow(
                 FrameLayout.LayoutParams.MATCH_PARENT
             )
         )
+        applyLocked()
+    }
+
+    /**
+     * Makes this text selectable inside the current floating window and extends the platform
+     * selection toolbar with the app's selected-text speech action when TTS is enabled.
+     */
+    fun configureSelectableText(
+        textView: TextView,
+        isContentSelectable: () -> Boolean,
+        speechLabel: String,
+        selectionSpeechAction: () -> ((String) -> Unit)?,
+    ) {
+        selectableTextViews[textView] = isContentSelectable
+        textView.isFocusableInTouchMode = true
+        textView.setCustomSelectionActionModeCallback(object : ActionMode.Callback {
+            override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
+                if (locked || !isContentSelectable()) return false
+                activeSelectionActionMode = mode
+                menu.add(Menu.NONE, R.id.action_speak_selected_text, 100, speechLabel).apply {
+                    setIcon(R.drawable.ic_volume_up)
+                    setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
+                    isVisible = selectionSpeechAction() != null && selectedText(textView) != null
+                }
+                return true
+            }
+
+            override fun onPrepareActionMode(mode: ActionMode, menu: Menu): Boolean {
+                menu.findItem(R.id.action_speak_selected_text)?.isVisible =
+                    selectionSpeechAction() != null && selectedText(textView) != null
+                return true
+            }
+
+            override fun onActionItemClicked(mode: ActionMode, item: MenuItem): Boolean {
+                if (item.itemId != R.id.action_speak_selected_text) return false
+                val selected = selectedText(textView) ?: return false
+                val speak = selectionSpeechAction() ?: return false
+                speak(selected)
+                mode.finish()
+                return true
+            }
+
+            override fun onDestroyActionMode(mode: ActionMode) {
+                if (activeSelectionActionMode === mode) activeSelectionActionMode = null
+            }
+        })
+        refreshSelectableTextViews()
+    }
+
+    fun refreshSelectableTextViews() {
+        selectableTextViews.forEach { (textView, isContentSelectable) ->
+            val enabled = !locked && isContentSelectable()
+            if (textView.isTextSelectable != enabled) textView.setTextIsSelectable(enabled)
+        }
+    }
+
+    private fun selectedText(textView: TextView): String? =
+        selectedTextForSpeech(textView.text, textView.selectionStart, textView.selectionEnd)
+
+    private fun showDialogHost(
+        root: View,
+        params: WindowManager.LayoutParams,
+    ): Result<Unit> {
+        var pendingDialog: Dialog? = null
+        return runCatching {
+            val host = Dialog(context, R.style.Theme_GameOcr_Transparent)
+                .also { pendingDialog = it }
+            host.requestWindowFeature(Window.FEATURE_NO_TITLE)
+            host.setCancelable(false)
+            host.setCanceledOnTouchOutside(false)
+            host.setContentView(root)
+            val window = requireNotNull(host.window) { "Floating overlay dialog window is unavailable" }
+            window.setType(params.type)
+            window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            window.setDimAmount(0f)
+            window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            applyWindowLayoutParams(window, params)
+            window.decorView.setBackgroundColor(Color.TRANSPARENT)
+            WindowCompat.setDecorFitsSystemWindows(window, false)
+            host.show()
+            dialog = host
+            updateWindowLayout(params)
+        }.onFailure {
+            runCatching { pendingDialog?.dismiss() }
+        }
+    }
+
+    private fun updateWindowLayout(params: WindowManager.LayoutParams) {
+        val window = dialog?.window ?: return
+        applyWindowLayoutParams(window, params)
+    }
+
+    private fun applyWindowLayoutParams(
+        window: Window,
+        params: WindowManager.LayoutParams,
+    ) {
+        val managedFlags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+        window.attributes = window.attributes.apply {
+            width = params.width
+            height = params.height
+            x = params.x
+            y = params.y
+            gravity = params.gravity
+            flags = (flags and managedFlags.inv()) or (params.flags and managedFlags)
+            format = params.format
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                layoutInDisplayCutoutMode = params.layoutInDisplayCutoutMode
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                fitInsetsTypes = params.fitInsetsTypes
+                fitInsetsSides = params.fitInsetsSides
+            }
+        }
+    }
+
+    private fun setSelectionWindowFocusable(focusable: Boolean) {
+        val params = layoutParams ?: return
+        val notFocusable = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+        val newFlags = if (focusable && !locked) {
+            params.flags and notFocusable.inv()
+        } else {
+            params.flags or notFocusable
+        }
+        if (params.flags == newFlags) return
+        params.flags = newFlags
+        updateWindowLayout(params)
+    }
+
+    private fun endActiveSelection() {
+        activeSelectionActionMode?.finish()
+        activeSelectionActionMode = null
+        selectableTextViews.keys.forEach { textView ->
+            (textView.text as? Spannable)?.let(Selection::removeSelection)
+            textView.clearFocus()
+        }
+        setSelectionWindowFocusable(false)
     }
 
     fun hide() {
-        val v = rootView ?: return
-        runCatching { wm.removeView(v) }
+        if (rootView == null && dialog == null) return
+        endActiveSelection()
+        val currentDialog = dialog
+        dialog = null
+        runCatching { currentDialog?.dismiss() }
         rootView = null
         layoutParams = null
         contentSlot = null
@@ -221,7 +386,7 @@ class DraggableOverlayWindow(
         initialY = -1
         widthDp = DEFAULT_WIDTH_DP
         heightDp = DEFAULT_HEIGHT_DP
-        val v = rootView ?: return
+        rootView ?: return
         val params = layoutParams ?: return
         val density = context.resources.displayMetrics.density
         val w = (widthDp * density).roundToInt()
@@ -231,7 +396,7 @@ class DraggableOverlayWindow(
         params.height = h
         params.x = ((screenW - w) / 2).coerceAtLeast(0)
         params.y = ((screenH - h) / 2).coerceAtLeast(0)
-        runCatching { wm.updateViewLayout(v, params) }
+        updateWindowLayout(params)
         persistGeometry()
     }
 
@@ -393,6 +558,9 @@ class DraggableOverlayWindow(
     /** 应用 locked 字段到视图：锁定时 header/footer GONE（✕ 自动随 header 隐藏），
      *  锁按钮换实心锁；解锁时全部恢复 + 锁按钮换开锁图标。 */
     private fun applyLocked() {
+        if (locked) endActiveSelection()
+        setSelectionWindowFocusable(!locked)
+        refreshSelectableTextViews()
         val vis = if (locked) View.GONE else View.VISIBLE
         headerView?.visibility = vis
         footerView?.visibility = vis
@@ -422,8 +590,8 @@ class DraggableOverlayWindow(
                     val (screenW, screenH) = currentScreenSize()
                     params.x = (startX + dx).coerceIn(0, (screenW - params.width).coerceAtLeast(0))
                     params.y = (startY + dy).coerceIn(0, (screenH - params.height).coerceAtLeast(0))
-                    val v = rootView ?: return@setOnTouchListener false
-                    runCatching { wm.updateViewLayout(v, params) }
+                    rootView ?: return@setOnTouchListener false
+                    updateWindowLayout(params)
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
@@ -465,8 +633,8 @@ class DraggableOverlayWindow(
                     val maxH = (screenH - params.y).coerceAtLeast(minH)
                     params.width = (startW + dx).coerceIn(minW, maxW)
                     params.height = (startH + dy).coerceIn(minH, maxH)
-                    val v = rootView ?: return@setOnTouchListener false
-                    runCatching { wm.updateViewLayout(v, params) }
+                    rootView ?: return@setOnTouchListener false
+                    updateWindowLayout(params)
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {

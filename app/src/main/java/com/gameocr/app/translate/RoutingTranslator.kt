@@ -14,14 +14,16 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import timber.log.Timber
 
-/** 按 [Settings.translatorEngine] 路由到 OpenAI 兼容 / DeepL / 有道图片翻译 / Google /
+/** 按 [Settings.translatorEngine] 路由到 OpenAI / Anthropic 兼容、DeepL、有道图片翻译 / Google /
  *  火山 / 百度翻译 / 腾讯云翻译。新增引擎只需在此加构造参数 + [engineFor] 的 when 分支。 */
 @Singleton
 class RoutingTranslator @Inject constructor(
     private val openAi: OpenAiTranslator,
+    private val anthropic: AnthropicTranslator,
     private val deepl: DeepLTranslator,
     private val youdaoPicTrans: YoudaoPicTransTranslator,
     private val google: GoogleTranslator,
+    private val googleMlKit: MlKitOnDeviceTranslator,
     private val volc: VolcTranslator,
     private val baiduFanyi: BaiduFanyiTranslator,
     private val tencent: TencentTranslator,
@@ -60,6 +62,23 @@ class RoutingTranslator @Inject constructor(
         get() = false // 不能静态判断；调用方应该用 [prefersBatchFor]
 
     fun prefersBatchFor(settings: Settings): Boolean = engineFor(settings).prefersBatch
+
+    suspend fun downloadMlKitLanguagePair(sourceLang: String, targetLang: String) {
+        googleMlKit.ensureLanguagePairModelsDownloaded(sourceLang, targetLang)
+    }
+
+    suspend fun areMlKitLanguagePairModelsDownloaded(
+        sourceLang: String,
+        targetLang: String,
+    ): Boolean = googleMlKit.areLanguagePairModelsDownloaded(sourceLang, targetLang)
+
+    suspend fun getMissingMlKitLanguageModels(
+        sourceLang: String,
+        targetLang: String,
+    ): Set<String> = googleMlKit.getMissingLanguageModels(sourceLang, targetLang)
+
+    suspend fun getDownloadedMlKitLanguageModels(): Set<String> =
+        googleMlKit.getDownloadedLanguageModels()
 
     internal suspend fun prewarmLocalModel(settings: Settings): LocalLlmPrewarmResult {
         val local = engineFor(settings) as? LocalLlamaTranslator
@@ -264,9 +283,11 @@ class RoutingTranslator @Inject constructor(
 
     private fun engineFor(settings: Settings): Translator = when (settings.translatorEngine) {
         TranslatorEngine.OPENAI -> openAi
+        TranslatorEngine.ANTHROPIC -> anthropic
         TranslatorEngine.DEEPL -> deepl
         TranslatorEngine.YOUDAO_PICTRANS -> youdaoPicTrans
         TranslatorEngine.GOOGLE -> google
+        TranslatorEngine.GOOGLE_ML_KIT -> googleMlKit
         TranslatorEngine.VOLC -> volc
         TranslatorEngine.BAIDU_FANYI -> baiduFanyi
         TranslatorEngine.TENCENT -> tencent

@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -45,6 +46,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.gameocr.app.R
 import com.gameocr.app.data.Language
@@ -67,6 +69,8 @@ fun LanguagePicker(
     onSelect: (String) -> Unit,
     pinned: List<String> = emptyList(),
     onTogglePin: ((String) -> Unit)? = null,
+    allowAuto: Boolean = true,
+    allowedLanguageCodes: Set<String>? = null,
     modifier: Modifier = Modifier
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -116,6 +120,8 @@ fun LanguagePicker(
         LanguagePickerSheet(
             currentCode = currentCode,
             pinned = pinned,
+            allowAuto = allowAuto,
+            allowedLanguageCodes = allowedLanguageCodes,
             onSelect = { code ->
                 onSelect(code)
                 expanded = false
@@ -128,9 +134,15 @@ fun LanguagePicker(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun LanguagePickerSheet(
+internal fun LanguagePickerSheet(
     currentCode: String,
     pinned: List<String>,
+    allowAuto: Boolean,
+    allowedLanguageCodes: Set<String>?,
+    priorityCodes: List<String> = emptyList(),
+    badgedLanguageCodes: Set<String> = emptySet(),
+    badgeLabel: String? = null,
+    unbadgedStatusLabel: String? = null,
     onSelect: (String) -> Unit,
     onTogglePin: ((String) -> Unit)?,
     onDismiss: () -> Unit
@@ -143,14 +155,28 @@ private fun LanguagePickerSheet(
     val listState = rememberLazyListState()
 
     // 搜索后拆成两段：pinned 命中的按收藏顺序排前；其余按 Languages.ALL 顺序排后。
-    val (pinnedResults, otherResults) = remember(query, pinned) {
-        val matched = Languages.search(context, query)
+    val (pinnedResults, otherResults) = remember(
+        query,
+        pinned,
+        allowAuto,
+        allowedLanguageCodes,
+        priorityCodes,
+    ) {
+        val matched = Languages.search(context, query).filter { language ->
+            (allowAuto || !language.code.equals(Languages.AUTO.code, ignoreCase = true)) &&
+                (allowedLanguageCodes == null || language.code in allowedLanguageCodes)
+        }
         val matchedCodes = matched.map { it.code }.toSet()
         val pinnedHit = pinned
             .filter { it in matchedCodes }
             .mapNotNull { code -> matched.firstOrNull { it.code == code } }
-        val others = matched.filter { it.code !in pinned }
-        pinnedHit to others
+        val priorityHit = priorityCodes
+            .distinct()
+            .filter { it in matchedCodes && it !in pinned }
+            .mapNotNull { code -> matched.firstOrNull { it.code == code } }
+        val priorityHitCodes = priorityHit.mapTo(mutableSetOf()) { it.code }
+        val others = matched.filter { it.code !in pinned && it.code !in priorityHitCodes }
+        pinnedHit to (priorityHit + others)
     }
 
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
@@ -201,6 +227,11 @@ private fun LanguagePickerSheet(
                                 lang = lang,
                                 isPinned = true,
                                 isSelected = lang.code.equals(currentCode, ignoreCase = true),
+                                statusLabel = if (lang.code in badgedLanguageCodes) {
+                                    badgeLabel
+                                } else {
+                                    unbadgedStatusLabel
+                                },
                                 onClick = {
                                     scope.launch {
                                         sheetState.hide()
@@ -222,6 +253,11 @@ private fun LanguagePickerSheet(
                             lang = lang,
                             isPinned = false,
                             isSelected = lang.code.equals(currentCode, ignoreCase = true),
+                            statusLabel = if (lang.code in badgedLanguageCodes) {
+                                badgeLabel
+                            } else {
+                                unbadgedStatusLabel
+                            },
                             onClick = {
                                 scope.launch {
                                     sheetState.hide()
@@ -508,6 +544,7 @@ private fun LanguageRow(
     lang: Language,
     isPinned: Boolean,
     isSelected: Boolean,
+    statusLabel: String? = null,
     onClick: () -> Unit,
     onTogglePin: (() -> Unit)?
 ) {
@@ -546,6 +583,17 @@ private fun LanguageRow(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(end = 4.dp)
         )
+        statusLabel?.let { label ->
+            Text(
+                label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+                textAlign = TextAlign.End,
+                modifier = Modifier
+                    .width(72.dp)
+                    .padding(end = 4.dp),
+            )
+        }
         if (onTogglePin != null) {
             IconButton(onClick = onTogglePin) {
                 Icon(

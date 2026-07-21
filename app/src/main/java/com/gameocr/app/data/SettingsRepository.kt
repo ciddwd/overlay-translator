@@ -37,6 +37,9 @@ class SettingsRepository @Inject constructor(
         val BaseUrl = stringPreferencesKey("base_url")
         val ApiKey = stringPreferencesKey("api_key")
         val Model = stringPreferencesKey("model")
+        val AnthropicBaseUrl = stringPreferencesKey("anthropic_base_url")
+        val AnthropicApiKey = stringPreferencesKey("anthropic_api_key")
+        val AnthropicModel = stringPreferencesKey("anthropic_model")
         val SourceLang = stringPreferencesKey("source_lang")
         val TargetLang = stringPreferencesKey("target_lang")
         val Prompt = stringPreferencesKey("prompt")
@@ -51,6 +54,8 @@ class SettingsRepository @Inject constructor(
         val DeveloperOptionsEnabled = booleanPreferencesKey("developer_options_enabled")
         val OcrScreenshotSavingEnabled = booleanPreferencesKey("ocr_screenshot_saving_enabled")
         val DisableTranslationCache = booleanPreferencesKey("disable_translation_cache")
+        val DisableCrossLineContextTranslation =
+            booleanPreferencesKey("disable_cross_line_context_translation")
         val OcrRedBoxModeEnabled = booleanPreferencesKey("ocr_red_box_mode_enabled")
         val OcrRedBoxShowSourceText = booleanPreferencesKey("ocr_red_box_show_source_text")
         val OcrRedBoxShowTranslation = booleanPreferencesKey("ocr_red_box_show_translation")
@@ -66,6 +71,41 @@ class SettingsRepository @Inject constructor(
         val RegionSavedH = intPreferencesKey("capture_region_saved_screen_h")
         val Streaming = booleanPreferencesKey("streaming_translate")
         val RetryEmptyTranslation = booleanPreferencesKey("retry_empty_translation")
+        val TtsEnabled = booleanPreferencesKey("tts_enabled")
+        val TtsProvider = stringPreferencesKey("tts_provider")
+        val TtsVoice = stringPreferencesKey("tts_voice")
+        val TtsEmotion = stringPreferencesKey("tts_emotion")
+        val TtsSpeed = floatPreferencesKey("tts_speed")
+        val TtsPitch = floatPreferencesKey("tts_pitch")
+        val TtsGainDb = intPreferencesKey("tts_gain_db")
+        val TtsHttpBaseUrl = stringPreferencesKey("tts_http_base_url")
+        val TtsHttpBearerToken = stringPreferencesKey("tts_http_bearer_token")
+        val TtsHttpResponseMode = stringPreferencesKey("tts_http_response_mode")
+        val TtsVolcengineResource = stringPreferencesKey("tts_volcengine_resource")
+        val TtsVolcengineBaseUrl = stringPreferencesKey("tts_volcengine_base_url")
+        val TtsVolcengineApiKey = stringPreferencesKey("tts_volcengine_api_key")
+        val TtsVolcengineSpeaker = stringPreferencesKey("tts_volcengine_speaker")
+        val TtsVolcengineModel = stringPreferencesKey("tts_volcengine_model")
+        val TtsVolcengineContext = stringPreferencesKey("tts_volcengine_context")
+        val TtsVolcenginePitch = intPreferencesKey("tts_volcengine_pitch")
+        val TtsVolcengineToneFidelity = booleanPreferencesKey("tts_volcengine_tone_fidelity")
+        val TtsMiniMaxModel = stringPreferencesKey("tts_minimax_model")
+        val TtsMiniMaxBaseUrl = stringPreferencesKey("tts_minimax_base_url")
+        val TtsMiniMaxApiKey = stringPreferencesKey("tts_minimax_api_key")
+        val TtsMiniMaxVoice = stringPreferencesKey("tts_minimax_voice")
+        val TtsMiniMaxEmotion = stringPreferencesKey("tts_minimax_emotion")
+        val TtsMiniMaxSpeed = floatPreferencesKey("tts_minimax_speed")
+        val TtsMiniMaxPitch = intPreferencesKey("tts_minimax_pitch")
+        val TtsMimoModel = stringPreferencesKey("tts_mimo_model")
+        val TtsMimoBaseUrl = stringPreferencesKey("tts_mimo_base_url")
+        val TtsMimoApiKey = stringPreferencesKey("tts_mimo_api_key")
+        val TtsMimoVoice = stringPreferencesKey("tts_mimo_voice")
+        // Legacy single field, read only for migration.
+        val TtsMimoInstruction = stringPreferencesKey("tts_mimo_instruction")
+        val TtsMimoPresetInstruction = stringPreferencesKey("tts_mimo_preset_instruction")
+        val TtsMimoVoiceDesignPrompt = stringPreferencesKey("tts_mimo_voice_design_prompt")
+        val TtsMimoVoiceCloneInstruction = stringPreferencesKey("tts_mimo_voice_clone_instruction")
+        val TtsMimoVoiceSampleUri = stringPreferencesKey("tts_mimo_voice_sample_uri")
         val RenderModeKey = stringPreferencesKey("render_mode")
         val TranslationBlockInteractionMode = stringPreferencesKey("translation_block_interaction_mode")
         val Upscale = booleanPreferencesKey("pre_upscale")
@@ -115,6 +155,7 @@ class SettingsRepository @Inject constructor(
         val LegacyFloatingWindowBorderStyle = stringPreferencesKey("floating_window_border_style")
         // 收藏的语言代码列表，逗号分隔（"ja,zh-CN,en"）。逗号不可能出现在 BCP-47 tag 里，分隔安全。
         val PinnedLangs = stringPreferencesKey("pinned_languages")
+        val MlKitRecentSourceLanguages = stringPreferencesKey("mlkit_recent_source_languages")
         val OverlayWrap = booleanPreferencesKey("overlay_allow_wrap")
         val OverlayCollision = booleanPreferencesKey("overlay_avoid_collision")
         val BaiduEndpoint = stringPreferencesKey("baidu_ocr_endpoint")
@@ -202,6 +243,14 @@ class SettingsRepository @Inject constructor(
         Keys.BaiduFanyiSecretKey,
         Keys.UmiOcrBaseUrl,
         Keys.LunaOcrBaseUrl,
+        Keys.TtsHttpBaseUrl,
+        Keys.TtsHttpBearerToken,
+        Keys.TtsVolcengineBaseUrl,
+        Keys.TtsVolcengineApiKey,
+        Keys.TtsMiniMaxBaseUrl,
+        Keys.TtsMiniMaxApiKey,
+        Keys.TtsMimoBaseUrl,
+        Keys.TtsMimoApiKey,
         Keys.CleartextHosts,
         Keys.DictionaryPrompt,
         Keys.LocalLlmMirror,
@@ -338,6 +387,9 @@ class SettingsRepository @Inject constructor(
             prefs.putSecure(Keys.BaseUrl, next.baseUrl)
             prefs.putSecure(Keys.ApiKey, next.apiKey)
             prefs[Keys.Model] = next.model
+            prefs.putSecure(Keys.AnthropicBaseUrl, next.anthropicBaseUrl)
+            prefs.putSecure(Keys.AnthropicApiKey, next.anthropicApiKey)
+            prefs[Keys.AnthropicModel] = next.anthropicModel
             prefs[Keys.SourceLang] = next.sourceLang
             prefs[Keys.TargetLang] = next.targetLang
             prefs.putSecure(Keys.Prompt, next.promptTemplate)
@@ -354,6 +406,7 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.DeveloperOptionsEnabled] = next.developerOptionsEnabled
             prefs[Keys.OcrScreenshotSavingEnabled] = next.ocrScreenshotSavingEnabled
             prefs[Keys.DisableTranslationCache] = next.disableTranslationCache
+            prefs[Keys.DisableCrossLineContextTranslation] = next.disableCrossLineContextTranslation
             prefs[Keys.OcrRedBoxModeEnabled] = next.ocrRedBoxModeEnabled
             prefs[Keys.OcrRedBoxShowSourceText] = next.ocrRedBoxShowSourceText
             prefs[Keys.OcrRedBoxShowTranslation] = next.ocrRedBoxShowTranslation
@@ -371,6 +424,43 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.RegionSavedH] = next.captureRegionSavedScreenH
             prefs[Keys.Streaming] = next.streamingTranslate
             prefs[Keys.RetryEmptyTranslation] = next.retryEmptyTranslation
+            prefs[Keys.TtsEnabled] = next.ttsEnabled
+            prefs[Keys.TtsProvider] = next.ttsProvider.name
+            prefs[Keys.TtsVoice] = next.ttsVoice
+            prefs[Keys.TtsEmotion] = next.ttsEmotion
+            prefs[Keys.TtsSpeed] = next.ttsSpeed.coerceIn(0.25f, 4.0f)
+            prefs[Keys.TtsPitch] = next.ttsPitch.coerceIn(0.25f, 4.0f)
+            prefs[Keys.TtsGainDb] = next.ttsGainDb.coerceIn(
+                MIN_TTS_PLAYBACK_GAIN_DB,
+                MAX_TTS_PLAYBACK_GAIN_DB,
+            )
+            prefs.putSecure(Keys.TtsHttpBaseUrl, next.ttsHttpBaseUrl)
+            prefs.putSecure(Keys.TtsHttpBearerToken, next.ttsHttpBearerToken)
+            prefs[Keys.TtsHttpResponseMode] = next.ttsHttpResponseMode.name
+            prefs[Keys.TtsVolcengineResource] = next.ttsVolcengineResource.name
+            prefs.putSecure(Keys.TtsVolcengineBaseUrl, next.ttsVolcengineBaseUrl)
+            prefs.putSecure(Keys.TtsVolcengineApiKey, next.ttsVolcengineApiKey)
+            prefs[Keys.TtsVolcengineSpeaker] = next.ttsVolcengineSpeaker
+            prefs[Keys.TtsVolcengineModel] = next.ttsVolcengineModel
+            prefs[Keys.TtsVolcengineContext] = next.ttsVolcengineContext
+            prefs[Keys.TtsVolcenginePitch] = next.ttsVolcenginePitch.coerceIn(-12, 12)
+            prefs[Keys.TtsVolcengineToneFidelity] = next.ttsVolcengineToneFidelity
+            prefs[Keys.TtsMiniMaxModel] = next.ttsMiniMaxModel.name
+            prefs.putSecure(Keys.TtsMiniMaxBaseUrl, next.ttsMiniMaxBaseUrl)
+            prefs.putSecure(Keys.TtsMiniMaxApiKey, next.ttsMiniMaxApiKey)
+            prefs[Keys.TtsMiniMaxVoice] = next.ttsMiniMaxVoice
+            prefs[Keys.TtsMiniMaxEmotion] = next.ttsMiniMaxEmotion
+            prefs[Keys.TtsMiniMaxSpeed] = next.ttsMiniMaxSpeed.coerceIn(0.5f, 2.0f)
+            prefs[Keys.TtsMiniMaxPitch] = next.ttsMiniMaxPitch.coerceIn(-12, 12)
+            prefs[Keys.TtsMimoModel] = next.ttsMimoModel.name
+            prefs.putSecure(Keys.TtsMimoBaseUrl, next.ttsMimoBaseUrl)
+            prefs.putSecure(Keys.TtsMimoApiKey, next.ttsMimoApiKey)
+            prefs[Keys.TtsMimoVoice] = next.ttsMimoVoice
+            prefs[Keys.TtsMimoPresetInstruction] = next.ttsMimoInstruction
+            prefs[Keys.TtsMimoVoiceDesignPrompt] = next.ttsMimoVoiceDesignPrompt
+            prefs[Keys.TtsMimoVoiceCloneInstruction] = next.ttsMimoVoiceCloneInstruction
+            prefs.remove(Keys.TtsMimoInstruction)
+            prefs[Keys.TtsMimoVoiceSampleUri] = next.ttsMimoVoiceSampleUri
             prefs[Keys.RenderModeKey] = next.renderMode.name
             prefs[Keys.TranslationBlockInteractionMode] = next.translationBlockInteractionMode.name
             prefs[Keys.Upscale] = next.preprocess.upscale2x
@@ -420,6 +510,7 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.FloatingWindowLocked] = next.floatingWindowLocked
             prefs[Keys.CustomBorderStyle] = next.customBorderStyle.name
             prefs[Keys.PinnedLangs] = next.pinnedLanguages.joinToString(",")
+            prefs[Keys.MlKitRecentSourceLanguages] = next.mlKitRecentSourceLanguages.joinToString(",")
             prefs[Keys.OverlayWrap] = next.overlayAllowWrap
             prefs[Keys.OverlayCollision] = next.overlayAvoidCollision
             prefs[Keys.BaiduEndpoint] = next.baiduOcrEndpoint.name
@@ -496,10 +587,23 @@ class SettingsRepository @Inject constructor(
             layout = storedTranslationOutputLayout,
             direction = storedTranslationOutputDirection,
         )
+        val storedMimoModel = runCatching {
+            MimoTtsModel.valueOf(this[Keys.TtsMimoModel] ?: "")
+        }.getOrDefault(default.ttsMimoModel)
+        val mimoInstructions = resolveMimoInstructionValues(
+            model = storedMimoModel,
+            legacy = this[Keys.TtsMimoInstruction],
+            preset = this[Keys.TtsMimoPresetInstruction],
+            voiceDesign = this[Keys.TtsMimoVoiceDesignPrompt],
+            voiceClone = this[Keys.TtsMimoVoiceCloneInstruction],
+        )
         return MangaOcrAdvancedSettingsPolicy.normalize(Settings(
             baseUrl = secureString(Keys.BaseUrl, default.baseUrl),
             apiKey = secureString(Keys.ApiKey, default.apiKey),
             model = this[Keys.Model] ?: default.model,
+            anthropicBaseUrl = secureString(Keys.AnthropicBaseUrl, default.anthropicBaseUrl),
+            anthropicApiKey = secureString(Keys.AnthropicApiKey, default.anthropicApiKey),
+            anthropicModel = this[Keys.AnthropicModel] ?: default.anthropicModel,
             // 兼容 0.1.x 旧用户：那时 sourceLang 用 enum.name（"AUTO"/"JA"/...）保存。
             // 新版改为 BCP-47 tag（"auto"/"ja"/...）。读出时若是旧大写值，按 mapping 转回。
             sourceLang = (this[Keys.SourceLang] ?: default.sourceLang).let { raw ->
@@ -537,6 +641,8 @@ class SettingsRepository @Inject constructor(
                 ?: default.ocrScreenshotSavingEnabled,
             disableTranslationCache = this[Keys.DisableTranslationCache]
                 ?: default.disableTranslationCache,
+            disableCrossLineContextTranslation = this[Keys.DisableCrossLineContextTranslation]
+                ?: default.disableCrossLineContextTranslation,
             ocrRedBoxModeEnabled = this[Keys.OcrRedBoxModeEnabled]
                 ?: default.ocrRedBoxModeEnabled,
             ocrRedBoxShowSourceText = this[Keys.OcrRedBoxShowSourceText]
@@ -573,6 +679,64 @@ class SettingsRepository @Inject constructor(
             captureRegionSavedScreenH = this[Keys.RegionSavedH] ?: default.captureRegionSavedScreenH,
             streamingTranslate = this[Keys.Streaming] ?: default.streamingTranslate,
             retryEmptyTranslation = this[Keys.RetryEmptyTranslation] ?: default.retryEmptyTranslation,
+            ttsEnabled = this[Keys.TtsEnabled] ?: default.ttsEnabled,
+            ttsProvider = parseTtsProvider(this[Keys.TtsProvider].orEmpty(), default.ttsProvider),
+            ttsVoice = this[Keys.TtsVoice] ?: default.ttsVoice,
+            ttsEmotion = this[Keys.TtsEmotion] ?: default.ttsEmotion,
+            ttsSpeed = (this[Keys.TtsSpeed] ?: default.ttsSpeed).coerceIn(0.25f, 4.0f),
+            ttsPitch = (this[Keys.TtsPitch] ?: default.ttsPitch).coerceIn(0.25f, 4.0f),
+            ttsGainDb = (this[Keys.TtsGainDb] ?: default.ttsGainDb).coerceIn(
+                MIN_TTS_PLAYBACK_GAIN_DB,
+                MAX_TTS_PLAYBACK_GAIN_DB,
+            ),
+            ttsHttpBaseUrl = secureString(Keys.TtsHttpBaseUrl, default.ttsHttpBaseUrl),
+            ttsHttpBearerToken = secureString(Keys.TtsHttpBearerToken, default.ttsHttpBearerToken),
+            ttsHttpResponseMode = runCatching {
+                TtsHttpResponseMode.valueOf(this[Keys.TtsHttpResponseMode] ?: "")
+            }.getOrDefault(default.ttsHttpResponseMode),
+            ttsVolcengineResource = runCatching {
+                VolcengineTtsResource.valueOf(this[Keys.TtsVolcengineResource] ?: "")
+            }.getOrDefault(default.ttsVolcengineResource),
+            ttsVolcengineBaseUrl = secureString(
+                Keys.TtsVolcengineBaseUrl,
+                default.ttsVolcengineBaseUrl,
+            ),
+            ttsVolcengineApiKey = secureString(
+                Keys.TtsVolcengineApiKey,
+                default.ttsVolcengineApiKey,
+            ),
+            ttsVolcengineSpeaker = this[Keys.TtsVolcengineSpeaker]
+                ?: default.ttsVolcengineSpeaker,
+            ttsVolcengineModel = this[Keys.TtsVolcengineModel] ?: default.ttsVolcengineModel,
+            ttsVolcengineContext = this[Keys.TtsVolcengineContext]
+                ?: default.ttsVolcengineContext,
+            ttsVolcenginePitch = (this[Keys.TtsVolcenginePitch]
+                ?: default.ttsVolcenginePitch).coerceIn(-12, 12),
+            ttsVolcengineToneFidelity = this[Keys.TtsVolcengineToneFidelity]
+                ?: default.ttsVolcengineToneFidelity,
+            ttsMiniMaxModel = runCatching {
+                MiniMaxTtsModel.valueOf(this[Keys.TtsMiniMaxModel] ?: "")
+            }.getOrDefault(default.ttsMiniMaxModel),
+            ttsMiniMaxBaseUrl = secureString(
+                Keys.TtsMiniMaxBaseUrl,
+                default.ttsMiniMaxBaseUrl,
+            ),
+            ttsMiniMaxApiKey = secureString(Keys.TtsMiniMaxApiKey, default.ttsMiniMaxApiKey),
+            ttsMiniMaxVoice = this[Keys.TtsMiniMaxVoice] ?: default.ttsMiniMaxVoice,
+            ttsMiniMaxEmotion = this[Keys.TtsMiniMaxEmotion] ?: default.ttsMiniMaxEmotion,
+            ttsMiniMaxSpeed = (this[Keys.TtsMiniMaxSpeed] ?: default.ttsMiniMaxSpeed)
+                .coerceIn(0.5f, 2.0f),
+            ttsMiniMaxPitch = (this[Keys.TtsMiniMaxPitch] ?: default.ttsMiniMaxPitch)
+                .coerceIn(-12, 12),
+            ttsMimoModel = storedMimoModel,
+            ttsMimoBaseUrl = secureString(Keys.TtsMimoBaseUrl, default.ttsMimoBaseUrl),
+            ttsMimoApiKey = secureString(Keys.TtsMimoApiKey, default.ttsMimoApiKey),
+            ttsMimoVoice = this[Keys.TtsMimoVoice] ?: default.ttsMimoVoice,
+            ttsMimoInstruction = mimoInstructions.preset,
+            ttsMimoVoiceDesignPrompt = mimoInstructions.voiceDesign,
+            ttsMimoVoiceCloneInstruction = mimoInstructions.voiceClone,
+            ttsMimoVoiceSampleUri = this[Keys.TtsMimoVoiceSampleUri]
+                ?: default.ttsMimoVoiceSampleUri,
             // 0.3.x 之前 RenderMode 叫 BANNER，0.4 改名为 FLOATING_WINDOW。silent migrate 老值。
             renderMode = (this[Keys.RenderModeKey] ?: "").let { raw ->
                 runCatching { RenderMode.valueOf(raw) }.getOrElse {
@@ -653,6 +817,11 @@ class SettingsRepository @Inject constructor(
                 ?.map { it.trim() }
                 ?.filter { it.isNotEmpty() }
                 ?: default.pinnedLanguages,
+            mlKitRecentSourceLanguages = this[Keys.MlKitRecentSourceLanguages]
+                ?.split(',')
+                ?.map { it.trim() }
+                ?.filter { it.isNotEmpty() }
+                ?: default.mlKitRecentSourceLanguages,
             overlayAllowWrap = this[Keys.OverlayWrap] ?: default.overlayAllowWrap,
             overlayAvoidCollision = this[Keys.OverlayCollision] ?: default.overlayAvoidCollision,
             baiduOcrEndpoint = runCatching { BaiduOcrEndpoint.valueOf(this[Keys.BaiduEndpoint] ?: "") }
@@ -754,4 +923,32 @@ class SettingsRepository @Inject constructor(
             // runtimeTranslationContext is request-scoped and deliberately never persisted.
         ))
     }
+}
+
+internal data class MimoInstructionValues(
+    val preset: String,
+    val voiceDesign: String,
+    val voiceClone: String,
+)
+
+internal fun resolveMimoInstructionValues(
+    model: MimoTtsModel,
+    legacy: String?,
+    preset: String?,
+    voiceDesign: String?,
+    voiceClone: String?,
+): MimoInstructionValues {
+    if (preset != null || voiceDesign != null || voiceClone != null) {
+        return MimoInstructionValues(
+            preset = preset.orEmpty(),
+            voiceDesign = voiceDesign.orEmpty(),
+            voiceClone = voiceClone.orEmpty(),
+        )
+    }
+    val oldValue = legacy.orEmpty()
+    return MimoInstructionValues(
+        preset = oldValue.takeIf { model == MimoTtsModel.PRESET }.orEmpty(),
+        voiceDesign = oldValue.takeIf { model == MimoTtsModel.VOICE_DESIGN }.orEmpty(),
+        voiceClone = oldValue.takeIf { model == MimoTtsModel.VOICE_CLONE }.orEmpty(),
+    )
 }

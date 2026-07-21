@@ -56,6 +56,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.AudioFile
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FormatAlignCenter
 import androidx.compose.material.icons.automirrored.filled.FormatAlignLeft
@@ -64,6 +66,7 @@ import androidx.compose.material.icons.filled.FormatBold
 import androidx.compose.material.icons.filled.FormatItalic
 import androidx.compose.material.icons.filled.FormatUnderlined
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Visibility
@@ -90,6 +93,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -162,6 +166,7 @@ import com.gameocr.app.appcontext.isUsageAccessGranted
 import com.gameocr.app.data.FloatingMenu
 import com.gameocr.app.data.FloatingSkill
 import com.gameocr.app.data.Languages
+import com.gameocr.app.translate.MlKitLanguagePolicy
 import com.gameocr.app.data.LoopTriggerMode
 import com.gameocr.app.data.LoopTextRegionMode
 import com.gameocr.app.data.MangaOcrAdvancedSettingsPolicy
@@ -193,6 +198,44 @@ import com.gameocr.app.data.TranslationPresetImportPlan
 import com.gameocr.app.data.TranslationBlockInteractionMode
 import com.gameocr.app.data.TranslationPresetTransfer
 import com.gameocr.app.data.TranslatorEngine
+import com.gameocr.app.data.TtsHttpResponseMode
+import com.gameocr.app.data.TtsProvider
+import com.gameocr.app.data.VolcengineTtsResource
+import com.gameocr.app.data.MiniMaxTtsModel
+import com.gameocr.app.data.MimoTtsModel
+import com.gameocr.app.data.DEFAULT_MIMO_TTS_BASE_URL
+import com.gameocr.app.data.DEFAULT_MINIMAX_TTS_BASE_URL
+import com.gameocr.app.data.DEFAULT_VOLCENGINE_TTS_BASE_URL
+import com.gameocr.app.data.MAX_TTS_PLAYBACK_GAIN_DB
+import com.gameocr.app.data.MIN_TTS_PLAYBACK_GAIN_DB
+import com.gameocr.app.tts.SystemTtsVoiceOption
+import com.gameocr.app.tts.shouldLoadSystemTtsVoices
+import com.gameocr.app.tts.MINIMAX_CN_LOW_LATENCY_BASE_URL
+import com.gameocr.app.tts.MINIMAX_GLOBAL_BASE_URL
+import com.gameocr.app.tts.MINIMAX_GLOBAL_LOW_LATENCY_BASE_URL
+import com.gameocr.app.tts.MIMO_TOKEN_PLAN_CN_BASE_URL
+import com.gameocr.app.tts.MIMO_TOKEN_PLAN_EU_BASE_URL
+import com.gameocr.app.tts.MIMO_TOKEN_PLAN_SGP_BASE_URL
+import com.gameocr.app.tts.MIMO_BUILTIN_VOICE_REFERENCE_1
+import com.gameocr.app.tts.MIMO_BUILTIN_VOICE_REFERENCE_2
+import com.gameocr.app.tts.MiniMaxManagedVoice
+import com.gameocr.app.tts.MiniMaxVoiceCloneRequest
+import com.gameocr.app.tts.MiniMaxVoiceCreationResult
+import com.gameocr.app.tts.MiniMaxVoiceDesignRequest
+import com.gameocr.app.tts.isMimoTokenPlanBaseUrl
+import com.gameocr.app.tts.miniMaxTtsEndpointUrlOrNull
+import com.gameocr.app.tts.mimoTtsEndpointUrlOrNull
+import com.gameocr.app.tts.canGenerateVoiceDesignPrompt
+import com.gameocr.app.tts.canPolishMimoStyleInstruction
+import com.gameocr.app.tts.normalizedTtsPlaybackGainDb
+import com.gameocr.app.tts.shouldResetTtsTestFeedback
+import com.gameocr.app.tts.supportsTtsPlaybackGain
+import com.gameocr.app.tts.volcengineTtsEndpointUrlOrNull
+import com.gameocr.app.tts.ttsPresetSummaryLabelRes
+import com.gameocr.app.tts.ttsTestMayIncurCharges
+import com.gameocr.app.tts.ttsFailureMessage
+import com.gameocr.app.tts.TtsProviderGroup
+import com.gameocr.app.tts.ttsProviderGroup
 import com.gameocr.app.data.resolveTranslationOutputSettings
 import com.gameocr.app.data.manualOverlayLayoutControlsEnabled
 import com.gameocr.app.data.settingsSearchEntryId
@@ -210,6 +253,7 @@ import androidx.compose.ui.zIndex
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.layout.height
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -290,6 +334,7 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
+    val defaultTtsTestText = stringResource(R.string.settings_tts_test_text_default)
     val scope = rememberCoroutineScope()
     val modelDownloadWorkInfos by viewModel.modelDownloadWorkInfos.collectAsState(initial = emptyList())
     val unfinishedModelDownloads = modelDownloadWorkInfos.filterNot { it.state.isFinished }
@@ -379,6 +424,9 @@ fun SettingsScreen(
     var baseUrl by remember { mutableStateOf("") }
     var apiKey by remember { mutableStateOf("") }
     var model by remember { mutableStateOf("") }
+    var anthropicBaseUrl by remember { mutableStateOf("") }
+    var anthropicApiKey by remember { mutableStateOf("") }
+    var anthropicModel by remember { mutableStateOf("") }
     var prompt by remember { mutableStateOf("") }
     var targetLang by remember { mutableStateOf("zh-CN") }
     var sourceLang by remember { mutableStateOf("auto") }
@@ -412,6 +460,16 @@ fun SettingsScreen(
     var testRunning by remember { mutableStateOf(false) }
     var testMessage by remember { mutableStateOf<String?>(null) }
     var testSuccess by remember { mutableStateOf(false) }
+    var mlKitModelDownloadRunning by remember { mutableStateOf(false) }
+    var mlKitModelDownloadMessage by remember { mutableStateOf<String?>(null) }
+    var mlKitModelStatePair by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var mlKitModelsReady by remember { mutableStateOf<Boolean?>(null) }
+    var mlKitDownloadedLanguageModels by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var showMlKitMoreLanguages by remember { mutableStateOf(false) }
+    var mlKitMissingModelsPrompt by remember { mutableStateOf<MlKitMissingModelsPrompt?>(null) }
+    var mlKitModelPromptDismissedPair by remember {
+        mutableStateOf<Pair<String, String>?>(null)
+    }
     var fetchedModels by remember { mutableStateOf<List<String>>(emptyList()) }
     var modelPickerExpanded by remember { mutableStateOf(false) }
     var textSize by remember { mutableStateOf(14f) }
@@ -445,6 +503,56 @@ fun SettingsScreen(
     var ocrRedBoxShowTranslation by remember { mutableStateOf(false) }
     var streaming by remember { mutableStateOf(true) }
     var retryEmptyTranslation by remember { mutableStateOf(false) }
+    var ttsEnabled by remember { mutableStateOf(false) }
+    var ttsProvider by remember { mutableStateOf(TtsProvider.SYSTEM) }
+    var ttsVoice by remember { mutableStateOf("") }
+    var systemTtsVoices by remember { mutableStateOf<List<SystemTtsVoiceOption>>(emptyList()) }
+    var systemTtsVoicesLoading by remember { mutableStateOf(false) }
+    var systemTtsVoicesError by remember { mutableStateOf<String?>(null) }
+    var systemTtsVoiceRefreshRequest by remember { mutableStateOf(0) }
+    var ttsTestText by remember(defaultTtsTestText) { mutableStateOf(defaultTtsTestText) }
+    var ttsTestRunning by remember { mutableStateOf(false) }
+    var ttsTestMessage by remember { mutableStateOf<String?>(null) }
+    var ttsTestSuccess by remember { mutableStateOf(false) }
+    var ttsTestGeneration by remember { mutableStateOf(0L) }
+    var ttsEmotion by remember { mutableStateOf("") }
+    var ttsSpeed by remember { mutableStateOf(1.0f) }
+    var ttsPitch by remember { mutableStateOf(1.0f) }
+    var ttsGainDb by remember { mutableStateOf(0) }
+    var ttsHttpBaseUrl by remember { mutableStateOf("") }
+    var ttsHttpBearerToken by remember { mutableStateOf("") }
+    var ttsHttpResponseMode by remember { mutableStateOf(TtsHttpResponseMode.BINARY_AUDIO) }
+    var ttsVolcengineResource by remember {
+        mutableStateOf(VolcengineTtsResource.PRESET_VOICE_2_0)
+    }
+    var ttsVolcengineBaseUrl by remember { mutableStateOf(DEFAULT_VOLCENGINE_TTS_BASE_URL) }
+    var ttsVolcengineApiKey by remember { mutableStateOf("") }
+    var ttsVolcengineSpeaker by remember { mutableStateOf("zh_female_vv_uranus_bigtts") }
+    var ttsVolcengineModel by remember { mutableStateOf("seed-tts-2.0-standard") }
+    var ttsVolcengineContext by remember { mutableStateOf("") }
+    var ttsVolcenginePitch by remember { mutableStateOf(0) }
+    var ttsVolcengineToneFidelity by remember { mutableStateOf(false) }
+    var ttsMiniMaxModel by remember { mutableStateOf(MiniMaxTtsModel.SPEECH_2_8_HD) }
+    var ttsMiniMaxBaseUrl by remember { mutableStateOf(DEFAULT_MINIMAX_TTS_BASE_URL) }
+    var ttsMiniMaxApiKey by remember { mutableStateOf("") }
+    var ttsMiniMaxVoice by remember { mutableStateOf("male-qn-qingse") }
+    var ttsMiniMaxEmotion by remember { mutableStateOf("") }
+    var ttsMiniMaxSpeed by remember { mutableStateOf(1.0f) }
+    var ttsMiniMaxPitch by remember { mutableStateOf(0) }
+    var ttsMimoModel by remember { mutableStateOf(MimoTtsModel.PRESET) }
+    var ttsMimoBaseUrl by remember { mutableStateOf(DEFAULT_MIMO_TTS_BASE_URL) }
+    var ttsMimoApiKey by remember { mutableStateOf("") }
+    var ttsMimoVoice by remember { mutableStateOf("mimo_default") }
+    var ttsMimoInstruction by remember { mutableStateOf("") }
+    var ttsMimoVoiceDesignPrompt by remember { mutableStateOf("") }
+    var ttsMimoVoiceCloneInstruction by remember { mutableStateOf("") }
+    var ttsMimoVoiceSampleUri by remember { mutableStateOf(MIMO_BUILTIN_VOICE_REFERENCE_1) }
+    var ttsMimoPresetStyleGenerating by remember { mutableStateOf(false) }
+    var ttsMimoPresetStyleMessage by remember { mutableStateOf<String?>(null) }
+    var ttsMimoCloneStyleGenerating by remember { mutableStateOf(false) }
+    var ttsMimoCloneStyleMessage by remember { mutableStateOf<String?>(null) }
+    var ttsMimoVoiceDesignGenerating by remember { mutableStateOf(false) }
+    var ttsMimoVoiceDesignMessage by remember { mutableStateOf<String?>(null) }
     var renderMode by remember { mutableStateOf(RenderMode.BLOCKS) }
     var translationBlockInteractionMode by remember {
         mutableStateOf(TranslationBlockInteractionMode.COPY_BUTTON)
@@ -527,6 +635,7 @@ fun SettingsScreen(
     var apiTimeoutSec by remember { mutableStateOf(30f) }
     var mergeAdjacent by remember { mutableStateOf(true) }
     var mergeStrength by remember { mutableStateOf(com.gameocr.app.data.MergeStrength.STANDARD) }
+    var crossLineContextTranslationEnabled by remember { mutableStateOf(true) }
     // 文本方向自动判别：默认关；改动后即时落盘（走 viewModel.saveTextOrientationAutoDetect），不进 buildSnapshot
     var textOrientAutoDetect by remember { mutableStateOf(false) }
     // DBNet / 气泡聚类阈值。Slider 切换即时落盘（saveDbnetThresholds），下次截屏立即生效。
@@ -569,6 +678,9 @@ fun SettingsScreen(
     // 星标语言：本地镜像。togglePinLanguage 立即落盘，下次 ON_RESUME / load() 拉回最新；
     // 这里也乐观更新一份本地状态，UI 立刻反映。
     var pinnedLanguages by remember { mutableStateOf<List<String>>(emptyList()) }
+    var mlKitRecentSources by remember {
+        mutableStateOf(DEFAULT_ML_KIT_RECENT_SOURCE_LANGUAGES)
+    }
 
     // dirty 检测：load 时 capture 一份初始 Settings，之后跟 buildSnapshot() 比 equals。
     // 旧版手写两份 List<Any?>，每加 Settings 字段都要在两个 list 同步加，反复犯"忘改一边"的 bug。
@@ -685,10 +797,57 @@ fun SettingsScreen(
         }
     }
 
+    fun selectMlKitSourceLanguage(languageTag: String) {
+        timber.log.Timber.tag("MlKitTrans").i(
+            "[select-on-device-source] %s -> %s", sourceLang, languageTag
+        )
+        sourceLang = languageTag
+        mlKitRecentSources = mlKitRecentSourceLanguages(mlKitRecentSources, languageTag)
+        mlKitModelDownloadMessage = null
+        selectTranslatorEngine(TranslatorEngine.GOOGLE_ML_KIT)
+    }
+
+    fun startMlKitModelDownload(pair: Pair<String, String>) {
+        if (mlKitModelDownloadRunning) return
+        mlKitMissingModelsPrompt = null
+        mlKitModelPromptDismissedPair = pair
+        mlKitModelDownloadRunning = true
+        mlKitModelDownloadMessage = null
+        scope.launch {
+            val result = runCatching {
+                viewModel.downloadMlKitLanguagePair(pair.first, pair.second)
+            }
+            mlKitModelDownloadRunning = false
+            if (translatorEngine != TranslatorEngine.GOOGLE_ML_KIT ||
+                (sourceLang to targetLang) != pair
+            ) {
+                return@launch
+            }
+            if (result.isSuccess) {
+                mlKitModelStatePair = pair
+                mlKitModelsReady = true
+                mlKitModelDownloadMessage = null
+                mlKitDownloadedLanguageModels = runCatching {
+                    viewModel.getDownloadedMlKitLanguageModels()
+                }.getOrDefault(mlKitDownloadedLanguageModels)
+            } else {
+                val error = checkNotNull(result.exceptionOrNull())
+                mlKitModelsReady = false
+                mlKitModelDownloadMessage = context.getString(
+                    R.string.settings_mlkit_model_download_failed,
+                    error.message ?: error.javaClass.simpleName,
+                )
+            }
+        }
+    }
+
     fun applyPresetSettingsToUi(s: Settings) {
         baseUrl = s.baseUrl
         apiKey = s.apiKey
         model = s.model
+        anthropicBaseUrl = s.anthropicBaseUrl
+        anthropicApiKey = s.anthropicApiKey
+        anthropicModel = s.anthropicModel
         prompt = s.promptTemplate
         sourceLang = s.sourceLang
         targetLang = s.targetLang
@@ -781,6 +940,7 @@ fun SettingsScreen(
         apiTimeoutSec = s.apiTimeoutSeconds.toFloat()
         mergeAdjacent = s.mergeAdjacentBlocks
         mergeStrength = s.mergeStrength
+        crossLineContextTranslationEnabled = !s.disableCrossLineContextTranslation
         textOrientAutoDetect = s.textOrientationAutoDetect
         manualTextOrient = s.manualTextOrientation
         resolveTranslationOutputSettings(
@@ -800,6 +960,7 @@ fun SettingsScreen(
         translationPresets = s.translationPresets
         activeTranslationPresetId = s.activeTranslationPresetId
         pinnedLanguages = s.pinnedLanguages
+        mlKitRecentSources = mlKitRecentSourceLanguages(s.mlKitRecentSourceLanguages)
         cleartextHostsText = s.cleartextAllowedHosts.joinToString("\n")
     }
     fun presetDisplayNameForMessage(preset: TranslationPreset): String = when (preset.id) {
@@ -1020,8 +1181,12 @@ fun SettingsScreen(
         baseUrl = baseUrl,
         apiKey = apiKey,
         model = model,
+        anthropicBaseUrl = anthropicBaseUrl,
+        anthropicApiKey = anthropicApiKey,
+        anthropicModel = anthropicModel,
         sourceLang = sourceLang,
         targetLang = targetLang,
+        mlKitRecentSourceLanguages = mlKitRecentSources,
         promptTemplate = prompt,
         ocrEngine = ocrEngine,
         captureLoopIntervalMs = loopInterval.toLongOrNull() ?: 2000L,
@@ -1043,6 +1208,39 @@ fun SettingsScreen(
         overlayFonts = overlayFontEntries,
         streamingTranslate = streaming,
         retryEmptyTranslation = retryEmptyTranslation,
+        ttsEnabled = ttsEnabled,
+        ttsProvider = ttsProvider,
+        ttsVoice = ttsVoice,
+        ttsEmotion = ttsEmotion,
+        ttsSpeed = ttsSpeed,
+        ttsPitch = ttsPitch,
+        ttsGainDb = ttsGainDb,
+        ttsHttpBaseUrl = ttsHttpBaseUrl,
+        ttsHttpBearerToken = ttsHttpBearerToken,
+        ttsHttpResponseMode = ttsHttpResponseMode,
+        ttsVolcengineResource = ttsVolcengineResource,
+        ttsVolcengineBaseUrl = ttsVolcengineBaseUrl,
+        ttsVolcengineApiKey = ttsVolcengineApiKey,
+        ttsVolcengineSpeaker = ttsVolcengineSpeaker,
+        ttsVolcengineModel = ttsVolcengineModel,
+        ttsVolcengineContext = ttsVolcengineContext,
+        ttsVolcenginePitch = ttsVolcenginePitch,
+        ttsVolcengineToneFidelity = ttsVolcengineToneFidelity,
+        ttsMiniMaxModel = ttsMiniMaxModel,
+        ttsMiniMaxBaseUrl = ttsMiniMaxBaseUrl,
+        ttsMiniMaxApiKey = ttsMiniMaxApiKey,
+        ttsMiniMaxVoice = ttsMiniMaxVoice,
+        ttsMiniMaxEmotion = ttsMiniMaxEmotion,
+        ttsMiniMaxSpeed = ttsMiniMaxSpeed,
+        ttsMiniMaxPitch = ttsMiniMaxPitch,
+        ttsMimoModel = ttsMimoModel,
+        ttsMimoBaseUrl = ttsMimoBaseUrl,
+        ttsMimoApiKey = ttsMimoApiKey,
+        ttsMimoVoice = ttsMimoVoice,
+        ttsMimoInstruction = ttsMimoInstruction,
+        ttsMimoVoiceDesignPrompt = ttsMimoVoiceDesignPrompt,
+        ttsMimoVoiceCloneInstruction = ttsMimoVoiceCloneInstruction,
+        ttsMimoVoiceSampleUri = ttsMimoVoiceSampleUri,
         renderMode = renderMode,
         translationBlockInteractionMode = translationBlockInteractionMode,
         overlayPlacement = placement,
@@ -1091,10 +1289,12 @@ fun SettingsScreen(
         apiTimeoutSeconds = apiTimeoutSec.toInt(),
         mergeAdjacentBlocks = mergeAdjacent,
         mergeStrength = mergeStrength,
+        disableCrossLineContextTranslation = !crossLineContextTranslationEnabled,
         cleartextAllowedHosts = cleartextHostsWithLocalOcrUrls(
             parseCleartextHosts(cleartextHostsText),
             umiOcrBaseUrl,
-            lunaOcrBaseUrl
+            lunaOcrBaseUrl,
+            ttsHttpBaseUrl
         )
     )
 
@@ -1194,6 +1394,9 @@ fun SettingsScreen(
     val doSave: suspend () -> Unit = {
         viewModel.save(
             baseUrl = baseUrl, apiKey = apiKey, model = model,
+            anthropicBaseUrl = anthropicBaseUrl,
+            anthropicApiKey = anthropicApiKey,
+            anthropicModel = anthropicModel,
             targetLang = targetLang, sourceLang = sourceLang, prompt = prompt,
             textSize = textSize.toInt(), alpha = alpha,
             overlayTextStyle = overlayTextStyle,
@@ -1212,6 +1415,39 @@ fun SettingsScreen(
             ocrRedBoxShowTranslation = ocrRedBoxShowTranslation,
             streaming = streaming,
             retryEmptyTranslation = retryEmptyTranslation,
+            ttsEnabled = ttsEnabled,
+            ttsProvider = ttsProvider,
+            ttsVoice = ttsVoice,
+            ttsEmotion = ttsEmotion,
+            ttsSpeed = ttsSpeed,
+            ttsPitch = ttsPitch,
+            ttsGainDb = ttsGainDb,
+            ttsHttpBaseUrl = ttsHttpBaseUrl,
+            ttsHttpBearerToken = ttsHttpBearerToken,
+            ttsHttpResponseMode = ttsHttpResponseMode,
+            ttsVolcengineResource = ttsVolcengineResource,
+            ttsVolcengineBaseUrl = ttsVolcengineBaseUrl,
+            ttsVolcengineApiKey = ttsVolcengineApiKey,
+            ttsVolcengineSpeaker = ttsVolcengineSpeaker,
+            ttsVolcengineModel = ttsVolcengineModel,
+            ttsVolcengineContext = ttsVolcengineContext,
+            ttsVolcenginePitch = ttsVolcenginePitch,
+            ttsVolcengineToneFidelity = ttsVolcengineToneFidelity,
+            ttsMiniMaxModel = ttsMiniMaxModel,
+            ttsMiniMaxBaseUrl = ttsMiniMaxBaseUrl,
+            ttsMiniMaxApiKey = ttsMiniMaxApiKey,
+            ttsMiniMaxVoice = ttsMiniMaxVoice,
+            ttsMiniMaxEmotion = ttsMiniMaxEmotion,
+            ttsMiniMaxSpeed = ttsMiniMaxSpeed,
+            ttsMiniMaxPitch = ttsMiniMaxPitch,
+            ttsMimoModel = ttsMimoModel,
+            ttsMimoBaseUrl = ttsMimoBaseUrl,
+            ttsMimoApiKey = ttsMimoApiKey,
+            ttsMimoVoice = ttsMimoVoice,
+            ttsMimoInstruction = ttsMimoInstruction,
+            ttsMimoVoiceDesignPrompt = ttsMimoVoiceDesignPrompt,
+            ttsMimoVoiceCloneInstruction = ttsMimoVoiceCloneInstruction,
+            ttsMimoVoiceSampleUri = ttsMimoVoiceSampleUri,
             renderMode = renderMode,
             translationBlockInteractionMode = translationBlockInteractionMode,
             placement = placement,
@@ -1240,6 +1476,7 @@ fun SettingsScreen(
             apiTimeoutSeconds = apiTimeoutSec.toInt(),
             mergeAdjacentBlocks = mergeAdjacent,
             mergeStrength = mergeStrength,
+            disableCrossLineContextTranslation = !crossLineContextTranslationEnabled,
             cleartextAllowedHosts = parseCleartextHosts(cleartextHostsText),
             translatorEngine = effectiveTranslatorEngine(),
             deeplKey = deeplKey,
@@ -1715,6 +1952,45 @@ fun SettingsScreen(
         )
     }
 
+    mlKitMissingModelsPrompt?.let { prompt ->
+        val sourceName = Languages.nameOf(context, prompt.pair.first)
+        val targetName = Languages.nameOf(context, prompt.pair.second)
+        val missingNames = prompt.missingLanguages.joinToString(", ") { languageTag ->
+            Languages.nameOf(context, languageTag)
+        }
+        AlertDialog(
+            onDismissRequest = {
+                mlKitModelPromptDismissedPair = prompt.pair
+                mlKitMissingModelsPrompt = null
+            },
+            title = { Text(stringResource(R.string.mlkit_missing_models_dialog_title)) },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.mlkit_missing_models_dialog_message,
+                        sourceName,
+                        targetName,
+                        missingNames,
+                    )
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { startMlKitModelDownload(prompt.pair) }) {
+                    Text(stringResource(R.string.mlkit_missing_models_dialog_download))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    mlKitModelPromptDismissedPair = prompt.pair
+                    mlKitMissingModelsPrompt = null
+                    translatorEngine = TranslatorEngine.OPENAI
+                }) {
+                    Text(stringResource(R.string.mlkit_missing_models_dialog_switch_llm))
+                }
+            },
+        )
+    }
+
     if (showSakuraFallbackDialog) {
         val sourceName = com.gameocr.app.data.Languages.nameOf(context, sourceLang)
         val targetName = com.gameocr.app.data.Languages.nameOf(context, targetLang)
@@ -2101,6 +2377,9 @@ fun SettingsScreen(
             baseUrl = s.baseUrl
             apiKey = s.apiKey
             model = s.model
+            anthropicBaseUrl = s.anthropicBaseUrl
+            anthropicApiKey = s.anthropicApiKey
+            anthropicModel = s.anthropicModel
             prompt = migratedPrompt
             targetLang = s.targetLang
             sourceLang = s.sourceLang
@@ -2144,6 +2423,42 @@ fun SettingsScreen(
             ocrRedBoxShowSourceText = s.ocrRedBoxShowSourceText
             ocrRedBoxShowTranslation = s.ocrRedBoxShowTranslation
             streaming = s.streamingTranslate
+            retryEmptyTranslation = s.retryEmptyTranslation
+            ttsEnabled = s.ttsEnabled
+            ttsProvider = s.ttsProvider
+            ttsVoice = s.ttsVoice
+            ttsEmotion = s.ttsEmotion
+            ttsSpeed = s.ttsSpeed
+            ttsPitch = s.ttsPitch
+            ttsGainDb = s.ttsGainDb
+            ttsHttpBaseUrl = s.ttsHttpBaseUrl
+            ttsHttpBearerToken = s.ttsHttpBearerToken
+            ttsHttpResponseMode = s.ttsHttpResponseMode
+            ttsVolcengineResource = s.ttsVolcengineResource
+            ttsVolcengineBaseUrl = s.ttsVolcengineBaseUrl
+            ttsVolcengineApiKey = s.ttsVolcengineApiKey
+            ttsVolcengineSpeaker = s.ttsVolcengineSpeaker
+            ttsVolcengineModel = s.ttsVolcengineModel
+            ttsVolcengineContext = s.ttsVolcengineContext
+            ttsVolcenginePitch = s.ttsVolcenginePitch
+            ttsVolcengineToneFidelity = s.ttsVolcengineToneFidelity
+            ttsMiniMaxModel = s.ttsMiniMaxModel
+            ttsMiniMaxBaseUrl = s.ttsMiniMaxBaseUrl
+            ttsMiniMaxApiKey = s.ttsMiniMaxApiKey
+            ttsMiniMaxVoice = s.ttsMiniMaxVoice
+            ttsMiniMaxEmotion = s.ttsMiniMaxEmotion
+            ttsMiniMaxSpeed = s.ttsMiniMaxSpeed
+            ttsMiniMaxPitch = s.ttsMiniMaxPitch
+            ttsMimoModel = s.ttsMimoModel
+            ttsMimoBaseUrl = s.ttsMimoBaseUrl
+            ttsMimoApiKey = s.ttsMimoApiKey
+            ttsMimoVoice = s.ttsMimoVoice
+            ttsMimoInstruction = s.ttsMimoInstruction
+            ttsMimoVoiceDesignPrompt = s.ttsMimoVoiceDesignPrompt
+            ttsMimoVoiceCloneInstruction = s.ttsMimoVoiceCloneInstruction
+            ttsMimoVoiceSampleUri = s.ttsMimoVoiceSampleUri.ifBlank {
+                MIMO_BUILTIN_VOICE_REFERENCE_1
+            }
             renderMode = s.renderMode
             translationBlockInteractionMode = s.translationBlockInteractionMode
             floatingWindowContentMode = s.floatingWindowContentMode
@@ -2195,11 +2510,13 @@ fun SettingsScreen(
             translationPresets = s.translationPresets
             activeTranslationPresetId = s.activeTranslationPresetId
             pinnedLanguages = s.pinnedLanguages
+            mlKitRecentSources = mlKitRecentSourceLanguages(s.mlKitRecentSourceLanguages)
             allowWrap = s.overlayAllowWrap
             avoidCollision = s.overlayAvoidCollision
             apiTimeoutSec = s.apiTimeoutSeconds.toFloat()
             mergeAdjacent = s.mergeAdjacentBlocks
             mergeStrength = s.mergeStrength
+            crossLineContextTranslationEnabled = !s.disableCrossLineContextTranslation
             textOrientAutoDetect = s.textOrientationAutoDetect
             dbnetProb = s.dbnetProbThresh
             dbnetScore = s.dbnetBoxScoreThresh
@@ -2229,6 +2546,76 @@ fun SettingsScreen(
 
     // paddleStatus 独立异步加载：file.exists() / file.length() 走 IO 线程，避免阻塞首帧。
     val settingsLoaded = initialSettings != null
+    LaunchedEffect(settingsLoaded, translatorEngine, sourceLang, targetLang) {
+        if (!settingsLoaded || translatorEngine != TranslatorEngine.GOOGLE_ML_KIT) {
+            mlKitModelStatePair = null
+            mlKitModelsReady = null
+            mlKitMissingModelsPrompt = null
+            mlKitDownloadedLanguageModels = emptySet()
+            return@LaunchedEffect
+        }
+        mlKitDownloadedLanguageModels = runCatching {
+            viewModel.getDownloadedMlKitLanguageModels()
+        }.getOrDefault(emptySet())
+        if (
+            sourceLang.isBlank() ||
+            sourceLang.equals(Languages.AUTO.code, ignoreCase = true) ||
+            targetLang.isBlank() ||
+            targetLang.equals(Languages.AUTO.code, ignoreCase = true) ||
+            !MlKitLanguagePolicy.isSupportedLanguageTag(sourceLang) ||
+            !MlKitLanguagePolicy.isSupportedLanguageTag(targetLang)
+        ) {
+            mlKitModelStatePair = null
+            mlKitModelsReady = null
+            mlKitMissingModelsPrompt = null
+            return@LaunchedEffect
+        }
+        val pair = sourceLang to targetLang
+        mlKitModelStatePair = null
+        mlKitModelsReady = null
+        mlKitMissingModelsPrompt = null
+        val missingResult = runCatching {
+            viewModel.getMissingMlKitLanguageModels(pair.first, pair.second)
+        }
+        val missingLanguages = missingResult.getOrDefault(emptySet())
+        mlKitModelsReady = missingResult.isSuccess && missingLanguages.isEmpty()
+        mlKitModelStatePair = pair
+        if (
+            missingResult.isSuccess &&
+            missingLanguages.isNotEmpty() &&
+            mlKitModelPromptDismissedPair != pair
+        ) {
+            mlKitMissingModelsPrompt = MlKitMissingModelsPrompt(
+                pair = pair,
+                missingLanguages = missingLanguages,
+            )
+        }
+    }
+    LaunchedEffect(
+        settingsLoaded,
+        ttsEnabled,
+        ttsProvider,
+        targetLang,
+        systemTtsVoiceRefreshRequest,
+    ) {
+        if (
+            !settingsLoaded ||
+            !shouldLoadSystemTtsVoices(ttsEnabled, ttsProvider == TtsProvider.SYSTEM)
+        ) {
+            return@LaunchedEffect
+        }
+        systemTtsVoicesLoading = true
+        systemTtsVoicesError = null
+        try {
+            systemTtsVoices = viewModel.loadSystemTtsVoices(targetLang)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            systemTtsVoicesError = error.message ?: error.javaClass.simpleName
+        } finally {
+            systemTtsVoicesLoading = false
+        }
+    }
     val modelDownloadStateKey = modelDownloadWorkInfos.map { it.id to it.state }
     val modelDownloadStageKey = unfinishedModelDownloads.map { info ->
         ModelDownloadSpec.decode(
@@ -2432,18 +2819,52 @@ fun SettingsScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(stringResource(R.string.settings_label_translator_engine), style = MaterialTheme.typography.labelLarge)
 
-                // 与 OCR 一样分组：端侧 LLM / 云端 LLM / 云端翻译。chip 多了平铺 FlowRow 也能换行，
-                // 但用户难以一眼区分 LLM 类（重质量、配 prompt）与传统翻译 API 类（重稳定性、限频）。
+                // All on-device options share one group; cloud engines remain split by API type.
                 Text(
                     stringResource(R.string.settings_translator_group_local_llm),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                val quickMlKitSources = mlKitRecentSourceLanguages(
+                    stored = mlKitRecentSources,
+                    selected = sourceLang.takeIf {
+                        translatorEngine == TranslatorEngine.GOOGLE_ML_KIT
+                    },
+                )
+                val downloadedMlKitPickerCodes = mlKitDownloadedPickerLanguageCodes(
+                    mlKitDownloadedLanguageModels
                 )
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
+                    quickMlKitSources.forEach { languageTag ->
+                        val defaultOption = MlKitQuickSourceLanguage.fromLanguageTag(languageTag)
+                        FilterChip(
+                            selected = translatorEngine == TranslatorEngine.GOOGLE_ML_KIT &&
+                                mlKitLanguageTagsMatch(languageTag, sourceLang),
+                            onClick = { selectMlKitSourceLanguage(languageTag) },
+                            label = {
+                                Text(
+                                    defaultOption?.let { stringResource(it.labelRes) }
+                                        ?: Languages.nameOf(context, languageTag)
+                                )
+                            },
+                        )
+                    }
+                    FilterChip(
+                        selected = false,
+                        onClick = {
+                            showMlKitMoreLanguages = true
+                            scope.launch {
+                                mlKitDownloadedLanguageModels = runCatching {
+                                    viewModel.getDownloadedMlKitLanguageModels()
+                                }.getOrDefault(mlKitDownloadedLanguageModels)
+                            }
+                        },
+                        label = { Text(stringResource(R.string.settings_on_device_translation_more)) },
+                    )
                     EngineChip(
                         translatorEngine,
                         TranslatorEngine.LOCAL_SAKURA,
@@ -2457,6 +2878,24 @@ fun SettingsScreen(
                         enabled = localLlmDeviceCapable
                     ) { selectTranslatorEngine(it) }
                 }
+                if (showMlKitMoreLanguages) {
+                    LanguagePickerSheet(
+                        currentCode = sourceLang,
+                        pinned = pinnedLanguages,
+                        allowAuto = false,
+                        allowedLanguageCodes = mlKitLanguagePickerCodes,
+                        priorityCodes = downloadedMlKitPickerCodes,
+                        badgedLanguageCodes = downloadedMlKitPickerCodes.toSet(),
+                        badgeLabel = stringResource(R.string.settings_mlkit_model_downloaded_short),
+                        unbadgedStatusLabel = stringResource(R.string.settings_mlkit_model_download_short),
+                        onSelect = { languageTag ->
+                            selectMlKitSourceLanguage(languageTag)
+                            showMlKitMoreLanguages = false
+                        },
+                        onTogglePin = null,
+                        onDismiss = { showMlKitMoreLanguages = false },
+                    )
+                }
                 Text(
                     stringResource(R.string.settings_translator_group_cloud_llm),
                     style = MaterialTheme.typography.labelSmall,
@@ -2468,6 +2907,7 @@ fun SettingsScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     EngineChip(translatorEngine, TranslatorEngine.OPENAI, stringResource(R.string.settings_engine_openai_llm)) { translatorEngine = it }
+                    EngineChip(translatorEngine, TranslatorEngine.ANTHROPIC, stringResource(R.string.settings_engine_anthropic_llm)) { translatorEngine = it }
                 }
                 Text(
                     stringResource(R.string.settings_translator_group_cloud),
@@ -2604,6 +3044,76 @@ fun SettingsScreen(
                                             model = id
                                             modelPickerExpanded = false
                                         }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    }
+                } else if (translatorEngine == TranslatorEngine.ANTHROPIC) {
+                    SettingsSearchTarget(
+                        searchTargetRegistry,
+                        R.string.settings_search_item_anthropic_base_url,
+                        R.string.settings_search_item_anthropic_api_key,
+                        R.string.settings_search_item_anthropic_model,
+                    ) {
+                    OutlinedTextField(
+                        value = anthropicBaseUrl,
+                        onValueChange = { anthropicBaseUrl = it },
+                        label = { Text(stringResource(R.string.settings_base_url)) },
+                        placeholder = { Text(stringResource(R.string.settings_anthropic_base_url_placeholder)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
+                    SecretTextField(
+                        value = anthropicApiKey,
+                        onValueChange = { anthropicApiKey = it },
+                        label = stringResource(R.string.settings_api_key),
+                        placeholder = stringResource(R.string.settings_anthropic_api_key_placeholder),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = anthropicModel,
+                        onValueChange = { anthropicModel = it },
+                        label = { Text(stringResource(R.string.settings_model)) },
+                        placeholder = { Text(stringResource(R.string.settings_anthropic_model_placeholder)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
+                    Text(
+                        stringResource(R.string.settings_anthropic_compatibility_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (fetchedModels.isNotEmpty()) {
+                        ExposedDropdownMenuBox(
+                            expanded = modelPickerExpanded,
+                            onExpandedChange = { modelPickerExpanded = !modelPickerExpanded },
+                        ) {
+                            OutlinedTextField(
+                                value = "",
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text(stringResource(R.string.settings_test_pick_model)) },
+                                placeholder = { Text("${fetchedModels.size} models") },
+                                trailingIcon = {
+                                    ExposedDropdownMenuDefaults.TrailingIcon(
+                                        expanded = modelPickerExpanded
+                                    )
+                                },
+                                modifier = Modifier.menuAnchor().fillMaxWidth(),
+                            )
+                            ExposedDropdownMenu(
+                                expanded = modelPickerExpanded,
+                                onDismissRequest = { modelPickerExpanded = false },
+                            ) {
+                                fetchedModels.forEach { id ->
+                                    DropdownMenuItem(
+                                        text = { Text(id) },
+                                        onClick = {
+                                            anthropicModel = id
+                                            modelPickerExpanded = false
+                                        },
                                     )
                                 }
                             }
@@ -2811,6 +3321,95 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     }
+                } else if (translatorEngine == TranslatorEngine.GOOGLE_ML_KIT) {
+                    SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_google_mlkit) {
+                    Text(
+                        stringResource(R.string.settings_google_mlkit_tip),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        stringResource(R.string.settings_mlkit_data_disclosure),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    val sourceSelected = sourceLang.isNotBlank() &&
+                        !sourceLang.equals(Languages.AUTO.code, ignoreCase = true)
+                    val targetSelected = targetLang.isNotBlank() &&
+                        !targetLang.equals(Languages.AUTO.code, ignoreCase = true)
+                    val sourceSupported = sourceSelected &&
+                        MlKitLanguagePolicy.isSupportedLanguageTag(sourceLang)
+                    val targetSupported = targetSelected &&
+                        MlKitLanguagePolicy.isSupportedLanguageTag(targetLang)
+                    val currentPair = sourceLang to targetLang
+                    val currentPairReady = mlKitModelStatePair == currentPair &&
+                        mlKitModelsReady == true
+                    val currentPairChecked = mlKitModelStatePair == currentPair &&
+                        mlKitModelsReady != null
+                    when {
+                        !sourceSupported -> Text(
+                            text = stringResource(
+                                R.string.settings_mlkit_unsupported_source_language,
+                                Languages.nameOf(context, sourceLang),
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        !targetSupported -> Text(
+                            text = stringResource(
+                                R.string.settings_mlkit_unsupported_target_language,
+                                Languages.nameOf(context, targetLang),
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        !currentPairChecked -> {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                            )
+                        }
+                        currentPairReady -> Text(
+                            text = stringResource(R.string.settings_mlkit_model_ready),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        else -> Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            OutlinedButton(
+                                enabled = !mlKitModelDownloadRunning,
+                                onClick = { startMlKitModelDownload(currentPair) },
+                            ) {
+                                Text(
+                                    if (mlKitModelDownloadRunning) {
+                                        stringResource(R.string.settings_mlkit_model_downloading)
+                                    } else {
+                                        stringResource(
+                                            R.string.settings_mlkit_download_pair,
+                                            Languages.nameOf(context, sourceLang),
+                                            Languages.nameOf(context, targetLang),
+                                        )
+                                    }
+                                )
+                            }
+                            if (mlKitModelDownloadRunning) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                )
+                            }
+                        }
+                    }
+                    mlKitModelDownloadMessage?.let { message ->
+                        Text(
+                            text = message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    }
                 } else if (translatorEngine == TranslatorEngine.GOOGLE) {
                     SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_google) {
                     // GOOGLE：无 key，仅提示风险。改 else if 明确匹配——避免后续新增枚举（如 LOCAL_*）
@@ -2826,6 +3425,7 @@ fun SettingsScreen(
                 // —— 测试连接 ——
                 // 验证 baseUrl/key/model（或 DeepL key/endpoint）能不能用；DeepL 顺便返回剩余额度，
                 // OpenAI 顺便拉 model 列表回填到上方下拉。状态文字按成功/失败着色，下次点击覆盖。
+                if (translatorEngine != TranslatorEngine.GOOGLE_ML_KIT) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -2841,6 +3441,9 @@ fun SettingsScreen(
                                     baseUrl = baseUrl,
                                     apiKey = apiKey,
                                     model = model,
+                                    anthropicBaseUrl = anthropicBaseUrl,
+                                    anthropicApiKey = anthropicApiKey,
+                                    anthropicModel = anthropicModel,
                                     deeplKey = deeplKey,
                                     deeplPro = deeplPro,
                                     deeplProtocol = deeplProtocol,
@@ -2888,6 +3491,7 @@ fun SettingsScreen(
                         else MaterialTheme.colorScheme.error
                     )
                 }
+                }
                     // 乐观更新本地 + 异步落盘。togglePinLanguage 内部用 repo.update 是原子的。
                 // Prompt / 流式开关只对 LLM 类（OpenAI 兼容）翻译引擎有意义；
                 // DeepL 是机器翻译 API，不读 prompt、也不走 SSE，隐藏避免误导。
@@ -2906,19 +3510,30 @@ fun SettingsScreen(
                     label = stringResource(R.string.settings_source_lang),
                     currentCode = sourceLang,
                     onSelect = {
-                        timber.log.Timber.tag("OcrLangLink").i(
-                            "[user-select-source] %s -> %s", sourceLang, it
-                        )
-                        sourceLang = it
-                        if (
-                            translatorEngine == TranslatorEngine.LOCAL_SAKURA &&
-                            !supportsSakuraLanguagePair(it, targetLang)
-                        ) {
-                            showSakuraFallbackDialog = true
+                        if (translatorEngine == TranslatorEngine.GOOGLE_ML_KIT) {
+                            selectMlKitSourceLanguage(it)
+                        } else {
+                            timber.log.Timber.tag("OcrLangLink").i(
+                                "[user-select-source] %s -> %s", sourceLang, it
+                            )
+                            sourceLang = it
+                            mlKitModelDownloadMessage = null
+                            if (
+                                translatorEngine == TranslatorEngine.LOCAL_SAKURA &&
+                                !supportsSakuraLanguagePair(it, targetLang)
+                            ) {
+                                showSakuraFallbackDialog = true
+                            }
                         }
                     },
                     pinned = pinnedLanguages,
                     onTogglePin = onTogglePin,
+                    allowAuto = translatorEngine != TranslatorEngine.GOOGLE_ML_KIT,
+                    allowedLanguageCodes = if (translatorEngine == TranslatorEngine.GOOGLE_ML_KIT) {
+                        mlKitLanguagePickerCodes
+                    } else {
+                        null
+                    },
                 )
                 }
                 SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_TARGET_LANGUAGE) {
@@ -2927,6 +3542,7 @@ fun SettingsScreen(
                     currentCode = targetLang,
                     onSelect = {
                         targetLang = it
+                        mlKitModelDownloadMessage = null
                         if (
                             translatorEngine == TranslatorEngine.LOCAL_SAKURA &&
                             !supportsSakuraLanguagePair(sourceLang, it)
@@ -2936,6 +3552,12 @@ fun SettingsScreen(
                     },
                     pinned = pinnedLanguages,
                     onTogglePin = onTogglePin,
+                    allowAuto = translatorEngine != TranslatorEngine.GOOGLE_ML_KIT,
+                    allowedLanguageCodes = if (translatorEngine == TranslatorEngine.GOOGLE_ML_KIT) {
+                        mlKitLanguagePickerCodes
+                    } else {
+                        null
+                    },
                 )
                 }
                 SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_TRANSLATION_ASSISTANCE) {
@@ -2944,6 +3566,10 @@ fun SettingsScreen(
                     translatorEngine = translatorEngine,
                     streaming = streaming,
                     onStreamingChange = { streaming = it },
+                    crossLineContextTranslationEnabled = crossLineContextTranslationEnabled,
+                    onCrossLineContextTranslationEnabledChange = {
+                        crossLineContextTranslationEnabled = it
+                    },
                     glossaryEnabled = translationGlossaryEnabled,
                     onGlossaryEnabledChange = { enabled ->
                         translationGlossaryEnabled = enabled
@@ -2994,7 +3620,9 @@ fun SettingsScreen(
                     onRetryEmptyTranslationChange = { retryEmptyTranslation = it },
                 )
                 }
-                if (translatorEngine == TranslatorEngine.OPENAI) {
+                if (translatorEngine == TranslatorEngine.OPENAI ||
+                    translatorEngine == TranslatorEngine.ANTHROPIC
+                ) {
                     SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_PROMPTS) {
                     OpenAiPromptSettings(
                         prompt = prompt,
@@ -3014,6 +3642,280 @@ fun SettingsScreen(
             // —— OCR 引擎 ——
             // 端到端翻译引擎（有道图翻）会跳过 OCR 阶段，整个 OCR 设置区当前会被无视——
             // 灰显 + 禁用 chip 让用户一眼明白 + 不能误操作。
+            }
+
+            item(key = SectionKeys.TTS) {
+                SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_TTS) {
+                    SectionCard(title = stringResource(R.string.settings_section_tts)) {
+                        TtsSettings(
+                            enabled = ttsEnabled,
+                            onEnabledChange = { ttsEnabled = it },
+                            provider = ttsProvider,
+                            onProviderChange = { nextProvider ->
+                                if (shouldResetTtsTestFeedback(ttsProvider, nextProvider)) {
+                                    ttsTestGeneration++
+                                    viewModel.stopTts()
+                                    ttsProvider = nextProvider
+                                    ttsTestRunning = false
+                                    ttsTestMessage = null
+                                    ttsTestSuccess = false
+                                }
+                            },
+                            voice = ttsVoice,
+                            onVoiceChange = { ttsVoice = it },
+                            systemVoices = systemTtsVoices,
+                            systemVoicesLoading = systemTtsVoicesLoading,
+                            systemVoicesError = systemTtsVoicesError,
+                            onRefreshSystemVoices = { systemTtsVoiceRefreshRequest++ },
+                            testText = ttsTestText,
+                            previewLanguageTag = targetLang,
+                            onTestTextChange = {
+                                ttsTestText = it
+                                ttsTestMessage = null
+                            },
+                            testRunning = ttsTestRunning,
+                            testMessage = ttsTestMessage,
+                            testSuccess = ttsTestSuccess,
+                            onTest = { text ->
+                                val draftSettings = buildSnapshot()
+                                val generation = ttsTestGeneration + 1
+                                ttsTestGeneration = generation
+                                ttsTestRunning = true
+                                ttsTestMessage = null
+                                scope.launch {
+                                    try {
+                                        viewModel.testTts(text, draftSettings)
+                                        if (generation == ttsTestGeneration) {
+                                            ttsTestSuccess = true
+                                            ttsTestMessage = context.getString(
+                                                R.string.settings_tts_test_success
+                                            )
+                                        }
+                                    } catch (error: CancellationException) {
+                                        throw error
+                                    } catch (error: Throwable) {
+                                        if (generation == ttsTestGeneration) {
+                                            ttsTestSuccess = false
+                                            ttsTestMessage = context.ttsFailureMessage(error)
+                                        }
+                                    } finally {
+                                        if (generation == ttsTestGeneration) {
+                                            ttsTestRunning = false
+                                        }
+                                    }
+                                }
+                            },
+                            emotion = ttsEmotion,
+                            onEmotionChange = { ttsEmotion = it },
+                            speed = ttsSpeed,
+                            onSpeedChange = { ttsSpeed = it },
+                            pitch = ttsPitch,
+                            onPitchChange = { ttsPitch = it },
+                            gainDb = ttsGainDb,
+                            onGainDbChange = { ttsGainDb = it },
+                            httpBaseUrl = ttsHttpBaseUrl,
+                            onHttpBaseUrlChange = { ttsHttpBaseUrl = it },
+                            httpBearerToken = ttsHttpBearerToken,
+                            onHttpBearerTokenChange = { ttsHttpBearerToken = it },
+                            httpResponseMode = ttsHttpResponseMode,
+                            onHttpResponseModeChange = { ttsHttpResponseMode = it },
+                            volcengineResource = ttsVolcengineResource,
+                            onVolcengineResourceChange = { ttsVolcengineResource = it },
+                            volcengineBaseUrl = ttsVolcengineBaseUrl,
+                            onVolcengineBaseUrlChange = { ttsVolcengineBaseUrl = it },
+                            volcengineApiKey = ttsVolcengineApiKey,
+                            onVolcengineApiKeyChange = { ttsVolcengineApiKey = it },
+                            volcengineSpeaker = ttsVolcengineSpeaker,
+                            onVolcengineSpeakerChange = { ttsVolcengineSpeaker = it },
+                            volcengineModel = ttsVolcengineModel,
+                            onVolcengineModelChange = { ttsVolcengineModel = it },
+                            volcengineContext = ttsVolcengineContext,
+                            onVolcengineContextChange = { ttsVolcengineContext = it },
+                            volcenginePitch = ttsVolcenginePitch,
+                            onVolcenginePitchChange = { ttsVolcenginePitch = it },
+                            volcengineToneFidelity = ttsVolcengineToneFidelity,
+                            onVolcengineToneFidelityChange = { ttsVolcengineToneFidelity = it },
+                            miniMaxModel = ttsMiniMaxModel,
+                            onMiniMaxModelChange = { ttsMiniMaxModel = it },
+                            miniMaxBaseUrl = ttsMiniMaxBaseUrl,
+                            onMiniMaxBaseUrlChange = { ttsMiniMaxBaseUrl = it },
+                            miniMaxApiKey = ttsMiniMaxApiKey,
+                            onMiniMaxApiKeyChange = { ttsMiniMaxApiKey = it },
+                            miniMaxVoice = ttsMiniMaxVoice,
+                            onMiniMaxVoiceChange = { ttsMiniMaxVoice = it },
+                            onLoadMiniMaxManagedVoices = viewModel::loadMiniMaxManagedVoices,
+                            onCloneMiniMaxVoice = viewModel::cloneMiniMaxVoice,
+                            onDesignMiniMaxVoice = viewModel::designMiniMaxVoice,
+                            onPlayMiniMaxTrialAudio = { audioHex ->
+                                viewModel.playMiniMaxTrialAudio(audioHex, ttsGainDb)
+                            },
+                            onGenerateMiniMaxVoiceDescription = { draft ->
+                                viewModel.generateMiniMaxVoiceDescription(
+                                    draft = draft,
+                                    settings = buildSnapshot(),
+                                    outputLanguageTag = context.resources.configuration.locales[0]
+                                        .toLanguageTag(),
+                                )
+                            },
+                            onPreviewMiniMaxVoice = { voiceId, previewText ->
+                                viewModel.testTts(
+                                    previewText,
+                                    buildSnapshot().copy(
+                                        ttsEnabled = true,
+                                        ttsProvider = TtsProvider.MINIMAX,
+                                        ttsMiniMaxVoice = voiceId,
+                                    ),
+                                )
+                            },
+                            onDeleteMiniMaxVoice = viewModel::deleteMiniMaxVoice,
+                            miniMaxEmotion = ttsMiniMaxEmotion,
+                            onMiniMaxEmotionChange = { ttsMiniMaxEmotion = it },
+                            miniMaxSpeed = ttsMiniMaxSpeed,
+                            onMiniMaxSpeedChange = { ttsMiniMaxSpeed = it },
+                            miniMaxPitch = ttsMiniMaxPitch,
+                            onMiniMaxPitchChange = { ttsMiniMaxPitch = it },
+                            mimoModel = ttsMimoModel,
+                            onMimoModelChange = { ttsMimoModel = it },
+                            mimoBaseUrl = ttsMimoBaseUrl,
+                            onMimoBaseUrlChange = { ttsMimoBaseUrl = it },
+                            mimoApiKey = ttsMimoApiKey,
+                            onMimoApiKeyChange = { ttsMimoApiKey = it },
+                            mimoVoice = ttsMimoVoice,
+                            onMimoVoiceChange = { ttsMimoVoice = it },
+                            mimoInstruction = ttsMimoInstruction,
+                            onMimoInstructionChange = {
+                                ttsMimoInstruction = it
+                                ttsMimoPresetStyleMessage = null
+                            },
+                            mimoVoiceDesignPrompt = ttsMimoVoiceDesignPrompt,
+                            onMimoVoiceDesignPromptChange = {
+                                ttsMimoVoiceDesignPrompt = it
+                                ttsMimoVoiceDesignMessage = null
+                            },
+                            mimoVoiceCloneInstruction = ttsMimoVoiceCloneInstruction,
+                            onMimoVoiceCloneInstructionChange = {
+                                ttsMimoVoiceCloneInstruction = it
+                                ttsMimoCloneStyleMessage = null
+                            },
+                            mimoStyleGenerating = when (ttsMimoModel) {
+                                MimoTtsModel.PRESET -> ttsMimoPresetStyleGenerating
+                                MimoTtsModel.VOICE_CLONE -> ttsMimoCloneStyleGenerating
+                                MimoTtsModel.VOICE_DESIGN -> false
+                            },
+                            mimoStyleMessage = when (ttsMimoModel) {
+                                MimoTtsModel.PRESET -> ttsMimoPresetStyleMessage
+                                MimoTtsModel.VOICE_CLONE -> ttsMimoCloneStyleMessage
+                                MimoTtsModel.VOICE_DESIGN -> null
+                            },
+                            onPolishMimoStyle = { model, draft ->
+                                if (model != MimoTtsModel.VOICE_DESIGN) {
+                                    if (draft.isBlank()) {
+                                        val message = context.getString(
+                                            R.string.settings_tts_mimo_style_instruction_required
+                                        )
+                                        when (model) {
+                                            MimoTtsModel.PRESET -> ttsMimoPresetStyleMessage = message
+                                            MimoTtsModel.VOICE_CLONE -> ttsMimoCloneStyleMessage = message
+                                            MimoTtsModel.VOICE_DESIGN -> Unit
+                                        }
+                                    } else {
+                                        val draftSettings = buildSnapshot()
+                                        val outputLanguageTag =
+                                            context.resources.configuration.locales[0].toLanguageTag()
+                                        when (model) {
+                                            MimoTtsModel.PRESET -> {
+                                                ttsMimoPresetStyleGenerating = true
+                                                ttsMimoPresetStyleMessage = null
+                                            }
+                                            MimoTtsModel.VOICE_CLONE -> {
+                                                ttsMimoCloneStyleGenerating = true
+                                                ttsMimoCloneStyleMessage = null
+                                            }
+                                            MimoTtsModel.VOICE_DESIGN -> Unit
+                                        }
+                                        scope.launch {
+                                            try {
+                                                val polished = viewModel.polishMimoStyleInstruction(
+                                                    draft = draft,
+                                                    settings = draftSettings,
+                                                    outputLanguageTag = outputLanguageTag,
+                                                )
+                                                when (model) {
+                                                    MimoTtsModel.PRESET -> ttsMimoInstruction = polished
+                                                    MimoTtsModel.VOICE_CLONE -> {
+                                                        ttsMimoVoiceCloneInstruction = polished
+                                                    }
+                                                    MimoTtsModel.VOICE_DESIGN -> Unit
+                                                }
+                                            } catch (error: CancellationException) {
+                                                throw error
+                                            } catch (error: Throwable) {
+                                                val message = context.getString(
+                                                    R.string.settings_tts_mimo_style_polish_error,
+                                                    error.message ?: error.javaClass.simpleName,
+                                                )
+                                                when (model) {
+                                                    MimoTtsModel.PRESET -> {
+                                                        ttsMimoPresetStyleMessage = message
+                                                    }
+                                                    MimoTtsModel.VOICE_CLONE -> {
+                                                        ttsMimoCloneStyleMessage = message
+                                                    }
+                                                    MimoTtsModel.VOICE_DESIGN -> Unit
+                                                }
+                                            } finally {
+                                                when (model) {
+                                                    MimoTtsModel.PRESET -> {
+                                                        ttsMimoPresetStyleGenerating = false
+                                                    }
+                                                    MimoTtsModel.VOICE_CLONE -> {
+                                                        ttsMimoCloneStyleGenerating = false
+                                                    }
+                                                    MimoTtsModel.VOICE_DESIGN -> Unit
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            mimoVoiceDesignGenerating = ttsMimoVoiceDesignGenerating,
+                            mimoVoiceDesignMessage = ttsMimoVoiceDesignMessage,
+                            onGenerateMimoVoiceDesign = { draft ->
+                                if (draft.isBlank()) {
+                                    ttsMimoVoiceDesignMessage = context.getString(
+                                        R.string.settings_tts_mimo_voice_description_required
+                                    )
+                                    return@TtsSettings
+                                }
+                                val draftSettings = buildSnapshot()
+                                val outputLanguageTag = context.resources.configuration.locales[0]
+                                    .toLanguageTag()
+                                ttsMimoVoiceDesignGenerating = true
+                                ttsMimoVoiceDesignMessage = null
+                                scope.launch {
+                                    try {
+                                        ttsMimoVoiceDesignPrompt = viewModel.generateMimoVoiceDesign(
+                                            draft = draft,
+                                            settings = draftSettings,
+                                            outputLanguageTag = outputLanguageTag,
+                                        )
+                                    } catch (error: CancellationException) {
+                                        throw error
+                                    } catch (error: Throwable) {
+                                        ttsMimoVoiceDesignMessage = context.getString(
+                                            R.string.settings_tts_mimo_ai_generate_error,
+                                            error.message ?: error.javaClass.simpleName,
+                                        )
+                                    } finally {
+                                        ttsMimoVoiceDesignGenerating = false
+                                    }
+                                }
+                            },
+                            mimoVoiceSampleUri = ttsMimoVoiceSampleUri,
+                            onMimoVoiceSampleUriChange = { ttsMimoVoiceSampleUri = it },
+                        )
+                    }
+                }
             }
 
             item(key = SectionKeys.OCR) {
@@ -3865,10 +4767,18 @@ fun SettingsScreen(
                 }
 
                 if (renderMode == RenderMode.BLOCKS) {
-                    Text(
-                        stringResource(R.string.settings_translation_block_interaction_label),
-                        style = MaterialTheme.typography.labelLarge,
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            stringResource(R.string.settings_translation_block_interaction_label),
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                        SettingHelpTooltip(
+                            text = stringResource(
+                                R.string.settings_translation_block_interaction_vertical_help
+                            ),
+                            modifier = Modifier.padding(start = 4.dp),
+                        )
+                    }
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -4593,6 +5503,1090 @@ private fun rememberUsageAccessGranted(context: Context): Boolean {
     return granted
 }
 
+private fun ttsProviderGroupLabelRes(group: TtsProviderGroup): Int = when (group) {
+    TtsProviderGroup.ON_DEVICE -> R.string.settings_tts_group_on_device
+    TtsProviderGroup.LOCAL -> R.string.settings_tts_group_local
+    TtsProviderGroup.ONLINE -> R.string.settings_tts_group_online
+}
+
+private fun ttsProviderLabelRes(provider: TtsProvider): Int = when (provider) {
+    TtsProvider.SYSTEM -> R.string.settings_tts_provider_system
+    TtsProvider.GENERIC_HTTP -> R.string.settings_tts_provider_generic_http
+    TtsProvider.VOLCENGINE -> R.string.settings_tts_provider_volc
+    TtsProvider.MINIMAX -> R.string.settings_tts_provider_minimax
+    TtsProvider.MIMO -> R.string.settings_tts_provider_mimo
+}
+
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
+@Composable
+private fun TtsSettings(
+    enabled: Boolean,
+    onEnabledChange: (Boolean) -> Unit,
+    provider: TtsProvider,
+    onProviderChange: (TtsProvider) -> Unit,
+    voice: String,
+    onVoiceChange: (String) -> Unit,
+    systemVoices: List<SystemTtsVoiceOption>,
+    systemVoicesLoading: Boolean,
+    systemVoicesError: String?,
+    onRefreshSystemVoices: () -> Unit,
+    testText: String,
+    previewLanguageTag: String,
+    onTestTextChange: (String) -> Unit,
+    testRunning: Boolean,
+    testMessage: String?,
+    testSuccess: Boolean,
+    onTest: (String) -> Unit,
+    emotion: String,
+    onEmotionChange: (String) -> Unit,
+    speed: Float,
+    onSpeedChange: (Float) -> Unit,
+    pitch: Float,
+    onPitchChange: (Float) -> Unit,
+    gainDb: Int,
+    onGainDbChange: (Int) -> Unit,
+    httpBaseUrl: String,
+    onHttpBaseUrlChange: (String) -> Unit,
+    httpBearerToken: String,
+    onHttpBearerTokenChange: (String) -> Unit,
+    httpResponseMode: TtsHttpResponseMode,
+    onHttpResponseModeChange: (TtsHttpResponseMode) -> Unit,
+    volcengineResource: VolcengineTtsResource,
+    onVolcengineResourceChange: (VolcengineTtsResource) -> Unit,
+    volcengineBaseUrl: String,
+    onVolcengineBaseUrlChange: (String) -> Unit,
+    volcengineApiKey: String,
+    onVolcengineApiKeyChange: (String) -> Unit,
+    volcengineSpeaker: String,
+    onVolcengineSpeakerChange: (String) -> Unit,
+    volcengineModel: String,
+    onVolcengineModelChange: (String) -> Unit,
+    volcengineContext: String,
+    onVolcengineContextChange: (String) -> Unit,
+    volcenginePitch: Int,
+    onVolcenginePitchChange: (Int) -> Unit,
+    volcengineToneFidelity: Boolean,
+    onVolcengineToneFidelityChange: (Boolean) -> Unit,
+    miniMaxModel: MiniMaxTtsModel,
+    onMiniMaxModelChange: (MiniMaxTtsModel) -> Unit,
+    miniMaxBaseUrl: String,
+    onMiniMaxBaseUrlChange: (String) -> Unit,
+    miniMaxApiKey: String,
+    onMiniMaxApiKeyChange: (String) -> Unit,
+    miniMaxVoice: String,
+    onMiniMaxVoiceChange: (String) -> Unit,
+    onLoadMiniMaxManagedVoices: suspend (String, String) -> List<MiniMaxManagedVoice>,
+    onCloneMiniMaxVoice: suspend (MiniMaxVoiceCloneRequest) -> MiniMaxVoiceCreationResult,
+    onDesignMiniMaxVoice: suspend (MiniMaxVoiceDesignRequest) -> MiniMaxVoiceCreationResult,
+    onPlayMiniMaxTrialAudio: suspend (String) -> Unit,
+    onGenerateMiniMaxVoiceDescription: suspend (String) -> String,
+    onPreviewMiniMaxVoice: suspend (String, String) -> Unit,
+    onDeleteMiniMaxVoice: suspend (String, String, MiniMaxManagedVoice) -> Unit,
+    miniMaxEmotion: String,
+    onMiniMaxEmotionChange: (String) -> Unit,
+    miniMaxSpeed: Float,
+    onMiniMaxSpeedChange: (Float) -> Unit,
+    miniMaxPitch: Int,
+    onMiniMaxPitchChange: (Int) -> Unit,
+    mimoModel: MimoTtsModel,
+    onMimoModelChange: (MimoTtsModel) -> Unit,
+    mimoBaseUrl: String,
+    onMimoBaseUrlChange: (String) -> Unit,
+    mimoApiKey: String,
+    onMimoApiKeyChange: (String) -> Unit,
+    mimoVoice: String,
+    onMimoVoiceChange: (String) -> Unit,
+    mimoInstruction: String,
+    onMimoInstructionChange: (String) -> Unit,
+    mimoVoiceDesignPrompt: String,
+    onMimoVoiceDesignPromptChange: (String) -> Unit,
+    mimoVoiceCloneInstruction: String,
+    onMimoVoiceCloneInstructionChange: (String) -> Unit,
+    mimoStyleGenerating: Boolean,
+    mimoStyleMessage: String?,
+    onPolishMimoStyle: (MimoTtsModel, String) -> Unit,
+    mimoVoiceDesignGenerating: Boolean,
+    mimoVoiceDesignMessage: String?,
+    onGenerateMimoVoiceDesign: (String) -> Unit,
+    mimoVoiceSampleUri: String,
+    onMimoVoiceSampleUriChange: (String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        SwitchRow(
+            label = stringResource(R.string.settings_tts_enable),
+            checked = enabled,
+            helpText = stringResource(R.string.settings_tts_enable_hint),
+            onChange = onEnabledChange,
+        )
+        if (!enabled) return@Column
+        val context = LocalContext.current
+        val mimoVoiceSampleLauncher = rememberLauncherForActivityResult(
+            ActivityResultContracts.OpenDocument()
+        ) { uri ->
+            uri ?: return@rememberLauncherForActivityResult
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            }
+            onMimoVoiceSampleUriChange(uri.toString())
+        }
+        Text(
+            stringResource(R.string.settings_tts_provider_label),
+            style = MaterialTheme.typography.labelLarge,
+        )
+        TtsProviderGroup.entries.forEach { group ->
+            Text(
+                stringResource(ttsProviderGroupLabelRes(group)),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                TtsProvider.entries
+                    .filter { ttsProviderGroup(it) == group }
+                    .forEach { option ->
+                        EngineChip(
+                            provider,
+                            option,
+                            stringResource(ttsProviderLabelRes(option)),
+                            onSelect = onProviderChange,
+                        )
+                    }
+            }
+        }
+        Text(
+            stringResource(
+                when (provider) {
+                    TtsProvider.SYSTEM -> R.string.settings_tts_system_hint
+                    TtsProvider.VOLCENGINE -> R.string.settings_tts_volcengine_hint
+                    TtsProvider.MINIMAX -> R.string.settings_tts_minimax_hint
+                    TtsProvider.MIMO -> R.string.settings_tts_mimo_hint
+                    else -> R.string.settings_tts_http_hint
+                }
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        when (provider) {
+            TtsProvider.SYSTEM -> {
+                SystemTtsVoicePicker(
+                    value = voice,
+                    voices = systemVoices,
+                    loading = systemVoicesLoading,
+                    error = systemVoicesError,
+                    onValueChange = onVoiceChange,
+                    onRefresh = onRefreshSystemVoices,
+                )
+                TtsSpeedPitchControls(speed, onSpeedChange, pitch, onPitchChange)
+            }
+            TtsProvider.GENERIC_HTTP -> {
+                TtsVoiceField(voice, onVoiceChange)
+                TtsEmotionField(emotion, onEmotionChange)
+                TtsSpeedPitchControls(speed, onSpeedChange, pitch, onPitchChange)
+                OutlinedTextField(
+                    value = httpBaseUrl,
+                    onValueChange = onHttpBaseUrlChange,
+                    label = { Text(stringResource(R.string.settings_tts_http_base_url)) },
+                    placeholder = { Text(stringResource(R.string.settings_tts_http_base_url_placeholder)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                )
+                SecretTextField(
+                    value = httpBearerToken,
+                    onValueChange = onHttpBearerTokenChange,
+                    label = stringResource(R.string.settings_tts_http_token),
+                    placeholder = stringResource(R.string.settings_tts_http_token_placeholder),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    stringResource(R.string.settings_tts_http_response_mode),
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    EngineChip(
+                        httpResponseMode,
+                        TtsHttpResponseMode.BINARY_AUDIO,
+                        stringResource(R.string.settings_tts_response_binary),
+                        onSelect = onHttpResponseModeChange,
+                    )
+                    EngineChip(
+                        httpResponseMode,
+                        TtsHttpResponseMode.JSON_BASE64,
+                        stringResource(R.string.settings_tts_response_json_base64),
+                        onSelect = onHttpResponseModeChange,
+                    )
+                }
+            }
+            TtsProvider.VOLCENGINE -> {
+                val volcengineResourceLabels = mapOf(
+                    VolcengineTtsResource.PRESET_VOICE_2_0 to
+                        stringResource(R.string.settings_tts_volcengine_preset_resource),
+                    VolcengineTtsResource.VOICE_CLONE_2_0 to
+                        stringResource(R.string.settings_tts_volcengine_clone_resource),
+                )
+                TtsOptionDropdown(
+                    label = stringResource(R.string.settings_tts_volcengine_resource),
+                    value = volcengineResource,
+                    options = VolcengineTtsResource.entries,
+                    optionLabel = { resource -> volcengineResourceLabels[resource].orEmpty() },
+                    onValueChange = onVolcengineResourceChange,
+                )
+                TtsApiBaseUrlSelector(
+                    value = volcengineBaseUrl,
+                    options = listOf(
+                        TtsApiBaseUrlOption(
+                            stringResource(R.string.settings_tts_endpoint_volcengine_official),
+                            DEFAULT_VOLCENGINE_TTS_BASE_URL,
+                        ),
+                    ),
+                    onValueChange = onVolcengineBaseUrlChange,
+                    endpointResolver = ::volcengineTtsEndpointUrlOrNull,
+                    showSelectedUrl = false,
+                    showResolvedEndpoint = false,
+                )
+                SecretTextField(
+                    value = volcengineApiKey,
+                    onValueChange = onVolcengineApiKeyChange,
+                    label = stringResource(R.string.settings_tts_api_key),
+                    placeholder = stringResource(R.string.settings_tts_api_key_placeholder),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = volcengineSpeaker,
+                    onValueChange = onVolcengineSpeakerChange,
+                    label = { Text(stringResource(R.string.settings_tts_voice_id)) },
+                    placeholder = { Text("zh_female_vv_uranus_bigtts") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                )
+                if (volcengineResource == VolcengineTtsResource.VOICE_CLONE_2_0) {
+                    OutlinedTextField(
+                        value = volcengineModel,
+                        onValueChange = onVolcengineModelChange,
+                        label = { Text(stringResource(R.string.settings_tts_model)) },
+                        placeholder = { Text("seed-tts-2.0-standard") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
+                    SwitchRow(
+                        label = stringResource(R.string.settings_tts_volcengine_tone_fidelity),
+                        checked = volcengineToneFidelity,
+                        helpText = stringResource(R.string.settings_tts_volcengine_tone_fidelity_hint),
+                        onChange = onVolcengineToneFidelityChange,
+                    )
+                } else {
+                    OutlinedTextField(
+                        value = volcengineContext,
+                        onValueChange = onVolcengineContextChange,
+                        label = { Text(stringResource(R.string.settings_tts_volcengine_context)) },
+                        placeholder = {
+                            Text(stringResource(R.string.settings_tts_volcengine_context_placeholder))
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 2,
+                        maxLines = 4,
+                    )
+                }
+                Text(
+                    stringResource(R.string.settings_tts_volcengine_pitch_format, volcenginePitch),
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                Slider(
+                    value = volcenginePitch.coerceIn(-12, 12).toFloat(),
+                    onValueChange = { onVolcenginePitchChange(it.roundToInt()) },
+                    valueRange = -12f..12f,
+                    steps = 23,
+                )
+            }
+            TtsProvider.MINIMAX -> {
+                TtsOptionDropdown(
+                    label = stringResource(R.string.settings_tts_model),
+                    value = miniMaxModel,
+                    options = MiniMaxTtsModel.entries,
+                    optionLabel = MiniMaxTtsModel::apiId,
+                    onValueChange = onMiniMaxModelChange,
+                )
+                TtsApiBaseUrlSelector(
+                    value = miniMaxBaseUrl,
+                    options = listOf(
+                        TtsApiBaseUrlOption(
+                            stringResource(R.string.settings_tts_endpoint_minimax_cn),
+                            DEFAULT_MINIMAX_TTS_BASE_URL,
+                        ),
+                        TtsApiBaseUrlOption(
+                            stringResource(R.string.settings_tts_endpoint_minimax_cn_low_latency),
+                            MINIMAX_CN_LOW_LATENCY_BASE_URL,
+                        ),
+                        TtsApiBaseUrlOption(
+                            stringResource(R.string.settings_tts_endpoint_minimax_global),
+                            MINIMAX_GLOBAL_BASE_URL,
+                        ),
+                        TtsApiBaseUrlOption(
+                            stringResource(R.string.settings_tts_endpoint_minimax_global_low_latency),
+                            MINIMAX_GLOBAL_LOW_LATENCY_BASE_URL,
+                        ),
+                    ),
+                    onValueChange = onMiniMaxBaseUrlChange,
+                    endpointResolver = ::miniMaxTtsEndpointUrlOrNull,
+                    showSelectedUrl = false,
+                    showResolvedEndpoint = false,
+                )
+                SecretTextField(
+                    value = miniMaxApiKey,
+                    onValueChange = onMiniMaxApiKeyChange,
+                    label = stringResource(R.string.settings_tts_api_key),
+                    placeholder = stringResource(R.string.settings_tts_api_key_placeholder),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                MiniMaxVoiceField(
+                    value = miniMaxVoice,
+                    onValueChange = onMiniMaxVoiceChange,
+                    baseUrl = miniMaxBaseUrl,
+                    apiKey = miniMaxApiKey,
+                    onLoadManagedVoices = onLoadMiniMaxManagedVoices,
+                    onCloneVoice = onCloneMiniMaxVoice,
+                    onDesignVoice = onDesignMiniMaxVoice,
+                    onPlayTrialAudio = onPlayMiniMaxTrialAudio,
+                    onGenerateVoiceDescription = onGenerateMiniMaxVoiceDescription,
+                    onDeleteVoice = onDeleteMiniMaxVoice,
+                    previewLanguageTag = previewLanguageTag,
+                    onTestTextChange = onTestTextChange,
+                    onPreviewVoice = onPreviewMiniMaxVoice,
+                )
+                TtsEmotionField(miniMaxEmotion, onMiniMaxEmotionChange)
+                Text(
+                    stringResource(R.string.settings_tts_speed_format, miniMaxSpeed),
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                Slider(
+                    value = miniMaxSpeed.coerceIn(0.5f, 2.0f),
+                    onValueChange = onMiniMaxSpeedChange,
+                    valueRange = 0.5f..2.0f,
+                    steps = 14,
+                )
+                Text(
+                    stringResource(R.string.settings_tts_minimax_pitch_format, miniMaxPitch),
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                Slider(
+                    value = miniMaxPitch.coerceIn(-12, 12).toFloat(),
+                    onValueChange = { onMiniMaxPitchChange(it.roundToInt()) },
+                    valueRange = -12f..12f,
+                    steps = 23,
+                )
+            }
+            TtsProvider.MIMO -> {
+                Text(
+                    stringResource(R.string.settings_tts_model),
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    EngineChip(mimoModel, MimoTtsModel.PRESET, stringResource(R.string.settings_tts_mimo_preset), onSelect = onMimoModelChange)
+                    EngineChip(mimoModel, MimoTtsModel.VOICE_DESIGN, stringResource(R.string.settings_tts_mimo_voice_design), onSelect = onMimoModelChange)
+                    EngineChip(mimoModel, MimoTtsModel.VOICE_CLONE, stringResource(R.string.settings_tts_mimo_voice_clone), onSelect = onMimoModelChange)
+                }
+                Text(
+                    mimoModel.apiId,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                TtsApiBaseUrlSelector(
+                    value = mimoBaseUrl,
+                    options = listOf(
+                        TtsApiBaseUrlOption(
+                            stringResource(R.string.settings_tts_endpoint_mimo_official),
+                            DEFAULT_MIMO_TTS_BASE_URL,
+                        ),
+                        TtsApiBaseUrlOption(
+                            stringResource(R.string.settings_tts_endpoint_mimo_token_plan_cn),
+                            MIMO_TOKEN_PLAN_CN_BASE_URL,
+                        ),
+                        TtsApiBaseUrlOption(
+                            stringResource(R.string.settings_tts_endpoint_mimo_token_plan_sgp),
+                            MIMO_TOKEN_PLAN_SGP_BASE_URL,
+                        ),
+                        TtsApiBaseUrlOption(
+                            stringResource(R.string.settings_tts_endpoint_mimo_token_plan_eu),
+                            MIMO_TOKEN_PLAN_EU_BASE_URL,
+                        ),
+                    ),
+                    onValueChange = onMimoBaseUrlChange,
+                    endpointResolver = ::mimoTtsEndpointUrlOrNull,
+                    showSelectedUrl = false,
+                    showResolvedEndpoint = false,
+                )
+                if (isMimoTokenPlanBaseUrl(mimoBaseUrl)) {
+                    Text(
+                        text = stringResource(R.string.settings_tts_mimo_token_plan_restriction),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                SecretTextField(
+                    value = mimoApiKey,
+                    onValueChange = onMimoApiKeyChange,
+                    label = stringResource(R.string.settings_tts_api_key),
+                    placeholder = stringResource(R.string.settings_tts_api_key_placeholder),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                when (mimoModel) {
+                    MimoTtsModel.PRESET -> {
+                        TtsOptionDropdown(
+                            label = stringResource(R.string.settings_tts_voice),
+                            value = mimoVoice.ifBlank { "mimo_default" },
+                            options = MIMO_PRESET_VOICES,
+                            optionLabel = { it },
+                            onValueChange = onMimoVoiceChange,
+                        )
+                        MimoStyleInstructionEditor(
+                            value = mimoInstruction,
+                            onValueChange = onMimoInstructionChange,
+                            generating = mimoStyleGenerating,
+                            message = mimoStyleMessage,
+                            onPolish = {
+                                onPolishMimoStyle(MimoTtsModel.PRESET, mimoInstruction)
+                            },
+                        )
+                    }
+                    MimoTtsModel.VOICE_DESIGN -> {
+                        OutlinedTextField(
+                            value = mimoVoiceDesignPrompt,
+                            onValueChange = onMimoVoiceDesignPromptChange,
+                            label = { Text(stringResource(R.string.settings_tts_mimo_voice_description)) },
+                            placeholder = {
+                                Text(stringResource(R.string.settings_tts_mimo_voice_description_placeholder))
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            minLines = 2,
+                            maxLines = 4,
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            OutlinedButton(
+                                onClick = { onGenerateMimoVoiceDesign(mimoVoiceDesignPrompt) },
+                                enabled = canGenerateVoiceDesignPrompt(
+                                    mimoVoiceDesignPrompt,
+                                    mimoVoiceDesignGenerating,
+                                ),
+                            ) {
+                                if (mimoVoiceDesignGenerating) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        strokeWidth = 2.dp,
+                                    )
+                                } else {
+                                    Icon(Icons.Default.AutoAwesome, contentDescription = null)
+                                }
+                                Text(
+                                    stringResource(
+                                        if (mimoVoiceDesignGenerating) {
+                                            R.string.settings_tts_mimo_ai_generating
+                                        } else {
+                                            R.string.settings_tts_mimo_ai_generate
+                                        }
+                                    ),
+                                    modifier = Modifier.padding(start = 8.dp),
+                                )
+                            }
+                            SettingHelpTooltip(
+                                text = stringResource(R.string.settings_tts_mimo_ai_generate_hint)
+                            )
+                        }
+                        mimoVoiceDesignMessage?.let { message ->
+                            Text(
+                                text = message,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                    }
+                    MimoTtsModel.VOICE_CLONE -> {
+                        MimoStyleInstructionEditor(
+                            value = mimoVoiceCloneInstruction,
+                            onValueChange = onMimoVoiceCloneInstructionChange,
+                            generating = mimoStyleGenerating,
+                            message = mimoStyleMessage,
+                            onPolish = {
+                                onPolishMimoStyle(
+                                    MimoTtsModel.VOICE_CLONE,
+                                    mimoVoiceCloneInstruction,
+                                )
+                            },
+                        )
+                    }
+                }
+                if (mimoModel == MimoTtsModel.VOICE_CLONE) {
+                    val selectedReference = when (mimoVoiceSampleUri) {
+                        MIMO_BUILTIN_VOICE_REFERENCE_1,
+                        MIMO_BUILTIN_VOICE_REFERENCE_2 -> mimoVoiceSampleUri
+                        else -> MIMO_CUSTOM_VOICE_REFERENCE
+                    }
+                    val referenceLabels = mapOf(
+                        MIMO_BUILTIN_VOICE_REFERENCE_1 to
+                            stringResource(R.string.settings_tts_mimo_builtin_sample_1),
+                        MIMO_BUILTIN_VOICE_REFERENCE_2 to
+                            stringResource(R.string.settings_tts_mimo_builtin_sample_2),
+                        MIMO_CUSTOM_VOICE_REFERENCE to
+                            stringResource(R.string.settings_tts_mimo_custom_sample),
+                    )
+                    TtsOptionDropdown(
+                        label = stringResource(R.string.settings_tts_mimo_sample_source),
+                        value = selectedReference,
+                        options = MIMO_VOICE_REFERENCE_OPTIONS,
+                        optionLabel = { option -> referenceLabels[option].orEmpty() },
+                        onValueChange = { option ->
+                            if (option == MIMO_CUSTOM_VOICE_REFERENCE) {
+                                mimoVoiceSampleLauncher.launch(
+                                    arrayOf("audio/mpeg", "audio/wav", "audio/x-wav")
+                                )
+                            } else {
+                                onMimoVoiceSampleUriChange(option)
+                            }
+                        },
+                    )
+                    if (selectedReference == MIMO_CUSTOM_VOICE_REFERENCE) {
+                    Text(
+                        text = mimoVoiceSampleUri.takeIf(String::isNotBlank)
+                            ?.let { Uri.parse(it).lastPathSegment }
+                            ?: stringResource(R.string.settings_tts_mimo_no_sample),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = { mimoVoiceSampleLauncher.launch(arrayOf("audio/mpeg", "audio/wav", "audio/x-wav")) },
+                        ) {
+                            Icon(Icons.Default.AudioFile, contentDescription = null)
+                            Text(
+                                stringResource(R.string.settings_tts_mimo_select_sample),
+                                modifier = Modifier.padding(start = 8.dp),
+                            )
+                        }
+                        if (mimoVoiceSampleUri.isNotBlank()) {
+                            IconButton(onClick = {
+                                onMimoVoiceSampleUriChange(MIMO_BUILTIN_VOICE_REFERENCE_1)
+                            }) {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = stringResource(R.string.settings_tts_mimo_clear_sample),
+                                )
+                            }
+                        }
+                    }
+                    }
+                    Text(
+                        stringResource(R.string.settings_tts_mimo_sample_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+        if (supportsTtsPlaybackGain(provider)) {
+            val normalizedGainDb = normalizedTtsPlaybackGainDb(gainDb)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    stringResource(R.string.settings_tts_gain_format, normalizedGainDb),
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                SettingHelpTooltip(text = stringResource(R.string.settings_tts_gain_hint))
+            }
+            Slider(
+                value = normalizedGainDb.toFloat(),
+                onValueChange = { onGainDbChange(it.roundToInt()) },
+                valueRange = MIN_TTS_PLAYBACK_GAIN_DB.toFloat()..
+                    MAX_TTS_PLAYBACK_GAIN_DB.toFloat(),
+                steps = MAX_TTS_PLAYBACK_GAIN_DB - MIN_TTS_PLAYBACK_GAIN_DB - 1,
+            )
+        }
+        HorizontalDivider()
+        if (ttsTestMayIncurCharges(provider)) {
+            Text(
+                stringResource(R.string.settings_tts_test_cost_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        OutlinedTextField(
+            value = testText,
+            onValueChange = onTestTextChange,
+            label = { Text(stringResource(R.string.settings_tts_test_text)) },
+            placeholder = { Text(stringResource(R.string.settings_tts_test_text_placeholder)) },
+            modifier = Modifier.fillMaxWidth(),
+            minLines = 2,
+            maxLines = 4,
+        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedButton(
+                onClick = { onTest(testText) },
+                enabled = testText.isNotBlank() && !testRunning,
+            ) {
+                Text(
+                    if (testRunning) {
+                        stringResource(R.string.settings_tts_test_testing)
+                    } else {
+                        stringResource(R.string.settings_tts_test_action)
+                    }
+                )
+            }
+            if (testRunning) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    strokeWidth = 2.dp,
+                )
+            }
+        }
+        testMessage?.let { message ->
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (testSuccess) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.error
+                },
+            )
+        }
+    }
+}
+
+private val MIMO_PRESET_VOICES = listOf(
+    "mimo_default",
+    "冰糖",
+    "茉莉",
+    "苏打",
+    "白桦",
+    "Mia",
+    "Chloe",
+    "Milo",
+    "Dean",
+)
+
+private const val MIMO_CUSTOM_VOICE_REFERENCE = "custom:mimo_voice_reference"
+
+private val MIMO_VOICE_REFERENCE_OPTIONS = listOf(
+    MIMO_BUILTIN_VOICE_REFERENCE_1,
+    MIMO_BUILTIN_VOICE_REFERENCE_2,
+    MIMO_CUSTOM_VOICE_REFERENCE,
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SystemTtsVoicePicker(
+    value: String,
+    voices: List<SystemTtsVoiceOption>,
+    loading: Boolean,
+    error: String?,
+    onValueChange: (String) -> Unit,
+    onRefresh: () -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val selectedVoice = voices.firstOrNull { it.name.equals(value.trim(), ignoreCase = true) }
+    val selectedVoiceConnection = selectedVoice?.let { voice ->
+        stringResource(
+            if (voice.networkConnectionRequired) {
+                R.string.settings_tts_system_voice_network
+            } else {
+                R.string.settings_tts_system_voice_offline
+            }
+        )
+    }
+    val selectedLabel = when {
+        value.isBlank() -> stringResource(R.string.settings_tts_system_voice_default)
+        selectedVoice != null -> selectedVoice.name
+        else -> stringResource(R.string.settings_tts_system_voice_unavailable, value.trim())
+    }
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        ExposedDropdownMenuBox(
+            expanded = expanded,
+            onExpandedChange = { expanded = it },
+            modifier = Modifier.weight(1f),
+        ) {
+            OutlinedTextField(
+                value = selectedLabel,
+                onValueChange = {},
+                readOnly = true,
+                singleLine = true,
+                label = { Text(stringResource(R.string.settings_tts_system_voice)) },
+                supportingText = selectedVoice?.let { voice ->
+                    { Text("${voice.localeTag} - $selectedVoiceConnection") }
+                },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+                modifier = Modifier
+                    .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                    .fillMaxWidth(),
+            )
+            ExposedDropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+            ) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.settings_tts_system_voice_default)) },
+                    onClick = {
+                        expanded = false
+                        onValueChange("")
+                    },
+                )
+                voices.forEach { voice ->
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text(voice.name)
+                                Text(
+                                    "${voice.localeTag} - " + stringResource(
+                                        if (voice.networkConnectionRequired) {
+                                            R.string.settings_tts_system_voice_network
+                                        } else {
+                                            R.string.settings_tts_system_voice_offline
+                                        }
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        },
+                        onClick = {
+                            expanded = false
+                            onValueChange(voice.name)
+                        },
+                    )
+                }
+            }
+        }
+        TooltipBox(
+            positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+            tooltip = {
+                PlainTooltip { Text(stringResource(R.string.settings_tts_system_voice_refresh)) }
+            },
+            state = rememberTooltipState(),
+        ) {
+            IconButton(
+                onClick = onRefresh,
+                enabled = !loading,
+                modifier = Modifier.size(48.dp),
+            ) {
+                if (loading) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = stringResource(R.string.settings_tts_system_voice_refresh),
+                    )
+                }
+            }
+        }
+    }
+
+    when {
+        error != null -> Text(
+            text = stringResource(R.string.settings_tts_system_voice_error, error),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+        !loading && voices.isEmpty() -> Text(
+            text = stringResource(R.string.settings_tts_system_voice_empty),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun TtsVoiceField(value: String, onValueChange: (String) -> Unit) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(stringResource(R.string.settings_tts_voice)) },
+        placeholder = { Text(stringResource(R.string.settings_tts_voice_placeholder)) },
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+    )
+}
+
+@Composable
+private fun TtsEmotionField(value: String, onValueChange: (String) -> Unit) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(stringResource(R.string.settings_tts_emotion)) },
+        placeholder = { Text(stringResource(R.string.settings_tts_emotion_placeholder)) },
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+    )
+}
+
+@Composable
+private fun TtsSpeedPitchControls(
+    speed: Float,
+    onSpeedChange: (Float) -> Unit,
+    pitch: Float,
+    onPitchChange: (Float) -> Unit,
+) {
+    Text(
+        stringResource(R.string.settings_tts_speed_format, speed),
+        style = MaterialTheme.typography.labelLarge,
+    )
+    Slider(
+        value = speed.coerceIn(0.25f, 4.0f),
+        onValueChange = onSpeedChange,
+        valueRange = 0.25f..4.0f,
+        steps = 14,
+    )
+    Text(
+        stringResource(R.string.settings_tts_pitch_format, pitch),
+        style = MaterialTheme.typography.labelLarge,
+    )
+    Slider(
+        value = pitch.coerceIn(0.25f, 4.0f),
+        onValueChange = onPitchChange,
+        valueRange = 0.25f..4.0f,
+        steps = 14,
+    )
+}
+
+@Composable
+private fun MimoStyleInstructionEditor(
+    value: String,
+    onValueChange: (String) -> Unit,
+    generating: Boolean,
+    message: String?,
+    onPolish: () -> Unit,
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(stringResource(R.string.settings_tts_mimo_style_instruction)) },
+        placeholder = {
+            Text(stringResource(R.string.settings_tts_mimo_style_instruction_placeholder))
+        },
+        modifier = Modifier.fillMaxWidth(),
+        minLines = 2,
+        maxLines = 6,
+    )
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        OutlinedButton(
+            onClick = onPolish,
+            enabled = canPolishMimoStyleInstruction(value, generating),
+        ) {
+            if (generating) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    strokeWidth = 2.dp,
+                )
+            } else {
+                Icon(Icons.Default.AutoAwesome, contentDescription = null)
+            }
+            Text(
+                stringResource(
+                    if (generating) {
+                        R.string.settings_tts_mimo_ai_polishing
+                    } else {
+                        R.string.settings_tts_mimo_ai_polish
+                    }
+                ),
+                modifier = Modifier.padding(start = 8.dp),
+            )
+        }
+        SettingHelpDialogButton(
+            title = stringResource(R.string.settings_tts_mimo_style_help_title),
+            text = stringResource(R.string.settings_tts_mimo_style_help),
+        )
+    }
+    message?.let {
+        Text(
+            text = it,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+    }
+}
+
+private data class TtsApiBaseUrlOption(
+    val label: String,
+    val baseUrl: String,
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TtsApiBaseUrlSelector(
+    value: String,
+    options: List<TtsApiBaseUrlOption>,
+    onValueChange: (String) -> Unit,
+    endpointResolver: (String) -> String?,
+    showSelectedUrl: Boolean = true,
+    showResolvedEndpoint: Boolean = true,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    var forceCustom by remember { mutableStateOf(false) }
+    val normalized = value.trim().trimEnd('/')
+    val matched = options.firstOrNull {
+        it.baseUrl.trimEnd('/').equals(normalized, ignoreCase = true)
+    }
+    val customSelected = forceCustom || matched == null
+    val selectedLabel = matched?.label
+        ?.takeUnless { customSelected }
+        ?: stringResource(R.string.settings_tts_endpoint_custom)
+
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = it },
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        OutlinedTextField(
+            value = selectedLabel,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text(stringResource(R.string.settings_tts_endpoint_plan)) },
+            supportingText = value.takeIf { showSelectedUrl && it.isNotBlank() }?.let { current ->
+                { Text(current, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+            modifier = Modifier
+                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                .fillMaxWidth(),
+            singleLine = true,
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+        ) {
+            options.forEach { option ->
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(option.label)
+                            Text(
+                                option.baseUrl,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    },
+                    onClick = {
+                        expanded = false
+                        forceCustom = false
+                        onValueChange(option.baseUrl)
+                    },
+                )
+            }
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.settings_tts_endpoint_custom)) },
+                onClick = {
+                    expanded = false
+                    forceCustom = true
+                },
+            )
+        }
+    }
+
+    if (customSelected) {
+        val customEndpointValid = endpointResolver(value) != null
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            label = { Text(stringResource(R.string.settings_tts_api_base_url)) },
+            placeholder = { Text(stringResource(R.string.settings_tts_api_base_url_placeholder)) },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            isError = value.isNotBlank() && !customEndpointValid,
+        )
+    }
+
+    if (showResolvedEndpoint) {
+        val endpoint = endpointResolver(value)
+        Text(
+            text = if (endpoint != null) {
+                stringResource(R.string.settings_tts_resolved_endpoint, endpoint)
+            } else {
+                stringResource(R.string.settings_tts_invalid_base_url)
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = if (endpoint != null) {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            } else {
+                MaterialTheme.colorScheme.error
+            },
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun <T> TtsOptionDropdown(
+    label: String,
+    value: T,
+    options: List<T>,
+    optionLabel: (T) -> String,
+    onValueChange: (T) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = !expanded },
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        OutlinedTextField(
+            value = optionLabel(value),
+            onValueChange = {},
+            readOnly = true,
+            label = { Text(label) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+            modifier = Modifier
+                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                .fillMaxWidth(),
+            singleLine = true,
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+        ) {
+            options.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(optionLabel(option)) },
+                    onClick = {
+                        expanded = false
+                        onValueChange(option)
+                    },
+                )
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun TranslationAssistanceSettings(
@@ -4600,6 +6594,8 @@ private fun TranslationAssistanceSettings(
     translatorEngine: TranslatorEngine,
     streaming: Boolean,
     onStreamingChange: (Boolean) -> Unit,
+    crossLineContextTranslationEnabled: Boolean,
+    onCrossLineContextTranslationEnabledChange: (Boolean) -> Unit,
     glossaryEnabled: Boolean,
     onGlossaryEnabledChange: (Boolean) -> Unit,
     foregroundAppDetectionMode: com.gameocr.app.data.ForegroundAppDetectionMode,
@@ -4612,10 +6608,20 @@ private fun TranslationAssistanceSettings(
     retryEmptyTranslation: Boolean,
     onRetryEmptyTranslationChange: (Boolean) -> Unit,
 ) {
-    if (translatorEngine == TranslatorEngine.OPENAI) {
+    if (translatorEngine == TranslatorEngine.OPENAI ||
+        translatorEngine == TranslatorEngine.ANTHROPIC
+    ) {
         SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_streaming) {
         SwitchRow(stringResource(R.string.settings_streaming), streaming, onChange = onStreamingChange)
         }
+    }
+    SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_cross_line_context) {
+    SwitchRow(
+        label = stringResource(R.string.settings_cross_line_context_translation),
+        checked = crossLineContextTranslationEnabled,
+        helpText = stringResource(R.string.settings_cross_line_context_translation_hint),
+        onChange = onCrossLineContextTranslationEnabledChange,
+    )
     }
     SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_empty_translation_retry) {
     SwitchRow(
@@ -5303,6 +7309,7 @@ private fun overlayThemeColors(
 /** 搜索可用的 section key 常量。和 [SETTING_ITEMS] 的 sectionKey 对齐。 */
 private object SectionKeys {
     const val TRANSLATE = "translate"
+    const val TTS = "tts"
     const val PRESETS = "presets"
     const val OCR = "ocr"
     const val TEXT_ORIENTATION = "text_orientation"
@@ -5322,6 +7329,7 @@ internal val SETTINGS_SECTION_KEYS_IN_ORDER = listOf(
     SectionKeys.THEME_MODE,
     SectionKeys.PRESETS,
     SectionKeys.TRANSLATE,
+    SectionKeys.TTS,
     SectionKeys.OCR,
     SectionKeys.TEXT_ORIENTATION,
     SectionKeys.PREPROCESS,
@@ -5350,11 +7358,15 @@ private val SEARCH_TARGET_TRANSLATOR_PROVIDERS = intArrayOf(
     R.string.settings_search_item_base_url,
     R.string.settings_search_item_api_key,
     R.string.settings_search_item_model_name,
+    R.string.settings_search_item_anthropic_base_url,
+    R.string.settings_search_item_anthropic_api_key,
+    R.string.settings_search_item_anthropic_model,
     R.string.settings_search_item_deepl_api_key,
     R.string.settings_search_item_deepl_pro,
     R.string.settings_search_item_deepl_advanced,
     R.string.settings_search_item_youdao_pictrans,
     R.string.settings_search_item_google,
+    R.string.settings_search_item_google_mlkit,
     R.string.settings_search_item_volc,
     R.string.settings_search_item_baidu_fanyi,
     R.string.settings_search_item_tencent_translator,
@@ -5369,6 +7381,12 @@ private val SEARCH_TARGET_TRANSLATION_ASSISTANCE = intArrayOf(
     R.string.settings_send_app_name,
     R.string.settings_grant_usage_access,
     R.string.settings_manage_glossary,
+)
+private val SEARCH_TARGET_TTS = intArrayOf(
+    R.string.settings_section_tts,
+    R.string.settings_search_item_tts_enable,
+    R.string.settings_search_item_tts_provider,
+    R.string.settings_search_item_tts_http,
 )
 private val SEARCH_TARGET_PROMPTS = intArrayOf(
     R.string.settings_search_item_prompt,
@@ -5447,7 +7465,10 @@ private val SEARCH_TARGET_TRIGGER = intArrayOf(
     R.string.settings_search_item_loop_region,
     R.string.settings_search_item_a11y_volume,
 )
-private val SEARCH_TARGET_DEVELOPER = intArrayOf(R.string.settings_search_item_developer_ocr)
+private val SEARCH_TARGET_DEVELOPER = intArrayOf(
+    R.string.settings_search_item_developer_ocr,
+    R.string.settings_search_item_cross_line_context,
+)
 private val SEARCH_TARGET_NETWORK = intArrayOf(
     R.string.settings_search_item_api_timeout,
     R.string.settings_search_item_llm_mirror,
@@ -5463,6 +7484,7 @@ internal val SETTINGS_SEARCH_TARGET_RES_IDS: Set<Int> = listOf(
     SEARCH_TARGET_SOURCE_LANGUAGE,
     SEARCH_TARGET_TARGET_LANGUAGE,
     SEARCH_TARGET_TRANSLATION_ASSISTANCE,
+    SEARCH_TARGET_TTS,
     SEARCH_TARGET_PROMPTS,
     SEARCH_TARGET_OCR_ENGINE,
     SEARCH_TARGET_ORIENTATION_DETECTION,
@@ -5620,6 +7642,30 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
         R.string.settings_search_item_empty_translation_retry,
         SETTINGS_SEARCH_EMPTY_TRANSLATION_RETRY_KEYWORDS,
     ),
+    SearchEntry(
+        SectionKeys.TTS,
+        R.string.settings_section_tts,
+        R.string.settings_section_tts,
+        listOf("tts", "text to speech", "voice output", "语音", "朗读"),
+    ),
+    SearchEntry(
+        SectionKeys.TTS,
+        R.string.settings_section_tts,
+        R.string.settings_search_item_tts_enable,
+        listOf("tts", "text to speech", "speak", "voice output", "read aloud", "语音", "朗读", "播报"),
+    ),
+    SearchEntry(
+        SectionKeys.TTS,
+        R.string.settings_section_tts,
+        R.string.settings_search_item_tts_provider,
+        listOf("system tts", "android tts", "generic http", "luna", "pc", "volcengine", "aliyun", "火山", "阿里", "音色", "情绪"),
+    ),
+    SearchEntry(
+        SectionKeys.TTS,
+        R.string.settings_section_tts,
+        R.string.settings_search_item_tts_http,
+        listOf("tts url", "tts token", "http tts", "gateway", "adapter", "base url", "json base64", "binary audio", "本地网关", "适配器"),
+    ),
     SearchEntry(SectionKeys.PRESETS, R.string.settings_section_translation_presets, R.string.settings_section_translation_presets, listOf("preset", "presets", "profile", "mode", "系统预设方案", "翻译预设", "预设", "模式")),
     SearchEntry(SectionKeys.PRESETS, R.string.settings_section_translation_presets, R.string.settings_search_item_preset_transfer, SETTINGS_SEARCH_TRANSFER_KEYWORDS),
 
@@ -5631,9 +7677,14 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
         listOf("OpenAI", "DeepL", "LLM", "翻译引擎"),
         optionLabelResIds = listOf(
             R.string.settings_engine_openai_llm,
+            R.string.settings_engine_anthropic_llm,
             R.string.settings_engine_deepl,
             R.string.settings_engine_youdao_pictrans,
             R.string.settings_engine_google,
+            R.string.settings_on_device_translation_english,
+            R.string.settings_ocr_chip_chinese,
+            R.string.settings_ocr_chip_japanese,
+            R.string.settings_ocr_chip_korean,
             R.string.settings_engine_volc,
             R.string.settings_engine_baidu_fanyi,
             R.string.settings_engine_tencent,
@@ -5644,11 +7695,15 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_base_url, listOf("base url"), requiredTranslatorEngine = TranslatorEngine.OPENAI),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_api_key, listOf("api key"), requiredTranslatorEngine = TranslatorEngine.OPENAI),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_model_name, listOf("model", "模型名"), requiredTranslatorEngine = TranslatorEngine.OPENAI),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_anthropic_base_url, listOf("anthropic", "claude", "messages api", "base url"), requiredTranslatorEngine = TranslatorEngine.ANTHROPIC),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_anthropic_api_key, listOf("anthropic", "claude", "x-api-key"), requiredTranslatorEngine = TranslatorEngine.ANTHROPIC),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_anthropic_model, listOf("anthropic", "claude", "model", "模型名"), requiredTranslatorEngine = TranslatorEngine.ANTHROPIC),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_deepl_api_key, listOf("deepl"), requiredTranslatorEngine = TranslatorEngine.DEEPL),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_deepl_pro, listOf("deepl pro"), requiredTranslatorEngine = TranslatorEngine.DEEPL),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_deepl_advanced, listOf("deeplx", "bearer", "official", "protocol", "自架", "高级", "协议", "deepl base url"), requiredTranslatorEngine = TranslatorEngine.DEEPL),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_youdao_pictrans, listOf("youdao", "有道", "图片翻译", "pictrans", "ocrtransapi", "端到端"), requiredTranslatorEngine = TranslatorEngine.YOUDAO_PICTRANS),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_google, listOf("google", "谷歌", "translate"), requiredTranslatorEngine = TranslatorEngine.GOOGLE),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_google_mlkit, listOf("google ml kit", "mlkit", "on-device", "offline", "端侧", "离线"), requiredTranslatorEngine = TranslatorEngine.GOOGLE_ML_KIT),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_volc, listOf("volc", "volcengine", "火山", "字节", "doubao", "bytedance", "access key", "AK", "SK", "region", "区域"), requiredTranslatorEngine = TranslatorEngine.VOLC),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_baidu_fanyi, listOf("baidu fanyi", "百度翻译", "fanyi-api", "appid", "开放平台"), requiredTranslatorEngine = TranslatorEngine.BAIDU_FANYI),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_tencent_translator, listOf("tencent", "腾讯", "tmt", "tmtcloud", "腾讯云翻译"), requiredTranslatorEngine = TranslatorEngine.TENCENT),
@@ -5657,6 +7712,7 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_prompt, listOf("prompt", "提示词", "system")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_dictionary_prompt, listOf("dictionary", "词典", "划词", "word select", "phonetic", "音标", "释义", "definition", "prompt")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_streaming, listOf("streaming", "流式")),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_cross_line_context, listOf("cross context", "cross line", "上下文", "跨上下文", "段落")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_glossary_enabled, listOf("name consistency", "term memory", "译名一致性", "人名", "专名")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_send_app_name, listOf("send app name", "prompt app context", "发送应用名称", "模型应用名称")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_foreground_app_detection, listOf("app detection", "foreground app", "accessibility", "usage access", "应用识别", "前台应用")),
@@ -6384,15 +8440,23 @@ private fun translationPresetSummary(preset: TranslationPreset): String {
         ocrEngineLabel(preset.ocrEngine),
         presetLlmLabel(preset),
         Languages.nameOf(context, preset.sourceLang),
-        Languages.nameOf(context, preset.targetLang)
+        Languages.nameOf(context, preset.targetLang),
+        stringResource(ttsPresetSummaryLabelRes(preset.ttsEnabled, preset.ttsProvider)),
     )
 }
 
 @Composable
 private fun presetLlmLabel(preset: TranslationPreset): String = when (preset.translatorEngine) {
     TranslatorEngine.OPENAI -> preset.model.ifBlank { stringResource(R.string.settings_engine_openai_llm) }
+    TranslatorEngine.ANTHROPIC -> preset.anthropicModel.ifBlank {
+        stringResource(R.string.settings_engine_anthropic_llm)
+    }
     TranslatorEngine.LOCAL_SAKURA -> stringResource(R.string.settings_engine_local_sakura)
     TranslatorEngine.LOCAL_HY_MT2 -> stringResource(R.string.settings_engine_local_hymt2)
+    TranslatorEngine.GOOGLE_ML_KIT -> stringResource(
+        MlKitQuickSourceLanguage.fromLanguageTag(preset.sourceLang)?.labelRes
+            ?: R.string.settings_translator_group_on_device
+    )
     else -> translatorEngineLabel(preset.translatorEngine)
 }
 
@@ -6419,9 +8483,11 @@ private fun ocrEngineLabel(engine: OcrEngineKind): String = stringResource(
 private fun translatorEngineLabel(engine: TranslatorEngine): String = stringResource(
     when (engine) {
         TranslatorEngine.OPENAI -> R.string.settings_engine_openai_llm
+        TranslatorEngine.ANTHROPIC -> R.string.settings_engine_anthropic_llm
         TranslatorEngine.DEEPL -> R.string.settings_engine_deepl
         TranslatorEngine.YOUDAO_PICTRANS -> R.string.settings_engine_youdao_pictrans
         TranslatorEngine.GOOGLE -> R.string.settings_engine_google
+        TranslatorEngine.GOOGLE_ML_KIT -> R.string.settings_translator_group_on_device
         TranslatorEngine.VOLC -> R.string.settings_engine_volc
         TranslatorEngine.BAIDU_FANYI -> R.string.settings_engine_baidu_fanyi
         TranslatorEngine.TENCENT -> R.string.settings_engine_tencent
@@ -6544,7 +8610,7 @@ private fun SectionCard(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SettingHelpTooltip(
+internal fun SettingHelpTooltip(
     text: String,
     modifier: Modifier = Modifier
 ) {
@@ -6580,6 +8646,45 @@ private fun SettingHelpTooltip(
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+    }
+}
+
+@Composable
+private fun SettingHelpDialogButton(
+    title: String,
+    text: String,
+    modifier: Modifier = Modifier,
+) {
+    var visible by remember { mutableStateOf(false) }
+    IconButton(
+        onClick = { visible = true },
+        modifier = modifier.size(32.dp),
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.HelpOutline,
+            contentDescription = stringResource(R.string.settings_help_content_description),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    if (visible) {
+        AlertDialog(
+            onDismissRequest = { visible = false },
+            title = { Text(title) },
+            text = {
+                Text(
+                    text = text,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier
+                        .heightIn(max = 520.dp)
+                        .verticalScroll(rememberScrollState()),
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { visible = false }) {
+                    Text(stringResource(R.string.common_close))
+                }
+            },
+        )
     }
 }
 
@@ -6937,6 +9042,44 @@ private sealed class OcrLangIssue {
         val recommendedSourceCode: String
     ) : OcrLangIssue()
 }
+
+/** Four OCR-oriented shortcuts for the explicit source required by on-device translation. */
+internal enum class MlKitQuickSourceLanguage(
+    val languageTag: String,
+    @androidx.annotation.StringRes val labelRes: Int,
+) {
+    ENGLISH("en", R.string.settings_on_device_translation_english),
+    CHINESE("zh-CN", R.string.settings_ocr_chip_chinese),
+    JAPANESE("ja", R.string.settings_ocr_chip_japanese),
+    KOREAN("ko", R.string.settings_ocr_chip_korean);
+
+    fun matches(languageTag: String): Boolean = when (this) {
+        ENGLISH -> languageTag.equals("en", ignoreCase = true) ||
+            languageTag.startsWith("en-", ignoreCase = true)
+        CHINESE -> languageTag.equals("zh", ignoreCase = true) ||
+            languageTag.startsWith("zh-", ignoreCase = true)
+        JAPANESE -> languageTag.equals("ja", ignoreCase = true) ||
+            languageTag.startsWith("ja-", ignoreCase = true)
+        KOREAN -> languageTag.equals("ko", ignoreCase = true) ||
+            languageTag.startsWith("ko-", ignoreCase = true)
+    }
+
+    companion object {
+        fun fromLanguageTag(languageTag: String): MlKitQuickSourceLanguage? =
+            entries.firstOrNull { it.matches(languageTag) }
+    }
+}
+
+internal val mlKitLanguagePickerCodes: Set<String> = Languages.ALL
+    .asSequence()
+    .map { it.code }
+    .filter(MlKitLanguagePolicy::isSupportedLanguageTag)
+    .toSet()
+
+internal data class MlKitMissingModelsPrompt(
+    val pair: Pair<String, String>,
+    val missingLanguages: Set<String>,
+)
 
 internal enum class OpenAiFallbackField {
     BASE_URL,

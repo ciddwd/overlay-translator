@@ -733,11 +733,25 @@ class MangaOcrEngine @Inject constructor(
             }
         }
 
-        // Tiles run at full resolution. Put them first so duplicate suppression keeps the finer box.
-        val merged = dedupePaddleQuads(tiled + base)
+        // Keep the full-page result as the structural anchor. Tiled detections may recover isolated
+        // text, but an overlapping/nearby tiled box must not bridge or enlarge an existing bubble.
+        val bubbleClusterGap = MangaOcrAdvancedSettingsPolicy.effectiveBubbleClusterGap(
+            settings.bubbleClusterGap
+        )
+        val merged = fuseMangaOcrQuads(
+            base = base,
+            tiled = tiled,
+            anchorGuardGap = bubbleClusterGap,
+        )
         Timber.i(
-            "MangaOcr tiled DBNet: base=%d tiled=%d merged=%d tiles=%d bitmap=%dx%d",
-            base.size, tiled.size, merged.size, tiles.size, bitmap.width, bitmap.height
+            "MangaOcr tiled DBNet: base=%d tiled=%d merged=%d supplements=%d tiles=%d bitmap=%dx%d",
+            base.size,
+            tiled.size,
+            merged.size,
+            (merged.size - dedupePaddleQuads(base).size).coerceAtLeast(0),
+            tiles.size,
+            bitmap.width,
+            bitmap.height,
         )
         return merged
     }

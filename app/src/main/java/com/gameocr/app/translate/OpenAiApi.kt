@@ -10,7 +10,13 @@ internal data class ChatRequest(
     val messages: List<ChatMessage>,
     val temperature: Double = 0.3,
     val stream: Boolean = false,
-    @SerialName("max_tokens") val maxTokens: Int? = null
+    @SerialName("max_tokens") val maxTokens: Int? = null,
+    @SerialName("response_format") val responseFormat: ChatResponseFormat? = null,
+)
+
+@Serializable
+internal data class ChatResponseFormat(
+    val type: String,
 )
 
 @Serializable

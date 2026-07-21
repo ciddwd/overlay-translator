@@ -39,15 +39,16 @@ class SettingsLazyLayoutTest {
             Case("theme_mode", 1),
             Case("presets", 2),
             Case("translate", 3),
-            Case("ocr", 4),
-            Case("text_orientation", 5),
-            Case("preprocess", 6),
-            Case("overlay", 7),
-            Case("floating", 8),
-            Case("arc_menu", 9),
-            Case("trigger", 10),
-            Case("developer", 11),
-            Case("network", 12),
+            Case("tts", 4),
+            Case("ocr", 5),
+            Case("text_orientation", 6),
+            Case("preprocess", 7),
+            Case("overlay", 8),
+            Case("floating", 9),
+            Case("arc_menu", 10),
+            Case("trigger", 11),
+            Case("developer", 12),
+            Case("network", 13),
         ).forEach { case ->
             assertEquals(case.key, case.expectedIndex, settingsSectionIndex(case.key))
         }
@@ -153,6 +154,7 @@ class SettingsLazyLayoutTest {
                 "theme_mode" -> "THEME_MODE"
                 "presets" -> "PRESETS"
                 "translate" -> "TRANSLATE"
+                "tts" -> "TTS"
                 "ocr" -> "OCR"
                 "text_orientation" -> "TEXT_ORIENTATION"
                 "preprocess" -> "PREPROCESS"

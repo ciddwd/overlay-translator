@@ -7,6 +7,49 @@ import org.junit.Test
 class PaddleRecognitionCandidateTest {
 
     @Test
+    fun paddleRecognizedText_tableDriven_preservesAndClampsRecognitionScore() {
+        data class Case(
+            val name: String,
+            val candidate: PaddleRecognitionCandidate?,
+            val expectedText: String,
+            val expectedConfidence: Float,
+        )
+
+        val cases = listOf(
+            Case(
+                name = "logcat period misread as 8 keeps low recognition confidence",
+                candidate = PaddleRecognitionCandidate("8", 0.112f, PaddleCropOrientation.ORIGINAL),
+                expectedText = "8",
+                expectedConfidence = 0.112f,
+            ),
+            Case(
+                name = "score above one is clamped",
+                candidate = PaddleRecognitionCandidate("text", 1.2f, PaddleCropOrientation.ORIGINAL),
+                expectedText = "text",
+                expectedConfidence = 1f,
+            ),
+            Case(
+                name = "score below zero is clamped",
+                candidate = PaddleRecognitionCandidate("text", -0.2f, PaddleCropOrientation.ORIGINAL),
+                expectedText = "text",
+                expectedConfidence = 0f,
+            ),
+            Case(
+                name = "missing candidate becomes empty zero confidence result",
+                candidate = null,
+                expectedText = "",
+                expectedConfidence = 0f,
+            ),
+        )
+
+        cases.forEach { case ->
+            val actual = paddleRecognizedText(case.candidate)
+            assertEquals(case.name, case.expectedText, actual.text)
+            assertEquals(case.name, case.expectedConfidence, actual.confidence, 0.0001f)
+        }
+    }
+
+    @Test
     fun choosePaddleRecognitionCandidate_prefersUsefulVerticalText() {
         data class Case(
             val name: String,

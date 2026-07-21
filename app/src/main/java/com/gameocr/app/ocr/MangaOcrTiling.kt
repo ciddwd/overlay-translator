@@ -21,7 +21,14 @@ internal object MangaOcrTiling {
         height: Int,
         profile: PaddleDetectionProfile,
         tileSide: Int = DEFAULT_TILE_SIDE,
-    ): Boolean = profile.enableMangaTiling && shouldUseTiles(width, height, tileSide)
+    ): Boolean {
+        if (!profile.enableMangaTiling) return false
+        val minimumLongSide = maxOf(
+            tileSide,
+            profile.maxSideLen * MIN_DOWNSCALE_NUMERATOR / MIN_DOWNSCALE_DENOMINATOR,
+        )
+        return maxOf(width, height) > minimumLongSide
+    }
 
     fun shouldUseTiles(width: Int, height: Int, tileSide: Int = DEFAULT_TILE_SIDE): Boolean =
         maxOf(width, height) > tileSide
@@ -69,4 +76,9 @@ internal object MangaOcrTiling {
 
     const val DEFAULT_TILE_SIDE = 1800
     const val DEFAULT_OVERLAP = 360
+
+    // Tiling only pays off once the full-page pass would shrink the long side by more than 20%.
+    // This also avoids near-total overlap when a page is only slightly larger than one tile.
+    private const val MIN_DOWNSCALE_NUMERATOR = 5
+    private const val MIN_DOWNSCALE_DENOMINATOR = 4
 }

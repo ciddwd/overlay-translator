@@ -30,6 +30,13 @@ import com.gameocr.app.data.TranslationPresetCatalog
 import com.gameocr.app.data.TranslationPresetImportResult
 import com.gameocr.app.data.TranslationPresetTransfer
 import com.gameocr.app.data.TranslatorEngine
+import com.gameocr.app.data.TtsHttpResponseMode
+import com.gameocr.app.data.TtsProvider
+import com.gameocr.app.data.VolcengineTtsResource
+import com.gameocr.app.data.MiniMaxTtsModel
+import com.gameocr.app.data.MimoTtsModel
+import com.gameocr.app.data.MAX_TTS_PLAYBACK_GAIN_DB
+import com.gameocr.app.data.MIN_TTS_PLAYBACK_GAIN_DB
 import com.gameocr.app.download.ModelDownloadManager
 import com.gameocr.app.download.ModelDownloadSpec
 import com.gameocr.app.glossary.TranslationGlossaryRepository
@@ -42,6 +49,20 @@ import com.gameocr.app.ocr.lunaOcrHttpHostOrNull
 import com.gameocr.app.ocr.umiOcrHttpHostOrNull
 import com.gameocr.app.translate.RoutingTranslator
 import com.gameocr.app.translate.TestResult
+import com.gameocr.app.tts.ttsHttpHostOrNull
+import com.gameocr.app.tts.ttsApiHttpHostOrNull
+import com.gameocr.app.tts.SystemTtsEngine
+import com.gameocr.app.tts.SystemTtsVoiceOption
+import com.gameocr.app.tts.settingsForTtsTest
+import com.gameocr.app.tts.TtsEngine
+import com.gameocr.app.tts.HttpTtsEngine
+import com.gameocr.app.tts.VoiceDesignPromptGenerator
+import com.gameocr.app.tts.MiniMaxManagedVoice
+import com.gameocr.app.tts.MiniMaxVoiceCloneRequest
+import com.gameocr.app.tts.MiniMaxVoiceCreationResult
+import com.gameocr.app.tts.MiniMaxVoiceDesignRequest
+import com.gameocr.app.tts.MiniMaxVoiceManager
+import com.gameocr.app.tts.decodeMiniMaxTrialAudio
 import androidx.work.WorkInfo
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -64,11 +85,99 @@ class SettingsViewModel @Inject constructor(
     private val overlayFontManager: OverlayFontManager,
     private val glossaryRepository: TranslationGlossaryRepository,
     private val modelDownloadManager: ModelDownloadManager,
+    private val systemTtsEngine: SystemTtsEngine,
+    private val ttsEngine: TtsEngine,
+    private val httpTtsEngine: HttpTtsEngine,
+    private val voiceDesignPromptGenerator: VoiceDesignPromptGenerator,
+    private val miniMaxVoiceManager: MiniMaxVoiceManager,
 ) : ViewModel() {
 
     val modelDownloadWorkInfos: Flow<List<WorkInfo>> = modelDownloadManager.workInfos
 
     suspend fun load(): Settings = repo.get()
+
+    suspend fun downloadMlKitLanguagePair(sourceLang: String, targetLang: String) {
+        routingTranslator.downloadMlKitLanguagePair(sourceLang, targetLang)
+    }
+
+    suspend fun areMlKitLanguagePairModelsDownloaded(
+        sourceLang: String,
+        targetLang: String,
+    ): Boolean = routingTranslator.areMlKitLanguagePairModelsDownloaded(sourceLang, targetLang)
+
+    suspend fun getMissingMlKitLanguageModels(
+        sourceLang: String,
+        targetLang: String,
+    ): Set<String> = routingTranslator.getMissingMlKitLanguageModels(sourceLang, targetLang)
+
+    suspend fun getDownloadedMlKitLanguageModels(): Set<String> =
+        routingTranslator.getDownloadedMlKitLanguageModels()
+
+    suspend fun loadSystemTtsVoices(preferredLanguageTag: String): List<SystemTtsVoiceOption> =
+        systemTtsEngine.availableVoices(preferredLanguageTag)
+
+    suspend fun testTts(text: String, settings: Settings) {
+        require(text.isNotBlank()) { "TTS test text is blank" }
+        ttsEngine.stop()
+        ttsEngine.speak(text, settingsForTtsTest(text, settings))
+    }
+
+    fun stopTts() = ttsEngine.stop()
+
+    internal suspend fun loadMiniMaxManagedVoices(
+        baseUrl: String,
+        apiKey: String,
+    ): List<MiniMaxManagedVoice> = miniMaxVoiceManager.loadVoices(baseUrl, apiKey)
+
+    internal suspend fun cloneMiniMaxVoice(
+        request: MiniMaxVoiceCloneRequest,
+    ): MiniMaxVoiceCreationResult = miniMaxVoiceManager.cloneVoice(request)
+
+    internal suspend fun designMiniMaxVoice(
+        request: MiniMaxVoiceDesignRequest,
+    ): MiniMaxVoiceCreationResult = miniMaxVoiceManager.designVoice(request)
+
+    internal suspend fun playMiniMaxTrialAudio(audioHex: String, gainDb: Int) {
+        val payload = decodeMiniMaxTrialAudio(audioHex)
+        ttsEngine.stop()
+        httpTtsEngine.playAudio(
+            payload = payload,
+            playbackId = "minimax-voice-design-trial",
+            gainDb = gainDb,
+        )
+    }
+
+    internal suspend fun deleteMiniMaxVoice(
+        baseUrl: String,
+        apiKey: String,
+        voice: MiniMaxManagedVoice,
+    ) = miniMaxVoiceManager.deleteVoice(baseUrl, apiKey, voice)
+
+    suspend fun generateMimoVoiceDesign(
+        draft: String,
+        settings: Settings,
+        outputLanguageTag: String,
+    ): String = voiceDesignPromptGenerator.generate(draft, settings, outputLanguageTag)
+
+    suspend fun generateMiniMaxVoiceDescription(
+        draft: String,
+        settings: Settings,
+        outputLanguageTag: String,
+    ): String = voiceDesignPromptGenerator.generateMiniMaxDescription(
+        draft,
+        settings,
+        outputLanguageTag,
+    )
+
+    suspend fun polishMimoStyleInstruction(
+        draft: String,
+        settings: Settings,
+        outputLanguageTag: String,
+    ): String = voiceDesignPromptGenerator.polishStyleInstruction(
+        draft,
+        settings,
+        outputLanguageTag,
+    )
 
     suspend fun exportSettingsBundle(
         uri: Uri,
@@ -188,6 +297,9 @@ class SettingsViewModel @Inject constructor(
         baseUrl: String,
         apiKey: String,
         model: String,
+        anthropicBaseUrl: String,
+        anthropicApiKey: String,
+        anthropicModel: String,
         targetLang: String,
         sourceLang: String,
         prompt: String,
@@ -209,6 +321,39 @@ class SettingsViewModel @Inject constructor(
         ocrRedBoxShowTranslation: Boolean,
         streaming: Boolean,
         retryEmptyTranslation: Boolean,
+        ttsEnabled: Boolean,
+        ttsProvider: TtsProvider,
+        ttsVoice: String,
+        ttsEmotion: String,
+        ttsSpeed: Float,
+        ttsPitch: Float,
+        ttsGainDb: Int,
+        ttsHttpBaseUrl: String,
+        ttsHttpBearerToken: String,
+        ttsHttpResponseMode: TtsHttpResponseMode,
+        ttsVolcengineResource: VolcengineTtsResource,
+        ttsVolcengineBaseUrl: String,
+        ttsVolcengineApiKey: String,
+        ttsVolcengineSpeaker: String,
+        ttsVolcengineModel: String,
+        ttsVolcengineContext: String,
+        ttsVolcenginePitch: Int,
+        ttsVolcengineToneFidelity: Boolean,
+        ttsMiniMaxModel: MiniMaxTtsModel,
+        ttsMiniMaxBaseUrl: String,
+        ttsMiniMaxApiKey: String,
+        ttsMiniMaxVoice: String,
+        ttsMiniMaxEmotion: String,
+        ttsMiniMaxSpeed: Float,
+        ttsMiniMaxPitch: Int,
+        ttsMimoModel: MimoTtsModel,
+        ttsMimoBaseUrl: String,
+        ttsMimoApiKey: String,
+        ttsMimoVoice: String,
+        ttsMimoInstruction: String,
+        ttsMimoVoiceDesignPrompt: String,
+        ttsMimoVoiceCloneInstruction: String,
+        ttsMimoVoiceSampleUri: String,
         renderMode: RenderMode,
         translationBlockInteractionMode: TranslationBlockInteractionMode,
         placement: OverlayPlacement,
@@ -244,6 +389,7 @@ class SettingsViewModel @Inject constructor(
         apiTimeoutSeconds: Int,
         mergeAdjacentBlocks: Boolean,
         mergeStrength: com.gameocr.app.data.MergeStrength,
+        disableCrossLineContextTranslation: Boolean,
         cleartextAllowedHosts: List<String>,
         translatorEngine: TranslatorEngine,
         deeplKey: String,
@@ -267,6 +413,9 @@ class SettingsViewModel @Inject constructor(
                 baseUrl = baseUrl.trim(),
                 apiKey = apiKey.trim(),
                 model = model.trim(),
+                anthropicBaseUrl = anthropicBaseUrl.trim(),
+                anthropicApiKey = anthropicApiKey.trim(),
+                anthropicModel = anthropicModel.trim(),
                 targetLang = targetLang.trim(),
                 sourceLang = sourceLang.trim(),
                 promptTemplate = prompt,
@@ -288,6 +437,44 @@ class SettingsViewModel @Inject constructor(
                 ocrRedBoxShowTranslation = ocrRedBoxShowTranslation,
                 streamingTranslate = streaming,
                 retryEmptyTranslation = retryEmptyTranslation,
+                ttsEnabled = ttsEnabled,
+                ttsProvider = ttsProvider,
+                ttsVoice = ttsVoice.trim(),
+                ttsEmotion = ttsEmotion.trim(),
+                ttsSpeed = ttsSpeed.coerceIn(0.25f, 4.0f),
+                ttsPitch = ttsPitch.coerceIn(0.25f, 4.0f),
+                ttsGainDb = ttsGainDb.coerceIn(
+                    MIN_TTS_PLAYBACK_GAIN_DB,
+                    MAX_TTS_PLAYBACK_GAIN_DB,
+                ),
+                ttsHttpBaseUrl = ttsHttpBaseUrl.trim(),
+                ttsHttpBearerToken = ttsHttpBearerToken.trim(),
+                ttsHttpResponseMode = ttsHttpResponseMode,
+                ttsVolcengineResource = ttsVolcengineResource,
+                ttsVolcengineBaseUrl = ttsVolcengineBaseUrl.trim(),
+                ttsVolcengineApiKey = ttsVolcengineApiKey.trim(),
+                ttsVolcengineSpeaker = ttsVolcengineSpeaker.trim()
+                    .ifBlank { "zh_female_vv_uranus_bigtts" },
+                ttsVolcengineModel = ttsVolcengineModel.trim()
+                    .ifBlank { "seed-tts-2.0-standard" },
+                ttsVolcengineContext = ttsVolcengineContext.trim(),
+                ttsVolcenginePitch = ttsVolcenginePitch.coerceIn(-12, 12),
+                ttsVolcengineToneFidelity = ttsVolcengineToneFidelity,
+                ttsMiniMaxModel = ttsMiniMaxModel,
+                ttsMiniMaxBaseUrl = ttsMiniMaxBaseUrl.trim(),
+                ttsMiniMaxApiKey = ttsMiniMaxApiKey.trim(),
+                ttsMiniMaxVoice = ttsMiniMaxVoice.trim().ifBlank { "male-qn-qingse" },
+                ttsMiniMaxEmotion = ttsMiniMaxEmotion.trim(),
+                ttsMiniMaxSpeed = ttsMiniMaxSpeed.coerceIn(0.5f, 2.0f),
+                ttsMiniMaxPitch = ttsMiniMaxPitch.coerceIn(-12, 12),
+                ttsMimoModel = ttsMimoModel,
+                ttsMimoBaseUrl = ttsMimoBaseUrl.trim(),
+                ttsMimoApiKey = ttsMimoApiKey.trim(),
+                ttsMimoVoice = ttsMimoVoice.trim().ifBlank { "mimo_default" },
+                ttsMimoInstruction = ttsMimoInstruction.trim(),
+                ttsMimoVoiceDesignPrompt = ttsMimoVoiceDesignPrompt.trim(),
+                ttsMimoVoiceCloneInstruction = ttsMimoVoiceCloneInstruction.trim(),
+                ttsMimoVoiceSampleUri = ttsMimoVoiceSampleUri.trim(),
                 renderMode = renderMode,
                 translationBlockInteractionMode = translationBlockInteractionMode,
                 overlayPlacement = placement,
@@ -323,10 +510,15 @@ class SettingsViewModel @Inject constructor(
                 apiTimeoutSeconds = apiTimeoutSeconds.coerceIn(5, 300),
                 mergeAdjacentBlocks = mergeAdjacentBlocks,
                 mergeStrength = mergeStrength,
+                disableCrossLineContextTranslation = disableCrossLineContextTranslation,
                 cleartextAllowedHosts = cleartextHostsWithLocalOcrUrls(
                     cleartextAllowedHosts,
                     umiOcrBaseUrl,
-                    lunaOcrBaseUrl
+                    lunaOcrBaseUrl,
+                    ttsHttpBaseUrl,
+                    ttsMiniMaxBaseUrl,
+                    ttsMimoBaseUrl,
+                    ttsVolcengineBaseUrl,
                 ),
                 translatorEngine = translatorEngine,
                 deeplApiKey = deeplKey.trim(),
@@ -821,6 +1013,9 @@ class SettingsViewModel @Inject constructor(
         baseUrl: String,
         apiKey: String,
         model: String,
+        anthropicBaseUrl: String,
+        anthropicApiKey: String,
+        anthropicModel: String,
         deeplKey: String,
         deeplPro: Boolean,
         deeplProtocol: com.gameocr.app.data.DeeplProtocol,
@@ -845,6 +1040,9 @@ class SettingsViewModel @Inject constructor(
             baseUrl = baseUrl.trim(),
             apiKey = apiKey.trim(),
             model = model.trim(),
+            anthropicBaseUrl = anthropicBaseUrl.trim(),
+            anthropicApiKey = anthropicApiKey.trim(),
+            anthropicModel = anthropicModel.trim(),
             deeplApiKey = deeplKey.trim(),
             deeplPro = deeplPro,
             deeplProtocol = deeplProtocol,
@@ -871,10 +1069,25 @@ internal fun cleartextHostsWithLocalOcrUrls(
     hosts: List<String>,
     umiOcrBaseUrl: String,
     lunaOcrBaseUrl: String,
+    ttsHttpBaseUrl: String = "",
+    ttsMiniMaxBaseUrl: String = "",
+    ttsMimoBaseUrl: String = "",
+    ttsVolcengineBaseUrl: String = "",
 ): List<String> {
     val normalized = hosts.map { it.trim() }.filter { it.isNotEmpty() }
     val umiHost = umiOcrHttpHostOrNull(umiOcrBaseUrl)
     val lunaHost = lunaOcrHttpHostOrNull(lunaOcrBaseUrl)
-    return (normalized + listOfNotNull(umiHost, lunaHost))
+    val ttsHost = ttsHttpHostOrNull(ttsHttpBaseUrl)
+    val miniMaxTtsHost = ttsApiHttpHostOrNull(ttsMiniMaxBaseUrl)
+    val mimoTtsHost = ttsApiHttpHostOrNull(ttsMimoBaseUrl)
+    val volcengineTtsHost = ttsApiHttpHostOrNull(ttsVolcengineBaseUrl)
+    return (normalized + listOfNotNull(
+        umiHost,
+        lunaHost,
+        ttsHost,
+        miniMaxTtsHost,
+        mimoTtsHost,
+        volcengineTtsHost,
+    ))
         .distinctBy { it.lowercase() }
 }

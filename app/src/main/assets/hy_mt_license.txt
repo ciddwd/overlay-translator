@@ -2,7 +2,8 @@ Tencent Hy-MT2 Model Notice
 ===========================
 
 The optional on-device multilingual translation model used by this app is
-Tencent Hy-MT2-1.8B-GGUF. Copyright 2026 Tencent.
+Tencent Hy-MT2-1.8B-GGUF.
+Copyright (C) 2026 Tencent. All rights reserved.
 
 Hy-MT2-1.8B-GGUF is licensed under the Apache License, Version 2.0:
 https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF

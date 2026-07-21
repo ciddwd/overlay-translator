@@ -11,11 +11,13 @@ class TranslationPromptContextCapabilityTest {
 
         val cases = listOf(
             Case(TranslatorEngine.OPENAI, true),
+            Case(TranslatorEngine.ANTHROPIC, true),
             Case(TranslatorEngine.LOCAL_SAKURA, true),
             Case(TranslatorEngine.LOCAL_HY_MT2, true),
             Case(TranslatorEngine.DEEPL, false),
             Case(TranslatorEngine.YOUDAO_PICTRANS, false),
             Case(TranslatorEngine.GOOGLE, false),
+            Case(TranslatorEngine.GOOGLE_ML_KIT, false),
             Case(TranslatorEngine.VOLC, false),
             Case(TranslatorEngine.BAIDU_FANYI, false),
             Case(TranslatorEngine.TENCENT, false),

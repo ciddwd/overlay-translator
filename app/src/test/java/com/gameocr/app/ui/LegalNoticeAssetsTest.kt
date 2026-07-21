@@ -6,6 +6,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
 import java.net.URI
+import java.security.MessageDigest
 
 class LegalNoticeAssetsTest {
 
@@ -37,13 +38,49 @@ class LegalNoticeAssetsTest {
         listOf(
             Case("Android runtime", listOf("AndroidX", "Material Components", "Kotlin", "Dagger and Hilt")),
             Case("network runtime", listOf("Retrofit", "OkHttp", "Okio", "Timber")),
-            Case("ML Kit terms", listOf("Google ML Kit", "https://developers.google.com/ml-kit/terms")),
-            Case("native runtime", listOf("ONNX Runtime", "llama.cpp", "Vulkan-Headers", "SPIRV-Headers")),
+            Case(
+                "ML Kit terms",
+                listOf(
+                    "Google ML Kit",
+                    "ML Kit Translation 17.0.3",
+                    "performance and utilization metrics",
+                    "https://developers.google.com/ml-kit/terms",
+                ),
+            ),
+            Case(
+                "native runtime",
+                listOf(
+                    "ONNX Runtime",
+                    "onnxruntime_third_party_notices_1_20_0.txt",
+                    "llama.cpp",
+                    "Vulkan-Headers",
+                    "SPIRV-Headers",
+                ),
+            ),
             Case("Shizuku", listOf("Shizuku API", "Copyright (c) 2021 RikkaW")),
+            Case("Google transitive runtime", listOf("Android Data Transport", "Firebase Components / Encoders", "JSpecify")),
             Case("bundled Paddle models", listOf("doc_ori.onnx", "textline_ori.onnx", "SHA-256")),
-            Case("Hy-MT2", listOf("Hy-MT2-1.8B-GGUF", "Copyright 2026 Tencent", "Apache License 2.0")),
-            Case("Sakura", listOf("Sakura-1.5B-Qwen2.5-v1.0", "CC BY-NC-SA 4.0", "Commercial use is not permitted")),
-            Case("PaddleOCR downloads", listOf("PaddleOCR v6", "PaddleOCR v5")),
+            Case("Hy-MT2", listOf("Hy-MT2-1.8B-GGUF", "Copyright (C) 2026 Tencent", "Apache License 2.0")),
+            Case(
+                "Sakura",
+                listOf(
+                    "Sakura-1.5B-Qwen2.5-v1.0",
+                    "Hugging Face user shing3232",
+                    "Quantization is a modification",
+                    "CC BY-NC-SA 4.0",
+                    "Commercial use is not permitted",
+                ),
+            ),
+            Case(
+                "PaddleOCR downloads",
+                listOf(
+                    "PaddleOCR v6",
+                    "PaddleOCR v5 mobile detection and recognition ONNX models",
+                    "PaddlePaddle's official repositories",
+                    "PaddlePaddle/PP-OCRv5_mobile_det_onnx",
+                    "PaddlePaddle/PP-OCRv5_mobile_rec_onnx",
+                ),
+            ),
             Case("manga-ocr caveat", listOf("manga-ocr ONNX", "does not declare license metadata", "must not be described as open-source")),
         ).forEach { case ->
             case.requiredMarkers.forEach { marker ->
@@ -65,13 +102,25 @@ class LegalNoticeAssetsTest {
             Case(
                 name = "Hy-MT2",
                 asset = "hy_mt_license.txt",
-                requiredMarkers = listOf("Hy-MT2-1.8B-GGUF", "Apache License", "Copyright 2026 Tencent"),
+                requiredMarkers = listOf(
+                    "Hy-MT2-1.8B-GGUF",
+                    "Apache License",
+                    "Copyright (C) 2026 Tencent. All rights reserved.",
+                ),
                 forbiddenMarkers = listOf("Hy-MT1.5", "Territory", "EUROPEAN UNION"),
             ),
             Case(
                 name = "Sakura",
                 asset = "sakura_notice.txt",
-                requiredMarkers = listOf("CC BY-NC-SA 4.0", "Commercial use is not permitted", "Qwen2.5-1.5B", "Apache License"),
+                requiredMarkers = listOf(
+                    "SakuraLLM/Sakura-1.5B-Qwen2.5-v1.0-GGUF",
+                    "Hugging Face user shing3232",
+                    "without further modification",
+                    "CC BY-NC-SA 4.0",
+                    "Commercial use is not permitted",
+                    "Qwen2.5-1.5B",
+                    "Apache License",
+                ),
                 forbiddenMarkers = listOf("Tongyi Qianwen LICENSE AGREEMENT"),
             ),
         ).forEach { case ->
@@ -86,19 +135,118 @@ class LegalNoticeAssetsTest {
     }
 
     @Test
-    fun noticeUrls_areUniqueAbsoluteHttpsUrls() {
-        val notice = moduleFile("src/main/assets/third_party_notices.txt").readText()
-        val urls = Regex("https://[^\\s]+")
-            .findAll(notice)
-            .map { it.value.trimEnd('.', ',', ')') }
-            .toList()
+    fun onnxRuntimeNotices_matchPinnedOfficialArtifact() {
+        val asset = moduleFile("src/main/assets/onnxruntime_third_party_notices_1_20_0.txt")
+        val bytes = asset.readBytes()
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(bytes)
+            .joinToString("") { byte -> "%02X".format(byte) }
 
-        assertTrue("expected a substantive source list", urls.size >= 20)
-        assertEquals("duplicate legal-notice URLs", urls.distinct(), urls)
-        urls.forEach { url ->
-            val uri = URI(url)
-            assertEquals(url, "https", uri.scheme)
-            assertTrue("missing host: $url", !uri.host.isNullOrBlank())
+        assertEquals(338_538, bytes.size)
+        assertEquals(
+            "CF7342F7BA482EF715AE58F5F497A8D3564FA255164175AEA324CD293C5701A0",
+            digest,
+        )
+        assertTrue(asset.readText().startsWith("THIRD PARTY SOFTWARE NOTICES AND INFORMATION"))
+    }
+
+    @Test
+    fun thirdPartyNotices_matchCurrentBuildVersions() {
+        data class Case(val name: String, val catalogKey: String, val noticePrefix: String)
+
+        val notice = moduleFile("src/main/assets/third_party_notices.txt").readText()
+        val catalog = repositoryFile("gradle/libs.versions.toml").readText()
+        val appBuild = moduleFile("build.gradle.kts").readText()
+        val versionName = requireNotNull(
+            Regex("""versionName\s*=\s*"([^"]+)"""").find(appBuild)?.groupValues?.get(1),
+        )
+
+        assertTrue("stale application version", notice.contains("v$versionName build configuration"))
+        assertTrue("project license must use the main branch", notice.contains("blob/main/LICENSE"))
+        assertFalse("project license must not use the dev branch", notice.contains("blob/dev/LICENSE"))
+
+        listOf(
+            Case("Kotlin", "kotlin", "Kotlin"),
+            Case("Material Components", "material", "Material Components for Android"),
+            Case("Dagger and Hilt", "hilt", "Dagger and Hilt"),
+            Case("Retrofit", "retrofit", "Retrofit"),
+            Case("OkHttp", "okhttp", "OkHttp"),
+            Case("kotlinx.serialization", "serialization", "kotlinx.serialization"),
+            Case("kotlinx.coroutines", "coroutines", "kotlinx.coroutines"),
+            Case("Timber", "timber", "Timber"),
+            Case("Shizuku", "shizuku", "Shizuku API"),
+            Case("ML Kit Text Recognition", "mlkitTextRecognition", "Text Recognition"),
+            Case("ML Kit Translation", "mlkitTranslate", "ML Kit Translation"),
+            Case("ONNX Runtime", "onnxruntime", "ONNX Runtime Android"),
+        ).forEach { case ->
+            val version = requireNotNull(
+                Regex("(?m)^${Regex.escape(case.catalogKey)} = \"([^\"]+)\"")
+                    .find(catalog)
+                    ?.groupValues
+                    ?.get(1),
+            ) { "missing version catalog key: ${case.catalogKey}" }
+            assertTrue(
+                "${case.name}: NOTICE missing version $version",
+                notice.contains("${case.noticePrefix} $version"),
+            )
+        }
+        assertFalse("community PaddleOCR v5 source must not remain", notice.contains("bukuroo/PPOCRv5-ONNX"))
+    }
+
+    @Test
+    fun noticeUrls_areUniqueAbsoluteHttpsUrls() {
+        data class Case(val name: String, val asset: String, val minimumUrlCount: Int)
+
+        listOf(
+            Case("third-party notices", "third_party_notices.txt", 25),
+            Case("Hy-MT2 notice", "hy_mt_license.txt", 2),
+            Case("Sakura notice", "sakura_notice.txt", 5),
+        ).forEach { case ->
+            val urls = Regex("https://[^\\s]+")
+                .findAll(moduleFile("src/main/assets/${case.asset}").readText())
+                .map { it.value.trimEnd('.', ',', ')') }
+                .toList()
+
+            assertTrue("${case.name}: expected source links", urls.size >= case.minimumUrlCount)
+            assertEquals("${case.name}: duplicate URLs", urls.distinct(), urls)
+            urls.forEach { url ->
+                val uri = URI(url)
+                assertEquals(url, "https", uri.scheme)
+                assertTrue("${case.name}: missing host: $url", !uri.host.isNullOrBlank())
+            }
+        }
+    }
+
+    @Test
+    fun mlKitDataDisclosure_isVisibleInSettingsAndNotices() {
+        data class Case(val name: String, val file: File, val markers: List<String>)
+
+        listOf(
+            Case(
+                "settings screen",
+                moduleFile("src/main/java/com/gameocr/app/ui/SettingsScreen.kt"),
+                listOf("R.string.settings_mlkit_data_disclosure"),
+            ),
+            Case(
+                "English resources",
+                moduleFile("src/main/res/values/strings.xml"),
+                listOf("settings_mlkit_data_disclosure", "Captured images, source text, and translations are not sent to Google"),
+            ),
+            Case(
+                "Chinese resources",
+                moduleFile("src/main/res/values-zh-rCN/strings.xml"),
+                listOf("settings_mlkit_data_disclosure", "截屏、原文和译文不会发送给 Google"),
+            ),
+            Case(
+                "third-party notices",
+                moduleFile("src/main/assets/third_party_notices.txt"),
+                listOf("Input images and text are processed on-device", "performance and utilization metrics"),
+            ),
+        ).forEach { case ->
+            val text = case.file.readText()
+            case.markers.forEach { marker ->
+                assertTrue("${case.name}: missing $marker", text.contains(marker))
+            }
         }
     }
 
@@ -112,11 +260,15 @@ class LegalNoticeAssetsTest {
         listOf(
             Case("third-party notice asset", "THIRD_PARTY_NOTICES_ASSET"),
             Case("Apache license asset", "APACHE_LICENSE_ASSET"),
-            Case("offline asset loading", "context.assets.open(section.assetName)"),
+            Case("ONNX Runtime notices asset", "ONNXRUNTIME_NOTICES_ASSET"),
+            Case("Hy-MT2 notice asset", "HY_MT_NOTICE_ASSET"),
+            Case("Sakura notice asset", "SAKURA_NOTICE_ASSET"),
+            Case("on-demand offline asset loading", "context.assets.open(section.assetName)"),
+            Case("on-demand section selection", "selectedAssetName = section.assetName"),
             Case("selectable notice text", "SelectionContainer"),
             Case("scrollable notice text", ".verticalScroll(rememberScrollState())"),
             Case("localized page title", "R.string.settings_about_licenses_page_title"),
-            Case("system back handling", "BackHandler(onBack = onBack)"),
+            Case("system back handling", "BackHandler(onBack = navigateBack)"),
         ).forEach { case ->
             assertTrue("${case.name}: missing ${case.marker}", pageSource.contains(case.marker))
         }

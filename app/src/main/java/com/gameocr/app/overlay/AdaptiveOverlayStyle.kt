@@ -122,6 +122,18 @@ internal fun adaptiveAutoSizeMaxSp(
     return resolvedMax.takeIf { it > minTextSizeSp }
 }
 
+internal fun horizontalOverlayMaxLines(
+    allowWrap: Boolean,
+    adaptiveTextFitEnabled: Boolean,
+    availableHeightPx: Int,
+    estimatedLineHeightPx: Int,
+): Int = when {
+    !allowWrap -> 1
+    adaptiveTextFitEnabled -> Int.MAX_VALUE
+    else -> (availableHeightPx.coerceAtLeast(1) / estimatedLineHeightPx.coerceAtLeast(1))
+        .coerceAtLeast(1)
+}
+
 internal fun adaptiveTextLayoutOverflowReasons(
     textLength: Int,
     visibleTextEnd: Int,

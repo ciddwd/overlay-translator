@@ -10,6 +10,10 @@ import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
+import android.text.SpannableStringBuilder
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
+import android.text.style.RelativeSizeSpan
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
@@ -38,6 +42,15 @@ import kotlin.math.ceil
 import kotlinx.coroutines.CoroutineScope
 import timber.log.Timber
 
+internal fun performPlaybackOverlayDismiss(
+    stopPlayback: () -> Unit,
+    clearOverlay: () -> Unit,
+): Result<Unit> {
+    val stopResult = runCatching(stopPlayback)
+    clearOverlay()
+    return stopResult
+}
+
 /**
  * 译文叠加渲染。
  * - [showFullScreen]：可拖拽 / 可缩放的悬浮窗口（[DraggableOverlayWindow]），列出所有原文 → 译文；
@@ -50,6 +63,7 @@ class OverlayManager(
     private val settingsRepository: SettingsRepository,
     private val ioScope: CoroutineScope,
     private val onTranslationBlockDetailRequested: (source: String, translation: String) -> Unit = { _, _ -> },
+    private val onFloatingWindowDismissed: () -> Unit = {},
     @Volatile var textSizeSp: Int = 14,
     @Volatile var alpha: Float = 0.85f,
     @Volatile var regionOffset: android.graphics.Point = android.graphics.Point(0, 0),
@@ -71,6 +85,7 @@ class OverlayManager(
         FloatingWindowContentMode.SRC_AND_DST,
     @Volatile var translationBlockInteractionMode: TranslationBlockInteractionMode =
         TranslationBlockInteractionMode.COPY_BUTTON,
+    @Volatile var translationBlockSelectionSpeechAction: TtsPlaybackAction? = null,
     /** CUSTOM 主题的边框样式（仅 CUSTOM 主题生效）。CaptureService 同步。 */
     @Volatile var customBorderStyle: BorderStyle = BorderStyle.SOLID,
     @Volatile var overlayTypeface: Typeface? = null,
@@ -114,14 +129,14 @@ class OverlayManager(
     private val floatingWindow: DraggableOverlayWindow by lazy {
         DraggableOverlayWindow(context, settingsRepository, ioScope)
     }
-    /** 悬浮窗口流式模式下：idx → 译文 TextView。null 表示当前不是流式状态。 */
-    private var floatingDstViews: MutableMap<Int, TextView>? = null
+    /** 悬浮窗口唯一的连续文本宿主；流式更新会整体重建其 Spannable 内容。 */
+    private var floatingContentView: StyledTranslationTextView? = null
     private val floatingStreamingUpdateCounts = mutableMapOf<Int, Int>()
     private val floatingFrameUpdateCoalescers =
         mutableMapOf<Int, LatestFrameUpdateCoalescer<PendingOverlayTextUpdate>>()
     /** 上一次悬浮窗口内容（用户改配色保存时重建内容，立即生效）。Pair = (src, dst)。 */
     private var lastFloatingPairs: MutableList<Pair<String, String>>? = null
-    /** 上一次是流式还是整批显示。重建 content 时决定 floatingDstViews 是否要重建。 */
+    /** 上一次是流式还是整批显示。重建 content 时保留原渲染阶段。 */
     private var lastFloatingStreaming: Boolean = false
 
     private val overlayType: Int = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -402,7 +417,7 @@ class OverlayManager(
         if (floatingWindow.isShown()) {
             floatingWindow.setContent(content)
         } else {
-            floatingWindow.show(content, onDismiss = { clear() })
+            floatingWindow.show(content, onDismiss = ::handleFloatingWindowUserDismiss)
         }
     }
 
@@ -426,7 +441,7 @@ class OverlayManager(
         if (floatingWindow.isShown()) {
             floatingWindow.setContent(content)
         } else {
-            floatingWindow.show(content, onDismiss = { clear() })
+            floatingWindow.show(content, onDismiss = ::handleFloatingWindowUserDismiss)
         }
     }
 
@@ -444,7 +459,7 @@ class OverlayManager(
         }
         if (phase == AdaptiveTextLayoutPhase.STREAMING) {
             floatingStreamingUpdateCounts[index] = (floatingStreamingUpdateCounts[index] ?: 0) + 1
-            val target = floatingDstViews?.get(index) ?: return
+            val target = floatingContentView ?: return
             val coalescer = floatingFrameUpdateCoalescers.getOrPut(index) {
                 LatestFrameUpdateCoalescer(
                     scheduleFrame = { target.postOnAnimation(it) },
@@ -514,55 +529,72 @@ class OverlayManager(
     ): View {
         floatingFrameUpdateCoalescers.values.forEach { it.discardPending() }
         floatingFrameUpdateCoalescers.clear()
-        val container = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            val padH = (16 * context.resources.displayMetrics.density).toInt()
-            val padV = (12 * context.resources.displayMetrics.density).toInt()
+        val density = context.resources.displayMetrics.density
+        val contentView = StyledTranslationTextView(context).apply {
+            text = buildFloatingWindowText(pairs)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, textSizeSp.toFloat())
+            setTextColor(themeFgColor())
+            applyOverlayTextStyle(overlayTextStyle, overlayTypeface)
+            val padH = (16 * density).toInt()
+            val padV = (12 * density).toInt()
             setPadding(padH, padV, padH, padV)
-        }
-        val newDstViews = if (streaming) mutableMapOf<Int, TextView>() else null
-        val isSrcAndDst = floatingWindowContentMode == FloatingWindowContentMode.SRC_AND_DST
-
-        pairs.forEachIndexed { idx, (src, dst) ->
-            if (isSrcAndDst) {
-                container.addView(TextView(context).apply {
-                    text = "・$src"
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, (textSizeSp - 1).coerceAtLeast(10).toFloat())
-                    setTextColor(themeFgMutedColor())
-                })
-            }
-            val dstView = StyledTranslationTextView(context).apply {
-                text = dst
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, textSizeSp.toFloat())
-                setTextColor(themeFgColor())
-                applyOverlayTextStyle(overlayTextStyle, overlayTypeface)
-                if (isSrcAndDst) {
-                    val mt = (2 * context.resources.displayMetrics.density).toInt()
-                    val mb = (8 * context.resources.displayMetrics.density).toInt()
-                    setPadding(0, mt, 0, mb)
-                }
-            }
-            container.addView(dstView)
-            newDstViews?.put(idx, dstView)
-
-            // DST_ONLY 模式：段间细分隔线（不为最后一段加）
-            if (!isSrcAndDst && idx < pairs.size - 1) {
-                val divider = View(context).apply {
-                    setBackgroundColor(themeFgMutedColor() and 0x40FFFFFF.toInt())
-                }
-                val lp = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    (1 * context.resources.displayMetrics.density).toInt()
-                ).apply {
-                    val m = (6 * context.resources.displayMetrics.density).toInt()
-                    topMargin = m
-                    bottomMargin = m
-                }
-                container.addView(divider, lp)
+            adaptiveTextLayoutPhase = if (streaming) {
+                AdaptiveTextLayoutPhase.STREAMING
+            } else {
+                AdaptiveTextLayoutPhase.FINAL
             }
         }
-        floatingDstViews = newDstViews
-        return container
+        floatingContentView = contentView
+        floatingWindow.configureSelectableText(contentView,
+            isContentSelectable = {
+                hasSelectableFloatingWindowContent(
+                    lastFloatingPairs ?: pairs,
+                    floatingWindowContentMode,
+                )
+            },
+            speechLabel = context.getString(R.string.word_card_speak_selection),
+            selectionSpeechAction = {
+                translationBlockSelectionSpeechAction?.onStart
+            },
+        )
+        return contentView
+    }
+
+    private fun buildFloatingWindowText(pairs: List<Pair<String, String>>): CharSequence {
+        val result = SpannableStringBuilder()
+        val sourceScale = (textSizeSp - 1).coerceAtLeast(10).toFloat() /
+            textSizeSp.coerceAtLeast(1).toFloat()
+        floatingWindowTextSegments(pairs, floatingWindowContentMode).forEach { segment ->
+            val start = result.length
+            result.append(segment.text)
+            val end = result.length
+            if (start == end) return@forEach
+            when (segment.role) {
+                FloatingWindowTextRole.SOURCE -> {
+                    result.setSpan(
+                        ForegroundColorSpan(themeFgMutedColor()),
+                        start,
+                        end,
+                        Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+                    )
+                    result.setSpan(
+                        RelativeSizeSpan(sourceScale),
+                        start,
+                        end,
+                        Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+                    )
+                }
+
+                FloatingWindowTextRole.TRANSLATION -> Unit
+                FloatingWindowTextRole.SEPARATOR -> result.setSpan(
+                    ForegroundColorSpan(themeFgMutedColor()),
+                    start,
+                    end,
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+                )
+            }
+        }
+        return result
     }
 
     private fun DraggableOverlayWindow.applySettings() {
@@ -725,6 +757,20 @@ class OverlayManager(
                     ?: screenH
             } else screenH
 
+            val overlayGapPx = (8 * dm.density).toInt().coerceAtLeast(8)
+            val belowBoundaryScreen = if (belowNeighborTop >= screenH) {
+                screenH
+            } else {
+                belowNeighborTop + regionOffset.y + offsetY
+            }
+            val horizontalAvailableHeightPx = when (placement) {
+                OverlayPlacement.ABOVE -> {
+                    b.top + regionOffset.y + offsetY - resolvedBaseTop - overlayGapPx
+                }
+                OverlayPlacement.BELOW,
+                OverlayPlacement.OVERLAP -> belowBoundaryScreen - resolvedBaseTop - overlayGapPx
+            }.coerceAtLeast(lineHeightPx)
+
             var verticalSlotForLayout: VerticalOverlaySlot? = null
             var verticalHeightForLayout = FrameLayout.LayoutParams.WRAP_CONTENT
             val view: View = if (isVertical) {
@@ -852,18 +898,13 @@ class OverlayManager(
                             )
                         }
                         onAdaptiveTextLayoutResolved = { snapshot ->
-                            val belowBoundaryScreen = if (belowNeighborTop >= screenH) {
-                                screenH
-                            } else {
-                                belowNeighborTop + regionOffset.y + offsetY
-                            }
                             val expanded = expandAdaptiveHorizontalViewport(
                                 view = this@horizontalView,
                                 blockIndex = idx,
                                 topPx = resolvedBaseTop.coerceAtLeast(0),
                                 screenHeight = screenH,
                                 lowerBoundaryPx = belowBoundaryScreen,
-                                gapPx = (8 * dm.density).toInt().coerceAtLeast(8),
+                                gapPx = overlayGapPx,
                                 snapshot = snapshot,
                                 diagPrefix = diagPrefix,
                             )
@@ -883,11 +924,14 @@ class OverlayManager(
                     }
                     if (allowWrap) {
                         setSingleLine(false)
-                        // maxLines 固定 10 行：showBlocks 时 dst 是占位"…"无法算最终行数；
-                        // updateBlockText 又只更新 text 不动 maxLines；用大值保证段落聚类
-                        // 多行译文不被截断。代价是可能盖到下方相邻原文 box，但比"看到 …"好。
-                        maxLines = 10
-                        // 不显示省略号——即使超过 10 行也直接截，省略号在 OCR 场景看着像 bug
+                        // Use the actual vertical slot. A fixed line cap leaves most of a tall
+                        // merged OVERLAP box empty while TextView scrolls inside its first rows.
+                        maxLines = horizontalOverlayMaxLines(
+                            allowWrap = true,
+                            adaptiveTextFitEnabled = adaptiveStyle != null,
+                            availableHeightPx = horizontalAvailableHeightPx,
+                            estimatedLineHeightPx = lineHeightPx,
+                        )
                         ellipsize = null
                     } else {
                         // 强制单行模式：长译文不再显示"…"截断，改用 MARQUEE 跑马灯——文本超
@@ -895,7 +939,12 @@ class OverlayManager(
                         // marquee 需要 view 拿到 focus 或 isSelected=true 才会启动；overlay 窗
                         // 口拿不到 focus（我们设的 FLAG_NOT_FOCUSABLE），所以靠 isSelected。
                         setSingleLine(true)
-                        maxLines = 1
+                        maxLines = horizontalOverlayMaxLines(
+                            allowWrap = false,
+                            adaptiveTextFitEnabled = adaptiveStyle != null,
+                            availableHeightPx = horizontalAvailableHeightPx,
+                            estimatedLineHeightPx = lineHeightPx,
+                        )
                         ellipsize = android.text.TextUtils.TruncateAt.MARQUEE
                         marqueeRepeatLimit = -1
                         isSelected = true
@@ -1125,6 +1174,15 @@ class OverlayManager(
         if (nativeSelectionEnabled) {
             (view as TextView).apply {
                 setTextIsSelectable(true)
+                if (plan.enableSelectedTextSpeech) {
+                    enableSelectionSpeech(
+                        label = context.getString(R.string.word_card_speak_selection),
+                        isEnabled = { translationBlockSelectionSpeechAction != null },
+                        onSpeak = { selectedText ->
+                            translationBlockSelectionSpeechAction?.onStart?.invoke(selectedText)
+                        },
+                    )
+                }
                 isFocusableInTouchMode = true
                 setOnTouchListener { touchedView, event ->
                     when (event.actionMasked) {
@@ -1193,11 +1251,11 @@ class OverlayManager(
     }
 
     private fun applyFloatingWindowText(index: Int, update: PendingOverlayTextUpdate) {
-        val target = floatingDstViews?.get(index) ?: return
-        if (target is StyledTranslationTextView) {
-            target.adaptiveTextLayoutPhase = update.phase
-        }
-        target.text = update.text
+        val target = floatingContentView ?: return
+        val pairs = lastFloatingPairs ?: return
+        target.adaptiveTextLayoutPhase = update.phase
+        target.text = buildFloatingWindowText(pairs)
+        floatingWindow.refreshSelectableTextViews()
     }
 
     private fun expandAdaptiveVerticalViewport(
@@ -1427,11 +1485,20 @@ class OverlayManager(
     fun hasActiveResult(): Boolean =
         (blocksView != null && blockViews.isNotEmpty()) || floatingWindow.isShown()
 
+    private fun handleFloatingWindowUserDismiss() {
+        performPlaybackOverlayDismiss(
+            stopPlayback = onFloatingWindowDismissed,
+            clearOverlay = ::clear,
+        ).onFailure { error ->
+            Timber.w(error, "Failed to stop TTS when floating window was dismissed")
+        }
+    }
+
     fun clear() {
         clearLoading()
         dismissError()
         floatingWindow.hide()
-        floatingDstViews = null
+        floatingContentView = null
         floatingStreamingUpdateCounts.clear()
         floatingFrameUpdateCoalescers.values.forEach { it.discardPending() }
         floatingFrameUpdateCoalescers.clear()

@@ -145,11 +145,25 @@ class RoutingOcrEngine @Inject constructor(
                     deFurigana.map { it.boundingBox.toMergeDebugRect() },
                     verticalGapRatio = params.verticalGapRatio
                 )
-                val deNoised = removeVerticalOcrNoise(deFurigana, noiseLimits.baseColumnWidth)
-                if (deNoised.size != deFurigana.size) {
+                val punctuationMerged = mergeVerticalTerminalPunctuation(
+                    deFurigana,
+                    noiseLimits.baseColumnWidth,
+                )
+                if (punctuationMerged.size != deFurigana.size) {
+                    Timber.tag("OcrMerge").i(
+                        "[V] mergeTerminalPunctuation: %d -> %d",
+                        deFurigana.size,
+                        punctuationMerged.size,
+                    )
+                }
+                val deNoised = removeVerticalOcrNoise(
+                    punctuationMerged,
+                    noiseLimits.baseColumnWidth,
+                )
+                if (deNoised.size != punctuationMerged.size) {
                     Timber.tag("OcrMerge").i(
                         "[V] removeNoise: %d -> %d baseColW=%d",
-                        deFurigana.size,
+                        punctuationMerged.size,
                         deNoised.size,
                         noiseLimits.baseColumnWidth
                     )
@@ -178,13 +192,24 @@ class RoutingOcrEngine @Inject constructor(
         blocks: List<TextBlock>,
         limits: PreDirectionNoiseLimits
     ): List<TextBlock> {
-        val kept = blocks.filterNot { block ->
+        val protectedPunctuationIndexes = verticalTerminalPunctuationAttachments(
+            blocks.map { block ->
+                val rect = block.boundingBox
+                VerticalTerminalPunctuationBlock(
+                    text = block.text,
+                    rect = MergeDebugRect(rect.left, rect.top, rect.right, rect.bottom),
+                    confidence = block.confidence,
+                )
+            },
+            limits.baseShortSide,
+        ).values.flatten().toSet()
+        val kept = blocks.filterIndexed { index, block ->
             val drop = shouldDropPreDirectionOcrNoise(
                 text = block.text,
                 confidence = block.confidence,
                 rect = block.boundingBox.toMergeDebugRect(),
                 baseShortSide = limits.baseShortSide
-            )
+            ) && index !in protectedPunctuationIndexes
             if (drop) {
                 Timber.tag("OcrMerge").i(
                     "[noise] drop preDirection box=%s conf=%.3f baseShort=%d text=%s",
@@ -194,7 +219,7 @@ class RoutingOcrEngine @Inject constructor(
                     previewForLog(block.text)
                 )
             }
-            drop
+            !drop
         }
         if (kept.size != blocks.size) {
             Timber.tag("OcrMerge").i(
@@ -763,7 +788,7 @@ internal fun shouldDropVerticalOcrNoise(
     if (compact.isBlank()) return true
     if (compact.length > 4) return false
     if (compact.any { it.isCjkLikeForOcrMerge() }) return false
-    if (confidence >= 0.45f) return false
+    if (confidence >= OCR_LOW_CONFIDENCE_THRESHOLD) return false
 
     val base = baseColumnWidth.coerceAtLeast(1)
     val tinyWidth = rect.width <= base * 0.75f
@@ -782,7 +807,7 @@ internal fun shouldDropPreDirectionOcrNoise(
     if (compact.isBlank()) return true
     if (compact.length > 4) return false
     if (compact.any { it.isCjkLikeForOcrMerge() }) return false
-    if (confidence >= 0.45f) return false
+    if (confidence >= OCR_LOW_CONFIDENCE_THRESHOLD) return false
     if (!compact.all { it.isAsciiNoiseCandidateForOcrMerge() }) return false
 
     val base = baseShortSide.coerceAtLeast(1)
@@ -790,6 +815,138 @@ internal fun shouldDropPreDirectionOcrNoise(
     val area = rect.width * rect.height
     return shortSide <= base * 0.75f && area <= base * base * 1.2f
 }
+
+internal fun mergeVerticalTerminalPunctuation(
+    blocks: List<TextBlock>,
+    baseColumnWidth: Int,
+): List<TextBlock> {
+    if (blocks.size <= 1) return blocks
+    val attachments = verticalTerminalPunctuationAttachments(
+        blocks.map { block ->
+            val rect = block.boundingBox
+            VerticalTerminalPunctuationBlock(
+                text = block.text,
+                rect = MergeDebugRect(rect.left, rect.top, rect.right, rect.bottom),
+                confidence = block.confidence,
+            )
+        },
+        baseColumnWidth,
+    )
+    if (attachments.isEmpty()) return blocks
+
+    val attachedIndexes = attachments.values.flatten().toSet()
+    return blocks.mapIndexedNotNull { index, block ->
+        if (index in attachedIndexes) return@mapIndexedNotNull null
+        val punctuationBlocks = attachments[index]?.map(blocks::get).orEmpty()
+        if (punctuationBlocks.isEmpty()) return@mapIndexedNotNull block
+
+        val union = Rect(
+            minOf(block.boundingBox.left, punctuationBlocks.minOf { it.boundingBox.left }),
+            minOf(block.boundingBox.top, punctuationBlocks.minOf { it.boundingBox.top }),
+            maxOf(block.boundingBox.right, punctuationBlocks.maxOf { it.boundingBox.right }),
+            maxOf(block.boundingBox.bottom, punctuationBlocks.maxOf { it.boundingBox.bottom }),
+        )
+        val sourceBoxes = block.sourceBoxesOrBoundingBox() +
+            punctuationBlocks.flatMap { it.sourceBoxesOrBoundingBox() }
+        block.copy(
+            text = mergeVerticalTerminalPunctuationText(block.text),
+            boundingBox = union,
+            sourceBoxes = sourceBoxes,
+        )
+    }
+}
+
+internal data class VerticalTerminalPunctuationBlock(
+    val text: String,
+    val rect: MergeDebugRect,
+    val confidence: Float = 1f,
+)
+
+internal fun verticalTerminalPunctuationAttachments(
+    blocks: List<VerticalTerminalPunctuationBlock>,
+    baseColumnWidth: Int,
+): Map<Int, List<Int>> {
+    val punctuationIndexes = blocks.indices.filter { index ->
+        blocks[index].isVerticalFullStopCandidate()
+    }.toSet()
+    if (punctuationIndexes.isEmpty()) return emptyMap()
+
+    val attachments = mutableMapOf<Int, MutableList<Int>>()
+    punctuationIndexes.forEach { punctuationIndex ->
+        val punctuation = blocks[punctuationIndex]
+        val targetIndex = blocks.indices
+            .asSequence()
+            .filter { it !in punctuationIndexes }
+            .mapNotNull { index ->
+                verticalTerminalPunctuationScore(
+                    punctuationText = punctuation.text,
+                    punctuationConfidence = punctuation.confidence,
+                    punctuationRect = punctuation.rect,
+                    columnText = blocks[index].text,
+                    columnRect = blocks[index].rect,
+                    baseColumnWidth = baseColumnWidth,
+                )?.let { score -> index to score }
+            }
+            .minByOrNull { it.second }
+            ?.first
+        if (targetIndex != null) {
+            attachments.getOrPut(targetIndex) { mutableListOf() }.add(punctuationIndex)
+        }
+    }
+    return attachments.mapValues { (_, indexes) -> indexes.toList() }
+}
+
+private fun verticalTerminalPunctuationScore(
+    punctuationText: String,
+    punctuationConfidence: Float,
+    punctuationRect: MergeDebugRect,
+    columnText: String,
+    columnRect: MergeDebugRect,
+    baseColumnWidth: Int,
+): Int? {
+    if (!isVerticalFullStopCandidate(punctuationText, punctuationConfidence)) return null
+    val compactColumnText = columnText.filterNot { it.isWhitespace() }
+    if (compactColumnText.length < 4 || compactColumnText.none { it.isCjkLikeForOcrMerge() }) return null
+    if (columnRect.height < columnRect.width * 2) return null
+
+    val base = baseColumnWidth.coerceAtLeast(1)
+    val punctuationShortSide = minOf(punctuationRect.width, punctuationRect.height)
+    val punctuationArea = punctuationRect.width * punctuationRect.height
+    if (punctuationShortSide > base * 0.75f) return null
+    if (punctuationArea > base * base * 1.2f) return null
+
+    val punctuationCenterX = punctuationRect.left + punctuationRect.width / 2
+    val punctuationCenterY = punctuationRect.top + punctuationRect.height / 2
+    val columnCenterX = columnRect.left + columnRect.width / 2
+    val horizontalDistance = kotlin.math.abs(punctuationCenterX - columnCenterX)
+    val terminalDistance = kotlin.math.abs(punctuationCenterY - columnRect.bottom)
+    if (horizontalDistance > columnRect.width * 0.4f) return null
+    if (terminalDistance > base * 0.6f) return null
+    if (punctuationCenterY < columnRect.top + columnRect.height * 0.65f) return null
+    return horizontalDistance + terminalDistance
+}
+
+private fun VerticalTerminalPunctuationBlock.isVerticalFullStopCandidate(): Boolean =
+    isVerticalFullStopCandidate(text, confidence)
+
+private fun isVerticalFullStopCandidate(text: String, confidence: Float): Boolean {
+    val compact = text.filterNot { it.isWhitespace() }
+    if (compact in DEFINITE_VERTICAL_FULL_STOPS) return true
+    if (confidence >= OCR_LOW_CONFIDENCE_THRESHOLD) return false
+    return compact in LOW_CONFIDENCE_VERTICAL_FULL_STOP_LOOKALIKES ||
+        (compact.length == 1 && compact.single().isAsciiNoiseCandidateForOcrMerge())
+}
+
+internal fun mergeVerticalTerminalPunctuationText(text: String): String =
+    text.withTerminalFullStop()
+
+private fun String.withTerminalFullStop(): String =
+    if (trimEnd().lastOrNull() in SENTENCE_END_PUNCTUATION) this else this + "。"
+
+private val DEFINITE_VERTICAL_FULL_STOPS = setOf(".", "。", "．", "｡")
+private val LOW_CONFIDENCE_VERTICAL_FULL_STOP_LOOKALIKES = setOf("o", "O", "0", "°", "7o")
+private val SENTENCE_END_PUNCTUATION = setOf('。', '．', '｡', '.', '！', '!', '？', '?', '°')
+private const val OCR_LOW_CONFIDENCE_THRESHOLD = 0.45f
 
 private fun Char.isCjkLikeForOcrMerge(): Boolean =
     this in '\u3400'..'\u9FFF' ||

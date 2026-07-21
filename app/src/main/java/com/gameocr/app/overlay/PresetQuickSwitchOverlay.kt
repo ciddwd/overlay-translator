@@ -24,6 +24,7 @@ import com.gameocr.app.data.Settings
 import com.gameocr.app.data.TranslationPreset
 import com.gameocr.app.data.TranslationPresetCatalog
 import com.gameocr.app.data.TranslatorEngine
+import com.gameocr.app.tts.ttsPresetSummaryLabelRes
 
 class PresetQuickSwitchOverlay(private val context: Context) {
 
@@ -230,11 +231,12 @@ class PresetQuickSwitchOverlay(private val context: Context) {
                 ocrName(preset.ocrEngine),
                 presetLlmName(preset),
                 Languages.nameOf(context, preset.sourceLang),
-                Languages.nameOf(context, preset.targetLang)
+                Languages.nameOf(context, preset.targetLang),
+                context.getString(ttsPresetSummaryLabelRes(preset.ttsEnabled, preset.ttsProvider)),
             )
             setTextColor(mutedColor)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            maxLines = 3
+            maxLines = 4
             ellipsize = TextUtils.TruncateAt.END
         }
         textCol.addView(title)
@@ -267,9 +269,11 @@ class PresetQuickSwitchOverlay(private val context: Context) {
 
     private fun translatorName(engine: TranslatorEngine): String = when (engine) {
         TranslatorEngine.OPENAI -> context.getString(R.string.settings_engine_openai_llm)
+        TranslatorEngine.ANTHROPIC -> context.getString(R.string.settings_engine_anthropic_llm)
         TranslatorEngine.DEEPL -> context.getString(R.string.settings_engine_deepl)
         TranslatorEngine.YOUDAO_PICTRANS -> context.getString(R.string.settings_engine_youdao_pictrans)
         TranslatorEngine.GOOGLE -> context.getString(R.string.settings_engine_google)
+        TranslatorEngine.GOOGLE_ML_KIT -> context.getString(R.string.settings_translator_group_on_device)
         TranslatorEngine.VOLC -> context.getString(R.string.settings_engine_volc)
         TranslatorEngine.BAIDU_FANYI -> context.getString(R.string.settings_engine_baidu_fanyi)
         TranslatorEngine.TENCENT -> context.getString(R.string.settings_engine_tencent)
@@ -279,9 +283,25 @@ class PresetQuickSwitchOverlay(private val context: Context) {
 
     private fun presetLlmName(preset: TranslationPreset): String = when (preset.translatorEngine) {
         TranslatorEngine.OPENAI -> preset.model.ifBlank { translatorName(TranslatorEngine.OPENAI) }
+        TranslatorEngine.ANTHROPIC -> preset.anthropicModel.ifBlank {
+            translatorName(TranslatorEngine.ANTHROPIC)
+        }
         TranslatorEngine.LOCAL_SAKURA -> translatorName(TranslatorEngine.LOCAL_SAKURA)
         TranslatorEngine.LOCAL_HY_MT2 -> translatorName(TranslatorEngine.LOCAL_HY_MT2)
+        TranslatorEngine.GOOGLE_ML_KIT -> onDeviceSourceName(preset.sourceLang)
         else -> translatorName(preset.translatorEngine)
+    }
+
+    private fun onDeviceSourceName(languageTag: String): String = when {
+        languageTag.equals("zh", ignoreCase = true) || languageTag.startsWith("zh-", ignoreCase = true) ->
+            context.getString(R.string.settings_ocr_chip_chinese)
+        languageTag.equals("ja", ignoreCase = true) || languageTag.startsWith("ja-", ignoreCase = true) ->
+            context.getString(R.string.settings_ocr_chip_japanese)
+        languageTag.equals("ko", ignoreCase = true) || languageTag.startsWith("ko-", ignoreCase = true) ->
+            context.getString(R.string.settings_ocr_chip_korean)
+        languageTag.equals("en", ignoreCase = true) || languageTag.startsWith("en-", ignoreCase = true) ->
+            context.getString(R.string.settings_on_device_translation_english)
+        else -> context.getString(R.string.settings_translator_group_on_device)
     }
 
     private fun roundedBackground(color: Int, radius: Float): GradientDrawable =

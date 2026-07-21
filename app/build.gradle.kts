@@ -33,8 +33,8 @@ android {
         applicationId = "com.gameocr.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 13
-        versionName = "0.4.0"
+        versionCode = 14
+        versionName = "0.4.1"
 
         // Controlled local-LLM A/B switch. PP remains device-policy selected (6 on the
         // target 8-core phone); TG can be rebuilt as 4 or 6 without source changes.
@@ -107,7 +107,7 @@ android {
 
     packaging {
         resources {
-            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            excludes += "/META-INF/AL2.0"
         }
         // 必须开启：:llama-android 引入的 llama.cpp 用 GGML_BACKEND_DL=ON 模式，启动时
         // ggml_backend_load_all_from_path() 用 readdir 扫 nativeLibraryDir 找
@@ -160,6 +160,7 @@ dependencies {
     implementation(libs.mlkit.text.recognition.japanese)
     implementation(libs.mlkit.text.recognition.chinese)
     implementation(libs.mlkit.text.recognition.korean)
+    implementation(libs.mlkit.translate)
 
     // DataStore / Room
     implementation(libs.androidx.datastore.preferences)

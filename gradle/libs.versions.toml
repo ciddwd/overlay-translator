@@ -24,6 +24,7 @@ mlkitTextRecognition = "16.0.1"
 mlkitTextRecognitionJa = "16.0.1"
 mlkitTextRecognitionZh = "16.0.1"
 mlkitTextRecognitionKo = "16.0.1"
+mlkitTranslate = "17.0.3"
 
 datastore = "1.1.1"
 room = "2.6.1"
@@ -72,6 +73,7 @@ mlkit-text-recognition = { group = "com.google.mlkit", name = "text-recognition"
 mlkit-text-recognition-japanese = { group = "com.google.mlkit", name = "text-recognition-japanese", version.ref = "mlkitTextRecognitionJa" }
 mlkit-text-recognition-chinese = { group = "com.google.mlkit", name = "text-recognition-chinese", version.ref = "mlkitTextRecognitionZh" }
 mlkit-text-recognition-korean = { group = "com.google.mlkit", name = "text-recognition-korean", version.ref = "mlkitTextRecognitionKo" }
+mlkit-translate = { group = "com.google.mlkit", name = "translate", version.ref = "mlkitTranslate" }
 
 androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
 androidx-room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }

@@ -52,6 +52,17 @@ internal data class PaddleRecognitionCandidate(
     val elapsedMs: Long = 0L,
 )
 
+internal data class PaddleRecognizedText(
+    val text: String,
+    val confidence: Float,
+)
+
+internal fun paddleRecognizedText(candidate: PaddleRecognitionCandidate?): PaddleRecognizedText =
+    PaddleRecognizedText(
+        text = candidate?.text.orEmpty(),
+        confidence = candidate?.score?.coerceIn(0f, 1f) ?: 0f,
+    )
+
 internal data class PaddleProbMapStats(
     val width: Int,
     val height: Int,
@@ -144,6 +155,37 @@ internal fun paddleLogTextStats(text: String, maxSampleChars: Int = 160): Paddle
     )
 }
 
+internal fun parsePaddleYamlCharacterDict(lines: List<String>): List<String> {
+    val result = mutableListOf<String>()
+    var inDict = false
+    for (line in lines) {
+        val trimmed = line.trimEnd('\r', '\n')
+        if (trimmed.trimStart() == "character_dict:") {
+            inDict = true
+            continue
+        }
+        if (inDict) {
+            val match = Regex("^\\s*-\\s+(.+)$").matchEntire(trimmed)
+            if (match != null) {
+                var value = match.groupValues[1].trim(' ', '\t')
+                if ((value.startsWith("'") && value.endsWith("'")) ||
+                    (value.startsWith("\"") && value.endsWith("\""))) {
+                    value = value.substring(1, value.length - 1)
+                }
+                value = value.replace("\\'", "'")
+                    .replace("\\\"", "\"")
+                    .replace("\\n", "\n")
+                    .replace("\\t", "\t")
+                    .replace("\\\\", "\\")
+                result.add(value)
+            } else if (trimmed.isNotBlank() && !trimmed.trimStart().startsWith("#")) {
+                break
+            }
+        }
+    }
+    return result
+}
+
 internal fun String.forPaddleOcrLog(maxChars: Int = 160): String {
     val normalized = replace("\r", "\\r").replace("\n", "\\n")
     return if (normalized.length <= maxChars) normalized else normalized.take(maxChars) + "..."
@@ -210,7 +252,7 @@ internal fun paddleRecognitionQuality(candidate: PaddleRecognitionCandidate): Fl
  * PaddleOCR PP-OCRv5/v6 端侧识别。基于 ONNX Runtime Android，不需要打包 native .so。
  *
  * 支持两个模型版本（通过 [PaddleModelVersion] 切换）：
- * - V5_MOBILE: PP-OCRv5 mobile（det + rec + keys.txt）
+ * - V5_MOBILE: PP-OCRv5 mobile（官方 det + rec + inference.yml 字典）
  * - V6_TINY: PP-OCRv6 tiny（det + rec + inference.yml 内嵌字典）
  *
  * 数据流：
@@ -309,8 +351,7 @@ class PaddleOcrEngine @Inject constructor(
         }
         detSession = e.createSession(files.det.absolutePath, sessionOptions)
         recSession = e.createSession(files.rec.absolutePath, sessionOptions)
-        // PP-OCRv5: keys.txt 每行一个字符，末尾可能有多余 \r
-        // PP-OCRv6: 字典内嵌在 inference.yml 的 character_dict 字段
+        // PaddlePaddle 官方字典内嵌在 inference.yml 的 character_dict 字段。
         keys = if (files.keys.name.endsWith(".yml") || files.keys.name.endsWith(".yaml")) {
             parseYamlDict(files.keys)
         } else {
@@ -335,43 +376,12 @@ class PaddleOcrEngine @Inject constructor(
     }
 
     /**
-     * 解析 PP-OCRv6 inference.yml 中内嵌的 character_dict。
+     * 解析 PaddleOCR 官方 inference.yml 中内嵌的 character_dict。
      * YAML 格式：在 `character_dict:` 之后每行以 `  - ` 开头的都是一个字符。
      * 简单行解析，不引入 YAML 库依赖。
      */
     private fun parseYamlDict(file: File): List<String> {
-        val lines = file.readLines()
-        val result = mutableListOf<String>()
-        var inDict = false
-        for (line in lines) {
-            val trimmed = line.trimEnd('\r', '\n')
-            if (trimmed.trimStart() == "character_dict:") {
-                inDict = true
-                continue
-            }
-            if (inDict) {
-                // YAML list item: "  - <value>"
-                val match = Regex("^\\s+-\\s+(.+)$").matchEntire(trimmed)
-                if (match != null) {
-                    // 去掉可能的单引号/双引号包裹
-                    var value = match.groupValues[1].trim()
-                    if ((value.startsWith("'") && value.endsWith("'")) ||
-                        (value.startsWith("\"") && value.endsWith("\""))) {
-                        value = value.substring(1, value.length - 1)
-                    }
-                    // YAML 转义字符
-                    value = value.replace("\\'", "'")
-                        .replace("\\\"", "\"")
-                        .replace("\\n", "\n")
-                        .replace("\\t", "\t")
-                        .replace("\\\\", "\\")
-                    result.add(value)
-                } else if (trimmed.isNotBlank() && !trimmed.trimStart().startsWith("#")) {
-                    // 遇到非 list item 的非空行，说明 character_dict 结束
-                    break
-                }
-            }
-        }
+        val result = parsePaddleYamlCharacterDict(file.readLines())
         Timber.i("Parsed YAML dict: %d characters", result.size)
         return result
     }
@@ -449,7 +459,8 @@ class PaddleOcrEngine @Inject constructor(
         }
         val tRecStart = System.currentTimeMillis()
         val results = sorted.mapIndexedNotNull { i, quad ->
-            val text = recognizeQuad(bitmap, quad, runId, i).trim()
+            val recognition = paddleRecognizedText(recognizeQuad(bitmap, quad, runId, i))
+            val text = recognition.text.trim()
             val bounds = quad.axisAlignedBounds()
             val rect = Rect(
                 bounds[0].coerceAtLeast(0),
@@ -458,10 +469,11 @@ class PaddleOcrEngine @Inject constructor(
                 bounds[3].coerceAtMost(bitmap.height)
             )
             Timber.i(
-                "PaddleOCR run#%d result[%d] rect=%s textStats=%s text='%s'",
+                "PaddleOCR run#%d result[%d] rect=%s recScore=%.3f textStats=%s text='%s'",
                 runId,
                 i,
                 rect.toPaddleLogString(),
+                recognition.confidence,
                 paddleLogTextStats(text).toLogString(),
                 text.forPaddleOcrLog(),
             )
@@ -469,7 +481,12 @@ class PaddleOcrEngine @Inject constructor(
                 Timber.i("PaddleOCR run#%d result[%d] dropped empty text rect=%s", runId, i, rect.toPaddleLogString())
                 null
             } else {
-                TextBlock(text = text, boundingBox = rect, confidence = 1f, recognizedLanguage = "auto")
+                TextBlock(
+                    text = text,
+                    boundingBox = rect,
+                    confidence = recognition.confidence,
+                    recognizedLanguage = "auto",
+                )
             }
         }
         val tRec = System.currentTimeMillis() - tRecStart
@@ -771,18 +788,23 @@ class PaddleOcrEngine @Inject constructor(
     /**
      * CRNN 识别：用 [Matrix.setPolyToPoly] 把 Quad 4 点透视矫正到水平矩形 → resize 到 H=48 → 跑 onnx → CTC decode。
      */
-    private fun recognizeQuad(src: Bitmap, quad: DBPostprocessor.Quad, runId: Long, boxIndex: Int): String {
+    private fun recognizeQuad(
+        src: Bitmap,
+        quad: DBPostprocessor.Quad,
+        runId: Long,
+        boxIndex: Int,
+    ): PaddleRecognitionCandidate? {
         val session = recSession ?: run {
             Timber.w("PaddleOCR run#%d rec[%d] skipped: recSession=null", runId, boxIndex)
-            return ""
+            return null
         }
         val e = env ?: run {
             Timber.w("PaddleOCR run#%d rec[%d] skipped: env=null", runId, boxIndex)
-            return ""
+            return null
         }
         val crop = warpCropQuad(src, quad) ?: run {
             Timber.w("PaddleOCR run#%d rec[%d] warp failed quad=%s", runId, boxIndex, quad.toPaddleLogString())
-            return ""
+            return null
         }
         return try {
             val rotationDegrees = paddleVerticalCropRotationDegrees(crop.width, crop.height)
@@ -832,7 +854,7 @@ class PaddleOcrEngine @Inject constructor(
                 best?.toPaddleLogString() ?: "NONE",
                 candidates.joinToString(" || ") { it.toPaddleLogString() },
             )
-            best?.text.orEmpty()
+            best
         } finally {
             crop.recycle()
         }

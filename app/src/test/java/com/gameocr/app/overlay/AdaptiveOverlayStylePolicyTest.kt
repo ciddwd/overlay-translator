@@ -204,6 +204,16 @@ class AdaptiveOverlayStylePolicyTest {
                 expectedReasons = setOf(AdaptiveTextOverflowReason.MAX_LINES),
             ),
             Case(
+                name = "logcat seventeen lines fit expanded adaptive viewport without artificial limit",
+                textLength = 163,
+                visibleTextEnd = 163,
+                layoutHeightPx = 339,
+                contentHeightPx = 1494,
+                lineCount = 17,
+                maxLines = Int.MAX_VALUE,
+                expected = false,
+            ),
+            Case(
                 name = "ellipsis reported",
                 ellipsized = true,
                 expected = true,
@@ -252,6 +262,46 @@ class AdaptiveOverlayStylePolicyTest {
                     lineCount = case.lineCount,
                     maxLines = case.maxLines,
                     ellipsized = case.ellipsized,
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun horizontalOverlayMaxLines_tableDriven_usesAvailableHeightForNonAdaptiveWrapping() {
+        data class Case(
+            val name: String,
+            val allowWrap: Boolean,
+            val adaptiveTextFitEnabled: Boolean,
+            val availableHeightPx: Int,
+            val estimatedLineHeightPx: Int,
+            val expected: Int,
+        )
+
+        val cases = listOf(
+            Case("single line remains one", false, false, 2_134, 55, 1),
+            Case("single line adaptive remains one", false, true, 2_134, 55, 1),
+            Case("merged block uses its tall viewport", true, false, 2_134, 55, 38),
+            Case("small block uses only its available rows", true, false, 120, 48, 2),
+            Case(
+                "adaptive wrapping uses the measured viewport instead of an artificial line cap",
+                allowWrap = true,
+                adaptiveTextFitEnabled = true,
+                availableHeightPx = 2_134,
+                estimatedLineHeightPx = 55,
+                expected = Int.MAX_VALUE,
+            ),
+        )
+
+        cases.forEach { case ->
+            assertEquals(
+                case.name,
+                case.expected,
+                horizontalOverlayMaxLines(
+                    allowWrap = case.allowWrap,
+                    adaptiveTextFitEnabled = case.adaptiveTextFitEnabled,
+                    availableHeightPx = case.availableHeightPx,
+                    estimatedLineHeightPx = case.estimatedLineHeightPx,
                 ),
             )
         }

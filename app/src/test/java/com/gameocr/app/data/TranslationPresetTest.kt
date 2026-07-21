@@ -11,6 +11,7 @@ class TranslationPresetTest {
     fun mangaBuiltInPresetAppliesOfflineJapaneseMangaModeAndKeepsSecrets() {
         val base = Settings(
             apiKey = "openai-key",
+            anthropicApiKey = "anthropic-key",
             baiduOcrApiKey = "baidu-key",
             baiduOcrSecretKey = "baidu-secret",
             paddleAiStudioToken = "paddle-ai-studio-token",
@@ -63,6 +64,7 @@ class TranslationPresetTest {
         }
 
         assertEquals(base.apiKey, applied.apiKey)
+        assertEquals(base.anthropicApiKey, applied.anthropicApiKey)
         assertEquals(base.baiduOcrApiKey, applied.baiduOcrApiKey)
         assertEquals(base.baiduOcrSecretKey, applied.baiduOcrSecretKey)
         assertEquals(base.paddleAiStudioToken, applied.paddleAiStudioToken)
@@ -109,6 +111,7 @@ class TranslationPresetTest {
         val fieldNames = TranslationPreset::class.java.declaredFields.map { it.name }.toSet()
         val forbidden = setOf(
             "apiKey",
+            "anthropicApiKey",
             "baiduOcrApiKey",
             "baiduOcrSecretKey",
             "paddleAiStudioToken",
@@ -225,6 +228,80 @@ class TranslationPresetTest {
 
         cases.forEach { case ->
             assertFalse(case.name, TranslationPresetCatalog.matchesSettings(preset, case.changed))
+        }
+    }
+
+    @Test
+    fun translationPresetRoundTripsTtsSelectionWithoutOverwritingProviderDetails() {
+        data class Case(
+            val name: String,
+            val enabled: Boolean,
+            val provider: TtsProvider,
+        )
+
+        val cases = listOf(
+            Case("disabled", false, TtsProvider.SYSTEM),
+            Case("system", true, TtsProvider.SYSTEM),
+            Case("generic HTTP", true, TtsProvider.GENERIC_HTTP),
+            Case("Volcengine", true, TtsProvider.VOLCENGINE),
+            Case("MiniMax", true, TtsProvider.MINIMAX),
+            Case("MiMo", true, TtsProvider.MIMO),
+        )
+
+        cases.forEachIndexed { index, case ->
+            val source = Settings(
+                ttsEnabled = case.enabled,
+                ttsProvider = case.provider,
+                ttsMiniMaxApiKey = "source-minimax-secret",
+                ttsMimoApiKey = "source-mimo-secret",
+                ttsHttpBearerToken = "source-http-secret",
+            )
+            val preset = TranslationPresetCatalog.fromSettings(
+                id = "tts_$index",
+                name = case.name,
+                shortName = case.name.take(8),
+                settings = source,
+            )
+            val destination = Settings(
+                ttsEnabled = !case.enabled,
+                ttsProvider = TtsProvider.MIMO,
+                ttsVoice = "destination-voice",
+                ttsMiniMaxApiKey = "destination-minimax-secret",
+                ttsMimoApiKey = "destination-mimo-secret",
+                ttsHttpBearerToken = "destination-http-secret",
+            )
+            val applied = preset.applyTo(destination)
+
+            assertEquals("${case.name} preset enabled", case.enabled, preset.ttsEnabled)
+            assertEquals("${case.name} preset provider", case.provider, preset.ttsProvider)
+            assertEquals("${case.name} applied enabled", case.enabled, applied.ttsEnabled)
+            assertEquals("${case.name} applied provider", case.provider, applied.ttsProvider)
+            assertEquals("${case.name} voice remains global", "destination-voice", applied.ttsVoice)
+            assertEquals(
+                "${case.name} MiniMax credential remains global",
+                "destination-minimax-secret",
+                applied.ttsMiniMaxApiKey,
+            )
+            assertEquals(
+                "${case.name} MiMo credential remains global",
+                "destination-mimo-secret",
+                applied.ttsMimoApiKey,
+            )
+            assertEquals(
+                "${case.name} HTTP credential remains global",
+                "destination-http-secret",
+                applied.ttsHttpBearerToken,
+            )
+            assertTrue("${case.name} matches source", TranslationPresetCatalog.matchesSettings(preset, source))
+            assertFalse(
+                "${case.name} rejects changed enabled state",
+                TranslationPresetCatalog.matchesSettings(preset, source.copy(ttsEnabled = !case.enabled)),
+            )
+            val otherProvider = if (case.provider == TtsProvider.MINIMAX) TtsProvider.MIMO else TtsProvider.MINIMAX
+            assertFalse(
+                "${case.name} rejects changed provider",
+                TranslationPresetCatalog.matchesSettings(preset, source.copy(ttsProvider = otherProvider)),
+            )
         }
     }
 

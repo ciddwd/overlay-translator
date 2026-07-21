@@ -20,6 +20,20 @@ class TranslationCardOverlayCopySupportTest {
                 it.contains("text = buildSelectableDictionaryText(wordResult") &&
                     it.split("setTextIsSelectable(true)").size - 1 >= 3
             },
+            Case("source translation and dictionary have section headers") {
+                listOf(
+                    "R.string.word_card_section_source",
+                    "R.string.word_card_section_translation",
+                    "R.string.word_card_section_dictionary",
+                ).all(it::contains)
+            },
+            Case("dictionary speech includes every rendered dictionary section") {
+                it.contains("val speechText = dictionaryPlainText(wordResult, labels)") &&
+                    it.contains("onClick = { action.onToggle(speechText) }")
+            },
+            Case("all selectable card sections install selected-text speech") {
+                it.countOccurrences("enableSelectionSpeech(") >= 3
+            },
             Case("whole source copy action") { it.contains("copyToClipboard(sourceText)") },
             Case("whole translation copy action follows latest streamed text") {
                 it.contains("currentTranslation.takeIf") && it.contains("::copyToClipboard")
@@ -93,4 +107,7 @@ class TranslationCardOverlayCopySupportTest {
             File("src/main/java/com/gameocr/app/overlay/TranslationCardOverlay.kt"),
             File("app/src/main/java/com/gameocr/app/overlay/TranslationCardOverlay.kt"),
         ).firstOrNull(File::isFile) ?: error("TranslationCardOverlay.kt not found")
+
+    private fun String.countOccurrences(value: String): Int =
+        windowed(value.length).count { it == value }
 }

@@ -18,6 +18,63 @@ import javax.xml.parsers.DocumentBuilderFactory
 class SettingsScreenModelStatusTest {
 
     @Test
+    fun anthropicCompatibleLlm_hasDedicatedCloudConfigurationAndSearchTargets() {
+        val source = File("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
+        data class Case(val name: String, val marker: String)
+
+        listOf(
+            Case(
+                "cloud LLM engine chip",
+                "EngineChip(translatorEngine, TranslatorEngine.ANTHROPIC",
+            ),
+            Case("test connection receives Anthropic base URL", "anthropicBaseUrl = anthropicBaseUrl"),
+            Case("test connection receives Anthropic API key", "anthropicApiKey = anthropicApiKey"),
+            Case("test connection receives Anthropic model", "anthropicModel = anthropicModel"),
+            Case(
+                "Anthropic search switches to Anthropic engine",
+                "requiredTranslatorEngine = TranslatorEngine.ANTHROPIC",
+            ),
+        ).forEach { case ->
+            assertTrue(case.name, source.contains(case.marker))
+        }
+
+        val openAiConfigStart = source.indexOf("if (translatorEngine == TranslatorEngine.OPENAI) {")
+        val anthropicConfigStart = source.indexOf(
+            "} else if (translatorEngine == TranslatorEngine.ANTHROPIC)",
+            startIndex = openAiConfigStart,
+        )
+        val nextConfigStart = source.indexOf(
+            "} else if (translatorEngine == TranslatorEngine.DEEPL)",
+            startIndex = anthropicConfigStart,
+        )
+        assertTrue("OpenAI configuration branch", openAiConfigStart >= 0)
+        assertTrue("reachable Anthropic configuration branch", anthropicConfigStart > openAiConfigStart)
+        assertTrue("Anthropic configuration branch end", nextConfigStart > anthropicConfigStart)
+
+        val openAiConfig = source.substring(openAiConfigStart, anthropicConfigStart)
+        val anthropicConfig = source.substring(anthropicConfigStart, nextConfigStart)
+        assertFalse("OpenAI branch must not consume Anthropic", openAiConfig.contains("TranslatorEngine.ANTHROPIC"))
+        listOf(
+            Case("dedicated base URL state", "value = anthropicBaseUrl"),
+            Case("dedicated API key state", "value = anthropicApiKey"),
+            Case("dedicated model state", "value = anthropicModel"),
+            Case("Anthropic compatibility hint", "settings_anthropic_compatibility_hint"),
+        ).forEach { case ->
+            assertTrue(case.name, anthropicConfig.contains(case.marker))
+        }
+
+        val promptCall = source.indexOf("OpenAiPromptSettings(")
+        val promptCondition = source.substring(
+            source.lastIndexOf("if (translatorEngine", startIndex = promptCall),
+            promptCall,
+        )
+        assertTrue(
+            "Anthropic shares cloud LLM prompt settings",
+            promptCondition.contains("TranslatorEngine.ANTHROPIC"),
+        )
+    }
+
+    @Test
     fun translatorSection_placesLanguageAndContextControlsAfterEngineConfiguration() {
         val source = File("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
         val sectionStart = source.indexOf(
@@ -51,6 +108,73 @@ class SettingsScreenModelStatusTest {
             assertTrue("${case.name}: missing later marker", laterIndex >= 0)
             assertTrue(case.name, earlierIndex < laterIndex)
         }
+    }
+
+    @Test
+    fun crossLineContextTranslation_isEnabledByDefaultBelowStreamingTranslation() {
+        val source = File("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
+        val assistanceStart = source.indexOf("private fun TranslationAssistanceSettings(")
+        val assistanceEnd = source.indexOf(
+            "private fun OpenAiPromptSettings(",
+            startIndex = assistanceStart,
+        )
+        val developerStart = source.indexOf("item(key = SectionKeys.DEVELOPER)")
+        val developerEnd = source.indexOf(
+            "item(key = SectionKeys.NETWORK)",
+            startIndex = developerStart,
+        )
+        val streamingIndex = source.indexOf(
+            "R.string.settings_search_item_streaming",
+            startIndex = assistanceStart,
+        )
+        val crossLineIndex = source.indexOf(
+            "label = stringResource(R.string.settings_cross_line_context_translation)",
+            startIndex = assistanceStart,
+        )
+
+        assertTrue("translation assistance function exists", assistanceStart >= 0)
+        assertTrue("translation assistance function end exists", assistanceEnd > assistanceStart)
+        assertTrue("streaming switch exists", streamingIndex in assistanceStart until assistanceEnd)
+        assertTrue("cross-context switch is inside translation settings", crossLineIndex in assistanceStart until assistanceEnd)
+        assertTrue("cross-context switch follows streaming translation", streamingIndex < crossLineIndex)
+        assertTrue(
+            "cross-context switch uses positive enabled semantics",
+            source.substring(crossLineIndex, assistanceEnd)
+                .contains("checked = crossLineContextTranslationEnabled"),
+        )
+        assertTrue(
+            "cross-context UI defaults to enabled",
+            source.contains("var crossLineContextTranslationEnabled by remember { mutableStateOf(true) }"),
+        )
+        assertTrue(
+            "legacy disable field is inverted when settings load",
+            source.contains("crossLineContextTranslationEnabled = !s.disableCrossLineContextTranslation"),
+        )
+        assertTrue(
+            "positive UI value is inverted for legacy persistence",
+            source.contains("disableCrossLineContextTranslation = !crossLineContextTranslationEnabled"),
+        )
+        assertTrue("developer section exists", developerStart >= 0)
+        assertTrue("developer section end exists", developerEnd > developerStart)
+        assertFalse(
+            "developer section no longer exposes cross-context translation",
+            source.substring(developerStart, developerEnd)
+                .contains("settings_cross_line_context_translation"),
+        )
+        assertTrue(
+            "settings search routes cross-context translation to Translation",
+            source.contains(
+                "SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, " +
+                    "R.string.settings_search_item_cross_line_context"
+            ),
+        )
+        assertFalse(
+            "settings search no longer routes cross-context translation to Developer",
+            source.contains(
+                "SearchEntry(SectionKeys.DEVELOPER, R.string.settings_section_developer, " +
+                    "R.string.settings_search_item_cross_line_context"
+            ),
+        )
     }
 
     @Test
@@ -228,6 +352,44 @@ class SettingsScreenModelStatusTest {
     }
 
     @Test
+    fun translationBlockInteractionHelp_explainsVerticalSelectionLimitInEveryLocale() {
+        data class Case(
+            val name: String,
+            val resourcePath: String,
+            val expectedFragment: String,
+        )
+
+        val cases = listOf(
+            Case(
+                name = "English vertical limitation",
+                resourcePath = "src/main/res/values/strings.xml",
+                expectedFragment = "Vertical translation blocks do not support direct long-press text selection",
+            ),
+            Case(
+                name = "Simplified Chinese vertical limitation",
+                resourcePath = "src/main/res/values-zh-rCN/strings.xml",
+                expectedFragment = "竖排译文块不支持直接长按选中复制",
+            ),
+        )
+
+        cases.forEach { case ->
+            val value = stringResourceValue(
+                case.resourcePath,
+                "settings_translation_block_interaction_vertical_help",
+            )
+            assertTrue(case.name, value.contains(case.expectedFragment))
+        }
+
+        val source = File("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
+        assertTrue(
+            "translation block title has an adjacent help tooltip",
+            Regex(
+                """settings_translation_block_interaction_label[\s\S]*?SettingHelpTooltip\([\s\S]*?settings_translation_block_interaction_vertical_help"""
+            ).containsMatchIn(source),
+        )
+    }
+
+    @Test
     fun translationPresetSummaryFormat_usesOneReadableFieldPerLine() {
         data class Case(
             val name: String,
@@ -239,19 +401,19 @@ class SettingsScreenModelStatusTest {
             Case(
                 name = "default English summary",
                 resourcePath = "src/main/res/values/strings.xml",
-                expected = "OCR: %1\$s\\nTranslator: %2\$s\\nLanguages: %3\$s → %4\$s",
+                expected = "OCR: %1\$s\\nTranslator: %2\$s\\nLanguages: %3\$s → %4\$s\\nTTS: %5\$s",
             ),
             Case(
                 name = "Simplified Chinese summary",
                 resourcePath = "src/main/res/values-zh-rCN/strings.xml",
-                expected = "OCR：%1\$s\\n翻译：%2\$s\\n语言：%3\$s → %4\$s",
+                expected = "OCR：%1\$s\\n翻译：%2\$s\\n语言：%3\$s → %4\$s\\nTTS：%5\$s",
             ),
         )
 
         cases.forEach { case ->
             val summary = stringResourceValue(case.resourcePath, "preset_quick_summary_format")
             assertEquals(case.name, case.expected, summary)
-            assertEquals(case.name, 3, summary.split("\\n").size)
+            assertEquals(case.name, 4, summary.split("\\n").size)
             assertFalse(case.name, summary.contains(" · "))
         }
     }
@@ -1529,6 +1691,10 @@ class SettingsScreenModelStatusTest {
             val hosts: List<String>,
             val umiUrl: String,
             val lunaUrl: String,
+            val ttsUrl: String = "",
+            val miniMaxTtsUrl: String = "",
+            val mimoTtsUrl: String = "",
+            val volcengineTtsUrl: String = "",
             val expected: List<String>,
         )
 
@@ -1555,6 +1721,14 @@ class SettingsScreenModelStatusTest {
                 expected = listOf("luna-pc"),
             ),
             Case(
+                name = "tts http hostname is appended",
+                hosts = emptyList(),
+                umiUrl = "",
+                lunaUrl = "",
+                ttsUrl = "http://tts-pc:2333/api/tts",
+                expected = listOf("tts-pc"),
+            ),
+            Case(
                 name = "both local OCR hosts are appended",
                 hosts = listOf("nas.local"),
                 umiUrl = "http://umi-pc:1224/api/ocr",
@@ -1562,10 +1736,28 @@ class SettingsScreenModelStatusTest {
                 expected = listOf("nas.local", "umi-pc", "luna-pc"),
             ),
             Case(
+                name = "custom cloud TTS http hosts are appended",
+                hosts = emptyList(),
+                umiUrl = "",
+                lunaUrl = "",
+                miniMaxTtsUrl = "http://minimax-proxy:8080/v1",
+                mimoTtsUrl = "http://mimo-proxy:8081/v1",
+                expected = listOf("minimax-proxy", "mimo-proxy"),
+            ),
+            Case(
+                name = "custom Volcengine HTTP host is appended",
+                hosts = emptyList(),
+                umiUrl = "",
+                lunaUrl = "",
+                volcengineTtsUrl = "http://volc-proxy:8082",
+                expected = listOf("volc-proxy"),
+            ),
+            Case(
                 name = "duplicate hosts are deduped case insensitively",
                 hosts = listOf("PC-NAME"),
                 umiUrl = "http://pc-name:1224/api/ocr",
                 lunaUrl = "http://pc-name:3456/api/ocr",
+                ttsUrl = "http://pc-name:2333/api/tts",
                 expected = listOf("PC-NAME"),
             ),
             Case(
@@ -1573,6 +1765,7 @@ class SettingsScreenModelStatusTest {
                 hosts = listOf("pc-name"),
                 umiUrl = "https://ocr.example.com/api/ocr",
                 lunaUrl = "https://luna.example.com/api/ocr",
+                ttsUrl = "https://tts.example.com/api/tts",
                 expected = listOf("pc-name"),
             ),
             Case(
@@ -1580,6 +1773,7 @@ class SettingsScreenModelStatusTest {
                 hosts = listOf("pc-name", " "),
                 umiUrl = "not a url",
                 lunaUrl = "also not a url",
+                ttsUrl = "bad tts url",
                 expected = listOf("pc-name"),
             ),
         )
@@ -1588,7 +1782,15 @@ class SettingsScreenModelStatusTest {
             assertEquals(
                 case.name,
                 case.expected,
-                cleartextHostsWithLocalOcrUrls(case.hosts, case.umiUrl, case.lunaUrl)
+                cleartextHostsWithLocalOcrUrls(
+                    case.hosts,
+                    case.umiUrl,
+                    case.lunaUrl,
+                    case.ttsUrl,
+                    case.miniMaxTtsUrl,
+                    case.mimoTtsUrl,
+                    case.volcengineTtsUrl,
+                )
             )
         }
     }
