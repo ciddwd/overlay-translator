@@ -16,7 +16,7 @@ Third-party runtime software
 
 The Android release runtime dependency graph and the native code built into the
 application include the principal projects below. Version numbers refer to the
-v0.4.0 build configuration. Transitive modules belonging to the same project
+v0.4.1 build configuration. Transitive modules belonging to the same project
 family are grouped together.
 
 Apache License 2.0

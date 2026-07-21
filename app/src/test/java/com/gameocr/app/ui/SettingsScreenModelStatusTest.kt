@@ -111,7 +111,7 @@ class SettingsScreenModelStatusTest {
     }
 
     @Test
-    fun crossLineContextTranslation_isADeveloperDiagnosticOptOut() {
+    fun crossLineContextTranslation_isEnabledByDefaultBelowStreamingTranslation() {
         val source = File("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
         val assistanceStart = source.indexOf("private fun TranslationAssistanceSettings(")
         val assistanceEnd = source.indexOf(
@@ -123,36 +123,55 @@ class SettingsScreenModelStatusTest {
             "item(key = SectionKeys.NETWORK)",
             startIndex = developerStart,
         )
+        val streamingIndex = source.indexOf(
+            "R.string.settings_search_item_streaming",
+            startIndex = assistanceStart,
+        )
         val crossLineIndex = source.indexOf(
             "label = stringResource(R.string.settings_cross_line_context_translation)",
-            startIndex = developerStart,
+            startIndex = assistanceStart,
         )
 
         assertTrue("translation assistance function exists", assistanceStart >= 0)
         assertTrue("translation assistance function end exists", assistanceEnd > assistanceStart)
-        assertFalse(
-            "normal translation settings should not expose the diagnostic switch",
-            source.substring(assistanceStart, assistanceEnd)
-                .contains("settings_cross_line_context_translation"),
+        assertTrue("streaming switch exists", streamingIndex in assistanceStart until assistanceEnd)
+        assertTrue("cross-context switch is inside translation settings", crossLineIndex in assistanceStart until assistanceEnd)
+        assertTrue("cross-context switch follows streaming translation", streamingIndex < crossLineIndex)
+        assertTrue(
+            "cross-context switch uses positive enabled semantics",
+            source.substring(crossLineIndex, assistanceEnd)
+                .contains("checked = crossLineContextTranslationEnabled"),
+        )
+        assertTrue(
+            "cross-context UI defaults to enabled",
+            source.contains("var crossLineContextTranslationEnabled by remember { mutableStateOf(true) }"),
+        )
+        assertTrue(
+            "legacy disable field is inverted when settings load",
+            source.contains("crossLineContextTranslationEnabled = !s.disableCrossLineContextTranslation"),
+        )
+        assertTrue(
+            "positive UI value is inverted for legacy persistence",
+            source.contains("disableCrossLineContextTranslation = !crossLineContextTranslationEnabled"),
         )
         assertTrue("developer section exists", developerStart >= 0)
         assertTrue("developer section end exists", developerEnd > developerStart)
-        assertTrue("diagnostic switch is inside developer section", crossLineIndex in developerStart until developerEnd)
-        assertTrue(
-            "diagnostic switch is hidden behind developer mode",
-            source.substring(developerStart, crossLineIndex).contains("if (developerOptionsEnabled)"),
+        assertFalse(
+            "developer section no longer exposes cross-context translation",
+            source.substring(developerStart, developerEnd)
+                .contains("settings_cross_line_context_translation"),
         )
         assertTrue(
-            "settings search should route the diagnostic switch to Developer",
+            "settings search routes cross-context translation to Translation",
             source.contains(
-                "SearchEntry(SectionKeys.DEVELOPER, R.string.settings_section_developer, " +
+                "SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, " +
                     "R.string.settings_search_item_cross_line_context"
             ),
         )
         assertFalse(
-            "settings search should no longer route cross-line context to Translation",
+            "settings search no longer routes cross-context translation to Developer",
             source.contains(
-                "SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, " +
+                "SearchEntry(SectionKeys.DEVELOPER, R.string.settings_section_developer, " +
                     "R.string.settings_search_item_cross_line_context"
             ),
         )

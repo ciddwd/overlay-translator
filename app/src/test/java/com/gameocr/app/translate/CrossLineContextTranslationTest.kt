@@ -72,10 +72,9 @@ class CrossLineContextTranslationTest {
     }
 
     @Test
-    fun enablement_developerDiagnosticOptOutIsGatedAndMergeStillTakesPrecedence() {
+    fun enablement_userSettingDefaultsOnAndMergeStillTakesPrecedence() {
         data class Case(
             val name: String,
-            val developerOptionsEnabled: Boolean,
             val disableCrossLineContextTranslation: Boolean,
             val mergeAdjacentBlocks: Boolean,
             val expected: Boolean,
@@ -83,15 +82,12 @@ class CrossLineContextTranslationTest {
 
         assertFalse(Settings().disableCrossLineContextTranslation)
         listOf(
-            Case("normal mode always enables context", false, false, false, true),
-            Case("hidden diagnostic value cannot disable normal mode", false, true, false, true),
-            Case("developer mode keeps context by default", true, false, false, true),
-            Case("developer diagnostic can disable context", true, true, false, false),
-            Case("merged blocks do not run the context planner", false, false, true, false),
-            Case("merge still wins in developer mode", true, false, true, false),
+            Case("default enables cross-context translation", false, false, true),
+            Case("user can disable cross-context translation", true, false, false),
+            Case("merged blocks do not run the context planner", false, true, false),
+            Case("disabled remains off when blocks are already merged", true, true, false),
         ).forEach { case ->
             val enabled = crossLineContextTranslationEnabled(
-                developerOptionsEnabled = case.developerOptionsEnabled,
                 disableCrossLineContextTranslation = case.disableCrossLineContextTranslation,
             )
             assertEquals(

@@ -58,7 +58,10 @@ private data class TranslationCardWindowArea(
  * 一致，五种内置主题 + CUSTOM。**主题取色函数与 DraggableOverlayWindow 内的实现保持同步**，
  * 未来改主题色需要两边一起改。
  */
-class TranslationCardOverlay(private val context: Context) {
+class TranslationCardOverlay(
+    private val context: Context,
+    private val onDismissed: () -> Unit = {},
+) {
 
     private val overlayType: Int = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
         WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -83,7 +86,12 @@ class TranslationCardOverlay(private val context: Context) {
         val currentDialog = dialog
         dialog = null
         if (currentDialog != null) {
-            runCatching { currentDialog.dismiss() }
+            performPlaybackOverlayDismiss(
+                stopPlayback = onDismissed,
+                clearOverlay = { runCatching { currentDialog.dismiss() } },
+            ).onFailure { error ->
+                VerticalDiagnosticLog.w(error, "Failed to stop TTS when translation card was dismissed")
+            }
         }
         rootView = null
         translationView = null

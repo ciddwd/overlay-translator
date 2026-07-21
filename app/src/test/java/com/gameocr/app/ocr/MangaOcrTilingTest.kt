@@ -124,6 +124,9 @@ class MangaOcrTilingTest {
         val cases = listOf(
             Case("fast-large", 1440, 3200, PaddleDetectionProfile.FAST, false),
             Case("accurate-small", 1440, 1700, PaddleDetectionProfile.ACCURATE, false),
+            Case("accurate-regression-1439x2037", 1439, 2037, PaddleDetectionProfile.ACCURATE, false),
+            Case("accurate-at-20-percent-downscale-boundary", 1440, 2400, PaddleDetectionProfile.ACCURATE, false),
+            Case("accurate-beyond-downscale-boundary", 1440, 2401, PaddleDetectionProfile.ACCURATE, true),
             Case("accurate-portrait", 1440, 3200, PaddleDetectionProfile.ACCURATE, true),
             Case("accurate-landscape", 3200, 1440, PaddleDetectionProfile.ACCURATE, true),
         )

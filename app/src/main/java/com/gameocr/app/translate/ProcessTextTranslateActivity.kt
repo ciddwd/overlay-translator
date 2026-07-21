@@ -121,7 +121,10 @@ class ProcessTextTranslateActivity : ComponentActivity() {
                 playbackKey = "dictionary",
             )
             // 浮卡用 applicationContext 避免持 Activity 引用 leak
-            val card = TranslationCardOverlay(app)
+            val card = TranslationCardOverlay(
+                context = app,
+                onDismissed = { speechEngine.stop() },
+            )
             withContext(Dispatchers.Main) {
                 card.show(
                     sourceText = text,

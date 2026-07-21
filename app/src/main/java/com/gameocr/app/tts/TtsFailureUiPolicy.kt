@@ -7,6 +7,7 @@ private const val MAX_TTS_FAILURE_DETAIL_LENGTH = 160
 
 internal sealed interface TtsFailureUiReason {
     data class LanguageUnavailable(val languageTag: String) : TtsFailureUiReason
+    data class MiniMaxApi(val statusCode: Int, val statusMessage: String) : TtsFailureUiReason
     data class Generic(val detail: String) : TtsFailureUiReason
 }
 
@@ -15,6 +16,9 @@ internal fun ttsFailureUiReason(error: Throwable): TtsFailureUiReason {
     causes.filterIsInstance<SystemTtsLanguageUnavailableException>()
         .firstOrNull()
         ?.let { return TtsFailureUiReason.LanguageUnavailable(it.languageTag) }
+    causes.filterIsInstance<MiniMaxApiException>()
+        .firstOrNull()
+        ?.let { return TtsFailureUiReason.MiniMaxApi(it.statusCode, it.statusMessage) }
 
     val rawDetail = causes
         .mapNotNull { cause -> cause.message?.takeIf(String::isNotBlank) }
@@ -35,6 +39,10 @@ internal fun Context.ttsFailureMessage(error: Throwable): String =
         is TtsFailureUiReason.LanguageUnavailable -> getString(
             R.string.toast_tts_language_unavailable_format,
             reason.languageTag,
+        )
+        is TtsFailureUiReason.MiniMaxApi -> getString(
+            R.string.toast_tts_failed_format,
+            miniMaxApiErrorMessage(reason.statusCode, reason.statusMessage),
         )
         is TtsFailureUiReason.Generic -> getString(
             R.string.toast_tts_failed_format,

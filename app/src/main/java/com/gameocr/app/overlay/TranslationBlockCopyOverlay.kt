@@ -47,7 +47,10 @@ private data class TranslationBlockCopyPalette(
     val accent: Int,
 )
 
-class TranslationBlockCopyOverlay(private val context: Context) {
+class TranslationBlockCopyOverlay(
+    private val context: Context,
+    private val onDismissed: () -> Unit = {},
+) {
     private val overlayType: Int = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
         WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
     } else {
@@ -62,7 +65,14 @@ class TranslationBlockCopyOverlay(private val context: Context) {
     fun dismiss() {
         val current = dialog
         dialog = null
-        if (current != null) runCatching { current.dismiss() }
+        if (current != null) {
+            performPlaybackOverlayDismiss(
+                stopPlayback = onDismissed,
+                clearOverlay = { runCatching { current.dismiss() } },
+            ).onFailure { error ->
+                VerticalDiagnosticLog.w(error, "Failed to stop TTS when translation block panel was dismissed")
+            }
+        }
     }
 
     fun show(

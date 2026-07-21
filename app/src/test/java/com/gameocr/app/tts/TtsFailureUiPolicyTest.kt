@@ -29,6 +29,16 @@ class TtsFailureUiPolicyTest {
                 expected = TtsFailureUiReason.LanguageUnavailable("ja-JP"),
             ),
             Case(
+                name = "MiniMax API error",
+                error = MiniMaxApiException(2038, "clone disabled"),
+                expected = TtsFailureUiReason.MiniMaxApi(2038, "clone disabled"),
+            ),
+            Case(
+                name = "wrapped MiniMax API error",
+                error = RuntimeException("wrapper", MiniMaxApiException(1008, "insufficient balance")),
+                expected = TtsFailureUiReason.MiniMaxApi(1008, "insufficient balance"),
+            ),
+            Case(
                 name = "generic message",
                 error = IllegalStateException("engine unavailable"),
                 expected = TtsFailureUiReason.Generic("engine unavailable"),

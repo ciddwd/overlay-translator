@@ -312,7 +312,7 @@ private fun parseMiniMaxManagementResponse(raw: String, json: Json): JsonObject 
     val code = baseResponse?.get("status_code")?.jsonPrimitive?.intOrNull ?: 0
     if (code != 0) {
         val message = baseResponse?.get("status_msg")?.jsonPrimitive?.contentOrNull.orEmpty()
-        throw IllegalStateException("MiniMax error $code: ${message.take(200)}")
+        throw MiniMaxApiException(code, message)
     }
     return root
 }

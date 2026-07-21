@@ -32,9 +32,8 @@ internal fun shouldUseCrossLineContextTranslation(
 ): Boolean = enabled && !mergeAdjacentBlocks
 
 internal fun crossLineContextTranslationEnabled(
-    developerOptionsEnabled: Boolean,
     disableCrossLineContextTranslation: Boolean,
-): Boolean = !(developerOptionsEnabled && disableCrossLineContextTranslation)
+): Boolean = !disableCrossLineContextTranslation
 
 internal fun planCrossLineTranslationUnits(
     blocks: List<TextBlock>,

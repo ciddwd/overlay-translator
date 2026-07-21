@@ -93,6 +93,8 @@ import com.gameocr.app.tts.miniMaxVoiceIdValidationError
 import com.gameocr.app.tts.miniMaxVoicePreviewText
 import com.gameocr.app.tts.mergeMiniMaxManagedVoices
 import com.gameocr.app.tts.isValidMiniMaxClonePromptText
+import com.gameocr.app.tts.miniMaxApiErrorMessage
+import com.gameocr.app.tts.miniMaxApiExceptionOrNull
 import com.gameocr.app.tts.searchMiniMaxManagedVoices
 import com.gameocr.app.tts.searchMiniMaxSystemVoices
 import com.gameocr.app.tts.shouldLoadMiniMaxManagedVoices
@@ -1216,23 +1218,26 @@ private fun Context.displayNameForUri(uri: Uri): String {
     }
 }
 
-private fun miniMaxVoiceOperationErrorMessage(context: Context, error: Throwable): String = when (error) {
-    is MiniMaxAudioValidationException -> context.getString(
-        when (error.reason) {
-            MiniMaxAudioValidationError.UNSUPPORTED_FORMAT ->
-                R.string.settings_tts_minimax_audio_unsupported
-            MiniMaxAudioValidationError.FILE_TOO_LARGE ->
-                R.string.settings_tts_minimax_audio_too_large
-            MiniMaxAudioValidationError.CLONE_TOO_SHORT ->
-                R.string.settings_tts_minimax_clone_audio_too_short
-            MiniMaxAudioValidationError.CLONE_TOO_LONG ->
-                R.string.settings_tts_minimax_clone_audio_too_long
-            MiniMaxAudioValidationError.PROMPT_TOO_LONG ->
-                R.string.settings_tts_minimax_prompt_audio_too_long
-        }
-    )
-    is MiniMaxVoiceIdValidationException -> miniMaxVoiceIdErrorMessage(context, error.reason)
-    else -> error.message ?: error.javaClass.simpleName
+private fun miniMaxVoiceOperationErrorMessage(context: Context, error: Throwable): String {
+    error.miniMaxApiExceptionOrNull()?.let { return context.miniMaxApiErrorMessage(it) }
+    return when (error) {
+        is MiniMaxAudioValidationException -> context.getString(
+            when (error.reason) {
+                MiniMaxAudioValidationError.UNSUPPORTED_FORMAT ->
+                    R.string.settings_tts_minimax_audio_unsupported
+                MiniMaxAudioValidationError.FILE_TOO_LARGE ->
+                    R.string.settings_tts_minimax_audio_too_large
+                MiniMaxAudioValidationError.CLONE_TOO_SHORT ->
+                    R.string.settings_tts_minimax_clone_audio_too_short
+                MiniMaxAudioValidationError.CLONE_TOO_LONG ->
+                    R.string.settings_tts_minimax_clone_audio_too_long
+                MiniMaxAudioValidationError.PROMPT_TOO_LONG ->
+                    R.string.settings_tts_minimax_prompt_audio_too_long
+            }
+        )
+        is MiniMaxVoiceIdValidationException -> miniMaxVoiceIdErrorMessage(context, error.reason)
+        else -> error.message ?: error.javaClass.simpleName
+    }
 }
 
 private fun miniMaxVoiceIdErrorMessage(

@@ -33,8 +33,8 @@ android {
         applicationId = "com.gameocr.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 13
-        versionName = "0.4.0"
+        versionCode = 14
+        versionName = "0.4.1"
 
         // Controlled local-LLM A/B switch. PP remains device-policy selected (6 on the
         // target 8-core phone); TG can be rebuilt as 4 or 6 without source changes.

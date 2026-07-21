@@ -42,6 +42,15 @@ import kotlin.math.ceil
 import kotlinx.coroutines.CoroutineScope
 import timber.log.Timber
 
+internal fun performPlaybackOverlayDismiss(
+    stopPlayback: () -> Unit,
+    clearOverlay: () -> Unit,
+): Result<Unit> {
+    val stopResult = runCatching(stopPlayback)
+    clearOverlay()
+    return stopResult
+}
+
 /**
  * 译文叠加渲染。
  * - [showFullScreen]：可拖拽 / 可缩放的悬浮窗口（[DraggableOverlayWindow]），列出所有原文 → 译文；
@@ -54,6 +63,7 @@ class OverlayManager(
     private val settingsRepository: SettingsRepository,
     private val ioScope: CoroutineScope,
     private val onTranslationBlockDetailRequested: (source: String, translation: String) -> Unit = { _, _ -> },
+    private val onFloatingWindowDismissed: () -> Unit = {},
     @Volatile var textSizeSp: Int = 14,
     @Volatile var alpha: Float = 0.85f,
     @Volatile var regionOffset: android.graphics.Point = android.graphics.Point(0, 0),
@@ -407,7 +417,7 @@ class OverlayManager(
         if (floatingWindow.isShown()) {
             floatingWindow.setContent(content)
         } else {
-            floatingWindow.show(content, onDismiss = { clear() })
+            floatingWindow.show(content, onDismiss = ::handleFloatingWindowUserDismiss)
         }
     }
 
@@ -431,7 +441,7 @@ class OverlayManager(
         if (floatingWindow.isShown()) {
             floatingWindow.setContent(content)
         } else {
-            floatingWindow.show(content, onDismiss = { clear() })
+            floatingWindow.show(content, onDismiss = ::handleFloatingWindowUserDismiss)
         }
     }
 
@@ -1474,6 +1484,15 @@ class OverlayManager(
     /** 是否仍有贴字框或悬浮窗口译文显示在屏幕上。 */
     fun hasActiveResult(): Boolean =
         (blocksView != null && blockViews.isNotEmpty()) || floatingWindow.isShown()
+
+    private fun handleFloatingWindowUserDismiss() {
+        performPlaybackOverlayDismiss(
+            stopPlayback = onFloatingWindowDismissed,
+            clearOverlay = ::clear,
+        ).onFailure { error ->
+            Timber.w(error, "Failed to stop TTS when floating window was dismissed")
+        }
+    }
 
     fun clear() {
         clearLoading()

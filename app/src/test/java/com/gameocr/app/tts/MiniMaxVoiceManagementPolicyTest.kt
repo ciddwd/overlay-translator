@@ -313,13 +313,63 @@ class MiniMaxVoiceManagementPolicyTest {
 
     @Test
     fun apiStatusErrors_areNotSilentlyAccepted() {
-        val error = assertThrows(IllegalStateException::class.java) {
+        val error = assertThrows(MiniMaxApiException::class.java) {
             decodeMiniMaxManagedVoices(
                 """{"base_resp":{"status_code":1004,"status_msg":"invalid key"}}""",
                 json,
             )
         }
+        assertEquals(1004, error.statusCode)
+        assertEquals("invalid key", error.statusMessage)
         assertTrue(error.message.orEmpty().contains("1004"))
         assertTrue(error.message.orEmpty().contains("invalid key"))
+    }
+
+    @Test
+    fun apiErrorReason_coversEveryErrorCodeInOfficialErrorCodeReference() {
+        data class Case(
+            val code: Int,
+            val expected: MiniMaxApiErrorReason,
+        )
+
+        listOf(
+            Case(1000, MiniMaxApiErrorReason.RETRY_LATER),
+            Case(1001, MiniMaxApiErrorReason.REQUEST_TIMEOUT),
+            Case(1002, MiniMaxApiErrorReason.RATE_LIMIT),
+            Case(1004, MiniMaxApiErrorReason.INVALID_API_KEY),
+            Case(1008, MiniMaxApiErrorReason.INSUFFICIENT_BALANCE),
+            Case(1024, MiniMaxApiErrorReason.RETRY_LATER),
+            Case(1026, MiniMaxApiErrorReason.INPUT_SENSITIVE),
+            Case(1027, MiniMaxApiErrorReason.OUTPUT_SENSITIVE),
+            Case(1033, MiniMaxApiErrorReason.RETRY_LATER),
+            Case(1039, MiniMaxApiErrorReason.TOKEN_LIMIT),
+            Case(1041, MiniMaxApiErrorReason.CONNECTION_LIMIT),
+            Case(1042, MiniMaxApiErrorReason.INVALID_CHARACTERS),
+            Case(1043, MiniMaxApiErrorReason.ASR_SIMILARITY_MISMATCH),
+            Case(1044, MiniMaxApiErrorReason.PROMPT_SIMILARITY_MISMATCH),
+            Case(2013, MiniMaxApiErrorReason.INVALID_PARAMETERS),
+            Case(20132, MiniMaxApiErrorReason.INVALID_CLONE_SAMPLE_OR_VOICE_ID),
+            Case(2037, MiniMaxApiErrorReason.INVALID_VOICE_DURATION),
+            Case(2038, MiniMaxApiErrorReason.VOICE_CLONING_DISABLED),
+            Case(2039, MiniMaxApiErrorReason.DUPLICATE_VOICE_ID),
+            Case(2042, MiniMaxApiErrorReason.VOICE_ID_ACCESS_DENIED),
+            Case(2045, MiniMaxApiErrorReason.BURST_RATE_LIMIT),
+            Case(2048, MiniMaxApiErrorReason.PROMPT_AUDIO_TOO_LONG),
+            Case(2049, MiniMaxApiErrorReason.INVALID_API_KEY),
+            Case(2056, MiniMaxApiErrorReason.PLAN_RESOURCE_LIMIT),
+        ).forEach { case ->
+            assertEquals(case.code.toString(), case.expected, miniMaxApiErrorReason(case.code))
+        }
+        assertNull(miniMaxApiErrorReason(99999))
+    }
+
+    @Test
+    fun apiExceptionLookup_findsWrappedMiniMaxErrors() {
+        val apiError = MiniMaxApiException(2038, "  clone\n disabled  ")
+        val wrapped = IllegalStateException("request failed", RuntimeException("wrapper", apiError))
+
+        assertEquals(apiError, wrapped.miniMaxApiExceptionOrNull())
+        assertEquals("clone disabled", apiError.statusMessage)
+        assertNull(IllegalArgumentException("other").miniMaxApiExceptionOrNull())
     }
 }

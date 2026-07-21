@@ -10,16 +10,16 @@ class MiniMaxVoiceManagerUiAuditTest {
 
     @Test
     fun miniMaxVoiceField_exposesSearchCloneDesignPreviewUseAndDeleteActions() {
-        val settingsSource = sourceFile("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
-        val managerSource = sourceFile(
+        val settingsSource = sourceText("src/main/java/com/gameocr/app/ui/SettingsScreen.kt")
+        val managerSource = sourceText(
             "src/main/java/com/gameocr/app/ui/MiniMaxVoiceManagerDialog.kt"
-        ).readText()
-        val viewModelSource = sourceFile(
+        )
+        val viewModelSource = sourceText(
             "src/main/java/com/gameocr/app/ui/SettingsViewModel.kt"
-        ).readText()
-        val httpTtsSource = sourceFile(
+        )
+        val httpTtsSource = sourceText(
             "src/main/java/com/gameocr/app/tts/HttpTtsEngine.kt"
-        ).readText()
+        )
 
         data class Case(val name: String, val marker: String)
         listOf(
@@ -231,6 +231,28 @@ class MiniMaxVoiceManagerUiAuditTest {
             "settings_tts_minimax_design_trial_hint",
             "settings_tts_minimax_design_trial_error",
             "settings_tts_minimax_voice_delete_message",
+            "settings_tts_minimax_error_retry_later",
+            "settings_tts_minimax_error_request_timeout",
+            "settings_tts_minimax_error_rate_limit",
+            "settings_tts_minimax_error_api_key",
+            "settings_tts_minimax_error_balance",
+            "settings_tts_minimax_error_input_sensitive",
+            "settings_tts_minimax_error_output_sensitive",
+            "settings_tts_minimax_error_token_limit",
+            "settings_tts_minimax_error_connection_limit",
+            "settings_tts_minimax_error_invalid_characters",
+            "settings_tts_minimax_error_asr_similarity",
+            "settings_tts_minimax_error_prompt_similarity",
+            "settings_tts_minimax_error_parameters",
+            "settings_tts_minimax_error_clone_sample_or_voice_id",
+            "settings_tts_minimax_error_voice_duration",
+            "settings_tts_minimax_error_cloning_disabled",
+            "settings_tts_minimax_error_duplicate_voice_id",
+            "settings_tts_minimax_error_voice_id_access",
+            "settings_tts_minimax_error_burst_rate",
+            "settings_tts_minimax_error_plan_limit",
+            "settings_tts_minimax_error_unknown",
+            "settings_tts_minimax_error_unknown_detail",
         )
         listOf(
             "src/main/res/values/strings.xml",
@@ -284,4 +306,7 @@ class MiniMaxVoiceManagerUiAuditTest {
     private fun sourceFile(path: String): File =
         listOf(File(path), File("app", path)).firstOrNull { it.isFile }
             ?: error("Source file not found: $path")
+
+    private fun sourceText(path: String): String =
+        sourceFile(path).readText().replace("\r\n", "\n")
 }

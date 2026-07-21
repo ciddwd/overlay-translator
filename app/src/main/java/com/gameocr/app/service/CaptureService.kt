@@ -325,6 +325,7 @@ class CaptureService : Service() {
             settingsRepository = settingsRepository,
             ioScope = scope,
             onTranslationBlockDetailRequested = ::showTranslationBlockCopyPanel,
+            onFloatingWindowDismissed = { ttsEngine.stop() },
         )
         floatingButton = FloatingButtonManager(
             this,
@@ -778,7 +779,10 @@ class CaptureService : Service() {
                 playbackId = "word-select:$diagId:dictionary",
             )
             val card = withContext(Dispatchers.Main) {
-                (translationCard ?: TranslationCardOverlay(this@CaptureService).also {
+                (translationCard ?: TranslationCardOverlay(
+                    context = this@CaptureService,
+                    onDismissed = { ttsEngine.stop() },
+                ).also {
                     translationCard = it
                 }).also {
                     it.show(
@@ -1091,7 +1095,10 @@ class CaptureService : Service() {
             mainScope.launch {
                 translationCard?.dismiss()
                 val copyOverlay = translationBlockCopyOverlay
-                    ?: TranslationBlockCopyOverlay(this@CaptureService).also {
+                    ?: TranslationBlockCopyOverlay(
+                        context = this@CaptureService,
+                        onDismissed = { ttsEngine.stop() },
+                    ).also {
                         translationBlockCopyOverlay = it
                     }
                 copyOverlay.show(
@@ -2525,7 +2532,6 @@ class CaptureService : Service() {
         val useBatch = routing?.prefersBatchFor(settings) ?: translator.prefersBatch
         val useCrossLineContext = shouldUseCrossLineContextTranslation(
             enabled = crossLineContextTranslationEnabled(
-                developerOptionsEnabled = settings.developerOptionsEnabled,
                 disableCrossLineContextTranslation = settings.disableCrossLineContextTranslation,
             ),
             mergeAdjacentBlocks = settings.mergeAdjacentBlocks,
@@ -2936,7 +2942,6 @@ class CaptureService : Service() {
         val useBatch = routing?.prefersBatchFor(settings) ?: translator.prefersBatch
         val useCrossLineContext = shouldUseCrossLineContextTranslation(
             enabled = crossLineContextTranslationEnabled(
-                developerOptionsEnabled = settings.developerOptionsEnabled,
                 disableCrossLineContextTranslation = settings.disableCrossLineContextTranslation,
             ),
             mergeAdjacentBlocks = settings.mergeAdjacentBlocks,

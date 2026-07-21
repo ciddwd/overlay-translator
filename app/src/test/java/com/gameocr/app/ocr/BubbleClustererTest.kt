@@ -121,6 +121,60 @@ class BubbleClustererTest {
     }
 
     @Test
+    fun perpendicular_scale_bridge_policy_is_table_driven() {
+        data class Case(
+            val name: String,
+            val first: IntRect,
+            val second: IntRect,
+            val expectedBubbleCount: Int,
+        )
+
+        val cases = listOf(
+            Case(
+                "fast-profile-wide-bubble-must-not-absorb-vertical-column",
+                IntRect(326, 38, 506, 222),
+                IntRect(299, 122, 360, 318),
+                2,
+            ),
+            Case(
+                "accurate-profile-false-wide-box-must-not-bridge",
+                IntRect(49, 41, 237, 241),
+                IntRect(213, 117, 263, 370),
+                2,
+            ),
+            Case(
+                "normal-overlapping-vertical-columns-still-merge",
+                IntRect(213, 121, 266, 372),
+                IntRect(256, 122, 315, 440),
+                1,
+            ),
+            Case(
+                "short-column-with-similar-width-still-merges",
+                IntRect(213, 121, 266, 372),
+                IntRect(250, 140, 305, 205),
+                1,
+            ),
+            Case(
+                "tall-bubble-must-not-absorb-horizontal-row",
+                IntRect(20, 20, 100, 220),
+                IntRect(50, 180, 250, 230),
+                2,
+            ),
+        )
+
+        cases.forEach { case ->
+            val result = BubbleClusterer.cluster(
+                rects = listOf(case.first, case.second),
+                imgW = 600,
+                imgH = 600,
+                pad = 0,
+                gap = 0,
+            )
+            assertEquals(case.name, case.expectedBubbleCount, result.size)
+        }
+    }
+
+    @Test
     fun transitive_chain_merges_via_union_find() {
         // A-B 相邻、B-C 相邻、A-C 远距 → 并查集传递性应让三个都归一
         val rects = listOf(

@@ -233,6 +233,7 @@ import com.gameocr.app.tts.supportsTtsPlaybackGain
 import com.gameocr.app.tts.volcengineTtsEndpointUrlOrNull
 import com.gameocr.app.tts.ttsPresetSummaryLabelRes
 import com.gameocr.app.tts.ttsTestMayIncurCharges
+import com.gameocr.app.tts.ttsFailureMessage
 import com.gameocr.app.tts.TtsProviderGroup
 import com.gameocr.app.tts.ttsProviderGroup
 import com.gameocr.app.data.resolveTranslationOutputSettings
@@ -634,7 +635,7 @@ fun SettingsScreen(
     var apiTimeoutSec by remember { mutableStateOf(30f) }
     var mergeAdjacent by remember { mutableStateOf(true) }
     var mergeStrength by remember { mutableStateOf(com.gameocr.app.data.MergeStrength.STANDARD) }
-    var disableCrossLineContextTranslation by remember { mutableStateOf(false) }
+    var crossLineContextTranslationEnabled by remember { mutableStateOf(true) }
     // 文本方向自动判别：默认关；改动后即时落盘（走 viewModel.saveTextOrientationAutoDetect），不进 buildSnapshot
     var textOrientAutoDetect by remember { mutableStateOf(false) }
     // DBNet / 气泡聚类阈值。Slider 切换即时落盘（saveDbnetThresholds），下次截屏立即生效。
@@ -939,7 +940,7 @@ fun SettingsScreen(
         apiTimeoutSec = s.apiTimeoutSeconds.toFloat()
         mergeAdjacent = s.mergeAdjacentBlocks
         mergeStrength = s.mergeStrength
-        disableCrossLineContextTranslation = s.disableCrossLineContextTranslation
+        crossLineContextTranslationEnabled = !s.disableCrossLineContextTranslation
         textOrientAutoDetect = s.textOrientationAutoDetect
         manualTextOrient = s.manualTextOrientation
         resolveTranslationOutputSettings(
@@ -1288,7 +1289,7 @@ fun SettingsScreen(
         apiTimeoutSeconds = apiTimeoutSec.toInt(),
         mergeAdjacentBlocks = mergeAdjacent,
         mergeStrength = mergeStrength,
-        disableCrossLineContextTranslation = disableCrossLineContextTranslation,
+        disableCrossLineContextTranslation = !crossLineContextTranslationEnabled,
         cleartextAllowedHosts = cleartextHostsWithLocalOcrUrls(
             parseCleartextHosts(cleartextHostsText),
             umiOcrBaseUrl,
@@ -1475,7 +1476,7 @@ fun SettingsScreen(
             apiTimeoutSeconds = apiTimeoutSec.toInt(),
             mergeAdjacentBlocks = mergeAdjacent,
             mergeStrength = mergeStrength,
-            disableCrossLineContextTranslation = disableCrossLineContextTranslation,
+            disableCrossLineContextTranslation = !crossLineContextTranslationEnabled,
             cleartextAllowedHosts = parseCleartextHosts(cleartextHostsText),
             translatorEngine = effectiveTranslatorEngine(),
             deeplKey = deeplKey,
@@ -2515,7 +2516,7 @@ fun SettingsScreen(
             apiTimeoutSec = s.apiTimeoutSeconds.toFloat()
             mergeAdjacent = s.mergeAdjacentBlocks
             mergeStrength = s.mergeStrength
-            disableCrossLineContextTranslation = s.disableCrossLineContextTranslation
+            crossLineContextTranslationEnabled = !s.disableCrossLineContextTranslation
             textOrientAutoDetect = s.textOrientationAutoDetect
             dbnetProb = s.dbnetProbThresh
             dbnetScore = s.dbnetBoxScoreThresh
@@ -3565,6 +3566,10 @@ fun SettingsScreen(
                     translatorEngine = translatorEngine,
                     streaming = streaming,
                     onStreamingChange = { streaming = it },
+                    crossLineContextTranslationEnabled = crossLineContextTranslationEnabled,
+                    onCrossLineContextTranslationEnabledChange = {
+                        crossLineContextTranslationEnabled = it
+                    },
                     glossaryEnabled = translationGlossaryEnabled,
                     onGlossaryEnabledChange = { enabled ->
                         translationGlossaryEnabled = enabled
@@ -3691,10 +3696,7 @@ fun SettingsScreen(
                                     } catch (error: Throwable) {
                                         if (generation == ttsTestGeneration) {
                                             ttsTestSuccess = false
-                                            ttsTestMessage = context.getString(
-                                                R.string.settings_tts_test_error,
-                                                error.message ?: error.javaClass.simpleName,
-                                            )
+                                            ttsTestMessage = context.ttsFailureMessage(error)
                                         }
                                     } finally {
                                         if (generation == ttsTestGeneration) {
@@ -5239,16 +5241,6 @@ fun SettingsScreen(
                             checked = disableTranslationCache,
                             helpText = stringResource(R.string.settings_disable_translation_cache_hint),
                         ) { disableTranslationCache = it }
-                        SettingsSearchTarget(
-                            searchTargetRegistry,
-                            R.string.settings_search_item_cross_line_context,
-                        ) {
-                            SwitchRow(
-                                label = stringResource(R.string.settings_cross_line_context_translation),
-                                checked = disableCrossLineContextTranslation,
-                                helpText = stringResource(R.string.settings_cross_line_context_translation_hint),
-                            ) { disableCrossLineContextTranslation = it }
-                        }
                         SwitchRow(
                             label = stringResource(R.string.settings_ocr_red_box_mode_label),
                             checked = ocrRedBoxModeEnabled,
@@ -6602,6 +6594,8 @@ private fun TranslationAssistanceSettings(
     translatorEngine: TranslatorEngine,
     streaming: Boolean,
     onStreamingChange: (Boolean) -> Unit,
+    crossLineContextTranslationEnabled: Boolean,
+    onCrossLineContextTranslationEnabledChange: (Boolean) -> Unit,
     glossaryEnabled: Boolean,
     onGlossaryEnabledChange: (Boolean) -> Unit,
     foregroundAppDetectionMode: com.gameocr.app.data.ForegroundAppDetectionMode,
@@ -6620,6 +6614,14 @@ private fun TranslationAssistanceSettings(
         SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_streaming) {
         SwitchRow(stringResource(R.string.settings_streaming), streaming, onChange = onStreamingChange)
         }
+    }
+    SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_cross_line_context) {
+    SwitchRow(
+        label = stringResource(R.string.settings_cross_line_context_translation),
+        checked = crossLineContextTranslationEnabled,
+        helpText = stringResource(R.string.settings_cross_line_context_translation_hint),
+        onChange = onCrossLineContextTranslationEnabledChange,
+    )
     }
     SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_empty_translation_retry) {
     SwitchRow(
@@ -7710,7 +7712,7 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_prompt, listOf("prompt", "提示词", "system")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_dictionary_prompt, listOf("dictionary", "词典", "划词", "word select", "phonetic", "音标", "释义", "definition", "prompt")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_streaming, listOf("streaming", "流式")),
-    SearchEntry(SectionKeys.DEVELOPER, R.string.settings_section_developer, R.string.settings_search_item_cross_line_context, listOf("disable context", "cross line", "禁用跨行", "上下文", "段落", "diagnostic", "诊断")),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_cross_line_context, listOf("cross context", "cross line", "上下文", "跨上下文", "段落")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_glossary_enabled, listOf("name consistency", "term memory", "译名一致性", "人名", "专名")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_send_app_name, listOf("send app name", "prompt app context", "发送应用名称", "模型应用名称")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_foreground_app_detection, listOf("app detection", "foreground app", "accessibility", "usage access", "应用识别", "前台应用")),

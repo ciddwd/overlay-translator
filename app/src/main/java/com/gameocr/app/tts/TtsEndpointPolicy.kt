@@ -538,7 +538,7 @@ internal fun decodeMiniMaxTtsPayload(
     val statusCode = baseResponse?.get("status_code")?.asIntOrNull()
     if (statusCode != null && statusCode != 0) {
         val message = baseResponse["status_msg"].asStringOrNull().orEmpty()
-        throw RuntimeException("MiniMax TTS error $statusCode: ${message.take(200)}")
+        throw MiniMaxApiException(statusCode, message)
     }
     val audioHex = root["data"].asObjectOrNull()
         ?.get("audio")
