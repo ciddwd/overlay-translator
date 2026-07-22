@@ -54,16 +54,19 @@ class WordSelectOverlay(private val context: Context) {
 
     fun show(
         onTranslate: (Rect) -> Unit,
-        onCancel: () -> Unit
+        onCancel: () -> Unit,
+        initial: Rect? = null,
+        skipAdjustment: Boolean = false,
     ) {
         if (container != null) return
 
         val picker = RegionPickerView(
             context = context,
-            initial = null,
+            initial = initial,
             onCancel = onCancel,
             // 划词模式下不支持「双击=清除」语义，双击直接 cancel。
-            onClearAllRequested = { dismiss(); onCancel() }
+            onClearAllRequested = { dismiss(); onCancel() },
+            skipAdjustment = skipAdjustment,
         )
 
         lateinit var doCancel: () -> Unit
@@ -123,6 +126,11 @@ class WordSelectOverlay(private val context: Context) {
                 dismiss()
                 onCancel()
             }
+        }
+
+        picker.onDrawingComplete = { r ->
+            dismiss()
+            onTranslate(r)
         }
 
         val updateToolbarPos: (Rect?) -> Unit = { rect ->

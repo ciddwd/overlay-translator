@@ -613,6 +613,9 @@ fun SettingsScreen(
     // 当前主球技能。技能槽（FULL_SCREEN_SKILL）那一行的文案要跟着它动态显示「切到对方」：
     // 当前 FULL_SCREEN → 显示「— 划词翻译」；当前 WORD_SELECT → 显示「— 全屏翻译」
     var currentSkill by remember { mutableStateOf(com.gameocr.app.data.FloatingSkill.FULL_SCREEN) }
+    var wordSelectPreciseAdjust by remember { mutableStateOf(true) }
+    var wordSelectCardMode by remember { mutableStateOf(true) }
+    var wordSelectRememberRegion by remember { mutableStateOf(true) }
     var dictionaryPrompt by remember { mutableStateOf("") }
     // 悬浮按钮"贴边距离" slider 的实时预览：屏幕两侧画 inset 宽度的半透粉条。
     // 默认 false——进设置就显示条带太突兀；用户在 slider 旁手动开启「预览」后才覆盖到屏幕上。
@@ -638,6 +641,10 @@ fun SettingsScreen(
     var crossLineContextTranslationEnabled by remember { mutableStateOf(true) }
     // 文本方向自动判别：默认关；改动后即时落盘（走 viewModel.saveTextOrientationAutoDetect），不进 buildSnapshot
     var textOrientAutoDetect by remember { mutableStateOf(false) }
+    // 端侧 LLM 推理参数。Slider 切换即时落盘（saveLocalLlmInferenceParams），下次翻译生效。
+    var localLlmContextSize by remember { mutableStateOf(2048) }
+    var localLlmMaxNewTokens by remember { mutableStateOf(256) }
+    var llmInferenceParamsExpanded by remember { mutableStateOf(false) }
     // DBNet / 气泡聚类阈值。Slider 切换即时落盘（saveDbnetThresholds），下次截屏立即生效。
     var dbnetProb by remember { mutableStateOf(0.25f) }
     var dbnetScore by remember { mutableStateOf(0.5f) }
@@ -648,6 +655,7 @@ fun SettingsScreen(
     }
     var dbnetAdvancedExpanded by remember { mutableStateOf(false) }
     var showDbnetResetConfirm by remember { mutableStateOf(false) }
+    var preprocessExpanded by remember { mutableStateOf(false) }
     var manualTextOrient by remember { mutableStateOf<com.gameocr.app.ocr.TextOrientation?>(null) }
     var translationOutputFollowRecognition by remember { mutableStateOf(true) }
     var translationOutputLayout by remember {
@@ -937,6 +945,9 @@ fun SettingsScreen(
         menuOrder = s.floatingMenuItemOrder
         arcMenuPageSize = s.arcMenuPageSize.toFloat()
         currentSkill = s.floatingButtonSkill
+        wordSelectPreciseAdjust = s.wordSelectPreciseAdjust
+        wordSelectCardMode = s.wordSelectCardMode
+        wordSelectRememberRegion = s.wordSelectRememberRegion
         apiTimeoutSec = s.apiTimeoutSeconds.toFloat()
         mergeAdjacent = s.mergeAdjacentBlocks
         mergeStrength = s.mergeStrength
@@ -952,6 +963,8 @@ fun SettingsScreen(
             translationOutputLayout = output.layout
             translationOutputDirection = output.direction
         }
+        localLlmContextSize = s.localLlmContextSize
+        localLlmMaxNewTokens = s.localLlmMaxNewTokens
         dbnetProb = s.dbnetProbThresh
         dbnetScore = s.dbnetBoxScoreThresh
         dbnetUnclip = s.dbnetUnclipRatio
@@ -2506,6 +2519,9 @@ fun SettingsScreen(
             menuOrder = s.floatingMenuItemOrder
             arcMenuPageSize = s.arcMenuPageSize.toFloat()
             currentSkill = s.floatingButtonSkill
+            wordSelectPreciseAdjust = s.wordSelectPreciseAdjust
+            wordSelectCardMode = s.wordSelectCardMode
+            wordSelectRememberRegion = s.wordSelectRememberRegion
             dictionaryPrompt = s.dictionaryPrompt
             translationPresets = s.translationPresets
             activeTranslationPresetId = s.activeTranslationPresetId
@@ -3620,6 +3636,67 @@ fun SettingsScreen(
                     onRetryEmptyTranslationChange = { retryEmptyTranslation = it },
                 )
                 }
+                // 推理参数高级设置：仅端侧 LLM 引擎时显示，收起在术语库之后
+                if (localLlmModelKindFor(translatorEngine) != null) {
+                    val saveNow: () -> Unit = {
+                        scope.launch {
+                            viewModel.saveLocalLlmInferenceParams(localLlmContextSize, localLlmMaxNewTokens)
+                        }
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable(role = Role.Button) {
+                                llmInferenceParamsExpanded = !llmInferenceParamsExpanded
+                            }
+                            .padding(horizontal = 4.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.settings_llm_inference_params_header),
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        Icon(
+                            imageVector = Icons.Default.ExpandMore,
+                            contentDescription = null,
+                            modifier = Modifier.graphicsLayer {
+                                rotationZ = if (llmInferenceParamsExpanded) 180f else 0f
+                            },
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    if (llmInferenceParamsExpanded) {
+                        Text(
+                            stringResource(R.string.settings_llm_context_size, localLlmContextSize),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Slider(
+                            value = localLlmContextSize.toFloat(),
+                            onValueChange = { localLlmContextSize = it.toInt() },
+                            onValueChangeFinished = saveNow,
+                            valueRange = 512f..4096f,
+                            steps = 6,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Text(
+                            stringResource(R.string.settings_llm_max_new_tokens, localLlmMaxNewTokens),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Slider(
+                            value = localLlmMaxNewTokens.toFloat(),
+                            onValueChange = { localLlmMaxNewTokens = it.toInt() },
+                            onValueChangeFinished = saveNow,
+                            valueRange = 32f..512f,
+                            steps = 14,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
                 if (translatorEngine == TranslatorEngine.OPENAI ||
                     translatorEngine == TranslatorEngine.ANTHROPIC
                 ) {
@@ -4472,6 +4549,37 @@ fun SettingsScreen(
                             }
                         )
                     }
+                    // —— 图像预处理 ——
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { preprocessExpanded = !preprocessExpanded }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            (if (preprocessExpanded) "▼ " else "▶ ") +
+                                stringResource(R.string.settings_section_preprocess),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    if (preprocessExpanded) {
+                        SwitchRow(
+                            stringResource(R.string.settings_preprocess_upscale),
+                            preUpscale,
+                            helpText = stringResource(R.string.settings_preprocess_upscale_help)
+                        ) { preUpscale = it }
+                        if (cloudOcrUpscaleWarningVisible(ocrEngine, preUpscale)) {
+                            Text(
+                                stringResource(R.string.settings_preprocess_upscale_cloud_warning),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                        SwitchRow(stringResource(R.string.settings_preprocess_invert), preInvert) { preInvert = it }
+                        SwitchRow(stringResource(R.string.settings_preprocess_binarize), preBinarize) { preBinarize = it }
+                    }
                 }
                 } // 关闭 OCR section 内的"灰显 Column"（ocrSectionDisabled 控制 alpha）
             }
@@ -4481,28 +4589,6 @@ fun SettingsScreen(
 
             item(key = SectionKeys.TEXT_ORIENTATION) {
                 textOrientationSection()
-            }
-
-            // —— 图像预处理 ——
-            item(key = SectionKeys.PREPROCESS) {
-            SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_PREPROCESS) {
-            SectionCard(title = stringResource(R.string.settings_section_preprocess)) {
-                SwitchRow(
-                    stringResource(R.string.settings_preprocess_upscale),
-                    preUpscale,
-                    helpText = stringResource(R.string.settings_preprocess_upscale_help)
-                ) { preUpscale = it }
-                if (cloudOcrUpscaleWarningVisible(ocrEngine, preUpscale)) {
-                    Text(
-                        stringResource(R.string.settings_preprocess_upscale_cloud_warning),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
-                SwitchRow(stringResource(R.string.settings_preprocess_invert), preInvert) { preInvert = it }
-                SwitchRow(stringResource(R.string.settings_preprocess_binarize), preBinarize) { preBinarize = it }
-            }
-            }
             }
 
             // —— 显示 ——
@@ -5025,11 +5111,43 @@ fun SettingsScreen(
                 )
             }
 
+            // —— 划词翻译 ——
+            }
+
+            }
+
+            item(key = SectionKeys.WORD_SELECT) {
+            SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_WORD_SELECT) {
+            SectionCard(title = stringResource(R.string.settings_section_word_select)) {
+                SwitchRow(
+                    stringResource(R.string.settings_word_select_precise_adjust),
+                    wordSelectPreciseAdjust,
+                    helpText = stringResource(R.string.settings_word_select_precise_adjust_help)
+                ) {
+                    wordSelectPreciseAdjust = it
+                    scope.launch { viewModel.saveWordSelectPreciseAdjust(it) }
+                }
+                SwitchRow(
+                    stringResource(R.string.settings_word_select_card_mode),
+                    wordSelectCardMode,
+                    helpText = stringResource(R.string.settings_word_select_card_mode_help)
+                ) {
+                    wordSelectCardMode = it
+                    scope.launch { viewModel.saveWordSelectCardMode(it) }
+                }
+                SwitchRow(
+                    stringResource(R.string.settings_word_select_remember_region),
+                    wordSelectRememberRegion,
+                    helpText = stringResource(R.string.settings_word_select_remember_region_help)
+                ) {
+                    wordSelectRememberRegion = it
+                    scope.launch { viewModel.saveWordSelectRememberRegion(it) }
+                }
+            }
+            }
+            }
+
             // —— 触发器 ——
-            }
-
-            }
-
             item(key = SectionKeys.TRIGGER) {
             SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_TRIGGER) {
             SectionCard(title = stringResource(R.string.settings_section_trigger)) {
@@ -7313,8 +7431,8 @@ private object SectionKeys {
     const val PRESETS = "presets"
     const val OCR = "ocr"
     const val TEXT_ORIENTATION = "text_orientation"
-    const val PREPROCESS = "preprocess"
     const val OVERLAY = "overlay"
+    const val WORD_SELECT = "word_select"
     const val FLOATING = "floating"
     const val ARC_MENU = "arc_menu"
     const val TRIGGER = "trigger"
@@ -7332,10 +7450,10 @@ internal val SETTINGS_SECTION_KEYS_IN_ORDER = listOf(
     SectionKeys.TTS,
     SectionKeys.OCR,
     SectionKeys.TEXT_ORIENTATION,
-    SectionKeys.PREPROCESS,
     SectionKeys.OVERLAY,
     SectionKeys.FLOATING,
     SectionKeys.ARC_MENU,
+    SectionKeys.WORD_SELECT,
     SectionKeys.TRIGGER,
     SectionKeys.DEVELOPER,
     SectionKeys.NETWORK,
@@ -7408,6 +7526,9 @@ private val SEARCH_TARGET_OCR_ENGINE = intArrayOf(
     R.string.settings_search_item_tencent_region,
     R.string.settings_search_item_youdao_ocr,
     R.string.settings_search_item_dbnet_advanced,
+    R.string.settings_search_item_upscale,
+    R.string.settings_search_item_invert,
+    R.string.settings_search_item_binarize,
 )
 private val SEARCH_TARGET_ORIENTATION_DETECTION = intArrayOf(
     R.string.settings_orient_auto_detect_title,
@@ -7417,11 +7538,6 @@ private val SEARCH_TARGET_ORIENTATION_DETECTION = intArrayOf(
 private val SEARCH_TARGET_ORIENTATION_OUTPUT = intArrayOf(
     R.string.settings_translation_output_follow_title,
     R.string.settings_translation_output_layout_label,
-)
-private val SEARCH_TARGET_PREPROCESS = intArrayOf(
-    R.string.settings_search_item_upscale,
-    R.string.settings_search_item_invert,
-    R.string.settings_search_item_binarize,
 )
 private val SEARCH_TARGET_OVERLAY_DISPLAY = intArrayOf(
     R.string.settings_search_item_render_mode,
@@ -7458,6 +7574,11 @@ private val SEARCH_TARGET_FLOATING = intArrayOf(
     R.string.settings_search_item_floating_dock_inset,
 )
 private val SEARCH_TARGET_ARC_MENU = intArrayOf(R.string.settings_search_item_arc_menu_order)
+private val SEARCH_TARGET_WORD_SELECT = intArrayOf(
+    R.string.settings_search_item_word_select_precise,
+    R.string.settings_search_item_word_select_card_mode,
+    R.string.settings_search_item_word_select_remember,
+)
 private val SEARCH_TARGET_TRIGGER = intArrayOf(
     R.string.settings_search_item_loop_interval,
     R.string.settings_search_item_loop_trigger_mode,
@@ -7489,7 +7610,6 @@ internal val SETTINGS_SEARCH_TARGET_RES_IDS: Set<Int> = listOf(
     SEARCH_TARGET_OCR_ENGINE,
     SEARCH_TARGET_ORIENTATION_DETECTION,
     SEARCH_TARGET_ORIENTATION_OUTPUT,
-    SEARCH_TARGET_PREPROCESS,
     SEARCH_TARGET_OVERLAY_DISPLAY,
     SEARCH_TARGET_OVERLAY_THEME,
     SEARCH_TARGET_OVERLAY_TEXT,
@@ -7497,6 +7617,7 @@ internal val SETTINGS_SEARCH_TARGET_RES_IDS: Set<Int> = listOf(
     SEARCH_TARGET_OVERLAY_LAYOUT,
     SEARCH_TARGET_FLOATING,
     SEARCH_TARGET_ARC_MENU,
+    SEARCH_TARGET_WORD_SELECT,
     SEARCH_TARGET_TRIGGER,
     SEARCH_TARGET_DEVELOPER,
     SEARCH_TARGET_NETWORK,
@@ -7781,10 +7902,10 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
     SearchEntry(SectionKeys.TEXT_ORIENTATION, R.string.settings_text_orientation_section_title, R.string.settings_search_item_manual_orientation, listOf("manual", "lock", "orientation", "vertical", "horizontal", "stacked", "手动", "锁定", "方向", "竖排", "横排", "逐字")),
     SearchEntry(SectionKeys.TEXT_ORIENTATION, R.string.settings_text_orientation_section_title, R.string.settings_search_item_orientation_model, listOf("orientation model", "doc orientation", "direction model", "ONNX", "方向模型", "文本方向模型", "模型", "download", "下载", "本地导入", "local import", "导入", "delete", "删除")),
 
-    // —— 图像预处理 ——
-    SearchEntry(SectionKeys.PREPROCESS, R.string.settings_section_preprocess, R.string.settings_search_item_upscale, listOf("upscale", "放大", "上采样")),
-    SearchEntry(SectionKeys.PREPROCESS, R.string.settings_section_preprocess, R.string.settings_search_item_invert, listOf("invert", "反色", "暗底白字")),
-    SearchEntry(SectionKeys.PREPROCESS, R.string.settings_section_preprocess, R.string.settings_search_item_binarize, listOf("binarize", "otsu", "二值化")),
+    // —— 图像预处理（在 OCR section 内）——
+    SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_upscale, listOf("upscale", "放大", "上采样", "preprocess", "图像预处理")),
+    SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_invert, listOf("invert", "反色", "暗底白字", "preprocess", "图像预处理")),
+    SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_binarize, listOf("binarize", "otsu", "二值化", "preprocess", "图像预处理")),
 
     // —— 显示 ——
     SearchEntry(
@@ -7847,6 +7968,11 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
 
     // —— 弧菜单按钮顺序 ——
     SearchEntry(SectionKeys.ARC_MENU, R.string.settings_section_arc_menu, R.string.settings_search_item_arc_menu_order, listOf("arc menu", "弧菜单", "弧形", "顺序", "order", "reorder", "排序", "拖动", "menu", "按钮", "page", "page size", "分页", "每页", "翻页", "loop", "region", "home", "skill", "技能", "划词", "language", "语言", "源语言", "目标语言")),
+
+    // —— 划词翻译 ——
+    SearchEntry(SectionKeys.WORD_SELECT, R.string.settings_section_word_select, R.string.settings_search_item_word_select_precise, listOf("划词", "word select", "precise", "adjust", "松手", "精确调整", "release")),
+    SearchEntry(SectionKeys.WORD_SELECT, R.string.settings_section_word_select, R.string.settings_search_item_word_select_card_mode, listOf("划词", "word select", "card", "overlay", "卡片", "叠加", "全屏模式")),
+    SearchEntry(SectionKeys.WORD_SELECT, R.string.settings_section_word_select, R.string.settings_search_item_word_select_remember, listOf("划词", "word select", "remember", "记住", "选框", "region")),
 
     // —— 触发器 ——
     SearchEntry(SectionKeys.TRIGGER, R.string.settings_section_trigger, R.string.settings_search_item_loop_interval, listOf("loop", "循环", "interval", "间隔")),
@@ -10200,7 +10326,6 @@ private fun LocalLlmSection(
     val importLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.GetMultipleContents()
     ) { uris -> if (uris.isNotEmpty()) onImport(uris) }
-
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(
             verticalAlignment = Alignment.CenterVertically,

@@ -42,10 +42,10 @@ class SettingsLazyLayoutTest {
             Case("tts", 4),
             Case("ocr", 5),
             Case("text_orientation", 6),
-            Case("preprocess", 7),
-            Case("overlay", 8),
-            Case("floating", 9),
-            Case("arc_menu", 10),
+            Case("overlay", 7),
+            Case("floating", 8),
+            Case("arc_menu", 9),
+            Case("word_select", 10),
             Case("trigger", 11),
             Case("developer", 12),
             Case("network", 13),
@@ -157,10 +157,10 @@ class SettingsLazyLayoutTest {
                 "tts" -> "TTS"
                 "ocr" -> "OCR"
                 "text_orientation" -> "TEXT_ORIENTATION"
-                "preprocess" -> "PREPROCESS"
                 "overlay" -> "OVERLAY"
                 "floating" -> "FLOATING"
                 "arc_menu" -> "ARC_MENU"
+                "word_select" -> "WORD_SELECT"
                 "trigger" -> "TRIGGER"
                 "developer" -> "DEVELOPER"
                 "network" -> "NETWORK"

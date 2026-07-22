@@ -571,6 +571,18 @@ class SettingsViewModel @Inject constructor(
         repo.update { it.copy(customBorderStyle = style) }
     }
 
+    suspend fun saveWordSelectPreciseAdjust(enabled: Boolean) {
+        repo.update { it.copy(wordSelectPreciseAdjust = enabled) }
+    }
+
+    suspend fun saveWordSelectCardMode(enabled: Boolean) {
+        repo.update { it.copy(wordSelectCardMode = enabled) }
+    }
+
+    suspend fun saveWordSelectRememberRegion(enabled: Boolean) {
+        repo.update { it.copy(wordSelectRememberRegion = enabled) }
+    }
+
     /** 弧菜单按钮顺序：拖拽完即时落盘 + 生效，不走主 [save] 流程的 dirty 判定。 */
     suspend fun saveArcMenuOrder(order: List<com.gameocr.app.data.MenuItemId>) {
         repo.update { it.copy(floatingMenuItemOrder = order) }
@@ -994,6 +1006,15 @@ class SettingsViewModel @Inject constructor(
                 },
                 bubbleClusterGap = MangaOcrAdvancedSettingsPolicy.BUBBLE_CLUSTER_GAP,
                 mangaOcrCropPaddingPx = MangaOcrAdvancedSettingsPolicy.CROP_PADDING_PX,
+            )
+        }
+    }
+
+    suspend fun saveLocalLlmInferenceParams(contextSize: Int, maxNewTokens: Int) {
+        repo.update {
+            it.copy(
+                localLlmContextSize = contextSize.coerceIn(512, 4096),
+                localLlmMaxNewTokens = maxNewTokens.coerceIn(32, 512),
             )
         }
     }

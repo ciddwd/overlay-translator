@@ -589,15 +589,46 @@ class CaptureService : Service() {
         val ws = wordSelect ?: WordSelectOverlay(this).also { wordSelect = it }
         if (ws.isShown()) return
         mainScope.launch {
+            val settings = settingsRepository.get()
+            val screen = physicalDisplaySize(this@CaptureService)
+            settingsRepository.rescaleWordSelectLastRegionIfNeeded(screen.width, screen.height)
+            val initialRect: android.graphics.Rect? = if (settings.wordSelectRememberRegion) {
+                settingsRepository.get().wordSelectLastRegion?.let {
+                    android.graphics.Rect(it.left, it.top, it.right, it.bottom)
+                }
+            } else null
+
             floatingButton?.hide()
             ws.show(
+                initial = initialRect,
+                skipAdjustment = !settings.wordSelectPreciseAdjust,
                 onTranslate = { rect ->
                     scope.launch {
+                        // 保存本次选框
+                        if (settings.wordSelectRememberRegion) {
+                            val s = physicalDisplaySize(this@CaptureService)
+                            settingsRepository.update { it.copy(
+                                wordSelectLastRegion = com.gameocr.app.capture.CaptureRegion(rect.left, rect.top, rect.right, rect.bottom),
+                                wordSelectLastRegionSavedScreenW = s.width,
+                                wordSelectLastRegionSavedScreenH = s.height,
+                            ) }
+                        }
                         prepareCleanCaptureFrame(hideFloatingButton = true)
-                        runWordSelectPipeline(
-                            rect,
-                            restoreFloatingButtonAfterScreenshot = true
-                        )
+                        if (settings.wordSelectCardMode) {
+                            runWordSelectPipeline(rect, restoreFloatingButtonAfterScreenshot = true)
+                        } else {
+                            // 叠加模式：把选框写入 captureRegion，走全屏叠加管线
+                            val s = physicalDisplaySize(this@CaptureService)
+                            settingsRepository.update { it.copy(
+                                captureRegion = com.gameocr.app.capture.CaptureRegion(rect.left, rect.top, rect.right, rect.bottom),
+                                captureRegionSavedScreenW = s.width,
+                                captureRegionSavedScreenH = s.height,
+                            ) }
+                            captureOnce(
+                                showLoadingAfterScreenshot = true,
+                                restoreFloatingButtonAfterScreenshot = true,
+                            )
+                        }
                     }
                 },
                 onCancel = {

@@ -294,22 +294,22 @@ data class Settings(
      * LOOP 切换循环任务的启动/停止。模式会持久化，循环运行状态不会跨 Service 重启恢复。
      */
     val floatingButtonSkill: FloatingSkill = FloatingSkill.FULL_SCREEN,
+    /** 划词翻译：选框后进入精确调整阶段（显示 8 个 handle）再点翻译；关闭则松手即翻译。 */
+    val wordSelectPreciseAdjust: Boolean = true,
+    /** 划词翻译：开启 = 弹翻译卡片；关闭 = 走全屏叠加显示管线（译文覆盖在原文位置）。 */
+    val wordSelectCardMode: Boolean = true,
+    /** 划词翻译：记住上次的选框位置，下次打开时自动预填。 */
+    val wordSelectRememberRegion: Boolean = true,
+    /** 划词翻译上次选框（物理像素）。仅 [wordSelectRememberRegion] 开启时读取。 */
+    val wordSelectLastRegion: CaptureRegion? = null,
+    val wordSelectLastRegionSavedScreenW: Int = 0,
+    val wordSelectLastRegionSavedScreenH: Int = 0,
     /**
      * 划词翻译：单词模式专用的 LLM 词典 prompt 模板（仅 OpenAI 兼容引擎生效）。
      * 用占位符 `{source}` / `{target}` 同 [promptTemplate]。返回 JSON 让卡片显示音标 / 词性 /
      * 释义 / 难点解释 / 例句；解析失败回退到 [promptTemplate]。读取时若 key 缺省，按 UI locale 给出本地化默认。
      */
     val dictionaryPrompt: String = DEFAULT_DICTIONARY_PROMPT,
-    /**
-     * 端侧 LLM 采样温度。Hy-MT / Sakura 可共用；当前 binding 尚未把采样参数暴露到 JNI。
-     */
-    val localLlmTemperature: Float = 0.7f,
-    /** 端侧 LLM nucleus 采样 top-p。 */
-    val localLlmTopP: Float = 0.6f,
-    /** 端侧 LLM top-k。 */
-    val localLlmTopK: Int = 20,
-    /** 端侧 LLM 重复惩罚。 */
-    val localLlmRepetitionPenalty: Float = 1.05f,
     /** 端侧 LLM 上下文窗口大小（token）。屏译 OCR 段落短，2048 足够；越大越占内存。 */
     val localLlmContextSize: Int = 2048,
     /** 端侧 LLM 单次最长生成 token 数。屏译场景译文很少超过 256 token。 */
@@ -467,10 +467,6 @@ data class TranslationPreset(
     val translationOutputDirection: TranslationOutputDirection = TranslationOutputDirection.FOLLOW_RECOGNITION,
     val translationGlossaryEnabled: Boolean = true,
     val sendAppNameToTranslator: Boolean = false,
-    val localLlmTemperature: Float = 0.7f,
-    val localLlmTopP: Float = 0.6f,
-    val localLlmTopK: Int = 20,
-    val localLlmRepetitionPenalty: Float = 1.05f,
     val localLlmContextSize: Int = 2048,
     val localLlmMaxNewTokens: Int = 256,
     val dbnetProbThresh: Float = 0.25f,
@@ -545,10 +541,6 @@ data class TranslationPreset(
         translationOutputDirection = output.direction,
         translationGlossaryEnabled = translationGlossaryEnabled,
         sendAppNameToTranslator = sendAppNameToTranslator,
-        localLlmTemperature = localLlmTemperature,
-        localLlmTopP = localLlmTopP,
-        localLlmTopK = localLlmTopK,
-        localLlmRepetitionPenalty = localLlmRepetitionPenalty,
         localLlmContextSize = localLlmContextSize,
         localLlmMaxNewTokens = localLlmMaxNewTokens,
         dbnetProbThresh = dbnetProbThresh,
@@ -661,10 +653,6 @@ object TranslationPresetCatalog {
             translationOutputDirection = output.direction,
             translationGlossaryEnabled = settings.translationGlossaryEnabled,
             sendAppNameToTranslator = settings.sendAppNameToTranslator,
-            localLlmTemperature = settings.localLlmTemperature,
-            localLlmTopP = settings.localLlmTopP,
-            localLlmTopK = settings.localLlmTopK,
-            localLlmRepetitionPenalty = settings.localLlmRepetitionPenalty,
             localLlmContextSize = settings.localLlmContextSize,
             localLlmMaxNewTokens = settings.localLlmMaxNewTokens,
             dbnetProbThresh = settings.dbnetProbThresh,
@@ -777,10 +765,6 @@ object TranslationPresetCatalog {
             output.direction.name,
             preset.translationGlossaryEnabled,
             preset.sendAppNameToTranslator,
-            preset.localLlmTemperature.toBits(),
-            preset.localLlmTopP.toBits(),
-            preset.localLlmTopK,
-            preset.localLlmRepetitionPenalty.toBits(),
             preset.localLlmContextSize,
             preset.localLlmMaxNewTokens,
             preset.dbnetProbThresh.toBits(),

@@ -56,7 +56,6 @@ class SettingsFieldPolicyTest {
             cleartextAllowedHosts = listOf("must-not-import.example"),
             floatingWindowX = 500,
             targetLang = "zh-TW",
-            localLlmTemperature = 0.42f,
         )
 
         val merged = SettingsFieldPolicy.applyPortable(current, imported)
@@ -69,7 +68,7 @@ class SettingsFieldPolicyTest {
         assertEquals(current.cleartextAllowedHosts, merged.cleartextAllowedHosts)
         assertEquals(current.floatingWindowX, merged.floatingWindowX)
         assertEquals(imported.targetLang, merged.targetLang)
-        assertEquals(imported.localLlmTemperature, merged.localLlmTemperature)
+        assertEquals(imported.localLlmContextSize, merged.localLlmContextSize)
     }
 
     @Test
