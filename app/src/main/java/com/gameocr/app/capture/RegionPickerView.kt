@@ -35,11 +35,16 @@ class RegionPickerView(
     private val onCancel: () -> Unit,
     /** "双击 = 选择整屏" 触发时调用。语义跟主屏「清除选框」一致：清掉 captureRegion 让下次截屏走整屏，
      *  而不是画一个铺满屏幕的 rect 让用户再按 ✓。null 时退化为旧行为（设 rect=全屏 + 等用户确认）。 */
-    private val onClearAllRequested: (() -> Unit)? = null
+    private val onClearAllRequested: (() -> Unit)? = null,
+    /** 松手即翻译：DRAWING 阶段手指抬起后跳过 ADJUSTING，直接回调 [onDrawingComplete]。 */
+    val skipAdjustment: Boolean = false,
 ) : View(context) {
 
     /** rect 变化时通知调用方（浮层按钮用它做跟随定位）。null 表示当前没有有效框。 */
     var onRectChanged: ((Rect?) -> Unit)? = null
+
+    /** [skipAdjustment] 为 true 时，DRAWING 阶段松手触发此回调代替进入 ADJUSTING。 */
+    var onDrawingComplete: ((Rect) -> Unit)? = null
 
     enum class Mode { DRAWING, ADJUSTING }
 
@@ -276,8 +281,12 @@ class RegionPickerView(
                         invalidate()
                     }
                 } else {
-                    mode = Mode.ADJUSTING
-                    invalidate()
+                    if (skipAdjustment) {
+                        onDrawingComplete?.invoke(Rect(r))
+                    } else {
+                        mode = Mode.ADJUSTING
+                        invalidate()
+                    }
                 }
             }
             MotionEvent.ACTION_CANCEL -> {

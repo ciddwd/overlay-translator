@@ -45,9 +45,10 @@ class SettingsLazyLayoutTest {
             Case("overlay", 7),
             Case("floating", 8),
             Case("arc_menu", 9),
-            Case("trigger", 10),
-            Case("developer", 11),
-            Case("network", 12),
+            Case("word_select", 10),
+            Case("trigger", 11),
+            Case("developer", 12),
+            Case("network", 13),
         ).forEach { case ->
             assertEquals(case.key, case.expectedIndex, settingsSectionIndex(case.key))
         }
@@ -160,6 +161,7 @@ class SettingsLazyLayoutTest {
                 "overlay" -> "OVERLAY"
                 "floating" -> "FLOATING"
                 "arc_menu" -> "ARC_MENU"
+                "word_select" -> "WORD_SELECT"
                 "trigger" -> "TRIGGER"
                 "developer" -> "DEVELOPER"
                 "network" -> "NETWORK"

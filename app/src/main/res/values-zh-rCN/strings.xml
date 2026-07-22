@@ -1031,6 +1031,9 @@
     <string name="llm_status_ready">已就绪（%1$s MB）</string>
     <string name="llm_status_missing">未下载</string>
     <string name="llm_status_downloading_format">从 %1$s 下载中：%2$d / %3$d MB</string>
+    <string name="settings_llm_inference_params_header">推理参数高级设置</string>
+    <string name="settings_llm_context_size">上下文窗口：%1$d token</string>
+    <string name="settings_llm_max_new_tokens">最大生成 token 数：%1$d</string>
     <string name="llm_powered_by_notice">翻译由腾讯 Hy-MT2 与 SakuraLLM 提供，许可信息见关于页。</string>
     <string name="llm_mirror_label">自定义模型镜像 URL（base，末尾带 /）</string>
     <string name="llm_mirror_placeholder">如 https://my-cdn.example/models/</string>
@@ -1234,6 +1237,16 @@
     <string name="word_select_btn_translate">翻译</string>
     <string name="word_select_btn_cancel">取消</string>
     <string name="word_select_btn_redraw">重画</string>
+    <string name="settings_section_word_select">划词翻译</string>
+    <string name="settings_word_select_precise_adjust">精确调整（翻译前可微调选框）</string>
+    <string name="settings_word_select_precise_adjust_help">开启后，画框结束进入调整阶段，可拖动 8 个把手微调后再点翻译。关闭后松手即翻译，不进入调整阶段。</string>
+    <string name="settings_word_select_card_mode">弹出翻译卡片</string>
+    <string name="settings_word_select_card_mode_help">开启后，翻译结果以浮动卡片展示。关闭后，走全屏叠加显示管线，译文叠加在原文位置，同时将选框设为截图区域。</string>
+    <string name="settings_word_select_remember_region">记住上次的选框位置</string>
+    <string name="settings_word_select_remember_region_help">打开划词选框时自动预填上次的选区，可随时重画新区域。</string>
+    <string name="settings_search_item_word_select_precise">精确调整 / 松手翻译</string>
+    <string name="settings_search_item_word_select_card_mode">划词卡片 / 叠加模式</string>
+    <string name="settings_search_item_word_select_remember">记住划词选框</string>
     <string name="word_card_speak_source">朗读原文</string>
     <string name="word_card_speak_translation">朗读译文</string>
     <string name="word_card_speak_dictionary">朗读词典详情</string>
