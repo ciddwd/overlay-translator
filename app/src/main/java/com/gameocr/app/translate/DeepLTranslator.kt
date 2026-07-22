@@ -242,15 +242,15 @@ class DeepLTranslator @Inject constructor(
     }
 
     private suspend fun testOfficialUsage(settings: Settings): TestResult {
-        val endpoint = endpointFor(settings, DeeplProtocol.OFFICIAL, path = "usage")
-        val request = Request.Builder()
-            .url(endpoint)
-            .apply { authHeader(settings, DeeplProtocol.OFFICIAL)?.let { (k, v) -> header(k, v) } }
-            .header("Accept", "application/json")
-            .get()
-            .build()
-        val timedClient = client.withApiTimeout(settings.apiTimeoutSeconds)
         return runCatching {
+            val endpoint = endpointFor(settings, DeeplProtocol.OFFICIAL, path = "usage")
+            val request = Request.Builder()
+                .url(endpoint)
+                .apply { authHeader(settings, DeeplProtocol.OFFICIAL)?.let { (k, v) -> header(k, v) } }
+                .header("Accept", "application/json")
+                .get()
+                .build()
+            val timedClient = client.withApiTimeout(settings.apiTimeoutSeconds)
             withContext(Dispatchers.IO) {
                 timedClient.newCall(request).execute().use { resp ->
                     val raw = resp.body?.string().orEmpty()
@@ -289,10 +289,10 @@ class DeepLTranslator @Inject constructor(
 
     /** 用指定 protocol 发一次真实翻译 "Hello"，成功 → OK + 样例译文。用于 deeplx / AUTO 探活。 */
     private suspend fun testTranslateProbe(settings: Settings, protocol: DeeplProtocol): TestResult {
-        val targetCode = mapTargetLang(settings.targetLang)
-        val (_, request) = buildSingleRequest(settings, "Hello", targetCode, protocol)
-        val timedClient = client.withApiTimeout(settings.apiTimeoutSeconds)
         return runCatching {
+            val targetCode = mapTargetLang(settings.targetLang)
+            val (_, request) = buildSingleRequest(settings, "Hello", targetCode, protocol)
+            val timedClient = client.withApiTimeout(settings.apiTimeoutSeconds)
             withContext(Dispatchers.IO) {
                 timedClient.newCall(request).execute().use { resp ->
                     val raw = resp.body?.string().orEmpty()

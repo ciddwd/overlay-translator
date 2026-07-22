@@ -3436,37 +3436,45 @@ fun SettingsScreen(
                             testRunning = true
                             testMessage = null
                             scope.launch {
-                                val result = viewModel.testTranslator(
-                                    translatorEngine = translatorEngine,
-                                    baseUrl = baseUrl,
-                                    apiKey = apiKey,
-                                    model = model,
-                                    anthropicBaseUrl = anthropicBaseUrl,
-                                    anthropicApiKey = anthropicApiKey,
-                                    anthropicModel = anthropicModel,
-                                    deeplKey = deeplKey,
-                                    deeplPro = deeplPro,
-                                    deeplProtocol = deeplProtocol,
-                                    deeplBaseUrl = deeplBaseUrl,
-                                    deeplBearerAuth = deeplBearerAuth,
-                                    deeplCustomToken = deeplCustomToken,
-                                    youdaoAppKey = youdaoAppKey,
-                                    youdaoAppSecret = youdaoAppSecret,
-                                    apiTimeoutSeconds = apiTimeoutSec.toInt(),
-                                    volcAccessKeyId = volcAk,
-                                    volcSecretAccessKey = volcSk,
-                                    volcRegion = volcRegion,
-                                    baiduFanyiAppId = baiduFanyiAppId,
-                                    baiduFanyiSecretKey = baiduFanyiSecret,
-                                    tencentSecretId = tencentId,
-                                    tencentSecretKey = tencentKey,
-                                    tencentRegion = tencentRegion
-                                )
-                                testRunning = false
-                                testSuccess = result.success
-                                testMessage = result.message
-                                if (result.success && result.models.isNotEmpty()) {
-                                    fetchedModels = result.models
+                                try {
+                                    val result = viewModel.testTranslator(
+                                        translatorEngine = translatorEngine,
+                                        baseUrl = baseUrl,
+                                        apiKey = apiKey,
+                                        model = model,
+                                        anthropicBaseUrl = anthropicBaseUrl,
+                                        anthropicApiKey = anthropicApiKey,
+                                        anthropicModel = anthropicModel,
+                                        deeplKey = deeplKey,
+                                        deeplPro = deeplPro,
+                                        deeplProtocol = deeplProtocol,
+                                        deeplBaseUrl = deeplBaseUrl,
+                                        deeplBearerAuth = deeplBearerAuth,
+                                        deeplCustomToken = deeplCustomToken,
+                                        youdaoAppKey = youdaoAppKey,
+                                        youdaoAppSecret = youdaoAppSecret,
+                                        apiTimeoutSeconds = apiTimeoutSec.toInt(),
+                                        volcAccessKeyId = volcAk,
+                                        volcSecretAccessKey = volcSk,
+                                        volcRegion = volcRegion,
+                                        baiduFanyiAppId = baiduFanyiAppId,
+                                        baiduFanyiSecretKey = baiduFanyiSecret,
+                                        tencentSecretId = tencentId,
+                                        tencentSecretKey = tencentKey,
+                                        tencentRegion = tencentRegion
+                                    )
+                                    testSuccess = result.success
+                                    testMessage = result.message
+                                    if (result.success && result.models.isNotEmpty()) {
+                                        fetchedModels = result.models
+                                    }
+                                } catch (error: CancellationException) {
+                                    throw error
+                                } catch (error: Exception) {
+                                    testSuccess = false
+                                    testMessage = error.message ?: error.javaClass.simpleName
+                                } finally {
+                                    testRunning = false
                                 }
                             }
                         }
