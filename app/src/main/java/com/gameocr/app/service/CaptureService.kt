@@ -1452,6 +1452,7 @@ class CaptureService : Service() {
         val diagId = captureSequence.incrementAndGet()
         var captureAttemptStarted = false
         var captureChromeRestored = false
+        var floatingWindowHiddenForCapture = false
         fun restoreCaptureChromeOnce(showLoading: Boolean) {
             if (captureChromeRestored) return
             captureChromeRestored = true
@@ -1460,12 +1461,19 @@ class CaptureService : Service() {
                 restoreFloatingButton = restoreFloatingButtonAfterScreenshot
             )
         }
+        suspend fun restoreFloatingWindowAfterCapture() {
+            if (!floatingWindowHiddenForCapture) return
+            floatingWindowHiddenForCapture = false
+            withContext(Dispatchers.Main) {
+                overlay?.setFloatingWindowHiddenForCapture(hidden = false)
+            }
+        }
         try {
             if (loopMode) {
                 val loopSettings = settingsRepository.get()
-                val hasActiveResult = overlay?.hasActiveResult() == true
+                val hasBlockingResult = overlay?.hasBlockingLoopResult() == true
                 val activeResultDecision = LoopRuntimePolicy.activeResultDecision(
-                    hasActiveResult = hasActiveResult,
+                    hasBlockingResult = hasBlockingResult,
                     translationInFlight = loopTranslationInFlight,
                 )
                 when (activeResultDecision) {
@@ -1474,7 +1482,7 @@ class CaptureService : Service() {
                         logLoopRuntimeTransition(
                             diagId,
                             state = "translation_in_flight",
-                            message = "loop wait reason=translation_in_flight activeResult=$hasActiveResult",
+                            message = "loop wait reason=translation_in_flight blockingResult=$hasBlockingResult",
                         )
                         return
                     }
@@ -1496,7 +1504,16 @@ class CaptureService : Service() {
                 restoreCaptureChromeOnce(showLoading = false)
                 return
             }
+            if (loopMode) {
+                floatingWindowHiddenForCapture = withContext(Dispatchers.Main) {
+                    overlay?.setFloatingWindowHiddenForCapture(hidden = true) == true
+                }
+                if (floatingWindowHiddenForCapture) {
+                    delay(CAPTURE_CHROME_SETTLE_MS)
+                }
+            }
             val full = shotter.capture()
+            restoreFloatingWindowAfterCapture()
             if (full == null) {
                 // 截屏链路返回 null（MediaProjection token 失效 / Shizuku 调用失败等），
                 // 之前直接 return，用户只看到圈转一下；现在显式提示。
@@ -2382,6 +2399,7 @@ class CaptureService : Service() {
                 else -> renderFloatingWindow(blocks, settings, diagId)
             }
         } finally {
+            restoreFloatingWindowAfterCapture()
             if (captureAttemptStarted) {
                 restoreCaptureChromeOnce(showLoading = false)
                 logVerticalDiag(diagId, "finish")

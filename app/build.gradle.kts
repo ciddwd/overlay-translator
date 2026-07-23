@@ -7,6 +7,10 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
+hilt {
+    enableAggregatingTask = false
+}
+
 val localLlmGenerationThreads = providers
     .gradleProperty("localLlmGenerationThreads")
     .orElse("6")

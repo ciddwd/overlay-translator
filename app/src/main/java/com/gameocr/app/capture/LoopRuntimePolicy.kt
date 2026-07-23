@@ -20,11 +20,11 @@ internal object LoopRuntimePolicy {
     const val SMART_INDICATOR_PERIOD_MS: Long = 1600L
 
     fun activeResultDecision(
-        hasActiveResult: Boolean,
+        hasBlockingResult: Boolean,
         translationInFlight: Boolean,
     ): LoopActiveResultDecision {
         if (translationInFlight) return LoopActiveResultDecision.KEEP_TRANSLATING
-        if (!hasActiveResult) return LoopActiveResultDecision.CAPTURE
+        if (!hasBlockingResult) return LoopActiveResultDecision.CAPTURE
         return LoopActiveResultDecision.KEEP_VISIBLE
     }
 

@@ -9,7 +9,7 @@ class LoopRuntimePolicyTest {
     fun activeResultDecision_coversLoopModesTranslationAndTimingBoundaries() {
         data class Case(
             val name: String,
-            val hasActiveResult: Boolean,
+            val hasBlockingResult: Boolean,
             val translationInFlight: Boolean,
             val expected: LoopActiveResultDecision,
         )
@@ -17,18 +17,20 @@ class LoopRuntimePolicyTest {
         listOf(
             Case("no result captures", false, false,
                 LoopActiveResultDecision.CAPTURE),
+            Case("persistent floating result does not block capture", false, false,
+                LoopActiveResultDecision.CAPTURE),
             Case("translation blocks capture even after manual dismiss", false, true,
                 LoopActiveResultDecision.KEEP_TRANSLATING),
             Case("active translating result stays visible", true, true,
                 LoopActiveResultDecision.KEEP_TRANSLATING),
-            Case("active result always requires manual dismiss", true, false,
+            Case("blocking overlay result requires manual dismiss", true, false,
                 LoopActiveResultDecision.KEEP_VISIBLE),
         ).forEach { case ->
             assertEquals(
                 case.name,
                 case.expected,
                 LoopRuntimePolicy.activeResultDecision(
-                    hasActiveResult = case.hasActiveResult,
+                    hasBlockingResult = case.hasBlockingResult,
                     translationInFlight = case.translationInFlight,
                 ),
             )

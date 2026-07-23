@@ -160,6 +160,20 @@ class CaptureChromeOrderingTest {
     }
 
     @Test
+    fun loopCapture_temporarilyHidesPersistentFloatingWindowAroundScreenshot() {
+        val snippet = functionSnippet(captureServiceSource(), "private suspend fun captureOnce(")
+        val blockingResultIndex = snippet.indexOf("overlay?.hasBlockingLoopResult()")
+        val hideIndex = snippet.indexOf("setFloatingWindowHiddenForCapture(hidden = true)")
+        val captureIndex = snippet.indexOf("val full = shotter.capture()", hideIndex)
+        val restoreIndex = snippet.indexOf("restoreFloatingWindowAfterCapture()", captureIndex)
+
+        assertTrue("loop should only wait for blocking overlay results", blockingResultIndex >= 0)
+        assertTrue("floating window should be hidden before screenshot", hideIndex >= 0)
+        assertTrue("screenshot should happen after the floating window is hidden", captureIndex > hideIndex)
+        assertTrue("floating window should be restored immediately after screenshot", restoreIndex > captureIndex)
+    }
+
+    @Test
     fun applyOverlayConfig_tableDriven_keepsViewMutationsOnMainThread() {
         data class Case(
             val name: String,

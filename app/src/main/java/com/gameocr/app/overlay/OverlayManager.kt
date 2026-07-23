@@ -481,8 +481,12 @@ class OverlayManager(
         applyFloatingWindowText(index, PendingOverlayTextUpdate(text, phase))
     }
 
-    /** 仅悬浮窗口模式有效：是否当前可见（用于循环模式 hasActiveBlocks 等价的判定，目前未用）。 */
+    /** 仅悬浮窗口模式有效：是否当前可见。 */
     fun isFloatingWindowShown(): Boolean = floatingWindow.isShown()
+
+    /** 循环截图前临时停止/恢复悬浮窗口绘制，不销毁常驻窗口及其内容。 */
+    fun setFloatingWindowHiddenForCapture(hidden: Boolean): Boolean =
+        floatingWindow.setHiddenForCapture(hidden)
 
     /**
      * 重新加载 DraggableOverlayWindow 字段：在 applyOverlayConfig 时由外部调用，确保
@@ -1481,9 +1485,9 @@ class OverlayManager(
         updateTranslationBlockActionState(index)
     }
 
-    /** 是否仍有贴字框或悬浮窗口译文显示在屏幕上。 */
-    fun hasActiveResult(): Boolean =
-        (blocksView != null && blockViews.isNotEmpty()) || floatingWindow.isShown()
+    /** 贴字框必须手动关闭后循环才能继续；常驻悬浮窗口不属于阻塞结果。 */
+    fun hasBlockingLoopResult(): Boolean =
+        blocksView != null && blockViews.isNotEmpty()
 
     private fun handleFloatingWindowUserDismiss() {
         performPlaybackOverlayDismiss(
@@ -1538,7 +1542,7 @@ class OverlayManager(
             // SurfaceFlinger 只单独排除该层但物理屏正常。可惜 MIUI / HyperOS 的反盗版逻辑
             // 看到屏幕上有 FLAG_SECURE 层就直接拒绝整张 MediaProjection 输出，Shizuku
             // screencap 也 exit=1。代价远大于自循环防护，已撤回。BLOCKS 模式自循环靠
-            // [hasActiveResult] 与循环结果生命周期共同避免把应用自己的译文截回去。
+            // [hasBlockingLoopResult] 阻塞下一帧；悬浮窗口则只在截图瞬间临时停止绘制。
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START

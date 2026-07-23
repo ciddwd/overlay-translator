@@ -101,6 +101,16 @@ class DraggableOverlayWindow(
 
     fun isShown(): Boolean = rootView != null
 
+    /**
+     * 循环截图时临时停止绘制窗口，但保留同一个 window、内容和几何状态。
+     * 返回 false 表示窗口当前未显示，调用方无需安排恢复。
+     */
+    fun setHiddenForCapture(hidden: Boolean): Boolean {
+        val root = rootView ?: return false
+        root.visibility = if (hidden) View.INVISIBLE else View.VISIBLE
+        return true
+    }
+
     /** 当前窗口在屏幕坐标系的矩形（x,y 是 gravity=TOP|START 下的 layoutParams.x/y）。未显示时返回 null。 */
     fun currentBounds(): android.graphics.Rect? {
         val p = layoutParams ?: return null
