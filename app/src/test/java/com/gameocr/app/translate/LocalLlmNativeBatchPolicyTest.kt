@@ -17,18 +17,28 @@ class LocalLlmNativeBatchPolicyTest {
         )
 
         val cases = listOf(
-            Case("single result", listOf(2), "译文", listOf(BatchTranslationUpdate(2, "译文"))),
+            Case(
+                "single result",
+                listOf(2),
+                "译文",
+                listOf(BatchTranslationUpdate(2, "译文", elapsedMs = 321L)),
+            ),
             Case(
                 "deduplicated source restores duplicate positions",
                 listOf(0, 3, 7),
                 "相同译文",
                 listOf(
-                    BatchTranslationUpdate(0, "相同译文"),
-                    BatchTranslationUpdate(3, "相同译文"),
-                    BatchTranslationUpdate(7, "相同译文"),
+                    BatchTranslationUpdate(0, "相同译文", elapsedMs = 321L),
+                    BatchTranslationUpdate(3, "相同译文", elapsedMs = 321L),
+                    BatchTranslationUpdate(7, "相同译文", elapsedMs = 321L),
                 ),
             ),
-            Case("null failure is still emitted", listOf(1), null, listOf(BatchTranslationUpdate(1, null))),
+            Case(
+                "null failure is still emitted",
+                listOf(1),
+                null,
+                listOf(BatchTranslationUpdate(1, null, elapsedMs = 321L)),
+            ),
             Case("empty index list", emptyList(), "unused", emptyList()),
         )
 
@@ -36,7 +46,7 @@ class LocalLlmNativeBatchPolicyTest {
             assertEquals(
                 case.name,
                 case.expected,
-                localLlmBatchResultUpdates(case.indexes, case.translated),
+                localLlmBatchResultUpdates(case.indexes, case.translated, elapsedMs = 321L),
             )
         }
     }

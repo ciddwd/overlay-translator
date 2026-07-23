@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TranslatorIncrementalTest {
@@ -30,10 +31,11 @@ class TranslatorIncrementalTest {
             val returned = translator.translateBatchIncremental(case.sources, Settings(), updates::add)
 
             assertEquals("${case.name} returned", case.results, returned)
-            assertEquals(
-                "${case.name} updates",
-                case.results.mapIndexed { index, text -> BatchTranslationUpdate(index, text) },
-                updates,
+            assertEquals("${case.name} update indexes", case.results.indices.toList(), updates.map { it.index })
+            assertEquals("${case.name} update texts", case.results, updates.map { it.text })
+            assertTrue(
+                "${case.name} elapsed times",
+                updates.all { (it.elapsedMs ?: -1L) >= 0L },
             )
         }
     }

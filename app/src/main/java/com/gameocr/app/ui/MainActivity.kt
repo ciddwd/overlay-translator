@@ -24,6 +24,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import com.gameocr.app.data.AppLocalePrefs
 import com.gameocr.app.data.ThemeModePrefs
+import com.gameocr.app.onboarding.OnboardingPrefs
+import com.gameocr.app.onboarding.OnboardingScreen
+import com.gameocr.app.onboarding.FloatingTourRerunPolicy
+import com.gameocr.app.overlay.FloatingMenuTourPrefs
+import com.gameocr.app.service.CaptureService
+import com.gameocr.app.service.CaptureServiceState
 import com.gameocr.app.ui.theme.GameOcrTheme
 import com.gameocr.app.ui.theme.LocalThemeMode
 import com.gameocr.app.ui.theme.ThemeModeController
@@ -77,12 +83,27 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class Route { Main, Settings, Glossary, Logs, LegalNotices }
+private enum class Route { Main, Onboarding, Settings, Glossary, Logs, LegalNotices }
 
 @Composable
 private fun AppRoot(routeRequest: State<String?>) {
+    val context = LocalContext.current
+    var onboardingFirstRun by rememberSaveable {
+        mutableStateOf(!OnboardingPrefs.isCompleted(context))
+    }
+    var onboardingOpenedFromHelp by rememberSaveable {
+        mutableStateOf(false)
+    }
     // 用 rememberSaveable：语言切换会触发系统 recreate Activity，route 须跨重建保留。
-    var routeName by rememberSaveable { mutableStateOf(routeRequest.value ?: Route.Main.name) }
+    var routeName by rememberSaveable {
+        mutableStateOf(
+            routeRequest.value ?: if (onboardingFirstRun) {
+                Route.Onboarding.name
+            } else {
+                Route.Main.name
+            }
+        )
+    }
     val settingsListState = rememberLazyListState()
     LaunchedEffect(routeRequest.value) {
         val requested = routeRequest.value ?: return@LaunchedEffect
@@ -101,6 +122,40 @@ private fun AppRoot(routeRequest: State<String?>) {
                 onOpenSettings = { routeName = Route.Settings.name },
                 onOpenLogs = { routeName = Route.Logs.name },
                 onOpenLegalNotices = { routeName = Route.LegalNotices.name },
+                onOpenOnboarding = {
+                    val decision = FloatingTourRerunPolicy.onHelpOpened()
+                    if (decision.resetCompletion) {
+                        FloatingMenuTourPrefs.reset(context)
+                    }
+                    onboardingOpenedFromHelp = true
+                    onboardingFirstRun = false
+                    routeName = Route.Onboarding.name
+                },
+            )
+            Route.Onboarding -> OnboardingScreen(
+                firstRun = onboardingFirstRun,
+                onFinished = {
+                    val decision = FloatingTourRerunPolicy.onOnboardingExit(
+                        openedFromHelp = onboardingOpenedFromHelp,
+                        completed = true,
+                        captureServiceRunning = CaptureServiceState.running.value,
+                    )
+                    OnboardingPrefs.markCompleted(context)
+                    onboardingFirstRun = false
+                    onboardingOpenedFromHelp = false
+                    routeName = Route.Main.name
+                    if (decision.notifyRunningService) {
+                        context.startService(
+                            CaptureService.runFloatingTourIntent(context)
+                        )
+                    }
+                },
+                onSkipped = {
+                    OnboardingPrefs.markCompleted(context)
+                    onboardingFirstRun = false
+                    onboardingOpenedFromHelp = false
+                    routeName = Route.Main.name
+                },
             )
             Route.Settings -> SettingsScreen(
                 onBack = { routeName = Route.Main.name },

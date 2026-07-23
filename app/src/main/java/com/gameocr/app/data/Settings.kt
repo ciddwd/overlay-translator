@@ -44,6 +44,7 @@ data class Settings(
     val developerOptionsEnabled: Boolean = false,
     val ocrScreenshotSavingEnabled: Boolean = false,
     val disableTranslationCache: Boolean = false,
+    val batchCumulativeCompletionTimeEnabled: Boolean = false,
     /** 兼容旧版持久化字段；界面以正向的“跨上下文翻译”开关展示。false 表示默认开启。 */
     val disableCrossLineContextTranslation: Boolean = false,
     val ocrRedBoxModeEnabled: Boolean = false,

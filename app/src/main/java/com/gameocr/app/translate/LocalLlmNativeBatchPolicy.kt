@@ -13,8 +13,9 @@ internal data class LocalLlmNativeBatchPlan<T>(
 internal fun localLlmBatchResultUpdates(
     resultIndexes: List<Int>,
     translated: String?,
+    elapsedMs: Long,
 ): List<BatchTranslationUpdate> = resultIndexes.map { index ->
-    BatchTranslationUpdate(index = index, text = translated)
+    BatchTranslationUpdate(index = index, text = translated, elapsedMs = elapsedMs)
 }
 
 /**

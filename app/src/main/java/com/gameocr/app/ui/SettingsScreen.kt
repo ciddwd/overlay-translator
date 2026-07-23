@@ -498,6 +498,7 @@ fun SettingsScreen(
     var developerOptionsEnabled by remember { mutableStateOf(false) }
     var ocrScreenshotSavingEnabled by remember { mutableStateOf(false) }
     var disableTranslationCache by remember { mutableStateOf(false) }
+    var batchCumulativeCompletionTimeEnabled by remember { mutableStateOf(false) }
     var ocrRedBoxModeEnabled by remember { mutableStateOf(false) }
     var ocrRedBoxShowSourceText by remember { mutableStateOf(true) }
     var ocrRedBoxShowTranslation by remember { mutableStateOf(false) }
@@ -889,6 +890,7 @@ fun SettingsScreen(
         developerOptionsEnabled = s.developerOptionsEnabled
         ocrScreenshotSavingEnabled = s.ocrScreenshotSavingEnabled
         disableTranslationCache = s.disableTranslationCache
+        batchCumulativeCompletionTimeEnabled = s.batchCumulativeCompletionTimeEnabled
         ocrRedBoxModeEnabled = s.ocrRedBoxModeEnabled
         ocrRedBoxShowSourceText = s.ocrRedBoxShowSourceText
         ocrRedBoxShowTranslation = s.ocrRedBoxShowTranslation
@@ -1199,6 +1201,7 @@ fun SettingsScreen(
         developerOptionsEnabled = developerOptionsEnabled,
         ocrScreenshotSavingEnabled = ocrScreenshotSavingEnabled,
         disableTranslationCache = disableTranslationCache,
+        batchCumulativeCompletionTimeEnabled = batchCumulativeCompletionTimeEnabled,
         ocrRedBoxModeEnabled = ocrRedBoxModeEnabled,
         ocrRedBoxShowSourceText = ocrRedBoxShowSourceText,
         ocrRedBoxShowTranslation = ocrRedBoxShowTranslation,
@@ -1410,6 +1413,7 @@ fun SettingsScreen(
             developerOptionsEnabled = developerOptionsEnabled,
             ocrScreenshotSavingEnabled = ocrScreenshotSavingEnabled,
             disableTranslationCache = disableTranslationCache,
+            batchCumulativeCompletionTimeEnabled = batchCumulativeCompletionTimeEnabled,
             ocrRedBoxModeEnabled = ocrRedBoxModeEnabled,
             ocrRedBoxShowSourceText = ocrRedBoxShowSourceText,
             ocrRedBoxShowTranslation = ocrRedBoxShowTranslation,
@@ -2419,6 +2423,7 @@ fun SettingsScreen(
             developerOptionsEnabled = s.developerOptionsEnabled
             ocrScreenshotSavingEnabled = s.ocrScreenshotSavingEnabled
             disableTranslationCache = s.disableTranslationCache
+            batchCumulativeCompletionTimeEnabled = s.batchCumulativeCompletionTimeEnabled
             ocrRedBoxModeEnabled = s.ocrRedBoxModeEnabled
             ocrRedBoxShowSourceText = s.ocrRedBoxShowSourceText
             ocrRedBoxShowTranslation = s.ocrRedBoxShowTranslation
@@ -5239,6 +5244,15 @@ fun SettingsScreen(
                         modifier = Modifier.padding(start = 16.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
+                        SwitchRow(
+                            label = stringResource(
+                                R.string.settings_batch_cumulative_completion_time_label
+                            ),
+                            checked = batchCumulativeCompletionTimeEnabled,
+                            helpText = stringResource(
+                                R.string.settings_batch_cumulative_completion_time_hint
+                            ),
+                        ) { batchCumulativeCompletionTimeEnabled = it }
                         SwitchRow(
                             label = stringResource(R.string.settings_ocr_screenshot_saving_label),
                             checked = ocrScreenshotSavingEnabled,

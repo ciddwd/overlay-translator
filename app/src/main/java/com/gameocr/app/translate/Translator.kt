@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.Flow
 data class BatchTranslationUpdate(
     val index: Int,
     val text: String?,
+    val elapsedMs: Long? = null,
 )
 
 internal class BatchTranslationProgressState(size: Int) {
@@ -73,9 +74,17 @@ interface Translator {
         settings: Settings,
         onUpdate: (BatchTranslationUpdate) -> Unit,
     ): List<String?> {
+        val startedAtNs = System.nanoTime()
         val results = translateBatch(sources, settings)
+        val elapsedMs = ((System.nanoTime() - startedAtNs) / 1_000_000L).coerceAtLeast(0L)
         results.forEachIndexed { index, text ->
-            onUpdate(BatchTranslationUpdate(index = index, text = text))
+            onUpdate(
+                BatchTranslationUpdate(
+                    index = index,
+                    text = text,
+                    elapsedMs = elapsedMs,
+                )
+            )
         }
         return results
     }

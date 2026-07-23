@@ -123,13 +123,22 @@ class MlKitOnDeviceTranslator @Inject constructor(
     ): List<String?> {
         val results = MutableList<String?>(sources.size) { null }
         sources.forEachIndexed { index, source ->
+            val startedAtNs = System.nanoTime()
             val result = runCatching { translate(source, settings) }
                 .onFailure {
                     Timber.tag("MlKitTrans").w(it, "batch item failed: index=%d", index)
                 }
                 .getOrNull()
+            val elapsedMs =
+                ((System.nanoTime() - startedAtNs) / 1_000_000L).coerceAtLeast(0L)
             results[index] = result
-            onUpdate(BatchTranslationUpdate(index = index, text = result))
+            onUpdate(
+                BatchTranslationUpdate(
+                    index = index,
+                    text = result,
+                    elapsedMs = elapsedMs,
+                )
+            )
         }
         return results
     }

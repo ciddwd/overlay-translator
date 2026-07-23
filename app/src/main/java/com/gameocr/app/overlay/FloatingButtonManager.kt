@@ -1,6 +1,7 @@
 package com.gameocr.app.overlay
 
 import android.annotation.SuppressLint
+import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.PixelFormat
 import android.graphics.Rect
@@ -95,6 +96,8 @@ class FloatingButtonManager(
     /** 弧菜单按钮顺序（来自 Settings.floatingMenuItemOrder）。CaptureService 在 settings collect 时同步。 */
     @Volatile var menuItemOrder: List<MenuItemId> = FloatingMenu.DEFAULT_ORDER
     @Volatile var arcMenuPageSize: Int = FloatingMenu.DEFAULT_PAGE_SIZE
+    @Volatile var firstUseTourPending: Boolean = false
+    @Volatile var onFirstUseTourCompleted: () -> Unit = {}
 
     /**
      * 主球技能切换回调：菜单里点了「划词翻译 / 全屏翻译」时调用。
@@ -137,10 +140,25 @@ class FloatingButtonManager(
     private var view: View? = null
     private var layoutParams: WindowManager.LayoutParams? = null
     private var progressView: LoopProgressView? = null
+    private var longPressGuideView: LongPressGuideView? = null
 
     private var snapAnimX: SpringAnimation? = null
     private var snapAnimY: SpringAnimation? = null
     private var arcMenuView: View? = null
+    private var tourStage: TourStage = TourStage.NONE
+    private var tourPlan: List<FloatingMenuTourPage> = emptyList()
+    private var tourPageIndex: Int = 0
+    private var tourTargetIndex: Int = 0
+    private var tourMenuItems: List<MenuItem> = emptyList()
+    private var tourMenuButtons: List<ImageView> = emptyList()
+    private var tourPulseAnimator: ValueAnimator? = null
+    private var tourPulseTarget: View? = null
+    private val tourOverlay by lazy {
+        FloatingMenuTourOverlay(context, wm, overlayType)
+    }
+    private val longPressCueOverlay by lazy {
+        FloatingLongPressCueOverlay(context, wm, overlayType)
+    }
 
     private val autoDockHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val autoDockRunnable = Runnable {
@@ -155,6 +173,7 @@ class FloatingButtonManager(
 
     /** 启动 3s 倒计时。重复调用会取消上次。守门条件不满足时 noop。 */
     private fun scheduleAutoDock() {
+        if (tourStage != TourStage.NONE) return
         if (!snapToEdgeEnabled || !autoDockEnabled) return
         if (dockSide != DockSide.NONE) return
         autoDockHandler.removeCallbacks(autoDockRunnable)
@@ -178,6 +197,28 @@ class FloatingButtonManager(
     }
 
     fun isShown(): Boolean = view != null
+
+    fun requestFirstUseTour() {
+        if (tourStage != TourStage.NONE) {
+            cancelFirstUseTour(markCompleted = false)
+        } else if (arcMenuView != null) {
+            dismissArcMenu()
+        }
+        firstUseTourPending = true
+        val currentView = view ?: return
+        currentView.postDelayed(
+            {
+                if (
+                    view === currentView &&
+                    firstUseTourPending &&
+                    tourStage == TourStage.NONE
+                ) {
+                    startFirstUseTour()
+                }
+            },
+            TOUR_START_DELAY_MS,
+        )
+    }
 
     /** Physical screen bounds occupied by the ball window, masked from loop-frame comparison. */
     fun captureExclusionRect(): Rect? {
@@ -209,6 +250,7 @@ class FloatingButtonManager(
         mainIcon = iv
         // 循环模式进度环：叠加在 iv 上层 size×size 居中，stop 状态不绘任何东西
         val progress = LoopProgressView(context)
+        val longPressGuide = LongPressGuideView(context)
         val container = LiquidFloatingContainer(context).apply {
             fillColor = androidx.core.content.ContextCompat.getColor(
                 this@FloatingButtonManager.context, R.color.floating_button
@@ -218,8 +260,10 @@ class FloatingButtonManager(
             ballRadius = size / 2f
             addView(iv, FrameLayout.LayoutParams(size, size, Gravity.CENTER))
             addView(progress, FrameLayout.LayoutParams(size, size, Gravity.CENTER))
+            addView(longPressGuide, FrameLayout.LayoutParams(size, size, Gravity.CENTER))
         }
         progressView = progress
+        longPressGuideView = longPressGuide
 
         val (screenW, screenH) = currentScreenSize()
 
@@ -265,6 +309,16 @@ class FloatingButtonManager(
         // post 到下一帧确保 view layout 完成再 snap，否则 SpringAnimation 用错的 start value 跳变。
         if (snapToEdgeEnabled) {
             container.post { snapToEdge() }
+        }
+        if (firstUseTourPending) {
+            container.postDelayed(
+                {
+                    if (view === container && firstUseTourPending) {
+                        startFirstUseTour()
+                    }
+                },
+                TOUR_START_DELAY_MS,
+            )
         }
     }
 
@@ -316,6 +370,9 @@ class FloatingButtonManager(
         // post 到下一帧再 snap：避开 onConfigurationChanged 到达时 wm 尺寸尚未切换的窗口期
         v.post {
             if (dockSide != DockSide.NONE) snapToEdge()
+            if (tourStage != TourStage.NONE) {
+                restartFirstUseTourAfterConfigurationChange()
+            }
         }
     }
 
@@ -371,6 +428,7 @@ class FloatingButtonManager(
     }
 
     fun hide() {
+        cancelFirstUseTour(markCompleted = false, dismissMenu = false)
         // hide 时若菜单还在 + 球已腾位 → 先把球位「回滚 到 positionBeforeMenu」再保存，不然下次
         // show() 用的 initialX/initialY 会是腾位后的临时位置，球永久跳到屏幕中部。
         positionBeforeMenu?.let { (origX, origY) ->
@@ -385,6 +443,8 @@ class FloatingButtonManager(
         snapAnimY?.cancel(); snapAnimY = null
         progressView?.stop()
         progressView = null
+        longPressGuideView?.stop()
+        longPressGuideView = null
         mainIcon = null
         // 保留 hide 前的最后位置——下次 show() 用 initialX/initialY 重建，否则会回到 service 启动
         // 时灌入的旧 settings 值（用户在弧菜单选区域后，调整完区域回来球就跳回原点的根因）。
@@ -631,6 +691,281 @@ class FloatingButtonManager(
         )
     }
 
+    private fun startFirstUseTour() {
+        if (!firstUseTourPending || tourStage != TourStage.NONE || view == null) return
+        firstUseTourPending = false
+        cancelAutoDock()
+        tourPlan = FloatingMenuTourPolicy.pages(menuItemOrder, arcMenuPageSize)
+        tourStage = TourStage.WAITING_FOR_LONG_PRESS
+        showMainBallTourStep()
+    }
+
+    private fun showMainBallTourStep() {
+        startTourPulse(view)
+        longPressGuideView?.start()
+        longPressCueOverlay.show(currentBallBounds())
+        tourOverlay.show(
+            anchorCenterY = currentBallCenterY(),
+            progress = context.getString(
+                R.string.floating_tour_progress,
+                1,
+                FloatingMenuTourPolicy.totalStepCount(menuItemOrder, arcMenuPageSize),
+            ),
+            title = context.getString(R.string.floating_tour_main_title),
+            body = context.getString(
+                R.string.floating_tour_main_body,
+                currentSkillDisplayName(),
+            ),
+            actionLabel = null,
+            onAction = {},
+            onSkip = { finishFirstUseTour() },
+        )
+    }
+
+    private fun currentSkillDisplayName(): String = context.getString(
+        when (skill) {
+            FloatingSkill.FULL_SCREEN -> R.string.floating_skill_full_screen_label
+            FloatingSkill.WORD_SELECT -> R.string.floating_skill_word_select_label
+            FloatingSkill.LOOP -> R.string.menu_loop_translate
+        }
+    )
+
+    private fun currentBallCenterY(): Int {
+        val params = layoutParams ?: return currentScreenSize().second / 2
+        return params.y + params.height / 2
+    }
+
+    private fun currentBallBounds(): Rect {
+        val density = context.resources.displayMetrics.density
+        val ballSize = (sizeDp.coerceIn(28, 128) * density).toInt()
+        val ballRadius = ballSize / 2
+        val params = layoutParams ?: run {
+            val (screenWidth, screenHeight) = currentScreenSize()
+            return Rect(
+                screenWidth / 2 - ballRadius,
+                screenHeight / 2 - ballRadius,
+                screenWidth / 2 + ballRadius,
+                screenHeight / 2 + ballRadius,
+            )
+        }
+        val centerX = params.x + when (dockSide) {
+            DockSide.LEFT -> ballRadius
+            DockSide.RIGHT -> params.width - ballRadius
+            DockSide.NONE -> params.width / 2
+        }
+        val centerY = params.y + params.height / 2
+        return Rect(
+            centerX - ballRadius,
+            centerY - ballRadius,
+            centerX + ballRadius,
+            centerY + ballRadius,
+        )
+    }
+
+    private fun restartFirstUseTourAfterConfigurationChange() {
+        if (tourStage == TourStage.NONE) return
+        val wasShowingCompletion = tourStage == TourStage.COMPLETION
+        stopTourPulse()
+        longPressGuideView?.stop()
+        longPressCueOverlay.dismiss()
+        tourOverlay.dismiss()
+        if (wasShowingCompletion) {
+            if (arcMenuView != null) dismissArcMenu()
+            view?.postDelayed(
+                { showFirstUseTourCelebration() },
+                TOUR_RESTART_DELAY_MS,
+            )
+            return
+        }
+        if (arcMenuView != null) {
+            tourStage = TourStage.WAITING_FOR_LONG_PRESS
+            dismissArcMenu()
+        } else {
+            tourStage = TourStage.WAITING_FOR_LONG_PRESS
+        }
+        view?.postDelayed({ showMainBallTourStep() }, TOUR_RESTART_DELAY_MS)
+    }
+
+    private fun startTourPulse(target: View?) {
+        stopTourPulse()
+        if (target == null) return
+        tourPulseTarget = target
+        tourPulseAnimator = ValueAnimator.ofFloat(1f, TOUR_PULSE_SCALE).apply {
+            duration = TOUR_PULSE_DURATION_MS
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.REVERSE
+            addUpdateListener {
+                val scale = it.animatedValue as Float
+                target.scaleX = scale
+                target.scaleY = scale
+            }
+            start()
+        }
+    }
+
+    private fun stopTourPulse() {
+        tourPulseAnimator?.cancel()
+        tourPulseAnimator = null
+        tourPulseTarget?.let {
+            it.scaleX = 1f
+            it.scaleY = 1f
+        }
+        tourPulseTarget = null
+    }
+
+    private fun showCurrentMenuTourStep() {
+        val page = tourPlan.getOrNull(tourPageIndex) ?: run {
+            finishFirstUseTour()
+            return
+        }
+        val target = page.targets.getOrNull(tourTargetIndex) ?: run {
+            finishFirstUseTour()
+            return
+        }
+        val item = tourMenuItems.getOrNull(tourTargetIndex) ?: run {
+            finishFirstUseTour()
+            return
+        }
+        val button = tourMenuButtons.getOrNull(tourTargetIndex) ?: run {
+            finishFirstUseTour()
+            return
+        }
+
+        tourMenuButtons.forEachIndexed { index, menuButton ->
+            menuButton.animate().cancel()
+            menuButton.alpha = if (index == tourTargetIndex) 1f else TOUR_DIMMED_ALPHA
+            menuButton.scaleX = 1f
+            menuButton.scaleY = 1f
+            menuButton.translationX = 0f
+            menuButton.translationY = 0f
+            menuButton.rotation = 0f
+        }
+        startTourPulse(button)
+
+        val absoluteIndex = FloatingMenuTourPolicy.absoluteStepIndex(
+            pages = tourPlan,
+            pageIndex = tourPageIndex,
+            targetIndex = tourTargetIndex,
+        )
+        val totalSteps = 1 + tourPlan.sumOf { it.targets.size }
+        val actionLabel = when {
+            target is FloatingMenuTourTarget.NextPage ->
+                context.getString(R.string.floating_tour_try_next_page)
+            tourPageIndex == tourPlan.lastIndex &&
+                tourTargetIndex == page.targets.lastIndex ->
+                context.getString(R.string.floating_tour_done)
+            else -> context.getString(R.string.floating_tour_next)
+        }
+        val descriptionRes = when (item.labelRes) {
+            R.string.menu_loop_translate -> R.string.floating_tour_loop_body
+            R.string.menu_pick_region -> R.string.floating_tour_region_body
+            R.string.menu_language_pair -> R.string.floating_tour_language_body
+            R.string.menu_preset_switch -> R.string.floating_tour_preset_body
+            R.string.menu_open_settings -> R.string.floating_tour_settings_body
+            R.string.menu_open_main -> R.string.floating_tour_home_body
+            R.string.menu_word_select -> R.string.floating_tour_word_select_body
+            R.string.menu_full_screen_skill -> R.string.floating_tour_full_screen_body
+            R.string.menu_next_page -> if (
+                target is FloatingMenuTourTarget.NextPage && target.wrapsToFirstPage
+            ) {
+                R.string.floating_tour_next_page_wrap_body
+            } else {
+                R.string.floating_tour_next_page_body
+            }
+            else -> R.string.floating_tour_generic_item_body
+        }
+        tourOverlay.show(
+            anchorCenterY = currentBallCenterY(),
+            progress = context.getString(
+                R.string.floating_tour_progress,
+                absoluteIndex + 1,
+                totalSteps,
+            ),
+            title = context.getString(item.labelRes),
+            body = context.getString(descriptionRes),
+            actionLabel = actionLabel,
+            onAction = { advanceFirstUseTour() },
+            onSkip = { finishFirstUseTour() },
+        )
+    }
+
+    private fun advanceFirstUseTour() {
+        if (tourStage != TourStage.MENU_ITEMS) return
+        when (
+            val decision = FloatingMenuTourPolicy.advance(
+                pages = tourPlan,
+                pageIndex = tourPageIndex,
+                targetIndex = tourTargetIndex,
+            )
+        ) {
+            FloatingMenuTourAdvance.Complete -> showFirstUseTourCelebration()
+            is FloatingMenuTourAdvance.ShowTarget -> {
+                tourPageIndex = decision.pageIndex
+                tourTargetIndex = decision.targetIndex
+                showCurrentMenuTourStep()
+            }
+            is FloatingMenuTourAdvance.OpenPage -> {
+                stopTourPulse()
+                tourOverlay.dismiss()
+                tourMenuItems.getOrNull(tourTargetIndex)?.onTap?.invoke()
+            }
+        }
+    }
+
+    private fun showFirstUseTourCelebration() {
+        if (tourStage == TourStage.NONE) return
+        tourStage = TourStage.COMPLETION
+        stopTourPulse()
+        tourOverlay.dismiss()
+        if (arcMenuView != null) dismissArcMenu()
+        tourOverlay.show(
+            anchorCenterY = currentBallCenterY(),
+            progress = context.getString(R.string.floating_tour_complete_progress),
+            title = context.getString(R.string.floating_tour_complete_title),
+            body = context.getString(R.string.floating_tour_complete_body),
+            actionLabel = context.getString(R.string.floating_tour_start_using),
+            onAction = { finishFirstUseTour() },
+            onSkip = null,
+            celebration = true,
+        )
+    }
+
+    private fun finishFirstUseTour() {
+        cancelFirstUseTour(markCompleted = true)
+    }
+
+    private fun cancelFirstUseTour(
+        markCompleted: Boolean,
+        dismissMenu: Boolean = true,
+    ) {
+        val wasActive = tourStage != TourStage.NONE
+        tourStage = TourStage.NONE
+        tourPlan = emptyList()
+        tourPageIndex = 0
+        tourTargetIndex = 0
+        stopTourPulse()
+        longPressGuideView?.stop()
+        longPressCueOverlay.dismiss()
+        tourOverlay.dismiss()
+        restoreMenuTourVisuals()
+        if (dismissMenu && arcMenuView != null) dismissArcMenu()
+        if (markCompleted && wasActive) onFirstUseTourCompleted()
+    }
+
+    private fun restoreMenuTourVisuals() {
+        tourMenuButtons.forEach {
+            it.animate().cancel()
+            it.alpha = MENU_ITEM_ALPHA
+            it.scaleX = 1f
+            it.scaleY = 1f
+            it.translationX = 0f
+            it.translationY = 0f
+            it.rotation = 0f
+        }
+        tourMenuItems = emptyList()
+        tourMenuButtons = emptyList()
+    }
+
     private fun arcSpreadFor(itemCount: Int): Double = ArcMenuGeometry.spreadFor(itemCount)
 
     /**
@@ -695,6 +1030,9 @@ class FloatingButtonManager(
         }
 
         target.setOnTouchListener { v, ev ->
+            if (tourStage == TourStage.COMPLETION) {
+                return@setOnTouchListener true
+            }
             when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     // 取消自动贴边倒计时 + 上次的吸边动画 + 待机透明度。**不**立即 wake——
@@ -711,6 +1049,9 @@ class FloatingButtonManager(
                     downTime = System.currentTimeMillis()
                     moved = false
                     longPressFired = false
+                    if (tourStage == TourStage.WAITING_FOR_LONG_PRESS) {
+                        longPressGuideView?.beginPress(longPressTimeout)
+                    }
                     v.postDelayed(longPressRunnable, longPressTimeout)
                     true
                 }
@@ -726,6 +1067,10 @@ class FloatingButtonManager(
                         snapAnimX?.cancel()
                         if (dockSide != DockSide.NONE) setDockSide(DockSide.NONE)
                         v.alpha = 1.0f
+                        if (tourStage == TourStage.WAITING_FOR_LONG_PRESS) {
+                            longPressGuideView?.start()
+                            longPressCueOverlay.dismiss()
+                        }
                         initX = params.x  // 用球当前真实位置当拖动起点
                         downX = ev.rawX
                         downY = ev.rawY
@@ -742,10 +1087,24 @@ class FloatingButtonManager(
                     v.removeCallbacks(longPressRunnable)
                     // 只要没明显拖动 + 长按 callback 还没烧 → 都算单击
                     if (!moved && !longPressFired) {
-                        onSingleTap()
+                        if (tourStage == TourStage.WAITING_FOR_LONG_PRESS) {
+                            longPressGuideView?.start()
+                        } else {
+                            onSingleTap()
+                        }
                     } else if (moved) {
                         // 拖动后松手 → 弹性吸附到最近的左/右边
                         snapToEdge()
+                        if (tourStage == TourStage.WAITING_FOR_LONG_PRESS) {
+                            v.postDelayed(
+                                {
+                                    if (tourStage == TourStage.WAITING_FOR_LONG_PRESS) {
+                                        showMainBallTourStep()
+                                    }
+                                },
+                                TOUR_RESTART_DELAY_MS,
+                            )
+                        }
                     }
                     true
                 }
@@ -792,6 +1151,10 @@ class FloatingButtonManager(
         )
         val pages = MenuItemRegistry.paginate(allItems, pageSize = arcMenuPageSize) { nextIdx ->
             // 翻页：关菜单但**不**回滚球位（保留腾位状态，下一页用同一位置开），再开下一页
+            if (tourStage == TourStage.MENU_ITEMS) {
+                stopTourPulse()
+                tourOverlay.dismiss()
+            }
             dismissArcMenu(restorePosition = false)
             view?.post { openArcMenuPage(nextIdx) }
         }
@@ -869,10 +1232,13 @@ class FloatingButtonManager(
         val root = FrameLayout(context).apply {
             setBackgroundColor(0x00000000)
             isClickable = true
-            setOnClickListener { dismissArcMenu() }
+            setOnClickListener {
+                if (tourStage == TourStage.NONE) dismissArcMenu()
+            }
         }
 
         val iconPad = (itemSize * 0.22f).toInt()
+        val menuButtons = mutableListOf<ImageView>()
         pageItems.forEachIndexed { idx, item ->
             val angle = angles[idx]
             val centerOffsetX = (radius * Math.cos(angle)).toFloat()
@@ -894,7 +1260,13 @@ class FloatingButtonManager(
                 setPadding(iconPad, iconPad, iconPad, iconPad)
                 contentDescription = context.getString(item.labelRes)
                 isClickable = true
-                setOnClickListener { item.onTap() }
+                setOnClickListener {
+                    if (tourStage == TourStage.MENU_ITEMS) {
+                        if (idx == tourTargetIndex) advanceFirstUseTour()
+                    } else {
+                        item.onTap()
+                    }
+                }
                 alpha = 0f
                 scaleX = 0.4f
                 scaleY = 0.4f
@@ -907,6 +1279,7 @@ class FloatingButtonManager(
                 topMargin = top
             }
             root.addView(btn, lp)
+            menuButtons += btn
 
             // 旋出入场：从球中心边旋转边飞出，OvershootInterpolator 让落位时轻微"过冲"再回弹
             btn.animate()
@@ -943,10 +1316,26 @@ class FloatingButtonManager(
         arcMenuView = root
         android.util.Log.d(TAG_MENU, "  addView root success=${addResult.isSuccess} buttons=${pageItems.size} baseAngle=${"%.2f".format(Math.toDegrees(baseAngle))}° spread=±${"%.2f".format(Math.toDegrees(spread))}°")
         addResult.exceptionOrNull()?.let { android.util.Log.e(TAG_MENU, "  addView failed", it) }
+        if (addResult.isSuccess && tourStage != TourStage.NONE) {
+            if (tourStage == TourStage.WAITING_FOR_LONG_PRESS) {
+                tourStage = TourStage.MENU_ITEMS
+            }
+            tourPageIndex = pageIndex
+            tourTargetIndex = 0
+            tourMenuItems = pageItems
+            tourMenuButtons = menuButtons
+            stopTourPulse()
+            longPressGuideView?.stop()
+            longPressCueOverlay.dismiss()
+            tourOverlay.dismiss()
+            showCurrentMenuTourStep()
+        }
     }
 
     private fun dismissArcMenu(restorePosition: Boolean = true) {
         android.util.Log.d(TAG_MENU, "dismissArcMenu(restore=$restorePosition) hadView=${arcMenuView != null} positionBeforeMenu=$positionBeforeMenu")
+        stopTourPulse()
+        restoreMenuTourVisuals()
         arcMenuView?.let { runCatching { wm.removeView(it) } }
         arcMenuView = null
         if (restorePosition) {
@@ -1008,9 +1397,21 @@ class FloatingButtonManager(
         }
     }
 
+    private enum class TourStage {
+        NONE,
+        WAITING_FOR_LONG_PRESS,
+        MENU_ITEMS,
+        COMPLETION,
+    }
+
     companion object {
         /** 自动贴边倒计时（ms）。固定 3s，未做成可配（产品决策）。 */
         private const val AUTO_DOCK_DELAY_MS: Long = 3000L
+        private const val TOUR_START_DELAY_MS: Long = 700L
+        private const val TOUR_RESTART_DELAY_MS: Long = 350L
+        private const val TOUR_PULSE_DURATION_MS: Long = 650L
+        private const val TOUR_PULSE_SCALE: Float = 1.14f
+        private const val TOUR_DIMMED_ALPHA: Float = 0.32f
         /** 弧形菜单按钮稳定后的 alpha。略低于 1，给点透明感能透出后面的内容但又不影响图标识别。 */
         private const val MENU_ITEM_ALPHA: Float = 0.85f
         /** 弧菜单调试 logcat tag。`adb logcat -s FBM-Menu:D` 一键过滤。 */

@@ -90,16 +90,22 @@ abstract class LocalLlamaTranslator(
 
         val results = MutableList<String?>(sources.size) { null }
         val emitted = BooleanArray(sources.size)
-        fun publish(index: Int, text: String?) {
+        fun publish(index: Int, text: String?, elapsedMs: Long) {
             if (index !in results.indices || emitted[index]) return
             emitted[index] = true
-            onUpdate(BatchTranslationUpdate(index = index, text = text))
+            onUpdate(
+                BatchTranslationUpdate(
+                    index = index,
+                    text = text,
+                    elapsedMs = elapsedMs.coerceAtLeast(0L),
+                )
+            )
         }
         val pendingByKey = linkedMapOf<String, BatchPending>()
         var cacheHits = 0
         sources.forEachIndexed { index, source ->
             if (source.isBlank()) {
-                publish(index, null)
+                publish(index, null, 0L)
                 return@forEachIndexed
             }
             val individualPrompt = runtimePrompt(buildUserPrompt(source, settings), settings)
@@ -108,7 +114,7 @@ abstract class LocalLlamaTranslator(
             if (cached != null) {
                 results[index] = cached
                 cacheHits += 1
-                publish(index, cached)
+                publish(index, cached, 0L)
             } else {
                 pendingByKey.getOrPut(key) {
                     BatchPending(
@@ -133,7 +139,7 @@ abstract class LocalLlamaTranslator(
                 } else {
                     item.resultIndexes.forEach {
                         results[it] = cached
-                        publish(it, cached)
+                        publish(it, cached, 0L)
                     }
                     cacheHits += item.resultIndexes.size
                     false
@@ -188,6 +194,7 @@ abstract class LocalLlamaTranslator(
                 firstRequest = false
                 if (!plan.nativeBatch) {
                     val item = plan.items.single()
+                    val itemStartedAt = SystemClock.elapsedRealtime()
                     val translated = generateLocked(
                         engine = engine,
                         userPrompt = item.individualPrompt,
@@ -197,7 +204,17 @@ abstract class LocalLlamaTranslator(
                         modelReadyMs = requestModelReadyMs,
                         queuedAt = requestQueuedAt,
                     )
-                    applyBatchResult(item, translated, results, settings, ::publish)
+                    applyBatchResult(
+                        item = item,
+                        translated = translated,
+                        results = results,
+                        settings = settings,
+                        elapsedMs = InferenceTiming.elapsedMs(
+                            itemStartedAt,
+                            SystemClock.elapsedRealtime(),
+                        ),
+                        publish = ::publish,
+                    )
                     return@forEachIndexed
                 }
 
@@ -222,8 +239,16 @@ abstract class LocalLlamaTranslator(
                     outputs != null,
                 )
                 if (outputs != null) {
+                    val groupElapsedMs = InferenceTiming.elapsedMs(startedAt, finishedAt)
                     plan.items.zip(outputs).forEach { (item, translated) ->
-                        applyBatchResult(item, translated, results, settings, ::publish)
+                        applyBatchResult(
+                            item = item,
+                            translated = translated,
+                            results = results,
+                            settings = settings,
+                            elapsedMs = groupElapsedMs,
+                            publish = ::publish,
+                        )
                     }
                 } else {
                     Timber.tag(PERF_TAG).w(
@@ -233,6 +258,7 @@ abstract class LocalLlamaTranslator(
                         plan.items.size,
                     )
                     plan.items.forEach { item ->
+                        val itemStartedAt = SystemClock.elapsedRealtime()
                         val translated = generateLocked(
                             engine = engine,
                             userPrompt = item.individualPrompt,
@@ -242,7 +268,17 @@ abstract class LocalLlamaTranslator(
                             modelReadyMs = 0L,
                             queuedAt = SystemClock.elapsedRealtime(),
                         )
-                        applyBatchResult(item, translated, results, settings, ::publish)
+                        applyBatchResult(
+                            item = item,
+                            translated = translated,
+                            results = results,
+                            settings = settings,
+                            elapsedMs = InferenceTiming.elapsedMs(
+                                itemStartedAt,
+                                SystemClock.elapsedRealtime(),
+                            ),
+                            publish = ::publish,
+                        )
                     }
                 }
             }
@@ -395,12 +431,13 @@ abstract class LocalLlamaTranslator(
         translated: String?,
         results: MutableList<String?>,
         settings: Settings,
-        publish: (Int, String?) -> Unit,
+        elapsedMs: Long,
+        publish: (Int, String?, Long) -> Unit,
     ) {
         translated?.let { cache.put(item.cacheKey, it, settings) }
-        localLlmBatchResultUpdates(item.resultIndexes, translated).forEach { update ->
+        localLlmBatchResultUpdates(item.resultIndexes, translated, elapsedMs).forEach { update ->
             results[update.index] = update.text
-            publish(update.index, update.text)
+            publish(update.index, update.text, update.elapsedMs ?: elapsedMs)
         }
     }
 

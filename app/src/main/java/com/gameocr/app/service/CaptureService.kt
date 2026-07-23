@@ -82,6 +82,7 @@ import com.gameocr.app.data.resolveTranslationOutputSettings
 import com.gameocr.app.data.FloatingSkill
 import com.gameocr.app.tts.ttsFailureMessage
 import com.gameocr.app.overlay.FloatingButtonManager
+import com.gameocr.app.overlay.FloatingMenuTourPrefs
 import com.gameocr.app.overlay.AdaptiveOverlayStyle
 import com.gameocr.app.overlay.AdaptiveOverlayStyleAnalyzer
 import com.gameocr.app.overlay.AdaptiveTextLayoutPhase
@@ -254,6 +255,10 @@ class CaptureService : Service() {
             ACTION_STOP -> stopSelf()
             ACTION_TRIGGER_ONCE -> triggerOnce()
             ACTION_PICK_REGION -> showRegionPickerOverlay()
+            ACTION_RUN_FLOATING_TOUR -> {
+                FloatingMenuTourPrefs.reset(this)
+                floatingButton?.requestFirstUseTour()
+            }
         }
         return START_NOT_STICKY
     }
@@ -342,6 +347,11 @@ class CaptureService : Service() {
             settingsRepository = settingsRepository,
             ioScope = scope
         ).also {
+            it.firstUseTourPending =
+                FloatingMenuTourPrefs.shouldShow(this@CaptureService)
+            it.onFirstUseTourCompleted = {
+                FloatingMenuTourPrefs.markCompleted(this@CaptureService)
+            }
             // 截图区域调整：用悬浮窗版替代旧的 Activity 跳转——不再切走游戏 / 漫画，且重复
             // 点菜单也只弹一次（show 内部去重）。
             it.onMenuPickRegion = { showRegionPickerOverlay() }
@@ -2648,7 +2658,13 @@ class CaptureService : Service() {
                     initialOutput = update.text,
                     settings = settings,
                     diagId = diagId,
-                    elapsedMs = elapsedSince(translateStartedAt),
+                    elapsedMs = TranslationLogElapsedPolicy.resolve(
+                        developerOptionsEnabled = settings.developerOptionsEnabled,
+                        batchCumulativeCompletionTimeEnabled =
+                            settings.batchCumulativeCompletionTimeEnabled,
+                        itemElapsedMs = update.elapsedMs,
+                        batchElapsedMs = elapsedSince(translateStartedAt),
+                    ),
                     phase = "incremental",
                 )
             }
@@ -2710,7 +2726,13 @@ class CaptureService : Service() {
                 initialOutput = translated.getOrNull(idx),
                 settings = settings,
                 diagId = diagId,
-                elapsedMs = translateElapsedMs,
+                elapsedMs = TranslationLogElapsedPolicy.resolve(
+                    developerOptionsEnabled = settings.developerOptionsEnabled,
+                    batchCumulativeCompletionTimeEnabled =
+                        settings.batchCumulativeCompletionTimeEnabled,
+                    itemElapsedMs = null,
+                    batchElapsedMs = translateElapsedMs,
+                ),
                 phase = "final",
             )
         }
@@ -2830,7 +2852,13 @@ class CaptureService : Service() {
                     initialOutput = update.text,
                     settings = settings,
                     diagId = diagId,
-                    elapsedMs = elapsedSince(translateStartedAt),
+                    elapsedMs = TranslationLogElapsedPolicy.resolve(
+                        developerOptionsEnabled = settings.developerOptionsEnabled,
+                        batchCumulativeCompletionTimeEnabled =
+                            settings.batchCumulativeCompletionTimeEnabled,
+                        itemElapsedMs = update.elapsedMs,
+                        batchElapsedMs = elapsedSince(translateStartedAt),
+                    ),
                     phase = "incremental",
                 )
             }
@@ -2890,7 +2918,13 @@ class CaptureService : Service() {
                 initialOutput = translated.getOrNull(idx),
                 settings = settings,
                 diagId = diagId,
-                elapsedMs = translateElapsedMs,
+                elapsedMs = TranslationLogElapsedPolicy.resolve(
+                    developerOptionsEnabled = settings.developerOptionsEnabled,
+                    batchCumulativeCompletionTimeEnabled =
+                        settings.batchCumulativeCompletionTimeEnabled,
+                    itemElapsedMs = null,
+                    batchElapsedMs = translateElapsedMs,
+                ),
                 phase = "final",
             )
         }
@@ -3615,6 +3649,8 @@ class CaptureService : Service() {
         const val ACTION_START = "com.gameocr.app.action.START"
         const val ACTION_STOP = "com.gameocr.app.action.STOP"
         const val ACTION_TRIGGER_ONCE = "com.gameocr.app.action.TRIGGER_ONCE"
+        const val ACTION_RUN_FLOATING_TOUR =
+            "com.gameocr.app.action.RUN_FLOATING_TOUR"
         /** 主屏框选区域时走这条——floating window 模式，绕开 Activity 的横屏 long-edge cutout letterbox。 */
         const val ACTION_PICK_REGION = "com.gameocr.app.action.PICK_REGION"
         const val EXTRA_RESULT_CODE = "extra_result_code"
@@ -3624,6 +3660,11 @@ class CaptureService : Service() {
 
         fun stopIntent(context: Context): Intent =
             Intent(context, CaptureService::class.java).apply { action = ACTION_STOP }
+
+        fun runFloatingTourIntent(context: Context): Intent =
+            Intent(context, CaptureService::class.java).apply {
+                action = ACTION_RUN_FLOATING_TOUR
+            }
     }
 }
 

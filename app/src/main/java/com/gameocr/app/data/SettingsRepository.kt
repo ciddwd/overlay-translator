@@ -54,6 +54,8 @@ class SettingsRepository @Inject constructor(
         val DeveloperOptionsEnabled = booleanPreferencesKey("developer_options_enabled")
         val OcrScreenshotSavingEnabled = booleanPreferencesKey("ocr_screenshot_saving_enabled")
         val DisableTranslationCache = booleanPreferencesKey("disable_translation_cache")
+        val BatchCumulativeCompletionTimeEnabled =
+            booleanPreferencesKey("batch_cumulative_completion_time_enabled")
         val DisableCrossLineContextTranslation =
             booleanPreferencesKey("disable_cross_line_context_translation")
         val OcrRedBoxModeEnabled = booleanPreferencesKey("ocr_red_box_mode_enabled")
@@ -406,6 +408,8 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.DeveloperOptionsEnabled] = next.developerOptionsEnabled
             prefs[Keys.OcrScreenshotSavingEnabled] = next.ocrScreenshotSavingEnabled
             prefs[Keys.DisableTranslationCache] = next.disableTranslationCache
+            prefs[Keys.BatchCumulativeCompletionTimeEnabled] =
+                next.batchCumulativeCompletionTimeEnabled
             prefs[Keys.DisableCrossLineContextTranslation] = next.disableCrossLineContextTranslation
             prefs[Keys.OcrRedBoxModeEnabled] = next.ocrRedBoxModeEnabled
             prefs[Keys.OcrRedBoxShowSourceText] = next.ocrRedBoxShowSourceText
@@ -641,6 +645,9 @@ class SettingsRepository @Inject constructor(
                 ?: default.ocrScreenshotSavingEnabled,
             disableTranslationCache = this[Keys.DisableTranslationCache]
                 ?: default.disableTranslationCache,
+            batchCumulativeCompletionTimeEnabled =
+                this[Keys.BatchCumulativeCompletionTimeEnabled]
+                    ?: default.batchCumulativeCompletionTimeEnabled,
             disableCrossLineContextTranslation = this[Keys.DisableCrossLineContextTranslation]
                 ?: default.disableCrossLineContextTranslation,
             ocrRedBoxModeEnabled = this[Keys.OcrRedBoxModeEnabled]

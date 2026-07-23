@@ -64,7 +64,11 @@ internal fun planNumericTranslationPassthrough(
     val passthroughUpdates = mutableListOf<BatchTranslationUpdate>()
     sources.forEachIndexed { index, source ->
         if (shouldPassthroughNumericTranslation(source)) {
-            passthroughUpdates += BatchTranslationUpdate(index = index, text = source)
+            passthroughUpdates += BatchTranslationUpdate(
+                index = index,
+                text = source,
+                elapsedMs = 0L,
+            )
         } else {
             translatableIndexes += index
             translatableSources += source

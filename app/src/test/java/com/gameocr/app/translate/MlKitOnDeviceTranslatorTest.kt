@@ -222,6 +222,7 @@ class MlKitOnDeviceTranslatorTest {
         assertEquals(listOf("en>zh:one", null, "en>zh:two", null), results)
         assertEquals(sources.indices.toList(), updates.map(BatchTranslationUpdate::index))
         assertEquals(results, updates.map(BatchTranslationUpdate::text))
+        assertTrue(updates.all { (it.elapsedMs ?: -1L) >= 0L })
         assertEquals(3, factory.clients.size)
         assertTrue(factory.clients.all(FakeClient::closed))
     }

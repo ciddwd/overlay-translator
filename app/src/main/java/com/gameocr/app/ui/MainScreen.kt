@@ -22,6 +22,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
@@ -91,6 +92,7 @@ fun MainScreen(
     onOpenSettings: () -> Unit,
     onOpenLogs: () -> Unit,
     onOpenLegalNotices: () -> Unit,
+    onOpenOnboarding: () -> Unit,
     viewModel: MainViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
@@ -361,12 +363,30 @@ fun MainScreen(
                     )
 
                     // 悬浮圆球的交互说明：用户经常找不到"循环模式"在哪里开关，集中在这里说一下
-                    Text(
-                        stringResource(R.string.main_label_usage),
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 8.dp)
-                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            stringResource(R.string.main_label_usage),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        TextButton(onClick = onOpenOnboarding) {
+                            Icon(
+                                Icons.AutoMirrored.Outlined.HelpOutline,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Text(
+                                stringResource(R.string.main_help),
+                                modifier = Modifier.padding(start = 4.dp),
+                            )
+                        }
+                    }
                     Text(
                         stringResource(R.string.main_usage_text),
                         style = MaterialTheme.typography.bodySmall,
@@ -715,9 +735,13 @@ private fun StatusRow(label: String, ok: Boolean, detail: String? = null) {
 }
 
 @Composable
-private fun ActionCard(title: String, content: @Composable () -> Unit) {
+private fun ActionCard(
+    title: String,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface,
             contentColor = MaterialTheme.colorScheme.onSurface
