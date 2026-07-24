@@ -1481,6 +1481,8 @@
     <string name="onboarding_rail_title">设置你的屏译体验</string>
     <string name="onboarding_rail_body">每页只做一个选择。完成后可从主屏“系统兼容”区域随时重新运行。</string>
 
+    <string name="onboarding_welcome_title">欢迎使用屏译\nScreen Translator</string>
+    <string name="onboarding_welcome_body">接下来，我们会通过几个简单步骤了解你最常翻译的内容，并完成语言、展示方式和翻译服务等基础配置。所有选项之后都可以在设置中修改。</string>
     <string name="onboarding_source_title">你正在阅读什么语言？</string>
     <string name="onboarding_source_body">请选择明确的源语言，这样离线翻译才能准备正确的语言包。</string>
     <string name="onboarding_source_label">源语言</string>
@@ -1490,7 +1492,7 @@
     <string name="onboarding_language_same_error">源语言和目标语言不能相同。</string>
 
     <string name="onboarding_display_title">希望怎样展示翻译？</string>
-    <string name="onboarding_display_body">请选择日常使用时的展示方式。若之后选择漫画模式，会安全地切换为原位自适应。</string>
+    <string name="onboarding_display_body">请选择日常内容翻译时的展示方式，之后仍可在设置中修改。</string>
     <string name="onboarding_display_adaptive">原位自适应覆盖</string>
     <string name="onboarding_display_adaptive_desc">在原文附近替换显示，并根据截图自动适配颜色和字号。</string>
     <string name="onboarding_display_below">显示在原文下方</string>

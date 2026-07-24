@@ -15,6 +15,7 @@ import com.gameocr.app.translate.MlKitLanguagePolicy
 import java.net.URI
 
 enum class OnboardingStep {
+    WELCOME,
     SOURCE_LANGUAGE,
     TARGET_LANGUAGE,
     DISPLAY_MODE,
@@ -135,12 +136,14 @@ data class OnboardingDraft(
 
 object OnboardingPolicy {
     fun stepsFor(draft: OnboardingDraft): List<OnboardingStep> = buildList {
+        add(OnboardingStep.WELCOME)
         add(OnboardingStep.SOURCE_LANGUAGE)
         add(OnboardingStep.TARGET_LANGUAGE)
-        add(OnboardingStep.DISPLAY_MODE)
         add(OnboardingStep.USAGE)
         if (draft.usage == OnboardingUsage.MANGA) {
             add(OnboardingStep.MANGA_DIRECTION)
+        } else {
+            add(OnboardingStep.DISPLAY_MODE)
         }
         add(OnboardingStep.TRANSLATION_METHOD)
         add(

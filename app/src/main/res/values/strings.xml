@@ -1483,6 +1483,8 @@
     <string name="onboarding_rail_title">Set up your translator</string>
     <string name="onboarding_rail_body">One choice per page. You can rerun this guide from the System compatibility section on the home screen.</string>
 
+    <string name="onboarding_welcome_title">Welcome to Screen Translator</string>
+    <string name="onboarding_welcome_body">We’ll guide you through a few quick choices to understand what you translate most often and set up the languages, display behavior, and translation services. You can change any of these later in Settings.</string>
     <string name="onboarding_source_title">What language are you reading?</string>
     <string name="onboarding_source_body">Choose an explicit source language so offline translation can prepare the correct language pack.</string>
     <string name="onboarding_source_label">Source language</string>
@@ -1492,7 +1494,7 @@
     <string name="onboarding_language_same_error">Source and target languages must be different.</string>
 
     <string name="onboarding_display_title">How should translations appear?</string>
-    <string name="onboarding_display_body">Pick the layout you want during normal use. Manga mode can safely override this with adaptive in-place text.</string>
+    <string name="onboarding_display_body">Choose how translations should appear for everyday content. You can change this later in Settings.</string>
     <string name="onboarding_display_adaptive">Adaptive in-place overlay</string>
     <string name="onboarding_display_adaptive_desc">Replace text near its original position and adapt colors and size to the captured image.</string>
     <string name="onboarding_display_below">Place below the source</string>

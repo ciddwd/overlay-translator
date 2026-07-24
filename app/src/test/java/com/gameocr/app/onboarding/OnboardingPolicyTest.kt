@@ -27,39 +27,39 @@ class OnboardingPolicyTest {
         )
 
         val commonStart = listOf(
+            OnboardingStep.WELCOME,
             OnboardingStep.SOURCE_LANGUAGE,
             OnboardingStep.TARGET_LANGUAGE,
-            OnboardingStep.DISPLAY_MODE,
             OnboardingStep.USAGE,
         )
+        val dailyStart = commonStart + OnboardingStep.DISPLAY_MODE
+        val mangaStart = commonStart + OnboardingStep.MANGA_DIRECTION
         val cases = listOf(
             Case(
                 OnboardingUsage.DAILY,
                 OnboardingTranslationMethod.OFFLINE,
-                commonStart + OnboardingStep.TRANSLATION_METHOD +
+                dailyStart + OnboardingStep.TRANSLATION_METHOD +
                     OnboardingStep.OFFLINE_LANGUAGE_DOWNLOAD + OnboardingStep.TTS +
                     OnboardingStep.SUMMARY,
             ),
             Case(
                 OnboardingUsage.DAILY,
                 OnboardingTranslationMethod.CLOUD_LLM,
-                commonStart + OnboardingStep.TRANSLATION_METHOD +
+                dailyStart + OnboardingStep.TRANSLATION_METHOD +
                     OnboardingStep.CLOUD_CONFIG + OnboardingStep.TTS +
                     OnboardingStep.SUMMARY,
             ),
             Case(
                 OnboardingUsage.MANGA,
                 OnboardingTranslationMethod.OFFLINE,
-                commonStart + OnboardingStep.MANGA_DIRECTION +
-                    OnboardingStep.TRANSLATION_METHOD +
+                mangaStart + OnboardingStep.TRANSLATION_METHOD +
                     OnboardingStep.MANGA_OFFLINE_DOWNLOAD + OnboardingStep.TTS +
                     OnboardingStep.SUMMARY,
             ),
             Case(
                 OnboardingUsage.MANGA,
                 OnboardingTranslationMethod.CLOUD_LLM,
-                commonStart + OnboardingStep.MANGA_DIRECTION +
-                    OnboardingStep.TRANSLATION_METHOD +
+                mangaStart + OnboardingStep.TRANSLATION_METHOD +
                     OnboardingStep.CLOUD_CONFIG + OnboardingStep.TTS +
                     OnboardingStep.SUMMARY,
             ),

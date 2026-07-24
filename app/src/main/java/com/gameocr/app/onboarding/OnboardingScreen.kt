@@ -2,6 +2,7 @@ package com.gameocr.app.onboarding
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -60,7 +61,14 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -389,6 +397,63 @@ private fun OnboardingProgressBar(current: Int, total: Int) {
     }
 }
 
+internal data class PersistentScrollbarGeometry(
+    val thumbTop: Float,
+    val thumbHeight: Float,
+)
+
+internal fun persistentScrollbarGeometry(
+    scrollValue: Int,
+    scrollMaxValue: Int,
+    viewportSize: Int,
+    trackHeight: Float,
+    minimumThumbHeight: Float,
+): PersistentScrollbarGeometry? {
+    if (scrollMaxValue <= 0 || viewportSize <= 0 || trackHeight <= 0f) return null
+
+    val contentHeight = viewportSize.toFloat() + scrollMaxValue
+    val thumbHeight = (trackHeight * viewportSize / contentHeight)
+        .coerceAtLeast(minimumThumbHeight.coerceIn(0f, trackHeight))
+        .coerceAtMost(trackHeight)
+    val thumbTop = (trackHeight - thumbHeight) *
+        (scrollValue.toFloat() / scrollMaxValue).coerceIn(0f, 1f)
+    return PersistentScrollbarGeometry(thumbTop = thumbTop, thumbHeight = thumbHeight)
+}
+
+private fun Modifier.persistentVerticalScrollbar(
+    scrollState: androidx.compose.foundation.ScrollState,
+    trackColor: Color,
+    thumbColor: Color,
+): Modifier = drawWithContent {
+    drawContent()
+    val verticalInset = 4.dp.toPx()
+    val trackHeight = (size.height - verticalInset * 2).coerceAtLeast(0f)
+    val geometry = persistentScrollbarGeometry(
+        scrollValue = scrollState.value,
+        scrollMaxValue = scrollState.maxValue,
+        viewportSize = scrollState.viewportSize,
+        trackHeight = trackHeight,
+        minimumThumbHeight = 40.dp.toPx(),
+    ) ?: return@drawWithContent
+
+    val barWidth = 6.dp.toPx().coerceAtMost(size.width)
+    val rightInset = 2.dp.toPx()
+    val left = size.width - rightInset - barWidth
+    val radius = CornerRadius(barWidth / 2f, barWidth / 2f)
+    drawRoundRect(
+        color = trackColor,
+        topLeft = Offset(left, verticalInset),
+        size = Size(barWidth, trackHeight),
+        cornerRadius = radius,
+    )
+    drawRoundRect(
+        color = thumbColor,
+        topLeft = Offset(left, verticalInset + geometry.thumbTop),
+        size = Size(barWidth, geometry.thumbHeight),
+        cornerRadius = radius,
+    )
+}
+
 @Composable
 private fun OnboardingPageSurface(
     step: OnboardingStep,
@@ -403,6 +468,8 @@ private fun OnboardingPageSurface(
     modifier: Modifier = Modifier,
 ) {
     val pageScrollState = rememberScrollState()
+    val scrollbarTrackColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.72f)
+    val scrollbarThumbColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.92f)
     LaunchedEffect(step) {
         pageScrollState.scrollTo(0)
     }
@@ -416,8 +483,17 @@ private fun OnboardingPageSurface(
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(max = 760.dp)
+                .persistentVerticalScrollbar(
+                    scrollState = pageScrollState,
+                    trackColor = scrollbarTrackColor,
+                    thumbColor = scrollbarThumbColor,
+                )
                 .verticalScroll(pageScrollState)
-                .padding(vertical = 12.dp),
+                .padding(
+                    end = 16.dp,
+                    top = 12.dp,
+                    bottom = 12.dp,
+                ),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Surface(
@@ -430,6 +506,7 @@ private fun OnboardingPageSurface(
                     verticalArrangement = Arrangement.spacedBy(18.dp),
                 ) {
                     when (step) {
+                        OnboardingStep.WELCOME -> WelcomePage()
                         OnboardingStep.SOURCE_LANGUAGE -> SourceLanguagePage(
                             draft,
                             onDraftChange,
@@ -496,6 +573,36 @@ private fun OnboardingPageSurface(
             }
         }
     }
+}
+
+@Composable
+private fun WelcomePage() {
+    Box(
+        modifier = Modifier
+            .size(64.dp)
+            .clip(RoundedCornerShape(16.dp)),
+    ) {
+        Image(
+            painter = painterResource(R.drawable.ic_launcher_background),
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
+        )
+        Image(
+            painter = painterResource(R.drawable.ic_launcher_foreground),
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
+        )
+    }
+    Text(
+        text = stringResource(R.string.onboarding_welcome_title),
+        style = MaterialTheme.typography.headlineSmall,
+        fontWeight = FontWeight.Bold,
+    )
+    Text(
+        text = stringResource(R.string.onboarding_welcome_body),
+        style = MaterialTheme.typography.bodyLarge,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 @Composable
