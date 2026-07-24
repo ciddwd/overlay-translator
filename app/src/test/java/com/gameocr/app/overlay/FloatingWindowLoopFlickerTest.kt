@@ -41,7 +41,9 @@ class FloatingWindowLoopFlickerTest {
             )
             assertTrue(
                 "${case.name} should destroy stale floating state for an empty result",
-                "${case.emptyCondition} {\n            clearFloatingWindow()" in snippet,
+                Regex(
+                    """${Regex.escape(case.emptyCondition)}\s*\{\s*clearFloatingWindow\(\)""",
+                ).containsMatchIn(snippet),
             )
             assertTrue(
                 "${case.name} should replace content on the existing window",
