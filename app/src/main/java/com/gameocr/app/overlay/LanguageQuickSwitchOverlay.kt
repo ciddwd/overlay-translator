@@ -26,6 +26,7 @@ import com.gameocr.app.data.Language
 import com.gameocr.app.data.Languages
 import com.gameocr.app.data.OverlayTheme
 import com.gameocr.app.data.Settings
+import com.gameocr.app.data.translationLanguageCodesConflict
 
 internal enum class LanguageSlot {
     SOURCE,
@@ -83,6 +84,18 @@ internal object LanguageQuickSwitchOptions {
             context.getString(lang.nameRes).contains(q, ignoreCase = true) ||
                 lang.code.lowercase().contains(lower)
         }
+    }
+
+    fun conflictsWithOtherSlot(
+        slot: LanguageSlot,
+        candidateCode: String,
+        currentSource: String,
+        currentTarget: String,
+    ): Boolean = when (slot) {
+        LanguageSlot.SOURCE ->
+            translationLanguageCodesConflict(candidateCode, currentTarget)
+        LanguageSlot.TARGET ->
+            translationLanguageCodesConflict(currentSource, candidateCode)
     }
 }
 
@@ -164,23 +177,53 @@ class LanguageQuickSwitchOverlay(private val context: Context) {
                     LanguageSlot.SOURCE -> lang.code.equals(sourceCode, ignoreCase = true)
                     LanguageSlot.TARGET -> lang.code.equals(targetCode, ignoreCase = true)
                 }
+                val conflictsWithOtherSlot = LanguageQuickSwitchOptions.conflictsWithOtherSlot(
+                    slot = selectedSlot,
+                    candidateCode = lang.code,
+                    currentSource = sourceCode,
+                    currentTarget = targetCode,
+                )
+                val disabledReason = if (conflictsWithOtherSlot) {
+                    context.getString(
+                        if (selectedSlot == LanguageSlot.SOURCE) {
+                            R.string.lang_picker_already_target
+                        } else {
+                            R.string.lang_picker_already_source
+                        }
+                    )
+                } else {
+                    null
+                }
                 list.addView(buildLanguageRow(
                     lang = lang,
                     selected = selected,
+                    enabled = !conflictsWithOtherSlot,
+                    disabledReason = disabledReason,
                     fgColor = fgColor,
                     mutedColor = mutedColor,
                     accentColor = accentColor,
                     density = density
                 ) {
-                    if (selectedSlot == LanguageSlot.SOURCE) {
-                        sourceCode = lang.code
-                        selectedSlot = LanguageSlot.TARGET
+                    val nextSource = if (selectedSlot == LanguageSlot.SOURCE) {
+                        lang.code
                     } else {
-                        targetCode = lang.code
+                        sourceCode
                     }
-                    onPairChanged(sourceCode, targetCode)
-                    refreshHeader()
-                    refreshList()
+                    val nextTarget = if (selectedSlot == LanguageSlot.TARGET) {
+                        lang.code
+                    } else {
+                        targetCode
+                    }
+                    if (!translationLanguageCodesConflict(nextSource, nextTarget)) {
+                        sourceCode = nextSource
+                        targetCode = nextTarget
+                        if (selectedSlot == LanguageSlot.SOURCE) {
+                            selectedSlot = LanguageSlot.TARGET
+                        }
+                        onPairChanged(sourceCode, targetCode)
+                        refreshHeader()
+                        refreshList()
+                    }
                 })
             }
         }
@@ -388,6 +431,8 @@ class LanguageQuickSwitchOverlay(private val context: Context) {
     private fun buildLanguageRow(
         lang: Language,
         selected: Boolean,
+        enabled: Boolean,
+        disabledReason: String?,
         fgColor: Int,
         mutedColor: Int,
         accentColor: Int,
@@ -399,11 +444,18 @@ class LanguageQuickSwitchOverlay(private val context: Context) {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(10), dp(9), dp(10), dp(9))
             background = roundedBackground(
-                if (selected) withAlpha(accentColor, 0x24) else Color.TRANSPARENT,
+                when {
+                    !enabled -> withAlpha(mutedColor, 0x24)
+                    selected -> withAlpha(accentColor, 0x24)
+                    else -> Color.TRANSPARENT
+                },
                 8f * density
             )
-            isClickable = true
-            setOnClickListener { onClick() }
+            isEnabled = enabled
+            isClickable = enabled
+            if (enabled) {
+                setOnClickListener { onClick() }
+            }
         }
         row.addView(TextView(context).apply {
             text = if (selected) "\u2713" else ""
@@ -413,16 +465,22 @@ class LanguageQuickSwitchOverlay(private val context: Context) {
         }, LinearLayout.LayoutParams(dp(28), LinearLayout.LayoutParams.WRAP_CONTENT))
         row.addView(TextView(context).apply {
             text = context.getString(lang.nameRes)
-            setTextColor(if (selected) accentColor else fgColor)
+            setTextColor(if (!enabled) mutedColor else if (selected) accentColor else fgColor)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
         }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         row.addView(TextView(context).apply {
-            text = lang.code
+            text = if (disabledReason == null) lang.code else "${lang.code}\n$disabledReason"
             setTextColor(mutedColor)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            gravity = Gravity.END
+            maxLines = 2
             setPadding(dp(8), 0, 0, 0)
+            if (!enabled) {
+                background = roundedBackground(withAlpha(mutedColor, 0x20), 8f * density)
+                setPadding(dp(8), dp(3), dp(8), dp(3))
+            }
         })
         return row
     }

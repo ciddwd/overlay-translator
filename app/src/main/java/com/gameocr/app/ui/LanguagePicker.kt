@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Search
@@ -71,6 +72,8 @@ fun LanguagePicker(
     onTogglePin: ((String) -> Unit)? = null,
     allowAuto: Boolean = true,
     allowedLanguageCodes: Set<String>? = null,
+    disabledLanguageCodes: Set<String> = emptySet(),
+    disabledStatusLabel: String? = null,
     modifier: Modifier = Modifier
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -122,6 +125,8 @@ fun LanguagePicker(
             pinned = pinned,
             allowAuto = allowAuto,
             allowedLanguageCodes = allowedLanguageCodes,
+            disabledLanguageCodes = disabledLanguageCodes,
+            disabledStatusLabel = disabledStatusLabel,
             onSelect = { code ->
                 onSelect(code)
                 expanded = false
@@ -143,6 +148,8 @@ internal fun LanguagePickerSheet(
     badgedLanguageCodes: Set<String> = emptySet(),
     badgeLabel: String? = null,
     unbadgedStatusLabel: String? = null,
+    disabledLanguageCodes: Set<String> = emptySet(),
+    disabledStatusLabel: String? = null,
     onSelect: (String) -> Unit,
     onTogglePin: ((String) -> Unit)?,
     onDismiss: () -> Unit
@@ -153,6 +160,9 @@ internal fun LanguagePickerSheet(
     var query by remember { mutableStateOf("") }
     val focusRequester = remember { FocusRequester() }
     val listState = rememberLazyListState()
+    val disabledCodes = remember(disabledLanguageCodes) {
+        disabledLanguageCodes.mapTo(mutableSetOf()) { it.trim().lowercase() }
+    }
 
     // 搜索后拆成两段：pinned 命中的按收藏顺序排前；其余按 Languages.ALL 顺序排后。
     val (pinnedResults, otherResults) = remember(
@@ -223,11 +233,15 @@ internal fun LanguagePickerSheet(
                     // 收藏区：按收藏顺序排，置顶
                     if (pinnedResults.isNotEmpty()) {
                         items(pinnedResults, key = { "p_${it.code}" }) { lang ->
+                            val disabled = lang.code.lowercase() in disabledCodes
                             LanguageRow(
                                 lang = lang,
                                 isPinned = true,
                                 isSelected = lang.code.equals(currentCode, ignoreCase = true),
-                                statusLabel = if (lang.code in badgedLanguageCodes) {
+                                enabled = !disabled,
+                                statusLabel = if (disabled) {
+                                    disabledStatusLabel
+                                } else if (lang.code in badgedLanguageCodes) {
                                     badgeLabel
                                 } else {
                                     unbadgedStatusLabel
@@ -249,11 +263,15 @@ internal fun LanguagePickerSheet(
                         }
                     }
                     items(otherResults, key = { it.code }) { lang ->
+                        val disabled = lang.code.lowercase() in disabledCodes
                         LanguageRow(
                             lang = lang,
                             isPinned = false,
                             isSelected = lang.code.equals(currentCode, ignoreCase = true),
-                            statusLabel = if (lang.code in badgedLanguageCodes) {
+                            enabled = !disabled,
+                            statusLabel = if (disabled) {
+                                disabledStatusLabel
+                            } else if (lang.code in badgedLanguageCodes) {
                                 badgeLabel
                             } else {
                                 unbadgedStatusLabel
@@ -544,6 +562,7 @@ private fun LanguageRow(
     lang: Language,
     isPinned: Boolean,
     isSelected: Boolean,
+    enabled: Boolean,
     statusLabel: String? = null,
     onClick: () -> Unit,
     onTogglePin: (() -> Unit)?
@@ -552,19 +571,32 @@ private fun LanguageRow(
         modifier = Modifier
             .fillMaxWidth()
             .background(
-                if (isSelected) MaterialTheme.colorScheme.primaryContainer
-                else MaterialTheme.colorScheme.surface
+                when {
+                    !enabled -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f)
+                    isSelected -> MaterialTheme.colorScheme.primaryContainer
+                    else -> MaterialTheme.colorScheme.surface
+                }
             )
-            .clickable(onClick = onClick)
+            .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(modifier = Modifier.size(24.dp), contentAlignment = Alignment.Center) {
-            if (isSelected) {
+            if (!enabled) {
+                Icon(
+                    Icons.Default.Block,
+                    contentDescription = statusLabel,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else if (isSelected) {
                 Icon(
                     Icons.Default.Check,
                     contentDescription = stringResource(R.string.lang_picker_selected),
-                    tint = MaterialTheme.colorScheme.primary
+                    tint = if (enabled) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
                 )
             }
         }
@@ -574,8 +606,13 @@ private fun LanguageRow(
             modifier = Modifier
                 .weight(1f)
                 .padding(horizontal = 12.dp),
-            color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer
-            else MaterialTheme.colorScheme.onSurface
+            color = if (!enabled) {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            } else if (isSelected) {
+                MaterialTheme.colorScheme.onPrimaryContainer
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            }
         )
         Text(
             lang.code,
@@ -587,15 +624,28 @@ private fun LanguageRow(
             Text(
                 label,
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary,
+                color = if (enabled) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
                 textAlign = TextAlign.End,
                 modifier = Modifier
-                    .width(72.dp)
+                    .width(92.dp)
+                    .background(
+                        color = if (enabled) {
+                            MaterialTheme.colorScheme.surface
+                        } else {
+                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+                        },
+                        shape = RoundedCornerShape(50),
+                    )
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
                     .padding(end = 4.dp),
             )
         }
         if (onTogglePin != null) {
-            IconButton(onClick = onTogglePin) {
+            IconButton(onClick = onTogglePin, enabled = enabled) {
                 Icon(
                     if (isPinned) Icons.Default.Star else Icons.Outlined.StarOutline,
                     contentDescription = stringResource(

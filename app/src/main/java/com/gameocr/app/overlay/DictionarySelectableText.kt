@@ -6,6 +6,8 @@ internal data class DictionaryTextLabels(
     val phonetic: String,
     val partOfSpeech: String,
     val definitions: String,
+    val inflections: String,
+    val synonyms: String,
     val difficultyNotes: String,
     val examples: String,
 )
@@ -48,6 +50,26 @@ internal fun dictionaryTextSegments(
                 wordResult.definitions.mapIndexed { index, definition ->
                     "${index + 1}. $definition"
                 }.joinToString(separator = "\n", prefix = "\n"),
+                DictionaryTextRole.BODY,
+            ),
+        ))
+    }
+
+    if (wordResult.inflections.isNotEmpty()) {
+        blocks.add(listOf(
+            DictionaryTextSegment(labels.inflections, DictionaryTextRole.LABEL),
+            DictionaryTextSegment(
+                wordResult.inflections.joinToString(separator = "\n", prefix = "\n") { "・$it" },
+                DictionaryTextRole.BODY,
+            ),
+        ))
+    }
+
+    if (wordResult.synonyms.isNotEmpty()) {
+        blocks.add(listOf(
+            DictionaryTextSegment(labels.synonyms, DictionaryTextRole.LABEL),
+            DictionaryTextSegment(
+                wordResult.synonyms.joinToString(separator = " / ", prefix = "\n"),
                 DictionaryTextRole.BODY,
             ),
         ))

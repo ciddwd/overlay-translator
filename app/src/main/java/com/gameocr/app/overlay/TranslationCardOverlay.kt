@@ -644,6 +644,8 @@ class TranslationCardOverlay(
             phonetic = context.getString(R.string.word_card_label_phonetic),
             partOfSpeech = context.getString(R.string.word_card_label_pos),
             definitions = context.getString(R.string.word_card_label_definitions),
+            inflections = context.getString(R.string.word_card_label_inflections),
+            synonyms = context.getString(R.string.word_card_label_synonyms),
             difficultyNotes = context.getString(R.string.word_card_label_difficulty_notes),
             examples = context.getString(R.string.word_card_label_examples),
         )

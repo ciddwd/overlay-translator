@@ -189,7 +189,8 @@ class AnthropicTranslator @Inject constructor(
             .replace("{source_lang}", sourceDisplay)
             .replace("{target}", targetDisplay)
             .replace("{target_lang}", targetDisplay)
-            .withDifficultyNotesContract(targetDisplay) + settings.runtimeTranslationContext
+            .withDifficultyNotesContract(targetDisplay)
+            .withLexicalDetailsContract(sourceDisplay) + settings.runtimeTranslationContext
         val request = buildAnthropicMessageRequest(
             settings = settings,
             systemPrompt = systemPrompt,
@@ -262,6 +263,6 @@ class AnthropicTranslator @Inject constructor(
 
     private companion object {
         const val TRANSLATION_MAX_TOKENS = 4096
-        const val DICTIONARY_MAX_TOKENS = 600
+        const val DICTIONARY_MAX_TOKENS = 800
     }
 }

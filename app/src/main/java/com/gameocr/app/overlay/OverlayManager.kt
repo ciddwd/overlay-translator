@@ -505,8 +505,11 @@ class OverlayManager(
      * **线程约束：必须在主线程调用**。内部会改 rootView.background / setContent，View 系统只
      * 接受主线程操作。调用方（CaptureService.applyOverlayConfig）记得 mainScope.launch 包一层。
      */
-    fun syncFloatingWindowFromSettings(settings: Settings) {
-        floatingWindow.applyFromSettings(settings)
+    fun syncFloatingWindowFromSettings(
+        settings: Settings,
+        syncLockedState: Boolean,
+    ) {
+        floatingWindow.applyFromSettings(settings, syncLockedState)
         // 配色 / 字号 / 内容模式变了 → 重建内容，让用户在 Settings 改完立即看到效果。
         // 不在显示中或者从没渲染过则不动。
         val pairs = lastFloatingPairs ?: return

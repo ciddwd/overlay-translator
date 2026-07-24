@@ -65,6 +65,7 @@ import com.gameocr.app.data.Settings
 import com.gameocr.app.data.SettingsRepository
 import com.gameocr.app.data.TranslationPreset
 import com.gameocr.app.data.TranslationPresetCatalog
+import com.gameocr.app.data.translationLanguageCodesConflict
 import com.gameocr.app.data.needsRawBitmap
 import com.gameocr.app.data.Languages
 import com.gameocr.app.ocr.BitmapPreprocessor
@@ -395,19 +396,13 @@ class CaptureService : Service() {
             mainScope.launch { floatingButton?.show() }
         }
 
-        // 订阅 settings 热更新：跳过首次 emit（避免和上面 show() 流程重叠初始化），之后任何
-        // 改动都立即应用到 overlay 与悬浮按钮。一次性 collect，cleanupCapture 时取消。
+        // Settings flow 是悬浮窗锁状态的唯一权威来源，首次 emit 同样需要应用初始状态。
+        // 循环截图取得的 Settings 快照可能已经过期，只刷新渲染参数，不能覆盖刚切换的锁状态。
         settingsCollectJob?.cancel()
         settingsCollectJob = scope.launch {
-            var first = true
             var lastEngine: com.gameocr.app.data.TranslatorEngine? = null
             settingsRepository.settings.collect { s ->
-                if (first) {
-                    first = false
-                    lastEngine = s.translatorEngine
-                    return@collect
-                }
-                applyOverlayConfig(s)
+                applyOverlayConfig(s, syncFloatingWindowLock = true)
                 // 端侧 LLM 引擎切走时主动释放权重：避免 500MB+ 模型常驻内存抢 Bitmap / OCR 模型空间。
                 val wasLocal = lastEngine?.name?.startsWith("LOCAL_") == true
                 val isLocal = s.translatorEngine.name.startsWith("LOCAL_")
@@ -1007,18 +1002,20 @@ class CaptureService : Service() {
             val settings = settingsRepository.get()
             mainScope.launch {
                 panel.show(settings) { source, target ->
-                    scope.launch {
-                        settingsRepository.update {
-                            it.copy(sourceLang = source, targetLang = target)
+                    if (!translationLanguageCodesConflict(source, target)) {
+                        scope.launch {
+                            settingsRepository.update {
+                                it.copy(sourceLang = source, targetLang = target)
+                            }
                         }
-                    }
-                    overlay?.showInfoHint(
-                        getString(
-                            R.string.language_quick_updated_format,
-                            Languages.nameOf(this@CaptureService, source),
-                            Languages.nameOf(this@CaptureService, target)
+                        overlay?.showInfoHint(
+                            getString(
+                                R.string.language_quick_updated_format,
+                                Languages.nameOf(this@CaptureService, source),
+                                Languages.nameOf(this@CaptureService, target)
+                            )
                         )
-                    )
+                    }
                 }
             }
         }
@@ -1641,7 +1638,7 @@ class CaptureService : Service() {
                 )
             }
             logBlankLikeFrame(diagId, "screenshot", fullStats)
-            applyOverlayConfig(settings)
+            applyOverlayConfig(settings, syncFloatingWindowLock = false)
             logVerticalSettings(diagId, settings, screenNow.width, screenNow.height)
 
             val region = settings.captureRegion
@@ -3634,7 +3631,10 @@ class CaptureService : Service() {
         )
     }
 
-    private suspend fun applyOverlayConfig(settings: Settings) {
+    private suspend fun applyOverlayConfig(
+        settings: Settings,
+        syncFloatingWindowLock: Boolean,
+    ) {
         val typeface = overlayFontManager.typefaceFor(settings)
         val dockEdgeInsetPx = (settings.floatingButtonDockInsetDp * resources.displayMetrics.density).toInt()
         val adaptiveBlocksEnabled =
@@ -3677,7 +3677,10 @@ class CaptureService : Service() {
                 )
                 ocrDebugShowSourceText = settings.ocrRedBoxShowSourceText
                 ocrDebugShowTranslation = settings.ocrRedBoxShowTranslation
-                syncFloatingWindowFromSettings(effectiveOverlaySettings)
+                syncFloatingWindowFromSettings(
+                    effectiveOverlaySettings,
+                    syncLockedState = syncFloatingWindowLock,
+                )
             }
             // Overlay / floating button both own Android Views; keep every visible update on main.
             floatingButton?.let {

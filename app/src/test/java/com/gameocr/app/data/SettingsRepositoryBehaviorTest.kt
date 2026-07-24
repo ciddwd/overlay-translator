@@ -13,6 +13,42 @@ import org.junit.Test
 class SettingsRepositoryBehaviorTest {
 
     @Test
+    fun translationLanguagePair_tableDriven_rejectsConflictingUpdates() = runBlocking {
+        data class Case(
+            val name: String,
+            val requestedSource: String,
+            val requestedTarget: String,
+            val expectedSource: String,
+            val expectedTarget: String,
+        )
+
+        listOf(
+            Case("valid pair is stored", "ja", "zh-CN", "ja", "zh-CN"),
+            Case("same source and target are rejected", "en", "en", "auto", "zh-CN"),
+            Case("case-only conflict is rejected", " JA ", "ja", "auto", "zh-CN"),
+            Case("regional variants remain valid", "zh-CN", "zh-TW", "zh-CN", "zh-TW"),
+        ).forEach { case ->
+            val repository = fileBackedRepository(
+                Files.createTempDirectory("settings-language-pair-test").toFile()
+            )
+
+            repository.update {
+                it.copy(sourceLang = Languages.AUTO.code, targetLang = Languages.ZH_CN.code)
+            }
+            repository.update {
+                it.copy(
+                    sourceLang = case.requestedSource,
+                    targetLang = case.requestedTarget,
+                )
+            }
+
+            val actual = repository.get()
+            assertEquals("${case.name} source", case.expectedSource, actual.sourceLang)
+            assertEquals("${case.name} target", case.expectedTarget, actual.targetLang)
+        }
+    }
+
+    @Test
     fun ttsPlaybackGain_tableDriven_isClampedWhenPersisted() = runBlocking {
         data class Case(val name: String, val requestedDb: Int, val expectedDb: Int)
 

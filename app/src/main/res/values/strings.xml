@@ -148,6 +148,16 @@
     <string name="settings_about_open_source_licenses">Open-source licenses</string>
     <string name="settings_about_third_party_notice_summary">Third-party notices for dependencies and model assets included in or downloaded by this app</string>
     <string name="settings_about_view_licenses">View licenses and notices</string>
+    <string name="settings_about_share_label">Share with friends</string>
+    <string name="settings_about_share_summary">Enjoying Screen Translator? Recommend it to a friend.</string>
+    <string name="settings_about_share_action">Share Screen Translator</string>
+    <string name="settings_about_share_chooser">Share Screen Translator</string>
+    <string name="settings_about_share_subject">Screen Translator · Free and open-source screen translation</string>
+    <string name="settings_about_share_text">Screen Translator is a free and open-source screen translation / OCR app.\nIt is especially useful for foreign-language forums, overseas shopping and trading platforms, manga, and games without built-in translation.\nIt supports floating screenshot translation, region and full-screen OCR, continuous translation, manga mode, offline and cloud LLM translation, word selection with inflections and synonyms, and TTS reading.\nLatest release: %1$s\nSource code: %2$s\nDownload only from official release channels.</string>
+    <string name="main_share_prompt_title">Recommend Screen Translator?</string>
+    <string name="main_share_prompt_message">If Screen Translator has been useful, consider recommending it to a friend who also needs translation.</string>
+    <string name="main_share_prompt_confirm">Share with a friend</string>
+    <string name="main_share_prompt_decline">No, thanks</string>
     <string name="settings_about_licenses_page_title">Open-source licenses and third-party notices</string>
     <string name="settings_about_app_license_title">Application license</string>
     <string name="settings_about_third_party_notices_title">Third-party notices</string>
@@ -845,6 +855,8 @@
     <string name="lang_picker_search_placeholder">Search languages</string>
     <string name="lang_picker_no_match">No matching language</string>
     <string name="lang_picker_selected">Selected</string>
+    <string name="lang_picker_already_target">Target selected</string>
+    <string name="lang_picker_already_source">Source selected</string>
     <string name="lang_picker_pin">Pin</string>
     <string name="lang_picker_unpin">Unpin</string>
 
@@ -1265,6 +1277,8 @@
     <string name="word_card_label_phonetic">Phonetic</string>
     <string name="word_card_label_pos">Part of speech</string>
     <string name="word_card_label_definitions">Definitions</string>
+    <string name="word_card_label_inflections">Inflections</string>
+    <string name="word_card_label_synonyms">Synonyms</string>
     <string name="word_card_label_difficulty_notes">Usage and terminology notes</string>
     <string name="word_card_label_examples">Examples</string>
     <string name="word_card_btn_copy_source">Copy source</string>
@@ -1398,7 +1412,7 @@
     <string name="err_orientation_model_rename_failed_format">rename %1$s -> %2$s failed</string>
 
     <!-- Default dictionary prompt -->
-    <string name="default_dictionary_prompt">You are a {source}→{target} bilingual dictionary assistant. Treat the user input as a single word or fixed phrase and output ONLY the following JSON — no markdown, no code fence, no explanation.\n{\n  \"phonetic\": \"phonetic / pronunciation in {source}; empty string if unknown\",\n  \"pos\": [\"part of speech in {target}, e.g. n./v./adj.; empty array if unknown\"],\n  \"definitions\": [\"definition 1 in {target}\", \"definition 2 in {target}\"],\n  \"difficulty_notes\": [\"explain in {target} any rare meaning, specialized domain, acronym expansion, cultural reference, or easily confused usage; empty array for ordinary terms\"],\n  \"examples\": [\n    { \"src\": \"{source} example\", \"dst\": \"{target} translation\" }\n  ]\n}\nRules:\n1. Must be valid JSON with exactly these keys;\n2. Use empty string / empty array for missing info;\n3. At most 2 examples;\n4. Rare words, specialized terms, acronyms, culture-specific names, and easily confused usages require concise difficulty notes (at most 3) without repeating the definitions; use an empty array for ordinary terms;\n5. Never translate the whole thing as a sentence — always a dictionary lookup.\n</string>
+    <string name="default_dictionary_prompt">You are a {source}→{target} bilingual dictionary assistant. Treat the user input as a single word or fixed phrase and output ONLY the following JSON — no markdown, no code fence, no explanation.\n{\n  \"phonetic\": \"phonetic / pronunciation in {source}; empty string if unknown\",\n  \"pos\": [\"part of speech in {target}, e.g. n./v./adj.; empty array if unknown\"],\n  \"definitions\": [\"definition 1 in {target}\", \"definition 2 in {target}\"],\n  \"inflections\": [\"form label: inflected form in {source}; empty array when not applicable\"],\n  \"synonyms\": [\"common synonym or near-synonym in {source}; empty array if unknown\"],\n  \"difficulty_notes\": [\"explain in {target} any rare meaning, specialized domain, acronym expansion, cultural reference, or easily confused usage; empty array for ordinary terms\"],\n  \"examples\": [\n    { \"src\": \"{source} example\", \"dst\": \"{target} translation\" }\n  ]\n}\nRules:\n1. Must be valid JSON with exactly these keys;\n2. Use empty string / empty array for missing info;\n3. Include at most 6 applicable inflections, 5 synonyms, and 2 examples;\n4. Rare words, specialized terms, acronyms, culture-specific names, and easily confused usages require concise difficulty notes (at most 3) without repeating the definitions; use an empty array for ordinary terms;\n5. Never translate the whole thing as a sentence — always a dictionary lookup.\n</string>
     <string name="settings_translation_output_layout_label">Translation layout</string>
     <string name="settings_translation_output_direction_label">Translation order</string>
     <string name="settings_translation_output_follow_title">Follow recognized text layout</string>
@@ -1497,7 +1511,11 @@
     <string name="onboarding_rail_body">One choice per page. You can rerun this guide from the System compatibility section on the home screen.</string>
 
     <string name="onboarding_welcome_title">Welcome to Screen Translator</string>
-    <string name="onboarding_welcome_body">We’ll guide you through a few quick choices to understand what you translate most often and set up the languages, display behavior, and translation services. You can change any of these later in Settings.</string>
+    <string name="onboarding_welcome_body">A few quick choices will set up what you translate most often, your languages, display behavior, and translation services. You can change any of these later in Settings.</string>
+    <string name="onboarding_open_source_title">Open source and free to use</string>
+    <string name="onboarding_open_source_body">This app is fully open source. It does not charge activation, membership, or license fees. Download only from official release channels and beware of paid resellers, impersonators, or claims that payment is required to unlock features.</string>
+    <string name="onboarding_open_source_service_note">Cloud LLM, TTS, and other third-party services may charge separately. Keep API keys private and never share them.</string>
+    <string name="onboarding_welcome_action">I understand — start setup</string>
     <string name="onboarding_source_title">What language are you reading?</string>
     <string name="onboarding_source_body">Choose an explicit source language so offline translation can prepare the correct language pack.</string>
     <string name="onboarding_source_label">Source language</string>

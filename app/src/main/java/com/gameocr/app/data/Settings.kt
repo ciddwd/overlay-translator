@@ -300,7 +300,7 @@ data class Settings(
     /** 划词翻译：开启 = 弹翻译卡片；关闭 = 走全屏叠加显示管线（译文覆盖在原文位置）。 */
     val wordSelectCardMode: Boolean = true,
     /** 划词翻译：记住上次的选框位置，下次打开时自动预填。 */
-    val wordSelectRememberRegion: Boolean = true,
+    val wordSelectRememberRegion: Boolean = false,
     /** 划词翻译上次选框（物理像素）。仅 [wordSelectRememberRegion] 开启时读取。 */
     val wordSelectLastRegion: CaptureRegion? = null,
     val wordSelectLastRegionSavedScreenW: Int = 0,
@@ -377,13 +377,15 @@ data class Settings(
         /**
          * 划词翻译的词典模式默认 prompt。要求 LLM 在输入是单词时返回严格 JSON——
          * 解析失败由 CaptureService 回退到纯翻译，不报错；解析成功则把 phonetic / pos /
-         * definitions / examples 显示在卡片字典区。
+         * definitions / inflections / synonyms / examples 显示在卡片字典区。
          */
         const val DEFAULT_DICTIONARY_PROMPT: String = """你是一名{source}→{target}的双语词典助手。请把用户输入当作一个单词或固定短语来处理，**只输出**下面格式的 JSON，不要加 markdown、代码块、解释。
 {
   "phonetic": "音标或读音（{source}; 无则空串）",
   "pos": ["词性，{target}缩写，如 名/动/形 或 n./v./adj.; 无则空数组"],
   "definitions": ["{target}释义 1", "{target}释义 2"],
+  "inflections": ["词形标签: {source}词形，如过去式、过去分词、复数、比较级或适用的变位；无则空数组"],
+  "synonyms": ["{source}常用同义词或近义词；无则空数组"],
   "difficulty_notes": ["用{target}解释生僻含义、专业领域、缩写全称或易混淆用法；普通词为空数组"],
   "examples": [
     { "src": "{source}例句", "dst": "{target}译文" }
@@ -392,7 +394,7 @@ data class Settings(
 要求：
 1. 必须是合法 JSON，键名与上面完全一致；
 2. 没有信息的字段用空串或空数组占位；
-3. 例句最多 2 条，太多删减；
+3. 词形变化最多 6 项、同义词最多 5 项、例句最多 2 条；
 4. 生僻词、专业名词、缩写、文化专名或易混淆用法必须给出难点解释，最多 3 条，不要重复释义；普通词用空数组；
 5. 不要把整段当句子翻译，只做词典查询。
 """

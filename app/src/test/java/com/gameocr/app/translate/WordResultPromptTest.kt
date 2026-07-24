@@ -35,6 +35,90 @@ class WordResultPromptTest {
     }
 
     @Test
+    fun lexicalDetailsContract_tableDriven_addsOnlyMissingFields() {
+        data class Case(
+            val name: String,
+            val prompt: String,
+            val expectedInflectionCount: Int,
+            val expectedSynonymCount: Int,
+            val shouldReuseInstance: Boolean,
+        )
+
+        listOf(
+            Case("legacy prompt", "Return dictionary JSON.", 1, 1, false),
+            Case("inflections already present", """Return {"inflections":[]}""", 1, 1, false),
+            Case("synonyms already present", """Return {"synonyms":[]}""", 1, 1, false),
+            Case("current default prompt", Settings.DEFAULT_DICTIONARY_PROMPT, 1, 1, true),
+        ).forEach { case ->
+            val resolved = case.prompt.withLexicalDetailsContract("English")
+            assertEquals(
+                "${case.name} inflections",
+                case.expectedInflectionCount,
+                Regex("\"inflections\"").findAll(resolved).count(),
+            )
+            assertEquals(
+                "${case.name} synonyms",
+                case.expectedSynonymCount,
+                Regex("\"synonyms\"").findAll(resolved).count(),
+            )
+            if (case.shouldReuseInstance) assertSame(case.name, case.prompt, resolved)
+        }
+    }
+
+    @Test
+    fun parsesInflectionsAndSynonyms_tableDriven_acceptsCompatibleKeys() {
+        data class Case(
+            val name: String,
+            val raw: String,
+            val expectedInflections: List<String>,
+            val expectedSynonyms: List<String>,
+        )
+
+        listOf(
+            Case(
+                name = "canonical fields",
+                raw = """{
+                    "definitions":["去"],
+                    "inflections":["past: went","past participle: gone"],
+                    "synonyms":["move","travel"]
+                }""".trimIndent(),
+                expectedInflections = listOf("past: went", "past participle: gone"),
+                expectedSynonyms = listOf("move", "travel"),
+            ),
+            Case(
+                name = "camel case aliases",
+                raw = """{
+                    "meaning":"运行",
+                    "wordForms":["past: ran"],
+                    "similarWords":["operate","function"]
+                }""".trimIndent(),
+                expectedInflections = listOf("past: ran"),
+                expectedSynonyms = listOf("operate", "function"),
+            ),
+            Case(
+                name = "singular aliases",
+                raw = """{
+                    "definition":"快速的",
+                    "inflection":"comparative: faster",
+                    "synonym":"quick"
+                }""".trimIndent(),
+                expectedInflections = listOf("comparative: faster"),
+                expectedSynonyms = listOf("quick"),
+            ),
+            Case(
+                name = "legacy response remains compatible",
+                raw = """{"definitions":["测试"],"examples":[]}""",
+                expectedInflections = emptyList(),
+                expectedSynonyms = emptyList(),
+            ),
+        ).forEach { case ->
+            val result = parseWordResult(case.raw, json)
+            assertEquals("${case.name} inflections", case.expectedInflections, result?.inflections)
+            assertEquals("${case.name} synonyms", case.expectedSynonyms, result?.synonyms)
+        }
+    }
+
+    @Test
     fun parsesDifficultyNotesAndKeepsLegacyJsonCompatible() {
         data class Case(
             val name: String,

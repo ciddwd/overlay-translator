@@ -560,10 +560,13 @@ private fun OnboardingPageSurface(
                         } else {
                             Text(
                                 stringResource(
-                                    if (step == OnboardingStep.SUMMARY) {
-                                        R.string.onboarding_finish
-                                    } else {
-                                        R.string.onboarding_next
+                                    when (step) {
+                                        OnboardingStep.WELCOME ->
+                                            R.string.onboarding_welcome_action
+                                        OnboardingStep.SUMMARY ->
+                                            R.string.onboarding_finish
+                                        else ->
+                                            R.string.onboarding_next
                                     }
                                 )
                             )
@@ -603,6 +606,37 @@ private fun WelcomePage() {
         style = MaterialTheme.typography.bodyLarge,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+        border = BorderStroke(
+            width = 1.dp,
+            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.28f),
+        ),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.onboarding_open_source_title),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+            )
+            Text(
+                text = stringResource(R.string.onboarding_open_source_body),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+            )
+            Text(
+                text = stringResource(R.string.onboarding_open_source_service_note),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.82f),
+            )
+        }
+    }
 }
 
 @Composable
@@ -619,6 +653,8 @@ private fun SourceLanguagePage(
         label = stringResource(R.string.onboarding_source_label),
         currentCode = draft.sourceLang,
         allowAuto = false,
+        disabledLanguageCodes = setOf(draft.targetLang),
+        disabledStatusLabel = stringResource(R.string.lang_picker_already_target),
         onSelect = { onDraftChange(draft.copy(sourceLang = it)) },
     )
 }
@@ -637,6 +673,8 @@ private fun TargetLanguagePage(
         label = stringResource(R.string.onboarding_target_label),
         currentCode = draft.targetLang,
         allowAuto = false,
+        disabledLanguageCodes = setOf(draft.sourceLang),
+        disabledStatusLabel = stringResource(R.string.lang_picker_already_source),
         onSelect = { onDraftChange(draft.copy(targetLang = it)) },
     )
     if (draft.sourceLang == draft.targetLang) {

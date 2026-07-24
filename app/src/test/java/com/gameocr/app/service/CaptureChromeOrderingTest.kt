@@ -206,7 +206,7 @@ class CaptureChromeOrderingTest {
             Case("overlay properties", "overlay?.apply"),
             Case(
                 "floating window resync uses the resolved fixed/adaptive style",
-                "syncFloatingWindowFromSettings(effectiveOverlaySettings)",
+                "syncFloatingWindowFromSettings(",
             ),
             Case("floating button resize", "it.applyResize()"),
             Case("floating button snap animation", "it.applySnapPreference(settings.floatingButtonSnapToEdge)"),

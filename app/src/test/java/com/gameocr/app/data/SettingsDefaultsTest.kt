@@ -7,6 +7,24 @@ import org.junit.Test
 class SettingsDefaultsTest {
 
     @Test
+    fun wordSelectDefaults_tableDriven_keepSelectionMemoryOff() {
+        data class Case(
+            val name: String,
+            val actual: Boolean,
+            val expected: Boolean,
+        )
+
+        val settings = Settings()
+        listOf(
+            Case("precise adjustment", settings.wordSelectPreciseAdjust, true),
+            Case("translation card", settings.wordSelectCardMode, true),
+            Case("remember selection", settings.wordSelectRememberRegion, false),
+        ).forEach { case ->
+            assertEquals(case.name, case.expected, case.actual)
+        }
+    }
+
+    @Test
     fun anthropicDefaults_areStableAcrossSettingsAndPresets() {
         data class Case(val name: String, val baseUrl: String, val model: String)
 

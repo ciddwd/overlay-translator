@@ -148,6 +148,16 @@
     <string name="settings_about_open_source_licenses">开源许可证</string>
     <string name="settings_about_third_party_notice_summary">本应用所含依赖项及内置或按需下载模型的第三方声明</string>
     <string name="settings_about_view_licenses">查看许可证与声明</string>
+    <string name="settings_about_share_label">分享给朋友</string>
+    <string name="settings_about_share_summary">觉得屏译好用？推荐给朋友吧。</string>
+    <string name="settings_about_share_action">分享屏译</string>
+    <string name="settings_about_share_chooser">分享屏译</string>
+    <string name="settings_about_share_subject">屏译 Screen Translator｜开源免费的屏幕翻译工具</string>
+    <string name="settings_about_share_text">屏译 Screen Translator 是一款开源免费的屏幕翻译 / OCR 工具。\n特别适合外文论坛、海外购物与交易平台、漫画和游戏等缺少内置翻译的场景。\n支持悬浮窗截图翻译、区域与全屏识别、循环翻译、漫画模式，以及离线和云端 LLM 翻译；还可划词翻译、查看词形与同义词，并使用 TTS 朗读。\n最新版下载：%1$s\n开源项目：%2$s\n请从官方发布渠道下载，谨防付费倒卖。</string>
+    <string name="main_share_prompt_title">愿意把屏译推荐给朋友吗？</string>
+    <string name="main_share_prompt_message">如果屏译对你有帮助，欢迎推荐给同样有翻译需求的朋友。</string>
+    <string name="main_share_prompt_confirm">分享给朋友</string>
+    <string name="main_share_prompt_decline">不分享</string>
     <string name="settings_about_licenses_page_title">开源许可证与第三方声明</string>
     <string name="settings_about_app_license_title">本应用开源许可证</string>
     <string name="settings_about_third_party_notices_title">第三方声明</string>
@@ -844,6 +854,8 @@
     <string name="lang_picker_search_placeholder">搜索语言</string>
     <string name="lang_picker_no_match">无匹配语言</string>
     <string name="lang_picker_selected">已选中</string>
+    <string name="lang_picker_already_target">目标语言已选</string>
+    <string name="lang_picker_already_source">源语言已选</string>
     <string name="lang_picker_pin">加星标</string>
     <string name="lang_picker_unpin">取消星标</string>
 
@@ -1264,6 +1276,8 @@
     <string name="word_card_label_phonetic">读音</string>
     <string name="word_card_label_pos">词性</string>
     <string name="word_card_label_definitions">释义</string>
+    <string name="word_card_label_inflections">词形变化</string>
+    <string name="word_card_label_synonyms">同义词</string>
     <string name="word_card_label_difficulty_notes">难点解释</string>
     <string name="word_card_label_examples">例句</string>
     <string name="word_card_btn_copy_source">复制原文</string>
@@ -1378,7 +1392,7 @@
     <string name="settings_orient_manual_active_hint">已手动锁定方向，自动判别已被跳过。</string>
 
     <!-- 默认词典 Prompt -->
-    <string name="default_dictionary_prompt">你是一名{source}→{target}的双语词典助手。请把用户输入当作一个单词或固定短语来处理，**只输出**下面格式的 JSON，不要加 markdown、代码块、解释。\n{\n  \"phonetic\": \"音标或读音（{source}; 无则空串）\",\n  \"pos\": [\"词性，{target}缩写，如 名/动/形 或 n./v./adj.; 无则空数组\"],\n  \"definitions\": [\"{target}释义 1\", \"{target}释义 2\"],\n  \"difficulty_notes\": [\"用{target}解释生僻含义、专业领域、缩写全称、文化背景或易混淆用法；普通词为空数组\"],\n  \"examples\": [\n    { \"src\": \"{source}例句\", \"dst\": \"{target}译文\" }\n  ]\n}\n要求：\n1. 必须是合法 JSON，键名与上面完全一致；\n2. 没有信息的字段用空串或空数组占位；\n3. 例句最多 2 条，太多删减；\n4. 生僻词、专业名词、缩写、文化专名或易混淆用法必须给出难点解释，最多 3 条，不要重复释义；普通词用空数组；\n5. 不要把整段当句子翻译，只做词典查询。\n</string>
+    <string name="default_dictionary_prompt">你是一名{source}→{target}的双语词典助手。请把用户输入当作一个单词或固定短语来处理，**只输出**下面格式的 JSON，不要加 markdown、代码块、解释。\n{\n  \"phonetic\": \"音标或读音（{source}; 无则空串）\",\n  \"pos\": [\"词性，{target}缩写，如 名/动/形 或 n./v./adj.; 无则空数组\"],\n  \"definitions\": [\"{target}释义 1\", \"{target}释义 2\"],\n  \"inflections\": [\"词形标签: {source}词形，如过去式、过去分词、复数、比较级或适用的变位；无则空数组\"],\n  \"synonyms\": [\"{source}常用同义词或近义词；无则空数组\"],\n  \"difficulty_notes\": [\"用{target}解释生僻含义、专业领域、缩写全称、文化背景或易混淆用法；普通词为空数组\"],\n  \"examples\": [\n    { \"src\": \"{source}例句\", \"dst\": \"{target}译文\" }\n  ]\n}\n要求：\n1. 必须是合法 JSON，键名与上面完全一致；\n2. 没有信息的字段用空串或空数组占位；\n3. 词形变化最多 6 项、同义词最多 5 项、例句最多 2 条；\n4. 生僻词、专业名词、缩写、文化专名或易混淆用法必须给出难点解释，最多 3 条，不要重复释义；普通词用空数组；\n5. 不要把整段当句子翻译，只做词典查询。\n</string>
     <string name="settings_orientation_model_name">ONNX 方向模型包</string>
     <string name="settings_orientation_model_desc">可选的 PaddleOCR 方向模型包（约 7.5 MB）：整图 0/90/180/270 分类 + 文本行 0/180 分类。安装后可在 OCR 前路由竖向画面，也能对倒置横排文本重跑一次并把框映射回原图。</string>
     <string name="settings_orientation_model_status_ready_format">方向模型已就绪 (%1$d KB)</string>
@@ -1495,7 +1509,11 @@
     <string name="onboarding_rail_body">每页只做一个选择。完成后可从主屏“系统兼容”区域随时重新运行。</string>
 
     <string name="onboarding_welcome_title">欢迎使用屏译\nScreen Translator</string>
-    <string name="onboarding_welcome_body">接下来，我们会通过几个简单步骤了解你最常翻译的内容，并完成语言、展示方式和翻译服务等基础配置。所有选项之后都可以在设置中修改。</string>
+    <string name="onboarding_welcome_body">接下来将通过几个简单步骤，选择你最常翻译的内容，并完成语言、展示方式和翻译服务等基础配置。所有选项之后都可以在设置中修改。</string>
+    <string name="onboarding_open_source_title">完全开源，免费使用</string>
+    <string name="onboarding_open_source_body">本软件完全开源，所有功能均不收取激活费、会员费或授权费。请通过官方发布渠道下载，谨防付费倒卖、冒充官方或以“解锁功能”为名的收费行为。</string>
+    <string name="onboarding_open_source_service_note">云端 LLM、TTS 等第三方服务可能由服务商单独计费，与本软件无关。请妥善保管 API Key，不要提供给他人。</string>
+    <string name="onboarding_welcome_action">我已了解，开始设置</string>
     <string name="onboarding_source_title">你正在阅读什么语言？</string>
     <string name="onboarding_source_body">请选择明确的源语言，这样离线翻译才能准备正确的语言包。</string>
     <string name="onboarding_source_label">源语言</string>

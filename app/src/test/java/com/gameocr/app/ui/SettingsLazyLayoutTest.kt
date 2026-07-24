@@ -43,10 +43,10 @@ class SettingsLazyLayoutTest {
             Case("ocr", 5),
             Case("text_orientation", 6),
             Case("overlay", 7),
-            Case("floating", 8),
-            Case("arc_menu", 9),
-            Case("word_select", 10),
-            Case("trigger", 11),
+            Case("word_select", 8),
+            Case("trigger", 9),
+            Case("floating", 10),
+            Case("arc_menu", 11),
             Case("developer", 12),
             Case("network", 13),
         ).forEach { case ->
@@ -60,6 +60,29 @@ class SettingsLazyLayoutTest {
             SETTINGS_SECTION_KEYS_IN_ORDER.size,
             SETTINGS_SECTION_KEYS_IN_ORDER.toSet().size,
         )
+    }
+
+    @Test
+    fun sectionOrder_tableDriven_placesLoopTriggerBeforeFloating() {
+        data class Case(
+            val name: String,
+            val before: String,
+            val after: String,
+        )
+
+        val source = sourceFile("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
+        listOf(
+            Case("word select before loop trigger", "WORD_SELECT", "TRIGGER"),
+            Case("loop trigger before floating", "TRIGGER", "FLOATING"),
+            Case("floating before arc menu", "FLOATING", "ARC_MENU"),
+        ).forEach { case ->
+            val beforeIndex = source.indexOf("item(key = SectionKeys.${case.before})")
+            val afterIndex = source.indexOf("item(key = SectionKeys.${case.after})")
+            assertTrue(
+                "${case.name}: before=$beforeIndex after=$afterIndex",
+                beforeIndex >= 0 && afterIndex > beforeIndex,
+            )
+        }
     }
 
     @Test

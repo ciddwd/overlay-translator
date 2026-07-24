@@ -233,7 +233,8 @@ class OpenAiTranslator @Inject constructor(
             .replace("{source_lang}", sourceDisplay)
             .replace("{target}", targetDisplay)
             .replace("{target_lang}", targetDisplay)
-            .withDifficultyNotesContract(targetDisplay) + settings.runtimeTranslationContext
+            .withDifficultyNotesContract(targetDisplay)
+            .withLexicalDetailsContract(sourceDisplay) + settings.runtimeTranslationContext
 
         val reqBody = ChatRequest(
             model = settings.model,
@@ -243,7 +244,7 @@ class OpenAiTranslator @Inject constructor(
             ),
             temperature = 0.0,
             stream = false,
-            maxTokens = 600,
+            maxTokens = DICTIONARY_MAX_TOKENS,
             responseFormat = dictionaryJsonResponseFormatOrNull(settings.baseUrl),
         )
         val payload = json.encodeToString(reqBody)
@@ -273,12 +274,14 @@ class OpenAiTranslator @Inject constructor(
 
         return parseWordResult(raw, json).also { result ->
             Timber.i(
-                "translateWord parsed=%s rawLength=%d phonetic=%s pos=%d definitions=%d notes=%d examples=%d",
+                "translateWord parsed=%s rawLength=%d phonetic=%s pos=%d definitions=%d inflections=%d synonyms=%d notes=%d examples=%d",
                 result != null,
                 raw.length,
                 result?.phonetic?.isNotBlank() == true,
                 result?.pos?.size ?: 0,
                 result?.definitions?.size ?: 0,
+                result?.inflections?.size ?: 0,
+                result?.synonyms?.size ?: 0,
                 result?.difficultyNotes?.size ?: 0,
                 result?.examples?.size ?: 0,
             )
@@ -331,6 +334,10 @@ class OpenAiTranslator @Inject constructor(
     }
 
     private fun ensureSlash(url: String): String = if (url.endsWith("/")) url else "$url/"
+
+    private companion object {
+        const val DICTIONARY_MAX_TOKENS = 800
+    }
 }
 
 internal fun String.withDifficultyNotesContract(targetDisplay: String): String {
@@ -340,6 +347,28 @@ internal fun String.withDifficultyNotesContract(targetDisplay: String): String {
         "difficulty_notes": an array written in $targetDisplay. For rare words, specialized terms, acronyms, culture-specific references, or easily confused usages, briefly explain the domain/context, full form, concept, or ambiguity. Use an empty array for ordinary terms. Include at most 3 items and do not repeat the definitions.
     """.trimIndent()
     return trimEnd() + "\n\n" + requirement
+}
+
+internal fun String.withLexicalDetailsContract(sourceDisplay: String): String {
+    val missingFields = buildList {
+        if (!this@withLexicalDetailsContract.contains("\"inflections\"")) {
+            add(
+                "\"inflections\": an array of at most 6 concise strings in $sourceDisplay, " +
+                    "each formatted as \"form label: inflected form\". Include only applicable " +
+                    "forms such as base form, past tense, past participle, plural, comparative, " +
+                    "conjugation, or declension; use an empty array when none apply."
+            )
+        }
+        if (!this@withLexicalDetailsContract.contains("\"synonyms\"")) {
+            add(
+                "\"synonyms\": an array of at most 5 common synonyms or near-synonyms in " +
+                    "$sourceDisplay; use an empty array when none are reliable."
+            )
+        }
+    }
+    if (missingFields.isEmpty()) return this
+    return trimEnd() + "\n\nAdditional required JSON fields:\n" +
+        missingFields.joinToString(separator = "\n")
 }
 
 internal fun dictionaryJsonResponseFormatOrNull(baseUrl: String): ChatResponseFormat? {
@@ -365,6 +394,29 @@ internal fun parseWordResult(raw: String, json: Json): WordResult? {
             definitions = obj.stringList(
                 keys = listOf("definitions", "definition", "meanings", "meaning", "translations"),
                 objectValueKeys = listOf("definition", "meaning", "translation", "text", "value"),
+            ),
+            inflections = obj.stringList(
+                keys = listOf(
+                    "inflections",
+                    "inflection",
+                    "word_forms",
+                    "wordForms",
+                    "forms",
+                    "conjugations",
+                    "declensions",
+                ),
+                objectValueKeys = listOf("form", "inflection", "value", "text", "word", "label"),
+            ),
+            synonyms = obj.stringList(
+                keys = listOf(
+                    "synonyms",
+                    "synonym",
+                    "similar_words",
+                    "similarWords",
+                    "near_synonyms",
+                    "nearSynonyms",
+                ),
+                objectValueKeys = listOf("word", "synonym", "term", "value", "text", "label"),
             ),
             difficultyNotes = obj.stringList(
                 keys = listOf(
@@ -398,6 +450,15 @@ private fun JsonObject.dictionaryPayload(): JsonObject {
         "definition",
         "meanings",
         "meaning",
+        "inflections",
+        "inflection",
+        "word_forms",
+        "wordForms",
+        "forms",
+        "synonyms",
+        "synonym",
+        "similar_words",
+        "similarWords",
     )
     if (keys.any { it in directKeys }) return this
     return listOf("data", "result", "word", "entry")

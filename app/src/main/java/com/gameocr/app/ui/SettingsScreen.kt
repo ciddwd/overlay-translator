@@ -201,6 +201,7 @@ import com.gameocr.app.data.TranslatorEngine
 import com.gameocr.app.data.TtsHttpResponseMode
 import com.gameocr.app.data.TtsProvider
 import com.gameocr.app.data.VolcengineTtsResource
+import com.gameocr.app.data.translationLanguageCodesConflict
 import com.gameocr.app.data.MiniMaxTtsModel
 import com.gameocr.app.data.MimoTtsModel
 import com.gameocr.app.data.DEFAULT_MIMO_TTS_BASE_URL
@@ -616,7 +617,7 @@ fun SettingsScreen(
     var currentSkill by remember { mutableStateOf(com.gameocr.app.data.FloatingSkill.FULL_SCREEN) }
     var wordSelectPreciseAdjust by remember { mutableStateOf(true) }
     var wordSelectCardMode by remember { mutableStateOf(true) }
-    var wordSelectRememberRegion by remember { mutableStateOf(true) }
+    var wordSelectRememberRegion by remember { mutableStateOf(false) }
     var dictionaryPrompt by remember { mutableStateOf("") }
     // 悬浮按钮"贴边距离" slider 的实时预览：屏幕两侧画 inset 宽度的半透粉条。
     // 默认 false——进设置就显示条带太突兀；用户在 slider 旁手动开启「预览」后才覆盖到屏幕上。
@@ -807,6 +808,7 @@ fun SettingsScreen(
     }
 
     fun selectMlKitSourceLanguage(languageTag: String) {
+        if (translationLanguageCodesConflict(languageTag, targetLang)) return
         timber.log.Timber.tag("MlKitTrans").i(
             "[select-on-device-source] %s -> %s", sourceLang, languageTag
         )
@@ -2909,6 +2911,8 @@ fun SettingsScreen(
                         badgedLanguageCodes = downloadedMlKitPickerCodes.toSet(),
                         badgeLabel = stringResource(R.string.settings_mlkit_model_downloaded_short),
                         unbadgedStatusLabel = stringResource(R.string.settings_mlkit_model_download_short),
+                        disabledLanguageCodes = setOf(targetLang),
+                        disabledStatusLabel = stringResource(R.string.lang_picker_already_target),
                         onSelect = { languageTag ->
                             selectMlKitSourceLanguage(languageTag)
                             showMlKitMoreLanguages = false
@@ -3539,6 +3543,9 @@ fun SettingsScreen(
                     label = stringResource(R.string.settings_source_lang),
                     currentCode = sourceLang,
                     onSelect = {
+                        if (translationLanguageCodesConflict(it, targetLang)) {
+                            return@LanguagePicker
+                        }
                         if (translatorEngine == TranslatorEngine.GOOGLE_ML_KIT) {
                             selectMlKitSourceLanguage(it)
                         } else {
@@ -3558,6 +3565,8 @@ fun SettingsScreen(
                     pinned = pinnedLanguages,
                     onTogglePin = onTogglePin,
                     allowAuto = translatorEngine != TranslatorEngine.GOOGLE_ML_KIT,
+                    disabledLanguageCodes = setOf(targetLang),
+                    disabledStatusLabel = stringResource(R.string.lang_picker_already_target),
                     allowedLanguageCodes = if (translatorEngine == TranslatorEngine.GOOGLE_ML_KIT) {
                         mlKitLanguagePickerCodes
                     } else {
@@ -3570,6 +3579,9 @@ fun SettingsScreen(
                     label = stringResource(R.string.settings_target_lang),
                     currentCode = targetLang,
                     onSelect = {
+                        if (translationLanguageCodesConflict(sourceLang, it)) {
+                            return@LanguagePicker
+                        }
                         targetLang = it
                         mlKitModelDownloadMessage = null
                         if (
@@ -3581,7 +3593,9 @@ fun SettingsScreen(
                     },
                     pinned = pinnedLanguages,
                     onTogglePin = onTogglePin,
-                    allowAuto = translatorEngine != TranslatorEngine.GOOGLE_ML_KIT,
+                    allowAuto = false,
+                    disabledLanguageCodes = setOf(sourceLang),
+                    disabledStatusLabel = stringResource(R.string.lang_picker_already_source),
                     allowedLanguageCodes = if (translatorEngine == TranslatorEngine.GOOGLE_ML_KIT) {
                         mlKitLanguagePickerCodes
                     } else {
@@ -5006,136 +5020,7 @@ fun SettingsScreen(
             // —— 悬浮按钮 ——
             }
 
-            item(key = SectionKeys.FLOATING) {
-            SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_FLOATING) {
-            SectionCard(title = stringResource(R.string.settings_section_floating)) {
-                SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_floating_size) {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(stringResource(R.string.settings_floating_size_format, floatingSize.toInt()), style = MaterialTheme.typography.labelLarge)
-                Slider(
-                    value = floatingSize,
-                    onValueChange = { floatingSize = it },
-                    valueRange = 32f..96f,
-                    steps = (96 - 32) / 4 - 1
-                )
-                }
-                }
-
-                SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_floating_snap) {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                SwitchRow(stringResource(R.string.settings_floating_snap_edge_label), floatingSnapEdge) { floatingSnapEdge = it }
-                Text(
-                    stringResource(R.string.settings_floating_snap_edge_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                }
-                }
-
-                SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_floating_auto_dock) {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                SwitchRow(
-                    stringResource(R.string.settings_floating_auto_dock_label),
-                    floatingAutoDock,
-                    enabled = floatingSnapEdge
-                ) { floatingAutoDock = it }
-                Text(
-                    stringResource(R.string.settings_floating_auto_dock_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.alpha(if (floatingSnapEdge) 1f else 0.4f)
-                )
-                }
-                }
-
-                SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_floating_dock_inset) {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(
-                    stringResource(R.string.settings_floating_dock_inset_format, floatingDockInset.toInt()),
-                    style = MaterialTheme.typography.labelLarge,
-                    modifier = Modifier.alpha(if (floatingSnapEdge) 1f else 0.4f)
-                )
-                Slider(
-                    value = floatingDockInset,
-                    onValueChange = { floatingDockInset = it },
-                    valueRange = 0f..40f,
-                    steps = 39,
-                    enabled = floatingSnapEdge
-                )
-                OutlinedButton(
-                    onClick = { insetPreviewActive = !insetPreviewActive },
-                    enabled = floatingSnapEdge,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(stringResource(
-                        if (insetPreviewActive) R.string.settings_floating_dock_inset_preview_stop
-                        else R.string.settings_floating_dock_inset_preview_start
-                    ))
-                }
-                Text(
-                    stringResource(R.string.settings_floating_dock_inset_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.alpha(if (floatingSnapEdge) 1f else 0.4f)
-                )
-                }
-                }
-            }
-
-            // —— 弧菜单按钮顺序 ——
-            }
-
-            }
-
-            item(key = SectionKeys.ARC_MENU) {
-            SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_ARC_MENU) {
-            SectionCard(
-                title = stringResource(R.string.settings_section_arc_menu),
-            ) {
-                Text(
-                    stringResource(R.string.settings_arc_menu_page_size, arcMenuPageSize.toInt()),
-                    style = MaterialTheme.typography.labelMedium
-                )
-                Slider(
-                    value = arcMenuPageSize,
-                    onValueChange = { arcMenuPageSize = it.roundToInt().coerceIn(
-                        FloatingMenu.MIN_PAGE_SIZE,
-                        FloatingMenu.MAX_PAGE_SIZE
-                    ).toFloat() },
-                    onValueChangeFinished = {
-                        scope.launch { viewModel.saveArcMenuPageSize(arcMenuPageSize.toInt()) }
-                    },
-                    valueRange = FloatingMenu.MIN_PAGE_SIZE.toFloat()..FloatingMenu.MAX_PAGE_SIZE.toFloat(),
-                    steps = FloatingMenu.MAX_PAGE_SIZE - FloatingMenu.MIN_PAGE_SIZE - 1
-                )
-                Text(
-                    stringResource(R.string.settings_arc_menu_page_size_desc),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    stringResource(
-                        R.string.settings_arc_menu_order_desc,
-                        arcMenuPageSize.toInt()
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                ArcMenuOrderEditor(
-                    order = menuOrder,
-                    currentSkill = currentSkill,
-                    onReorder = { next ->
-                        menuOrder = next
-                        scope.launch { viewModel.saveArcMenuOrder(next) }
-                    }
-                )
-            }
-
             // —— 划词翻译 ——
-            }
-
-            }
-
             item(key = SectionKeys.WORD_SELECT) {
             SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_WORD_SELECT) {
             SectionCard(title = stringResource(R.string.settings_section_word_select)) {
@@ -5167,7 +5052,7 @@ fun SettingsScreen(
             }
             }
 
-            // —— 触发器 ——
+            // —— 循环触发器 ——
             item(key = SectionKeys.TRIGGER) {
             SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_TRIGGER) {
             SectionCard(title = stringResource(R.string.settings_section_trigger)) {
@@ -5347,6 +5232,136 @@ fun SettingsScreen(
                 ) { Text(stringResource(R.string.settings_btn_open_a11y)) }
                 }
                 }
+            }
+
+            // —— 悬浮按钮 ——
+            }
+
+            }
+
+            item(key = SectionKeys.FLOATING) {
+            SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_FLOATING) {
+            SectionCard(title = stringResource(R.string.settings_section_floating)) {
+                SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_floating_size) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(stringResource(R.string.settings_floating_size_format, floatingSize.toInt()), style = MaterialTheme.typography.labelLarge)
+                Slider(
+                    value = floatingSize,
+                    onValueChange = { floatingSize = it },
+                    valueRange = 32f..96f,
+                    steps = (96 - 32) / 4 - 1
+                )
+                }
+                }
+
+                SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_floating_snap) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                SwitchRow(stringResource(R.string.settings_floating_snap_edge_label), floatingSnapEdge) { floatingSnapEdge = it }
+                Text(
+                    stringResource(R.string.settings_floating_snap_edge_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                }
+                }
+
+                SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_floating_auto_dock) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                SwitchRow(
+                    stringResource(R.string.settings_floating_auto_dock_label),
+                    floatingAutoDock,
+                    enabled = floatingSnapEdge
+                ) { floatingAutoDock = it }
+                Text(
+                    stringResource(R.string.settings_floating_auto_dock_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.alpha(if (floatingSnapEdge) 1f else 0.4f)
+                )
+                }
+                }
+
+                SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_floating_dock_inset) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    stringResource(R.string.settings_floating_dock_inset_format, floatingDockInset.toInt()),
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.alpha(if (floatingSnapEdge) 1f else 0.4f)
+                )
+                Slider(
+                    value = floatingDockInset,
+                    onValueChange = { floatingDockInset = it },
+                    valueRange = 0f..40f,
+                    steps = 39,
+                    enabled = floatingSnapEdge
+                )
+                OutlinedButton(
+                    onClick = { insetPreviewActive = !insetPreviewActive },
+                    enabled = floatingSnapEdge,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(stringResource(
+                        if (insetPreviewActive) R.string.settings_floating_dock_inset_preview_stop
+                        else R.string.settings_floating_dock_inset_preview_start
+                    ))
+                }
+                Text(
+                    stringResource(R.string.settings_floating_dock_inset_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.alpha(if (floatingSnapEdge) 1f else 0.4f)
+                )
+                }
+                }
+            }
+
+            // —— 弧菜单按钮顺序 ——
+            }
+
+            }
+
+            item(key = SectionKeys.ARC_MENU) {
+            SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_ARC_MENU) {
+            SectionCard(
+                title = stringResource(R.string.settings_section_arc_menu),
+            ) {
+                Text(
+                    stringResource(R.string.settings_arc_menu_page_size, arcMenuPageSize.toInt()),
+                    style = MaterialTheme.typography.labelMedium
+                )
+                Slider(
+                    value = arcMenuPageSize,
+                    onValueChange = { arcMenuPageSize = it.roundToInt().coerceIn(
+                        FloatingMenu.MIN_PAGE_SIZE,
+                        FloatingMenu.MAX_PAGE_SIZE
+                    ).toFloat() },
+                    onValueChangeFinished = {
+                        scope.launch { viewModel.saveArcMenuPageSize(arcMenuPageSize.toInt()) }
+                    },
+                    valueRange = FloatingMenu.MIN_PAGE_SIZE.toFloat()..FloatingMenu.MAX_PAGE_SIZE.toFloat(),
+                    steps = FloatingMenu.MAX_PAGE_SIZE - FloatingMenu.MIN_PAGE_SIZE - 1
+                )
+                Text(
+                    stringResource(R.string.settings_arc_menu_page_size_desc),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    stringResource(
+                        R.string.settings_arc_menu_order_desc,
+                        arcMenuPageSize.toInt()
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                ArcMenuOrderEditor(
+                    order = menuOrder,
+                    currentSkill = currentSkill,
+                    onReorder = { next ->
+                        menuOrder = next
+                        scope.launch { viewModel.saveArcMenuOrder(next) }
+                    }
+                )
             }
 
             // —— 开发者诊断 ——
@@ -7480,10 +7495,10 @@ internal val SETTINGS_SECTION_KEYS_IN_ORDER = listOf(
     SectionKeys.OCR,
     SectionKeys.TEXT_ORIENTATION,
     SectionKeys.OVERLAY,
-    SectionKeys.FLOATING,
-    SectionKeys.ARC_MENU,
     SectionKeys.WORD_SELECT,
     SectionKeys.TRIGGER,
+    SectionKeys.FLOATING,
+    SectionKeys.ARC_MENU,
     SectionKeys.DEVELOPER,
     SectionKeys.NETWORK,
 )

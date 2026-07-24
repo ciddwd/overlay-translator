@@ -1,5 +1,6 @@
 package com.gameocr.app.ui
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -16,14 +17,17 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
@@ -57,12 +61,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -70,17 +76,21 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.gameocr.app.BuildConfig
 import com.gameocr.app.R
 import com.gameocr.app.capture.CaptureRegion
 import com.gameocr.app.capture.MediaProjectionRequestActivity
 import com.gameocr.app.capture.RegionPickerActivity
 import com.gameocr.app.data.SettingsRepository
+import com.gameocr.app.overlay.FloatingMenuTourPalette
 import com.gameocr.app.rom.RomHelper
 import com.gameocr.app.service.CaptureService
 import com.gameocr.app.service.CaptureServiceState
 import com.gameocr.app.shizuku.ShizukuCapabilities
 import com.gameocr.app.shizuku.ShizukuManager
+import com.gameocr.app.update.UpdateChecker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.delay
@@ -105,7 +115,23 @@ fun MainScreen(
     var startMode by remember { mutableStateOf(StartMode.MEDIA_PROJECTION) }
     var userOverrodeMode by remember { mutableStateOf(false) }
     var showClearRegionDialog by remember { mutableStateOf(false) }
+    var showSharePrompt by rememberSaveable { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
+    val shareSubject = stringResource(R.string.settings_about_share_subject)
+    val shareText = stringResource(
+        R.string.settings_about_share_text,
+        UpdateChecker.RELEASE_PAGE_URL,
+        GITHUB_URL,
+    )
+    val shareChooserTitle = stringResource(R.string.settings_about_share_chooser)
+    val onShareApp: () -> Unit = {
+        launchAppShare(
+            context = context,
+            subject = shareSubject,
+            text = shareText,
+            chooserTitle = shareChooserTitle,
+        )
+    }
 
     // 主屏一进就触发自动检查更新。autoCheckIfDue 内部 1h 节流，频繁进出主屏不会浪费 API
      // 额度；只有 hasUpdate（且不是用户已跳过的版本）时才弹 dialog，已最新 / 失败 静默不打扰。
@@ -113,7 +139,19 @@ fun MainScreen(
     val updateVm: com.gameocr.app.update.UpdateViewModel = hiltViewModel()
     val topUpdateState by updateVm.state.collectAsState()
     val autoChecking by updateVm.autoChecking.collectAsState()
-    LaunchedEffect(Unit) { updateVm.autoCheckIfDue() }
+    LaunchedEffect(Unit) {
+        updateVm.autoCheckIfDue()
+        if (!viewModel.recordMainScreenEntryForSharePrompt()) return@LaunchedEffect
+
+        delay(SHARE_PROMPT_DELAY_MS)
+        val updateBlocksPrompt =
+            updateVm.autoChecking.value ||
+                updateVm.state.value !is com.gameocr.app.update.UpdateViewModel.State.Idle
+        if (updateBlocksPrompt) return@LaunchedEffect
+
+        viewModel.markSharePromptShown()
+        showSharePrompt = true
+    }
     // dialog 必须挂在 MainScreen 顶层，否则用户没滚到"关于"卡看不到自动检测的弹窗。
     // 0.3.0 及之前 dialog 只在 AboutContent 内挂载，导致"自动检测确实跑了但用户感觉没反应"。
     UpdateResultDialog(
@@ -202,6 +240,16 @@ fun MainScreen(
                     Text(stringResource(R.string.main_clear_region_dialog_cancel))
                 }
             }
+        )
+    }
+
+    if (showSharePrompt) {
+        SharePromptDialog(
+            onShare = {
+                showSharePrompt = false
+                onShareApp()
+            },
+            onDecline = { showSharePrompt = false },
         )
     }
 
@@ -456,7 +504,10 @@ fun MainScreen(
 
             // 关于：放在主屏底部，方便用户一眼看到版本号 / GitHub
             ActionCard(title = stringResource(R.string.settings_section_about)) {
-                AboutContent(onOpenLegalNotices = onOpenLegalNotices)
+                AboutContent(
+                    onOpenLegalNotices = onOpenLegalNotices,
+                    onShareApp = onShareApp,
+                )
             }
 
             // 底部留空
@@ -465,12 +516,16 @@ fun MainScreen(
     }
 }
 
-private const val GITHUB_URL = "https://github.com/ciddwd/overlay-translator"
+internal const val GITHUB_URL = "https://github.com/ciddwd/overlay-translator"
 internal const val QQ_GROUP_NUMBER = "1059655926"
 internal const val QQ_GROUP_URL = "https://qun.qq.com/universal-share/share?ac=1&authKey=%2Fs0%2FaO4mEHsgutzjUnhGIQEWLcAcGPXTefUY2YwdMkPdnHHuB%2FpLZm9hPjcrw6n5&busi_data=eyJncm91cENvZGUiOiIxMDU5NjU1OTI2IiwidG9rZW4iOiJ4b25nS0FvSFQyMko4WjJTMHhGRlIwSnppeVB2eGJCNjFua0FDTGZzNUhEWlY3VkdPcFVaOEdMams0aEY3aFBTIiwidWluIjoiNTcyMjQyOTk4In0%3D&data=j7H7DHUunIEqMXYLZxhTkx-K_LZTTs5aBJS95LT_Y50uQy37d5IiUU2y3gAPcy9CYRzRufvHuTCaSHOQsLTkTw&svctype=4&tempid=h5_group_info"
+private const val SHARE_PROMPT_DELAY_MS = 1_200L
 
 @Composable
-private fun AboutContent(onOpenLegalNotices: () -> Unit) {
+private fun AboutContent(
+    onOpenLegalNotices: () -> Unit,
+    onShareApp: () -> Unit,
+) {
     val context = LocalContext.current
     val updateVm: com.gameocr.app.update.UpdateViewModel = hiltViewModel()
     val updateState by updateVm.state.collectAsState()
@@ -537,6 +592,26 @@ private fun AboutContent(onOpenLegalNotices: () -> Unit) {
     }
 
     Text(
+        text = stringResource(R.string.settings_about_share_label),
+        style = MaterialTheme.typography.labelLarge
+    )
+    Text(
+        text = stringResource(R.string.settings_about_share_summary),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    OutlinedButton(
+        onClick = onShareApp,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Icon(Icons.Default.Share, contentDescription = null)
+        Text(
+            stringResource(R.string.settings_about_share_action),
+            modifier = Modifier.padding(start = 8.dp)
+        )
+    }
+
+    Text(
         text = stringResource(R.string.settings_about_qq_group_label),
         style = MaterialTheme.typography.labelLarge
     )
@@ -564,6 +639,114 @@ private fun AboutContent(onOpenLegalNotices: () -> Unit) {
 
     // 注意：UpdateResultDialog 已提到 MainScreen 顶层（避免自动检测弹窗被关于卡折叠遮住），
     // 这里不再重复挂——同一 ViewModel state，顶层 dialog 也响应"检查更新"按钮触发的 check()。
+}
+
+private fun launchAppShare(
+    context: Context,
+    subject: String,
+    text: String,
+    chooserTitle: String,
+) {
+    runCatching {
+        val sendIntent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, subject)
+            putExtra(Intent.EXTRA_TITLE, subject)
+            putExtra(Intent.EXTRA_TEXT, text)
+        }
+        context.startActivity(
+            Intent.createChooser(sendIntent, chooserTitle)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    }
+}
+
+@Composable
+private fun SharePromptDialog(
+    onShare: () -> Unit,
+    onDecline: () -> Unit,
+) {
+    val palette = FloatingMenuTourPalette.colors(
+        nightMode = MaterialTheme.colorScheme.background.luminance() < 0.5f,
+    )
+    val surfaceColor = Color(palette.surface)
+    val textColor = Color(palette.text)
+    val secondaryTextColor = Color(palette.secondaryText)
+    val accentColor = Color(palette.accent)
+    val actionTextColor = Color(palette.actionText)
+    val borderColor = Color(palette.border)
+
+    Dialog(
+        onDismissRequest = onDecline,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .widthIn(max = 440.dp)
+                .padding(horizontal = 24.dp),
+            shape = RoundedCornerShape(20.dp),
+            color = surfaceColor,
+            contentColor = textColor,
+            border = BorderStroke(1.dp, borderColor),
+            shadowElevation = 16.dp,
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                Surface(
+                    modifier = Modifier.size(44.dp),
+                    shape = CircleShape,
+                    color = borderColor.copy(alpha = 0.24f),
+                    contentColor = accentColor,
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.Share,
+                            contentDescription = null,
+                            modifier = Modifier.size(22.dp),
+                        )
+                    }
+                }
+                Text(
+                    text = stringResource(R.string.main_share_prompt_title),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = textColor,
+                )
+                Text(
+                    text = stringResource(R.string.main_share_prompt_message),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = secondaryTextColor,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    OutlinedButton(
+                        onClick = onDecline,
+                        border = BorderStroke(1.dp, borderColor),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = secondaryTextColor,
+                        ),
+                    ) {
+                        Text(stringResource(R.string.main_share_prompt_decline))
+                    }
+                    Button(
+                        onClick = onShare,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = accentColor,
+                            contentColor = actionTextColor,
+                        ),
+                    ) {
+                        Text(stringResource(R.string.main_share_prompt_confirm))
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -800,9 +983,19 @@ class MainViewModel @Inject constructor(
     private val shizukuManager: ShizukuManager,
     private val shizukuCapabilities: ShizukuCapabilities
 ) : ViewModel() {
+    private var sharePromptEntryRecorded = false
+
     suspend fun currentRegion(): CaptureRegion? = repo.get().captureRegion
     suspend fun clearRegion() {
         repo.update { it.copy(captureRegion = null) }
+    }
+    suspend fun recordMainScreenEntryForSharePrompt(): Boolean {
+        if (sharePromptEntryRecorded) return false
+        sharePromptEntryRecorded = true
+        return repo.recordMainScreenEntryForSharePrompt()
+    }
+    suspend fun markSharePromptShown() {
+        repo.markSharePromptShown()
     }
     fun shizukuAvailability(context: android.content.Context): ShizukuCapabilities.Availability =
         shizukuCapabilities.availability(context)

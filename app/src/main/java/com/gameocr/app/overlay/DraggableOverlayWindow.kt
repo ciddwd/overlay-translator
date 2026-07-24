@@ -34,6 +34,27 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
+internal data class FloatingWindowLockSyncDecision(
+    val locked: Boolean,
+    val pendingLocked: Boolean?,
+)
+
+internal fun resolveFloatingWindowLockSync(
+    currentLocked: Boolean,
+    settingsLocked: Boolean,
+    syncSettingsState: Boolean,
+    pendingLocked: Boolean?,
+): FloatingWindowLockSyncDecision = when {
+    !syncSettingsState ->
+        FloatingWindowLockSyncDecision(currentLocked, pendingLocked)
+    pendingLocked == null ->
+        FloatingWindowLockSyncDecision(settingsLocked, null)
+    pendingLocked == settingsLocked ->
+        FloatingWindowLockSyncDecision(settingsLocked, null)
+    else ->
+        FloatingWindowLockSyncDecision(currentLocked, pendingLocked)
+}
+
 /**
  * 可拖拽 + 可缩放的悬浮窗口外壳。**不拦截窗外触摸**——窗口尺寸 = 内容尺寸（非 MATCH_PARENT）
  * + `FLAG_NOT_TOUCH_MODAL`，下层 app 的 touch 天然透传（Android 12+ untrusted touch 限制只针对
@@ -98,6 +119,7 @@ class DraggableOverlayWindow(
     private var footerView: View? = null
     private var lockButtonView: ImageView? = null
     private var onDismiss: (() -> Unit)? = null
+    @Volatile private var pendingLockedState: Boolean? = null
 
     fun isShown(): Boolean = rootView != null
 
@@ -566,9 +588,10 @@ class DraggableOverlayWindow(
 
     /** 切换锁定状态：更新视图 + 立即写回 [SettingsRepository]，UI 端的开关跟着 settings flow 同步。 */
     private fun toggleLocked() {
-        locked = !locked
+        val newLocked = !locked
+        pendingLockedState = newLocked
+        locked = newLocked
         applyLocked()
-        val newLocked = locked
         ioScope.launch {
             settingsRepository.update { it.copy(floatingWindowLocked = newLocked) }
         }
@@ -910,7 +933,10 @@ class DraggableOverlayWindow(
      *  **线程约束：必须在主线程调用**。末尾会改 rootView.background / rootView.alpha，
      *  View 系统只接受主线程操作。settings flow 默认在 Dispatchers.Default，调用方必须 withContext(Main)
      *  或 mainScope.launch 包一层。 */
-    fun applyFromSettings(s: Settings) {
+    fun applyFromSettings(
+        s: Settings,
+        syncLockedState: Boolean,
+    ) {
         theme = s.overlayTheme
         alpha = s.overlayAlpha
         customBg = s.customBgColor
@@ -922,8 +948,15 @@ class DraggableOverlayWindow(
         initialY = s.floatingWindowY
         widthDp = s.floatingWindowWidthDp.coerceAtLeast(MIN_WIDTH_DP)
         heightDp = s.floatingWindowHeightDp.coerceAtLeast(MIN_HEIGHT_DP)
-        if (locked != s.floatingWindowLocked) {
-            locked = s.floatingWindowLocked
+        val lockDecision = resolveFloatingWindowLockSync(
+            currentLocked = locked,
+            settingsLocked = s.floatingWindowLocked,
+            syncSettingsState = syncLockedState,
+            pendingLocked = pendingLockedState,
+        )
+        pendingLockedState = lockDecision.pendingLocked
+        if (locked != lockDecision.locked) {
+            locked = lockDecision.locked
             if (isShown()) applyLocked()
         }
         // 已显示时刷新 root 背景 + alpha（主题色 / 自定义色 / 边框立即生效）
