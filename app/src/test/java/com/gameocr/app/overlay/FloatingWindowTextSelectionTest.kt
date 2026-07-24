@@ -10,6 +10,34 @@ import org.junit.Test
 class FloatingWindowTextSelectionTest {
 
     @Test
+    fun keyFocusPolicy_tableDriven_onlyFocusesAnActiveUnlockedSelection() {
+        data class Case(
+            val name: String,
+            val locked: Boolean,
+            val selectionActive: Boolean,
+            val expected: Boolean,
+        )
+
+        val cases = listOf(
+            Case("normal unlocked window passes Back through", false, false, false),
+            Case("normal locked window passes Back through", true, false, false),
+            Case("active unlocked selection temporarily owns Back", false, true, true),
+            Case("locking an active selection releases Back", true, true, false),
+        )
+
+        cases.forEach { case ->
+            assertEquals(
+                case.name,
+                case.expected,
+                floatingWindowNeedsKeyFocus(
+                    locked = case.locked,
+                    selectionActive = case.selectionActive,
+                ),
+            )
+        }
+    }
+
+    @Test
     fun selectionPolicy_tableDriven_coversLockAndTextStates() {
         data class Case(
             val name: String,
@@ -138,12 +166,17 @@ class FloatingWindowTextSelectionTest {
                 "setCustomSelectionActionModeCallback",
             ),
             Case(
-                "unlocked state keeps the current window focusable",
+                "normal unlocked state keeps the current window non-focusable",
                 windowSource,
-                "setSelectionWindowFocusable(!locked)",
+                "selectionActive = activeSelectionActionMode != null",
             ),
             Case(
-                "locking restores the non-focusable overlay",
+                "active selection temporarily makes the window focusable",
+                windowSource,
+                "selectionActive = true",
+            ),
+            Case(
+                "ending selection restores the non-focusable overlay",
                 windowSource,
                 "setSelectionWindowFocusable(false)",
             ),

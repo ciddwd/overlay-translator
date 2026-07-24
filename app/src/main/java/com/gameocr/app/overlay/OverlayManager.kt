@@ -401,9 +401,12 @@ class OverlayManager(
      * 批模式翻译（如 DeepL）走这条；流模式走 [prepareFloatingWindow] + [updateFloatingWindowText]。
      */
     fun showFullScreen(pairs: List<Pair<String, String>>) {
-        clearLoading()
-        clear()
-        if (pairs.isEmpty()) return
+        clearBlocksAndLoading()
+        if (pairs.isEmpty()) {
+            clearFloatingWindow()
+            return
+        }
+        floatingStreamingUpdateCounts.clear()
         VerticalDiagnosticLog.i("overlay showFullScreen pairs=${pairs.size} textSizeSp=$textSizeSp mode=$floatingWindowContentMode")
         pairs.forEachIndexed { index, (src, dst) ->
             VerticalDiagnosticLog.i(
@@ -426,9 +429,12 @@ class OverlayManager(
      * 逐段填入。等价于 [showBlocks] 之于 BLOCKS 模式，但内容渲染在悬浮窗里。
      */
     fun prepareFloatingWindow(sources: List<String>) {
-        clearLoading()
-        clear()
-        if (sources.isEmpty()) return
+        clearBlocksAndLoading()
+        if (sources.isEmpty()) {
+            clearFloatingWindow()
+            return
+        }
+        floatingStreamingUpdateCounts.clear()
         VerticalDiagnosticLog.i("overlay prepareFloatingWindow sources=${sources.size} textSizeSp=$textSizeSp mode=$floatingWindowContentMode")
         sources.forEachIndexed { index, source ->
             VerticalDiagnosticLog.i("overlay prepareFloatingWindow #${index + 1} src=${source.toDiagText()}")
@@ -483,6 +489,9 @@ class OverlayManager(
 
     /** 仅悬浮窗口模式有效：是否当前可见。 */
     fun isFloatingWindowShown(): Boolean = floatingWindow.isShown()
+
+    /** 当前悬浮窗口在屏幕坐标系中的边界；用于循环截图后遮蔽自身内容。 */
+    fun currentFloatingWindowBounds(): android.graphics.Rect? = floatingWindow.currentBounds()
 
     /** 循环截图前临时停止/恢复悬浮窗口绘制，不销毁常驻窗口及其内容。 */
     fun setFloatingWindowHiddenForCapture(hidden: Boolean): Boolean =
@@ -1498,15 +1507,9 @@ class OverlayManager(
         }
     }
 
-    fun clear() {
+    private fun clearBlocksAndLoading() {
         clearLoading()
         dismissError()
-        floatingWindow.hide()
-        floatingContentView = null
-        floatingStreamingUpdateCounts.clear()
-        floatingFrameUpdateCoalescers.values.forEach { it.discardPending() }
-        floatingFrameUpdateCoalescers.clear()
-        lastFloatingPairs = null
         val dialog = blocksDialog
         blocksDialog = null
         if (dialog != null) {
@@ -1521,6 +1524,20 @@ class OverlayManager(
         blockFrameUpdateCoalescers.values.forEach { it.discardPending() }
         blockFrameUpdateCoalescers.clear()
         blocksDiagnosticId = null
+    }
+
+    private fun clearFloatingWindow() {
+        floatingWindow.hide()
+        floatingContentView = null
+        floatingStreamingUpdateCounts.clear()
+        floatingFrameUpdateCoalescers.values.forEach { it.discardPending() }
+        floatingFrameUpdateCoalescers.clear()
+        lastFloatingPairs = null
+    }
+
+    fun clear() {
+        clearBlocksAndLoading()
+        clearFloatingWindow()
     }
 
     /**

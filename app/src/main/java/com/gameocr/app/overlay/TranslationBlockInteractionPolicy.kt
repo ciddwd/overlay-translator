@@ -35,3 +35,8 @@ internal fun isTranslationBlockTextActionable(text: String?): Boolean =
 
 internal fun canSelectFloatingWindowText(locked: Boolean, text: String?): Boolean =
     !locked && isTranslationBlockTextActionable(text)
+
+internal fun floatingWindowNeedsKeyFocus(
+    locked: Boolean,
+    selectionActive: Boolean,
+): Boolean = !locked && selectionActive

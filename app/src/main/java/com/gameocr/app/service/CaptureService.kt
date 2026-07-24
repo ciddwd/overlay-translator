@@ -4,7 +4,10 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Matrix
+import android.graphics.Paint
 import android.graphics.Point
 import android.graphics.Rect
 import android.media.projection.MediaProjection
@@ -18,6 +21,7 @@ import androidx.core.app.ServiceCompat
 import com.gameocr.app.R
 import com.gameocr.app.capture.CaptureCoordinateRelation
 import com.gameocr.app.capture.CaptureRegion
+import com.gameocr.app.capture.FloatingWindowCaptureAction
 import com.gameocr.app.capture.LoopFrameChangePolicy
 import com.gameocr.app.capture.LoopFrameFingerprint
 import com.gameocr.app.capture.LoopFrameFingerprintFactory
@@ -41,9 +45,12 @@ import com.gameocr.app.capture.LoopActiveResultDecision
 import com.gameocr.app.capture.LoopIndicatorMode
 import com.gameocr.app.capture.LoopRuntimePolicy
 import com.gameocr.app.capture.MediaProjectionScreenshotter
+import com.gameocr.app.capture.OverlayCaptureRect
 import com.gameocr.app.capture.Screenshotter
 import com.gameocr.app.capture.ShizukuScreenshotter
 import com.gameocr.app.capture.diagnoseCaptureGeometry
+import com.gameocr.app.capture.floatingWindowCaptureAction
+import com.gameocr.app.capture.mapOverlayBoundsToCapture
 import com.gameocr.app.shizuku.ShizukuCapabilities
 import com.gameocr.app.data.LogRepository
 import com.gameocr.app.data.LoopTriggerMode
@@ -1463,6 +1470,7 @@ class CaptureService : Service() {
         var captureAttemptStarted = false
         var captureChromeRestored = false
         var floatingWindowHiddenForCapture = false
+        var floatingWindowBoundsForCapture: OverlayCaptureRect? = null
         fun restoreCaptureChromeOnce(showLoading: Boolean) {
             if (captureChromeRestored) return
             captureChromeRestored = true
@@ -1515,14 +1523,41 @@ class CaptureService : Service() {
                 return
             }
             if (loopMode) {
-                floatingWindowHiddenForCapture = withContext(Dispatchers.Main) {
-                    overlay?.setFloatingWindowHiddenForCapture(hidden = true) == true
+                val loopSettings = settingsRepository.get()
+                val floatingWindowState = withContext(Dispatchers.Main) {
+                    val manager = overlay
+                    val shown = manager?.isFloatingWindowShown() == true
+                    shown to manager?.currentFloatingWindowBounds()
                 }
-                if (floatingWindowHiddenForCapture) {
-                    delay(CAPTURE_CHROME_SETTLE_MS)
+                when (
+                    floatingWindowCaptureAction(
+                        loopMode = true,
+                        renderMode = loopSettings.renderMode,
+                        isFloatingWindowShown = floatingWindowState.first,
+                    )
+                ) {
+                    FloatingWindowCaptureAction.NONE -> Unit
+                    FloatingWindowCaptureAction.HIDE_TEMPORARILY -> {
+                        floatingWindowHiddenForCapture = withContext(Dispatchers.Main) {
+                            overlay?.setFloatingWindowHiddenForCapture(hidden = true) == true
+                        }
+                        if (floatingWindowHiddenForCapture) {
+                            delay(CAPTURE_CHROME_SETTLE_MS)
+                        }
+                    }
+                    FloatingWindowCaptureAction.PRESERVE_AND_MASK -> {
+                        floatingWindowBoundsForCapture = floatingWindowState.second?.let { bounds ->
+                            OverlayCaptureRect(
+                                left = bounds.left,
+                                top = bounds.top,
+                                right = bounds.right,
+                                bottom = bounds.bottom,
+                            )
+                        }
+                    }
                 }
             }
-            val full = shotter.capture()
+            var full = shotter.capture()
             restoreFloatingWindowAfterCapture()
             if (full == null) {
                 // 截屏链路返回 null（MediaProjection token 失效 / Shizuku 调用失败等），
@@ -1537,6 +1572,20 @@ class CaptureService : Service() {
             // 在拿 settings 之前先 rescale region，免得拿到的是旧屏幕方向的坐标。
             restoreCaptureChromeOnce(showLoading = showLoadingAfterScreenshot)
             val screenNow = physicalDisplaySize(this@CaptureService)
+            val captureMask = mapOverlayBoundsToCapture(
+                bounds = floatingWindowBoundsForCapture,
+                overlayWidth = screenNow.width,
+                overlayHeight = screenNow.height,
+                captureWidth = full.width,
+                captureHeight = full.height,
+            )
+            if (captureMask != null) {
+                full = maskFloatingWindowFromCapture(full, captureMask)
+                logVerticalDiag(
+                    diagId,
+                    "floating window preserved during capture and masked bounds=$captureMask"
+                )
+            }
             settingsRepository.rescaleCaptureRegionIfNeeded(screenNow.width, screenNow.height)
             val settings = settingsRepository.get()
             val fullStats = sampleBitmapFrameStats(full)
@@ -2429,6 +2478,30 @@ class CaptureService : Service() {
         val b = region.bottom.coerceIn(0, src.height)
         if (r - l <= 8 || b - t <= 8) return src
         return Bitmap.createBitmap(src, l, t, r - l, b - t)
+    }
+
+    private fun maskFloatingWindowFromCapture(
+        source: Bitmap,
+        bounds: OverlayCaptureRect,
+    ): Bitmap {
+        val target = if (source.isMutable) {
+            source
+        } else {
+            source.copy(Bitmap.Config.ARGB_8888, true) ?: return source
+        }
+        Canvas(target).drawRect(
+            bounds.left.toFloat(),
+            bounds.top.toFloat(),
+            bounds.right.toFloat(),
+            bounds.bottom.toFloat(),
+            Paint().apply {
+                color = Color.WHITE
+                style = Paint.Style.FILL
+                isAntiAlias = false
+            },
+        )
+        if (target !== source) source.recycle()
+        return target
     }
 
     private fun analyzeAdaptiveOverlayStyles(

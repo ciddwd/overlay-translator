@@ -252,6 +252,12 @@ class DraggableOverlayWindow(
             override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
                 if (locked || !isContentSelectable()) return false
                 activeSelectionActionMode = mode
+                setSelectionWindowFocusable(
+                    floatingWindowNeedsKeyFocus(
+                        locked = locked,
+                        selectionActive = true,
+                    ),
+                )
                 menu.add(Menu.NONE, R.id.action_speak_selected_text, 100, speechLabel).apply {
                     setIcon(R.drawable.ic_volume_up)
                     setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
@@ -276,7 +282,10 @@ class DraggableOverlayWindow(
             }
 
             override fun onDestroyActionMode(mode: ActionMode) {
-                if (activeSelectionActionMode === mode) activeSelectionActionMode = null
+                if (activeSelectionActionMode === mode) {
+                    activeSelectionActionMode = null
+                    setSelectionWindowFocusable(false)
+                }
             }
         })
         refreshSelectableTextViews()
@@ -569,7 +578,12 @@ class DraggableOverlayWindow(
      *  锁按钮换实心锁；解锁时全部恢复 + 锁按钮换开锁图标。 */
     private fun applyLocked() {
         if (locked) endActiveSelection()
-        setSelectionWindowFocusable(!locked)
+        setSelectionWindowFocusable(
+            floatingWindowNeedsKeyFocus(
+                locked = locked,
+                selectionActive = activeSelectionActionMode != null,
+            ),
+        )
         refreshSelectableTextViews()
         val vis = if (locked) View.GONE else View.VISIBLE
         headerView?.visibility = vis
