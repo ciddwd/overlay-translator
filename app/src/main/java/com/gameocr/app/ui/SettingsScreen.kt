@@ -648,6 +648,7 @@ fun SettingsScreen(
         mutableStateOf(com.gameocr.app.data.PaddleDetectionProfile.FAST)
     }
     var dbnetAdvancedExpanded by remember { mutableStateOf(false) }
+    var preprocessExpanded by remember { mutableStateOf(false) }
     var showDbnetResetConfirm by remember { mutableStateOf(false) }
     var manualTextOrient by remember { mutableStateOf<com.gameocr.app.ocr.TextOrientation?>(null) }
     var translationOutputFollowRecognition by remember { mutableStateOf(true) }
@@ -4486,6 +4487,44 @@ fun SettingsScreen(
                         )
                     }
                 }
+
+                HorizontalDivider()
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { preprocessExpanded = !preprocessExpanded }
+                        .padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        (if (preprocessExpanded) "▼ " else "▶ ") +
+                            stringResource(R.string.settings_section_preprocess),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                if (preprocessExpanded) {
+                    SwitchRow(
+                        stringResource(R.string.settings_preprocess_upscale),
+                        preUpscale,
+                        helpText = stringResource(R.string.settings_preprocess_upscale_help)
+                    ) { preUpscale = it }
+                    if (cloudOcrUpscaleWarningVisible(ocrEngine, preUpscale)) {
+                        Text(
+                            stringResource(R.string.settings_preprocess_upscale_cloud_warning),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                    SwitchRow(
+                        stringResource(R.string.settings_preprocess_invert),
+                        preInvert
+                    ) { preInvert = it }
+                    SwitchRow(
+                        stringResource(R.string.settings_preprocess_binarize),
+                        preBinarize
+                    ) { preBinarize = it }
+                }
                 } // 关闭 OCR section 内的"灰显 Column"（ocrSectionDisabled 控制 alpha）
             }
             }
@@ -4494,28 +4533,6 @@ fun SettingsScreen(
 
             item(key = SectionKeys.TEXT_ORIENTATION) {
                 textOrientationSection()
-            }
-
-            // —— 图像预处理 ——
-            item(key = SectionKeys.PREPROCESS) {
-            SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_PREPROCESS) {
-            SectionCard(title = stringResource(R.string.settings_section_preprocess)) {
-                SwitchRow(
-                    stringResource(R.string.settings_preprocess_upscale),
-                    preUpscale,
-                    helpText = stringResource(R.string.settings_preprocess_upscale_help)
-                ) { preUpscale = it }
-                if (cloudOcrUpscaleWarningVisible(ocrEngine, preUpscale)) {
-                    Text(
-                        stringResource(R.string.settings_preprocess_upscale_cloud_warning),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
-                SwitchRow(stringResource(R.string.settings_preprocess_invert), preInvert) { preInvert = it }
-                SwitchRow(stringResource(R.string.settings_preprocess_binarize), preBinarize) { preBinarize = it }
-            }
-            }
             }
 
             // —— 显示 ——
@@ -7335,7 +7352,6 @@ private object SectionKeys {
     const val PRESETS = "presets"
     const val OCR = "ocr"
     const val TEXT_ORIENTATION = "text_orientation"
-    const val PREPROCESS = "preprocess"
     const val OVERLAY = "overlay"
     const val FLOATING = "floating"
     const val ARC_MENU = "arc_menu"
@@ -7354,7 +7370,6 @@ internal val SETTINGS_SECTION_KEYS_IN_ORDER = listOf(
     SectionKeys.TTS,
     SectionKeys.OCR,
     SectionKeys.TEXT_ORIENTATION,
-    SectionKeys.PREPROCESS,
     SectionKeys.OVERLAY,
     SectionKeys.FLOATING,
     SectionKeys.ARC_MENU,
@@ -7430,6 +7445,9 @@ private val SEARCH_TARGET_OCR_ENGINE = intArrayOf(
     R.string.settings_search_item_tencent_region,
     R.string.settings_search_item_youdao_ocr,
     R.string.settings_search_item_dbnet_advanced,
+    R.string.settings_search_item_upscale,
+    R.string.settings_search_item_invert,
+    R.string.settings_search_item_binarize,
 )
 private val SEARCH_TARGET_ORIENTATION_DETECTION = intArrayOf(
     R.string.settings_orient_auto_detect_title,
@@ -7439,11 +7457,6 @@ private val SEARCH_TARGET_ORIENTATION_DETECTION = intArrayOf(
 private val SEARCH_TARGET_ORIENTATION_OUTPUT = intArrayOf(
     R.string.settings_translation_output_follow_title,
     R.string.settings_translation_output_layout_label,
-)
-private val SEARCH_TARGET_PREPROCESS = intArrayOf(
-    R.string.settings_search_item_upscale,
-    R.string.settings_search_item_invert,
-    R.string.settings_search_item_binarize,
 )
 private val SEARCH_TARGET_OVERLAY_DISPLAY = intArrayOf(
     R.string.settings_search_item_render_mode,
@@ -7511,7 +7524,6 @@ internal val SETTINGS_SEARCH_TARGET_RES_IDS: Set<Int> = listOf(
     SEARCH_TARGET_OCR_ENGINE,
     SEARCH_TARGET_ORIENTATION_DETECTION,
     SEARCH_TARGET_ORIENTATION_OUTPUT,
-    SEARCH_TARGET_PREPROCESS,
     SEARCH_TARGET_OVERLAY_DISPLAY,
     SEARCH_TARGET_OVERLAY_THEME,
     SEARCH_TARGET_OVERLAY_TEXT,
@@ -7804,9 +7816,9 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
     SearchEntry(SectionKeys.TEXT_ORIENTATION, R.string.settings_text_orientation_section_title, R.string.settings_search_item_orientation_model, listOf("orientation model", "doc orientation", "direction model", "ONNX", "方向模型", "文本方向模型", "模型", "download", "下载", "本地导入", "local import", "导入", "delete", "删除")),
 
     // —— 图像预处理 ——
-    SearchEntry(SectionKeys.PREPROCESS, R.string.settings_section_preprocess, R.string.settings_search_item_upscale, listOf("upscale", "放大", "上采样")),
-    SearchEntry(SectionKeys.PREPROCESS, R.string.settings_section_preprocess, R.string.settings_search_item_invert, listOf("invert", "反色", "暗底白字")),
-    SearchEntry(SectionKeys.PREPROCESS, R.string.settings_section_preprocess, R.string.settings_search_item_binarize, listOf("binarize", "otsu", "二值化")),
+    SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_upscale, listOf("upscale", "放大", "上采样")),
+    SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_invert, listOf("invert", "反色", "暗底白字")),
+    SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_binarize, listOf("binarize", "otsu", "二值化")),
 
     // —— 显示 ——
     SearchEntry(

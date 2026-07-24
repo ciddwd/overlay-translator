@@ -42,18 +42,18 @@ class SettingsLazyLayoutTest {
             Case("tts", 4),
             Case("ocr", 5),
             Case("text_orientation", 6),
-            Case("preprocess", 7),
-            Case("overlay", 8),
-            Case("floating", 9),
-            Case("arc_menu", 10),
-            Case("trigger", 11),
-            Case("developer", 12),
-            Case("network", 13),
+            Case("overlay", 7),
+            Case("floating", 8),
+            Case("arc_menu", 9),
+            Case("trigger", 10),
+            Case("developer", 11),
+            Case("network", 12),
         ).forEach { case ->
             assertEquals(case.key, case.expectedIndex, settingsSectionIndex(case.key))
         }
 
         assertNull("unknown search sections must not jump to the first setting", settingsSectionIndex("missing"))
+        assertNull("preprocess is nested inside OCR", settingsSectionIndex("preprocess"))
         assertEquals(
             "section keys must stay unique",
             SETTINGS_SECTION_KEYS_IN_ORDER.size,
@@ -157,7 +157,6 @@ class SettingsLazyLayoutTest {
                 "tts" -> "TTS"
                 "ocr" -> "OCR"
                 "text_orientation" -> "TEXT_ORIENTATION"
-                "preprocess" -> "PREPROCESS"
                 "overlay" -> "OVERLAY"
                 "floating" -> "FLOATING"
                 "arc_menu" -> "ARC_MENU"
@@ -171,6 +170,83 @@ class SettingsLazyLayoutTest {
 
         cases.forEach { case -> assertTrue(case.name, case.source.contains(case.marker)) }
         assertFalse("the main settings page must not eagerly compose a vertical Column", settings.contains("verticalScroll(scrollState)"))
+    }
+
+    @Test
+    fun preprocessControls_areNestedAndSearchableInsideOcrSection() {
+        val source = sourceFile("src/main/java/com/gameocr/app/ui/SettingsScreen.kt")
+            .readText()
+            .replace("\r\n", "\n")
+        val ocrSection = source
+            .substringAfter("item(key = SectionKeys.OCR)")
+            .substringBefore("item(key = SectionKeys.TEXT_ORIENTATION)")
+        val ocrSearchTargets = source
+            .substringAfter("private val SEARCH_TARGET_OCR_ENGINE")
+            .substringBefore("private val SEARCH_TARGET_ORIENTATION_DETECTION")
+
+        data class Case(
+            val name: String,
+            val settingRes: String,
+            val searchRes: String,
+        )
+        listOf(
+            Case(
+                "upscale",
+                "R.string.settings_preprocess_upscale",
+                "R.string.settings_search_item_upscale",
+            ),
+            Case(
+                "invert",
+                "R.string.settings_preprocess_invert",
+                "R.string.settings_search_item_invert",
+            ),
+            Case(
+                "binarize",
+                "R.string.settings_preprocess_binarize",
+                "R.string.settings_search_item_binarize",
+            ),
+        ).forEach { case ->
+            assertTrue("${case.name} control is not inside OCR", ocrSection.contains(case.settingRes))
+            assertTrue(
+                "${case.name} is missing from the OCR child search target",
+                ocrSearchTargets.contains(case.searchRes),
+            )
+            assertTrue(
+                "${case.name} search entry must route to OCR",
+                source.contains(
+                    "SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, " +
+                        "${case.searchRes},"
+                ),
+            )
+        }
+
+        data class Marker(val name: String, val value: String)
+        listOf(
+            Marker(
+                "collapsed state",
+                "var preprocessExpanded by remember { mutableStateOf(false) }",
+            ),
+            Marker(
+                "expand action",
+                ".clickable { preprocessExpanded = !preprocessExpanded }",
+            ),
+            Marker("expanded content", "if (preprocessExpanded)"),
+            Marker(
+                "cloud upscale warning",
+                "cloudOcrUpscaleWarningVisible(ocrEngine, preUpscale)",
+            ),
+        ).forEach { marker ->
+            assertTrue(marker.name, source.contains(marker.value))
+        }
+
+        listOf(
+            "const val PREPROCESS",
+            "item(key = SectionKeys.PREPROCESS)",
+            "SEARCH_TARGET_PREPROCESS",
+            "SearchEntry(SectionKeys.PREPROCESS",
+        ).forEach { removed ->
+            assertFalse("legacy preprocess section remains: $removed", source.contains(removed))
+        }
     }
 
     @Test
