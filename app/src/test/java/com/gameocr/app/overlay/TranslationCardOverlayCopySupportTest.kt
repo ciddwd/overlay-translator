@@ -34,7 +34,9 @@ class TranslationCardOverlayCopySupportTest {
             Case("all selectable card sections install selected-text speech") {
                 it.countOccurrences("enableSelectionSpeech(") >= 3
             },
-            Case("whole source copy action") { it.contains("copyToClipboard(sourceText)") },
+            Case("whole source copy action follows corrected OCR text") {
+                it.contains("copyToClipboard(currentSource)")
+            },
             Case("whole translation copy action follows latest streamed text") {
                 it.contains("currentTranslation.takeIf") && it.contains("::copyToClipboard")
             },

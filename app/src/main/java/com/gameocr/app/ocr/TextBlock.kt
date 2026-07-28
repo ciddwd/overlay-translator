@@ -14,6 +14,7 @@ data class TextBlock(
     val recognizedLanguage: String? = null,
     val layoutOrientation: TextOrientation? = null,
     val sourceBoxes: List<Rect> = emptyList(),
+    val bubbleGroupId: Int? = null,
 )
 
 internal fun TextBlock.sourceBoxesOrBoundingBox(): List<Rect> =

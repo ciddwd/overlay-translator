@@ -281,7 +281,7 @@ internal suspend fun dumpMangaMaskDebugSet(
         )
     }.orEmpty()
     val guidedRegroupedGroups = detectorGuidedMasks?.let { guided ->
-        BubbleModelRegrouper.regroup(
+        BubbleModelRegrouper.regroupByModelAssignments(
             width = width,
             height = height,
             memberBounds = polygons.map { it.bounds },
@@ -293,14 +293,16 @@ internal suspend fun dumpMangaMaskDebugSet(
                     bottom = ceil(detection.bottom).toInt(),
                 )
             },
-            associations = guidedMemberAssociations,
+            modelByMember = guided.memberDetectionIndices,
             fallbackPadding = cropPaddingPx,
             fallbackGap = bubbleClusterGap,
         )
     }.orEmpty()
     detectorGuidedMasks?.let { guided ->
         timber.log.Timber.i(
-            "Manga guided regroup matched=%d/%d modelGroups=%d fallbackGroups=%d",
+            "Manga guided regroup detectorMatched=%d/%d maskMatched=%d/%d modelGroups=%d fallbackGroups=%d",
+            guided.memberDetectionIndices.count { it != null },
+            guided.memberDetectionIndices.size,
             guidedMemberAssociations.count { it.matched },
             guidedMemberAssociations.size,
             guidedRegroupedGroups.count { it.source == BubbleModelRegrouper.Source.MODEL },

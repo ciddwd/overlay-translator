@@ -314,42 +314,27 @@ class RoutingOcrEngine @Inject constructor(
     }
 
     /**
-     * 阶段 2：把"上下邻接 + 水平区间相交"的两段合成一个段落。
-     * 多轮合并直到稳定（一个气泡 4 行可能要 3 轮）。
+     * 阶段 2：只用不可变的原始行框建立段落，避免累计并集框把密集行拆成奇偶两组。
      */
     private fun mergeParagraph(blocks: List<TextBlock>, params: MergeParams): List<TextBlock> {
         if (blocks.size <= 1) return blocks
-        var current = blocks
-        repeat(10) {
-            val (next, merged) = mergeParagraphOnce(current, params)
-            if (!merged) return current
-            current = next
-        }
-        return current
-    }
-
-    private fun mergeParagraphOnce(blocks: List<TextBlock>, params: MergeParams): Pair<List<TextBlock>, Boolean> {
-        val sorted = blocks.sortedWith(compareBy({ it.boundingBox.top }, { it.boundingBox.left }))
-        val used = BooleanArray(sorted.size)
-        val result = mutableListOf<TextBlock>()
-        var anyMerged = false
-        for (i in sorted.indices) {
-            if (used[i]) continue
-            var acc = sorted[i]
-            used[i] = true
-            for (j in i + 1 until sorted.size) {
-                if (used[j]) continue
-                val adjacent = verticallyAdjacent(acc, sorted[j], params)
-                logVerticalParagraphCandidate(acc, sorted[j], params, adjacent)
-                if (adjacent) {
-                    acc = unionMerge(acc, sorted[j], separator = "\n")
-                    used[j] = true
-                    anyMerged = true
+        val groups = groupHorizontalParagraphRects(
+            rects = blocks.map { it.boundingBox.toMergeDebugRect() },
+            bubbleGroupIds = blocks.map(TextBlock::bubbleGroupId),
+            verticalGapRatio = params.verticalGapRatio,
+            horizontalOverlapRatio = params.horizontalOverlapRatio,
+        )
+        return groups.map { memberIndices ->
+            Timber.tag("OcrMerge").i(
+                "[H] stage2 paragraph immutableGroup members=%s",
+                memberIndices.joinToString(","),
+            )
+            memberIndices
+                .map(blocks::get)
+                .reduce { merged, member ->
+                    unionMerge(merged, member, separator = "\n")
                 }
-            }
-            result.add(acc)
         }
-        return result to anyMerged
     }
 
     private fun unionMerge(a: TextBlock, b: TextBlock, separator: String): TextBlock {
@@ -372,6 +357,7 @@ class RoutingOcrEngine @Inject constructor(
     }
 
     private fun sameLineAdjacent(a: TextBlock, b: TextBlock, params: MergeParams): Boolean {
+        if (!bubbleMergeCompatible(a, b)) return false
         // 左右 normalize：让 ra 总是更左的，rb 总是更右的。否则 unionMerge 后 box 的 right 扩张，
         // 后续比较时 gap = b.left - last.right 会出现严重的负值（-100+），所有竖排日漫这种
         // "右列 top 反而更小、排序后被先处理"的场景全部漏合。
@@ -523,6 +509,7 @@ class RoutingOcrEngine @Inject constructor(
     }
 
     private fun sameColumnAdjacent(a: TextBlock, b: TextBlock, params: MergeParams): Boolean {
+        if (!bubbleMergeCompatible(a, b)) return false
         // 上下 normalize：让 ra 总是更上的，rb 总是更下的；与 sameLineAdjacent 镜像。
         val (ra, rb) = if (a.boundingBox.top <= b.boundingBox.top)
             a.boundingBox to b.boundingBox
@@ -564,7 +551,7 @@ class RoutingOcrEngine @Inject constructor(
     }
 
     /**
-     * 竖排"左右邻接 + 垂直区间相交"判据。与 [verticallyAdjacent] 严格镜像：把"高度"
+     * 竖排"左右邻接 + 垂直区间相交"判据：把横排段落判断里的"高度"
      * 全部换成"宽度"，"水平相交"换成"垂直相交"。
      */
     private fun columnsHorizontallyAdjacent(
@@ -573,6 +560,7 @@ class RoutingOcrEngine @Inject constructor(
         params: MergeParams,
         limits: VerticalColumnMergeLimits
     ): Boolean {
+        if (!bubbleMergeCompatible(a, b)) return false
         val ra = a.boundingBox; val rb = b.boundingBox
         val debug = verticalColumnAdjacencyDebug(ra.toMergeDebugRect(), rb.toMergeDebugRect())
         val rejectReason = verticalColumnMergeRejectReason(debug, limits, params.horizontalOverlapRatio)
@@ -597,79 +585,20 @@ class RoutingOcrEngine @Inject constructor(
             previewForLog(b.text)
         )
         // 左右先 normalize：rR 是右列、rL 是左列
-        // 镜像 verticallyAdjacent 的 "rb.top < ra.bottom - lineH * 0.3"：允许小重叠
+        // 允许相邻竖列发生少量水平重叠。
         return allowed
-        // 同 verticallyAdjacent：stage2 不再做 size ratio limit
+        // stage2 不再做 size ratio limit。
     }
 
-    private fun logVerticalParagraphCandidate(
-        a: TextBlock,
-        b: TextBlock,
-        params: MergeParams,
-        allowed: Boolean
-    ) {
-        val ra = a.boundingBox; val rb = b.boundingBox
-        val lineH = minOf(ra.height().coerceAtLeast(1), rb.height().coerceAtLeast(1))
-        val vGap = rb.top - ra.bottom
-        val maxGap = lineH * params.verticalGapRatio
-        val backtrackLimit = lineH * 0.3f
-        val overlapLeft = maxOf(ra.left, rb.left)
-        val overlapRight = minOf(ra.right, rb.right)
-        val overlapW = overlapRight - overlapLeft
-        val minW = minOf(ra.width(), rb.width()).coerceAtLeast(1)
-        val overlapRatio = overlapW.toFloat() / minW
-        val reason = when {
-            allowed -> "merge"
-            rb.top < ra.bottom - backtrackLimit -> "backtrack"
-            vGap > maxGap -> "gap"
-            overlapW <= 0 -> "noOverlap"
-            overlapRatio < params.horizontalOverlapRatio -> "overlapRatio"
-            else -> "blocked"
-        }
-        Timber.tag("OcrMerge").i(
-            "[H] stage2 paragraph allow=%s reason=%s vGap=%d maxGap=%.1f overlapW=%d minOverlapW=%d " +
-                "overlapRatio=%.2f minOverlapRatio=%.2f backtrackLimit=%.1f upper=%s lower=%s text=%s + %s",
-            allowed,
-            reason,
-            vGap,
-            maxGap,
-            overlapW,
-            1,
-            overlapRatio,
-            params.horizontalOverlapRatio,
-            backtrackLimit,
-            ra.toMergeDebugRect().toLogString(),
-            rb.toMergeDebugRect().toLogString(),
-            previewForLog(a.text),
-            previewForLog(b.text)
-        )
-    }
+    private fun bubbleMergeCompatible(a: TextBlock, b: TextBlock): Boolean =
+        a.bubbleGroupId == b.bubbleGroupId
 
     private fun Rect.toMergeDebugRect(): MergeDebugRect =
         MergeDebugRect(left = left, top = top, right = right, bottom = bottom)
 
-    private fun verticallyAdjacent(a: TextBlock, b: TextBlock, params: MergeParams): Boolean {
-        val ra = a.boundingBox; val rb = b.boundingBox
-        val ha = ra.height().coerceAtLeast(1)
-        val hb = rb.height().coerceAtLeast(1)
-        val lineH = minOf(ha, hb)
-        if (rb.top < ra.bottom - lineH * 0.3f) return false
-        val vGap = rb.top - ra.bottom
-        if (vGap > lineH * params.verticalGapRatio) return false
-        val overlapLeft = maxOf(ra.left, rb.left)
-        val overlapRight = minOf(ra.right, rb.right)
-        val overlapW = overlapRight - overlapLeft
-        if (overlapW <= 0) return false
-        val minW = minOf(ra.width(), rb.width())
-        if (overlapW.toFloat() / minW < params.horizontalOverlapRatio) return false
-        // 注意：不再做 heightRatioLimit 检查——stage2 是跨行/跨列合并，acc 累积后段
-        // 高/段宽天然就远大于单行/单列，再用 ratio 反而会让剩余孤立小列接不进段。
-        return true
-    }
-
     /**
      * 合并算法的 5 个阈值。封装成 data class 方便按 [MergeStrength] 切换三套预设，
-     * 也方便日志 / 单元测试。各字段含义见各 [sameLineAdjacent] / [verticallyAdjacent] 用法。
+     * 也方便日志 / 单元测试。各字段含义见各方向的相邻判断。
      */
     private data class MergeParams(
         val sameLineTopTolerance: Float,
@@ -777,6 +706,77 @@ internal data class MergeDebugRect(
 
     fun toLogString(): String = "($left,$top,$right,$bottom)"
 }
+
+internal fun groupHorizontalParagraphRects(
+    rects: List<MergeDebugRect>,
+    bubbleGroupIds: List<Int?>,
+    verticalGapRatio: Float,
+    horizontalOverlapRatio: Float,
+): List<List<Int>> {
+    require(rects.size == bubbleGroupIds.size)
+    if (rects.isEmpty()) return emptyList()
+
+    val sortedIndices = rects.indices.sortedWith(
+        compareBy(
+            { rects[it].top },
+            { rects[it].left },
+        )
+    )
+    val used = BooleanArray(rects.size)
+    val groups = mutableListOf<List<Int>>()
+    sortedIndices.forEachIndexed { sortedPosition, firstIndex ->
+        if (used[firstIndex]) return@forEachIndexed
+        val members = mutableListOf(firstIndex)
+        used[firstIndex] = true
+        var tailIndex = firstIndex
+        for (candidatePosition in sortedPosition + 1 until sortedIndices.size) {
+            val candidateIndex = sortedIndices[candidatePosition]
+            if (used[candidateIndex]) continue
+            if (
+                horizontalParagraphRectsAdjacent(
+                    first = rects[tailIndex],
+                    second = rects[candidateIndex],
+                    sameBubbleBoundary =
+                        bubbleGroupIds[tailIndex] == bubbleGroupIds[candidateIndex],
+                    verticalGapRatio = verticalGapRatio,
+                    horizontalOverlapRatio = horizontalOverlapRatio,
+                )
+            ) {
+                members += candidateIndex
+                used[candidateIndex] = true
+                tailIndex = candidateIndex
+            }
+        }
+        groups += members
+    }
+    return groups
+}
+
+private fun horizontalParagraphRectsAdjacent(
+    first: MergeDebugRect,
+    second: MergeDebugRect,
+    sameBubbleBoundary: Boolean,
+    verticalGapRatio: Float,
+    horizontalOverlapRatio: Float,
+): Boolean {
+    if (!sameBubbleBoundary) return false
+    val lineHeight = minOf(first.height, second.height).coerceAtLeast(1)
+    val firstCenterY = (first.top + first.bottom) / 2f
+    val secondCenterY = (second.top + second.bottom) / 2f
+    val centerAdvance = secondCenterY - firstCenterY
+    if (centerAdvance < lineHeight * MIN_HORIZONTAL_PARAGRAPH_CENTER_ADVANCE_RATIO) {
+        return false
+    }
+    val verticalGap = second.top - first.bottom
+    if (verticalGap > lineHeight * verticalGapRatio) return false
+    val overlapWidth =
+        minOf(first.right, second.right) - maxOf(first.left, second.left)
+    if (overlapWidth <= 0) return false
+    val minWidth = minOf(first.width, second.width).coerceAtLeast(1)
+    return overlapWidth.toFloat() / minWidth >= horizontalOverlapRatio
+}
+
+private const val MIN_HORIZONTAL_PARAGRAPH_CENTER_ADVANCE_RATIO = 0.25f
 
 internal fun shouldDropVerticalOcrNoise(
     text: String,

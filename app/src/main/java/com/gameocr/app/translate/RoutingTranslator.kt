@@ -31,8 +31,12 @@ class RoutingTranslator @Inject constructor(
     private val hyMt2: HyMt2Translator,
     private val llamaEngineHolder: LlamaEngineHolder,
     private val translationContextResolver: TranslationContextResolver,
+    private val translationMemory: TranslationMemoryService,
 ) : Translator {
     override suspend fun translate(source: String, settings: Settings): String? {
+        translationMemory.recall(source, settings)?.let { memory ->
+            return normalizePlain(memory.correctedTranslation, settings)
+        }
         if (shouldPassthroughNumericTranslation(source)) {
             logNumericPassthrough(stage = "translate", count = 1, total = 1)
             return source
@@ -47,6 +51,10 @@ class RoutingTranslator @Inject constructor(
 
     override fun translateStream(source: String, settings: Settings): Flow<String> =
         flow {
+            translationMemory.recall(source, settings)?.let { memory ->
+                emit(memory.correctedTranslation)
+                return@flow
+            }
             if (shouldPassthroughNumericTranslation(source)) {
                 logNumericPassthrough(stage = "stream", count = 1, total = 1)
                 emit(source)
@@ -106,17 +114,39 @@ class RoutingTranslator @Inject constructor(
         settings: Settings,
         onUpdate: (BatchTranslationUpdate) -> Unit,
     ): List<String?> {
-        val passthroughPlan = planNumericTranslationPassthrough(sources)
+        if (sources.isEmpty()) return emptyList()
+        val memoryMatches = translationMemory.recallBatch(sources, settings)
+        val mergedResults = MutableList<String?>(sources.size) { null }
+        val pendingIndexes = mutableListOf<Int>()
+        val pendingSources = mutableListOf<String>()
+        sources.forEachIndexed { index, source ->
+            val memory = memoryMatches.getOrNull(index)
+            if (memory == null) {
+                pendingIndexes += index
+                pendingSources += source
+            } else {
+                val recalled = normalizePlain(memory.correctedTranslation, settings)
+                mergedResults[index] = recalled
+                onUpdate(BatchTranslationUpdate(index = index, text = recalled, elapsedMs = 0L))
+            }
+        }
+        if (pendingSources.isEmpty()) return mergedResults
+
+        val passthroughPlan = planNumericTranslationPassthrough(pendingSources)
         if (passthroughPlan.passthroughUpdates.isNotEmpty()) {
             logNumericPassthrough(
                 stage = "batch",
                 count = passthroughPlan.passthroughUpdates.size,
                 total = sources.size,
             )
-            passthroughPlan.passthroughUpdates.forEach(onUpdate)
+            passthroughPlan.passthroughUpdates.forEach { update ->
+                val originalIndex = pendingIndexes.getOrNull(update.index) ?: return@forEach
+                mergedResults[originalIndex] = update.text
+                onUpdate(update.copy(index = originalIndex))
+            }
         }
         if (passthroughPlan.translatableSources.isEmpty()) {
-            return passthroughPlan.merge(emptyList())
+            return mergedResults
         }
 
         val enriched = translationContextResolver.enrich(
@@ -127,13 +157,15 @@ class RoutingTranslator @Inject constructor(
             passthroughPlan.translatableSources,
             enriched,
         ) { update ->
-            passthroughPlan.originalIndexFor(update.index)?.let { originalIndex ->
+            passthroughPlan.originalIndexFor(update.index)?.let { pendingIndex ->
+                pendingIndexes.getOrNull(pendingIndex)?.let { originalIndex ->
                 onUpdate(
                     update.copy(
                         index = originalIndex,
                         text = update.text?.let { normalizePlain(it, enriched) },
                     )
                 )
+                }
             }
         }
         val normalizedResults = normalizeBatch(
@@ -141,7 +173,12 @@ class RoutingTranslator @Inject constructor(
             settings = enriched,
             stage = "batch"
         )
-        return passthroughPlan.merge(normalizedResults)
+        passthroughPlan.merge(normalizedResults).forEachIndexed { pendingIndex, text ->
+            pendingIndexes.getOrNull(pendingIndex)?.let { originalIndex ->
+                mergedResults[originalIndex] = text
+            }
+        }
+        return mergedResults
     }
 
     override suspend fun testConnection(settings: Settings): TestResult =
@@ -154,11 +191,21 @@ class RoutingTranslator @Inject constructor(
     override suspend fun ocrAndTranslate(
         bitmap: Bitmap,
         settings: Settings
-    ): List<Pair<TextBlock, String>> =
-        normalizeOcrTranslations(
+    ): List<Pair<TextBlock, String>> {
+        val normalized = normalizeOcrTranslations(
             results = engineFor(settings).ocrAndTranslate(bitmap, settings),
             settings = settings
         )
+        val memoryMatches = translationMemory.recallBatch(
+            sources = normalized.map { it.first.text },
+            settings = settings,
+        )
+        return normalized.mapIndexed { index, pair ->
+            val memory = memoryMatches.getOrNull(index)
+            if (memory == null) pair
+            else pair.first to normalizePlain(memory.correctedTranslation, settings)
+        }
+    }
 
     override suspend fun translateWord(source: String, settings: Settings): WordResult? {
         val enriched = translationContextResolver.enrich(source, settings)

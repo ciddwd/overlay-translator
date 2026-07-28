@@ -26,10 +26,16 @@ internal object LocalBubbleBackgroundRepairer {
         val bounds: IntRect,
         val erasePixels: Int,
         val repairedPixels: Int,
+        val acceptedComponentCount: Int,
         val componentCount: Int,
     ) {
         val workingPixels: Int
             get() = bounds.width * bounds.height
+
+        val fullyRepaired: Boolean
+            get() = componentCount > 0 &&
+                acceptedComponentCount == componentCount &&
+                repairedPixels > 0
     }
 
     data class Result(
@@ -53,6 +59,12 @@ internal object LocalBubbleBackgroundRepairer {
                 totalWorkingPixels.toFloat() / fullFramePixels
             }
     }
+
+    internal fun fullyRepairedModelIndices(crops: List<CropMetric>): Set<Int> =
+        crops.asSequence()
+            .filter(CropMetric::fullyRepaired)
+            .map(CropMetric::modelBubbleIndex)
+            .toSet()
 
     fun repair(
         width: Int,
@@ -144,6 +156,7 @@ internal object LocalBubbleBackgroundRepairer {
                 bounds = cropBounds,
                 erasePixels = erasePixelCount,
                 repairedPixels = localResult.repairedPixelCount,
+                acceptedComponentCount = localResult.acceptedComponentCount,
                 componentCount = localResult.decisions.size,
             )
         }

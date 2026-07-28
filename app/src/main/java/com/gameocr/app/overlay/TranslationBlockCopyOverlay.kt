@@ -81,6 +81,7 @@ class TranslationBlockCopyOverlay(
         settings: Settings,
         onSpeakSourceSelection: TtsPlaybackAction? = null,
         onSpeakTranslationSelection: TtsPlaybackAction? = null,
+        onCorrectTranslation: (() -> Unit)? = null,
     ) {
         dismiss()
         val density = context.resources.displayMetrics.density
@@ -201,10 +202,23 @@ class TranslationBlockCopyOverlay(
             setTextSize(TypedValue.COMPLEX_UNIT_SP, translationSpec.textSizeSp)
             setLineSpacing(2f, 1.08f)
             setTextIsSelectable(true)
-            onSpeakTranslationSelection?.let { action ->
+            if (onSpeakTranslationSelection != null || onCorrectTranslation != null) {
                 enableSelectionSpeech(
                     label = context.getString(R.string.word_card_speak_selection),
-                    onSpeak = action.onStart,
+                    isEnabled = { onSpeakTranslationSelection != null },
+                    correctionLabel = context.getString(R.string.translation_correction_action),
+                    correctionAction = {
+                        onCorrectTranslation?.takeIf {
+                            isTranslationCorrectionActionAvailable(
+                                isFinal = true,
+                                source = sourceText,
+                                translation = translation,
+                            )
+                        }
+                    },
+                    onSpeak = { selected ->
+                        onSpeakTranslationSelection?.onStart?.invoke(selected)
+                    },
                 )
             }
             setPadding(0, (4 * density).toInt(), 0, (8 * density).toInt())

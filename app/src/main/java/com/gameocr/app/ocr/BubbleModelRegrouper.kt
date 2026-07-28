@@ -35,21 +35,44 @@ internal object BubbleModelRegrouper {
         fallbackPadding: Int,
         fallbackGap: Int,
     ): List<Group> {
-        require(width > 0 && height > 0)
-        val associationByMember = arrayOfNulls<BubbleMaskAssociator.Association>(memberBounds.size)
+        val modelByMember = MutableList<Int?>(memberBounds.size) { null }
+        val assigned = BooleanArray(memberBounds.size)
         associations.forEach { association ->
             val memberIndex = association.ocrGroupIndex
             require(memberIndex in memberBounds.indices)
-            require(associationByMember[memberIndex] == null) {
+            require(!assigned[memberIndex]) {
                 "Duplicate association for OCR member $memberIndex"
             }
-            associationByMember[memberIndex] = association
+            assigned[memberIndex] = true
+            modelByMember[memberIndex] = association.modelBubbleIndex
         }
+        return regroupByModelAssignments(
+            width = width,
+            height = height,
+            memberBounds = memberBounds,
+            modelBounds = modelBounds,
+            modelByMember = modelByMember,
+            fallbackPadding = fallbackPadding,
+            fallbackGap = fallbackGap,
+        )
+    }
+
+    fun regroupByModelAssignments(
+        width: Int,
+        height: Int,
+        memberBounds: List<IntRect>,
+        modelBounds: List<IntRect>,
+        modelByMember: List<Int?>,
+        fallbackPadding: Int,
+        fallbackGap: Int,
+    ): List<Group> {
+        require(width > 0 && height > 0)
+        require(modelByMember.size == memberBounds.size)
 
         val membersByModel = linkedMapOf<Int, MutableList<Int>>()
         val fallbackMemberIndices = mutableListOf<Int>()
         memberBounds.indices.forEach { memberIndex ->
-            val modelIndex = associationByMember[memberIndex]?.modelBubbleIndex
+            val modelIndex = modelByMember[memberIndex]
             val usableModelIndex = modelIndex?.takeIf { index ->
                 index in modelBounds.indices && isValid(clamp(modelBounds[index], width, height))
             }

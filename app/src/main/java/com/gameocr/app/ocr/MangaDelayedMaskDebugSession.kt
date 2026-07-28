@@ -233,10 +233,9 @@ internal class MangaDelayedMaskDebugSessionManager {
             textAlign = Paint.Align.CENTER
             style = Paint.Style.FILL
         }
-        val repairedModels = localRepairResult.crops.asSequence()
-            .filter { it.repairedPixels > 0 }
-            .map { it.modelBubbleIndex }
-            .toSet()
+        val repairedModels = LocalBubbleBackgroundRepairer.fullyRepairedModelIndices(
+            localRepairResult.crops,
+        )
         val blockIndicesByModel = linkedMapOf<Int, MutableSet<Int>>()
         delayedMaskResult.decisions.asSequence()
             .filter { it.accepted }

@@ -34,7 +34,6 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -468,7 +467,7 @@ private fun MiniMaxVoiceManagerPageLayer(
     }
 
     pendingCreation?.let { creation ->
-        AlertDialog(
+        CatalystAlertDialog(
             onDismissRequest = { if (!busy) pendingCreation = null },
             title = { Text(stringResource(R.string.settings_tts_minimax_create_confirm_title)) },
             text = { Text(stringResource(R.string.settings_tts_minimax_create_confirm_message)) },
@@ -492,7 +491,7 @@ private fun MiniMaxVoiceManagerPageLayer(
     }
 
     pendingUse?.let { voice ->
-        AlertDialog(
+        CatalystAlertDialog(
             onDismissRequest = { pendingUse = null },
             title = { Text(stringResource(R.string.settings_tts_minimax_voice_use_title)) },
             text = {
@@ -526,7 +525,7 @@ private fun MiniMaxVoiceManagerPageLayer(
     }
 
     pendingDelete?.let { voice ->
-        AlertDialog(
+        CatalystAlertDialog(
             onDismissRequest = { if (!busy) pendingDelete = null },
             title = { Text(stringResource(R.string.settings_tts_minimax_voice_delete_title)) },
             text = {

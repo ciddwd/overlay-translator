@@ -267,6 +267,8 @@ class DraggableOverlayWindow(
         isContentSelectable: () -> Boolean,
         speechLabel: String,
         selectionSpeechAction: () -> ((String) -> Unit)?,
+        correctionLabel: String,
+        selectionCorrectionAction: () -> (() -> Unit)?,
     ) {
         selectableTextViews[textView] = isContentSelectable
         textView.isFocusableInTouchMode = true
@@ -285,22 +287,43 @@ class DraggableOverlayWindow(
                     setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
                     isVisible = selectionSpeechAction() != null && selectedText(textView) != null
                 }
+                menu.add(Menu.NONE, R.id.action_correct_translation, 101, correctionLabel).apply {
+                    setShowAsAction(MenuItem.SHOW_AS_ACTION_IF_ROOM)
+                    isVisible = selectedText(textView) != null &&
+                        selectionCorrectionAction() != null
+                }
                 return true
             }
 
             override fun onPrepareActionMode(mode: ActionMode, menu: Menu): Boolean {
                 menu.findItem(R.id.action_speak_selected_text)?.isVisible =
                     selectionSpeechAction() != null && selectedText(textView) != null
+                menu.findItem(R.id.action_correct_translation)?.isVisible =
+                    selectedText(textView) != null && selectionCorrectionAction() != null
                 return true
             }
 
             override fun onActionItemClicked(mode: ActionMode, item: MenuItem): Boolean {
-                if (item.itemId != R.id.action_speak_selected_text) return false
-                val selected = selectedText(textView) ?: return false
-                val speak = selectionSpeechAction() ?: return false
-                speak(selected)
-                mode.finish()
-                return true
+                return when (item.itemId) {
+                    R.id.action_speak_selected_text -> {
+                        val selected = selectedText(textView) ?: return false
+                        val speak = selectionSpeechAction() ?: return false
+                        speak(selected)
+                        mode.finish()
+                        true
+                    }
+
+                    R.id.action_correct_translation -> {
+                        val action = selectedText(textView)
+                            ?.let { selectionCorrectionAction() }
+                            ?: return false
+                        mode.finish()
+                        action()
+                        true
+                    }
+
+                    else -> false
+                }
             }
 
             override fun onDestroyActionMode(mode: ActionMode) {

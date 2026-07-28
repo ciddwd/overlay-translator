@@ -24,6 +24,7 @@ internal object DetectorGuidedBubbleMaskExtractor {
     data class Result(
         val detections: List<BubbleSegmentationPostprocessor.Detection>,
         val instanceMasks: List<BubbleSegmentationPostprocessor.InstanceMask>,
+        val memberDetectionIndices: List<Int?>,
         val unionMask: BooleanArray,
         val decisions: List<Decision>,
         val durationMs: Long,
@@ -58,6 +59,12 @@ internal object DetectorGuidedBubbleMaskExtractor {
             polygons = polygons,
             detections = boxDetections,
         )
+        val memberDetectionIndices = MutableList<Int?>(polygons.size) { null }
+        membersByDetection.forEach { (detectionIndex, memberIndices) ->
+            memberIndices.forEach { memberIndex ->
+                memberDetectionIndices[memberIndex] = detectionIndex
+            }
+        }
         val scratch = BooleanArray(width * height)
         val unionMask = BooleanArray(width * height)
         val decisions = ArrayList<Decision>(boxDetections.size)
@@ -118,6 +125,7 @@ internal object DetectorGuidedBubbleMaskExtractor {
         return Result(
             detections = modelDetections,
             instanceMasks = instanceMasks,
+            memberDetectionIndices = memberDetectionIndices,
             unionMask = unionMask,
             decisions = decisions,
             durationMs = (System.nanoTime() - startedAtNs) / 1_000_000L,

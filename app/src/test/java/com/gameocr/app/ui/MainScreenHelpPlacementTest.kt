@@ -50,6 +50,70 @@ class MainScreenHelpPlacementTest {
         )
     }
 
+    @Test
+    fun homeCompatibilityRestoration_tableDriven() {
+        val main = sourceFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readText()
+        val settings = sourceFile("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
+        val englishStrings = sourceFile("src/main/res/values/strings.xml").readText()
+        val chineseStrings = sourceFile("src/main/res/values-zh-rCN/strings.xml").readText()
+        val statusCard = main.substring(
+            main.indexOf("private fun StatusCard("),
+            main.indexOf("private fun StatusRow("),
+        )
+        val disabledRegion = main.substring(
+            main.indexOf("BEGIN_DISABLED_SCREENSHOT_REGION"),
+            main.indexOf("END_DISABLED_SCREENSHOT_REGION"),
+        )
+
+        data class Case(val name: String, val actual: Boolean)
+
+        listOf(
+            Case(
+                "capture region code remains preserved inside the disabled block",
+                disabledRegion.contains(
+                    "ActionCard(title = stringResource(R.string.main_section_region))"
+                ),
+            ),
+            Case(
+                "system compatibility is restored to the home screen",
+                main.contains(
+                    "ActionCard(title = stringResource(R.string.main_section_rom_guide))"
+                ),
+            ),
+            Case(
+                "system compatibility is removed from settings",
+                !settings.contains("SectionKeys.SYSTEM_COMPATIBILITY") &&
+                    !settings.contains("SystemCompatibilityGuide()"),
+            ),
+            Case(
+                "battery whitelist is restored to current status",
+                statusCard.contains("R.string.main_status_battery_whitelist"),
+            ),
+            Case(
+                "home compatibility retains the auto-start action",
+                main.contains("RomHelper.autoStartIntents(context)"),
+            ),
+            Case(
+                "home compatibility retains the battery whitelist action",
+                main.contains("RomHelper.batteryWhitelistIntents(context)"),
+            ),
+            Case(
+                "battery whitelist status refreshes when returning to the home screen",
+                main.contains(
+                    "batteryOk = RomHelper.isIgnoringBatteryOptimizations(context)"
+                ),
+            ),
+            Case(
+                "onboarding copy points back to home compatibility",
+                englishStrings.contains(
+                    "System compatibility section on the home screen"
+                ) && chineseStrings.contains("主屏“系统兼容”区域"),
+            ),
+        ).forEach { case ->
+            assertTrue(case.name, case.actual)
+        }
+    }
+
     private fun sourceFile(path: String): File =
         listOf(File(path), File("app", path)).firstOrNull(File::isFile)
             ?: error("Source file not found: $path")

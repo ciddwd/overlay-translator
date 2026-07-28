@@ -30,4 +30,31 @@ class TranslationLanguagePairPolicyTest {
             )
         }
     }
+
+    @Test
+    fun swap_tableDriven_isAtomicAndRejectsNonConcretePairs() {
+        data class Case(
+            val name: String,
+            val source: String,
+            val target: String,
+            val expected: Pair<String, String>?,
+        )
+
+        listOf(
+            Case("normal pair", "ja", "zh-CN", "zh-CN" to "ja"),
+            Case("regional variants", "zh-CN", "zh-TW", "zh-TW" to "zh-CN"),
+            Case("trims language codes", " en ", " ja ", "ja" to "en"),
+            Case("automatic source cannot become target", "auto", "zh-CN", null),
+            Case("automatic target is invalid", "ja", "AUTO", null),
+            Case("same language has nothing to swap", "ja", "JA", null),
+            Case("blank source", " ", "en", null),
+            Case("blank target", "en", "", null),
+        ).forEach { case ->
+            assertEquals(
+                case.name,
+                case.expected,
+                swappedTranslationLanguagePair(case.source, case.target),
+            )
+        }
+    }
 }

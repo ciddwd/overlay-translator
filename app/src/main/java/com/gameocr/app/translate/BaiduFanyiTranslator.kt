@@ -19,6 +19,25 @@ import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
+internal object BaiduFanyiBatchPolicy {
+    private val internalLineBreak = Regex("""[ \t]*[\r\n]+[ \t]*""")
+
+    fun buildQuery(sources: List<String>): String =
+        sources.joinToString("\n") { source ->
+            source.trim().replace(internalLineBreak, " ")
+        }
+
+    fun cacheModel(targetCode: String): String = "baidu-fanyi-v2-$targetCode"
+
+    fun requireResultCount(expected: Int, actual: Int) {
+        if (actual != expected) {
+            throw TranslationException(
+                "Baidu Fanyi result count mismatch: expected=$expected, actual=$actual",
+            )
+        }
+    }
+}
+
 /**
  * 百度翻译开放平台（fanyi-api.baidu.com）。
  *
@@ -53,6 +72,7 @@ class BaiduFanyiTranslator @Inject constructor(
 
         val targetCode = mapLang(settings.targetLang) ?: "zh"
         val sourceCode = mapLang(settings.sourceLang) ?: "auto"
+        val cacheModel = BaiduFanyiBatchPolicy.cacheModel(targetCode)
 
         val result = arrayOfNulls<String>(sources.size)
         val pending = mutableListOf<Int>()
@@ -62,15 +82,17 @@ class BaiduFanyiTranslator @Inject constructor(
                 result[i] = null
                 continue
             }
-            val key = cache.key(t, "baidu-fanyi-$targetCode", targetCode, "")
+            val key = cache.key(t, cacheModel, targetCode, "")
             val hit = cache.get(key, settings)
             if (hit != null) result[i] = hit
             else pending.add(i)
         }
         if (pending.isEmpty()) return result.toList()
 
-        // 多段拼成一个 q：真实换行，FormBody 会负责 URL-encode。
-        val q = pending.joinToString("\n") { sources[it].trim() }
+        // 块内换行先归一为空格，块间用真实换行分隔；FormBody 会负责 URL-encode。
+        val q = BaiduFanyiBatchPolicy.buildQuery(
+            pending.map { index -> sources[index] },
+        )
         val salt = System.currentTimeMillis().toString()
         val sign = md5Hex(settings.baiduFanyiAppId + q + salt + settings.baiduFanyiSecretKey)
 
@@ -104,10 +126,14 @@ class BaiduFanyiTranslator @Inject constructor(
             throw TranslationException("百度翻译 ${parsed.errorCode}: ${parsed.errorMsg ?: "unknown"}")
         }
         val results = parsed.transResult.orEmpty()
+        BaiduFanyiBatchPolicy.requireResultCount(
+            expected = pending.size,
+            actual = results.size,
+        )
         for ((order, idx) in pending.withIndex()) {
             val text = results.getOrNull(order)?.dst?.trim() ?: continue
             result[idx] = text
-            val key = cache.key(sources[idx].trim(), "baidu-fanyi-$targetCode", targetCode, "")
+            val key = cache.key(sources[idx].trim(), cacheModel, targetCode, "")
             cache.put(key, text, settings)
         }
         return result.toList()

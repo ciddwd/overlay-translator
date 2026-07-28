@@ -17,6 +17,7 @@ import android.os.IBinder
 import android.os.SystemClock
 import android.view.Surface
 import android.view.WindowManager
+import android.widget.Toast
 import androidx.core.app.ServiceCompat
 import com.gameocr.app.R
 import com.gameocr.app.capture.CaptureCoordinateRelation
@@ -69,6 +70,9 @@ import com.gameocr.app.data.TranslationPresetCatalog
 import com.gameocr.app.data.translationLanguageCodesConflict
 import com.gameocr.app.data.needsRawBitmap
 import com.gameocr.app.data.Languages
+import com.gameocr.app.glossary.GlossaryTermCategory
+import com.gameocr.app.glossary.GlossaryTermEntity
+import com.gameocr.app.glossary.TranslationGlossaryRepository
 import com.gameocr.app.ocr.BitmapPreprocessor
 import com.gameocr.app.ocr.MangaOcrEngine
 import com.gameocr.app.ocr.MangaDelayedMaskDebugSessionManager
@@ -102,6 +106,9 @@ import com.gameocr.app.overlay.PresetQuickSwitchOverlay
 import com.gameocr.app.overlay.RegionPickerOverlay
 import com.gameocr.app.overlay.TranslationBlockCopyOverlay
 import com.gameocr.app.overlay.TranslationCardOverlay
+import com.gameocr.app.overlay.TranslationCorrectionDraft
+import com.gameocr.app.overlay.TranslationCorrectionOverlay
+import com.gameocr.app.overlay.TranslationCorrectionRequest
 import com.gameocr.app.overlay.TtsPlaybackAction
 import com.gameocr.app.overlay.WordSelectOverlay
 import com.gameocr.app.ui.MainActivity
@@ -109,6 +116,8 @@ import com.gameocr.app.translate.BatchTranslationProgressState
 import com.gameocr.app.translate.BatchTranslationUpdate
 import com.gameocr.app.translate.CrossLineTranslationUnit
 import com.gameocr.app.translate.TranslationException
+import com.gameocr.app.translate.TranslationCorrectionPolicy
+import com.gameocr.app.translate.TranslationMemoryService
 import com.gameocr.app.translate.Translator
 import com.gameocr.app.translate.RoutingTranslator
 import com.gameocr.app.translate.individualTranslationUnits
@@ -206,6 +215,8 @@ class CaptureService : Service() {
     @Inject lateinit var mangaOcrModelInstaller: MangaOcrModelInstaller
     @Inject lateinit var mangaOcrEngine: MangaOcrEngine
     @Inject lateinit var ttsEngine: TtsEngine
+    @Inject lateinit var translationMemoryService: TranslationMemoryService
+    @Inject lateinit var translationGlossaryRepository: TranslationGlossaryRepository
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -222,6 +233,7 @@ class CaptureService : Service() {
     private var wordSelect: WordSelectOverlay? = null
     private var translationCard: TranslationCardOverlay? = null
     private var translationBlockCopyOverlay: TranslationBlockCopyOverlay? = null
+    private var translationCorrectionOverlay: TranslationCorrectionOverlay? = null
 
     private var loopJob: Job? = null
     private var translationRenderJob: Job? = null
@@ -343,6 +355,7 @@ class CaptureService : Service() {
             settingsRepository = settingsRepository,
             ioScope = scope,
             onTranslationBlockDetailRequested = ::showTranslationBlockCopyPanel,
+            onTranslationCorrectionRequested = ::showTranslationCorrection,
             onFloatingWindowDismissed = { ttsEngine.stop() },
         )
         floatingButton = FloatingButtonManager(
@@ -827,6 +840,11 @@ class CaptureService : Service() {
                         onSpeakSource = sourceSpeech,
                         onSpeakTranslation = translationSpeech,
                         onSpeakDictionary = dictionarySpeech,
+                        onCorrectTranslation = { source, translation ->
+                            showTranslationCorrection(
+                                TranslationCorrectionRequest(source, translation)
+                            )
+                        },
                     )
                 }
             }
@@ -897,7 +915,7 @@ class CaptureService : Service() {
                 ).text
             withContext(Dispatchers.Main) {
                 card.updateWordResult(outcome.wordResult)
-                card.updateTranslation(displayedTranslation)
+                card.updateTranslation(displayedTranslation, final = true)
             }
             if (outcome.translationError != null && outcome.wordResult == null) {
                 val msg = getString(
@@ -1152,7 +1170,111 @@ class CaptureService : Service() {
                         role = "block_translation_selection",
                         playbackId = "translation-block:$diagId:translation",
                     ),
+                    onCorrectTranslation = {
+                        showTranslationCorrection(
+                            TranslationCorrectionRequest(source, translation)
+                        )
+                    },
                 )
+            }
+        }
+    }
+
+    private fun showTranslationCorrection(request: TranslationCorrectionRequest) {
+        scope.launch {
+            val settings = settingsRepository.get()
+            val memoryScope = translationMemoryService.currentScope(settings)
+            val suggestGlossary = TranslationCorrectionPolicy.shouldSuggestGlossary(
+                correctedSource = request.observedSource,
+                correctedTranslation = request.translation,
+                scopePackage = memoryScope?.packageName.orEmpty(),
+            )
+            withContext(Dispatchers.Main) {
+                translationBlockCopyOverlay?.dismiss()
+                val editor = translationCorrectionOverlay
+                    ?: TranslationCorrectionOverlay(this@CaptureService).also {
+                        translationCorrectionOverlay = it
+                    }
+                editor.show(
+                    request = request,
+                    scope = memoryScope,
+                    suggestGlossary = suggestGlossary,
+                    onSave = { draft ->
+                        overlay?.applyTranslationCorrection(draft)
+                        translationCard?.applyTranslationCorrection(draft)
+                        persistTranslationCorrection(
+                            draft = draft,
+                            settings = settings,
+                            memoryScope = memoryScope,
+                        )
+                    },
+                )
+            }
+        }
+    }
+
+    private fun persistTranslationCorrection(
+        draft: TranslationCorrectionDraft,
+        settings: Settings,
+        memoryScope: com.gameocr.app.translate.TranslationMemoryScope?,
+    ) {
+        scope.launch {
+            val result = runCatching {
+                var memorySaved = false
+                var glossarySaved = false
+                if (memoryScope != null && draft.rememberTranslation) {
+                    translationMemoryService.remember(
+                        observedSource = draft.observedSource,
+                        correctedSource = draft.correctedSource,
+                        correctedTranslation = draft.correctedTranslation,
+                        settings = settings,
+                        scope = memoryScope,
+                    )
+                    memorySaved = true
+                }
+                if (
+                    memoryScope != null &&
+                    draft.addToGlossary &&
+                    TranslationCorrectionPolicy.shouldSuggestGlossary(
+                        correctedSource = draft.correctedSource,
+                        correctedTranslation = draft.correctedTranslation,
+                        scopePackage = memoryScope.packageName,
+                    )
+                ) {
+                    translationGlossaryRepository.upsert(
+                        GlossaryTermEntity(
+                            scopePackage = memoryScope.packageName,
+                            appLabel = memoryScope.appLabel,
+                            sourceLang = settings.sourceLang,
+                            targetLang = settings.targetLang,
+                            sourceTerm = draft.correctedSource,
+                            targetTerm = draft.correctedTranslation,
+                            category = GlossaryTermCategory.TERM,
+                        )
+                    )
+                    glossarySaved = true
+                }
+                when {
+                    glossarySaved -> getString(
+                        R.string.translation_correction_saved_glossary,
+                        memoryScope?.appLabel.orEmpty(),
+                    )
+                    memorySaved -> getString(
+                        R.string.translation_correction_saved_memory,
+                        memoryScope?.appLabel.orEmpty(),
+                    )
+                    else -> getString(R.string.translation_correction_saved_current)
+                }
+            }
+            withContext(Dispatchers.Main) {
+                val message = result.getOrElse { error ->
+                    Timber.w(error, "Failed to persist translation correction")
+                    getString(
+                        R.string.translation_correction_save_failed,
+                        error.message ?: error.javaClass.simpleName,
+                    )
+                }
+                Toast.makeText(this@CaptureService, message, Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -2894,6 +3016,13 @@ class CaptureService : Service() {
                     "coverage=${String.format(Locale.US, "%.3f", decision.minimumModelCoverage)}"
                 if (diagId != null) logVerticalDiag(diagId, detail) else Timber.i(detail)
             }
+            dump.localRepairResult.crops.forEach { crop ->
+                val detail = "delayed repair model=${crop.modelBubbleIndex} " +
+                    "components=${crop.acceptedComponentCount}/${crop.componentCount} " +
+                    "repairedPixels=${crop.repairedPixels}/${crop.erasePixels} " +
+                    "patchEligible=${crop.fullyRepaired}"
+                if (diagId != null) logVerticalDiag(diagId, detail) else Timber.i(detail)
+            }
             dump.repairResult.decisions
                 .filterNot { it.accepted }
                 .groupingBy { it.reason }
@@ -3939,6 +4068,8 @@ class CaptureService : Service() {
         translationCard = null
         translationBlockCopyOverlay?.dismiss()
         translationBlockCopyOverlay = null
+        translationCorrectionOverlay?.dismiss()
+        translationCorrectionOverlay = null
         ttsEngine.stop()
         screenshotter?.release()
         screenshotter = null

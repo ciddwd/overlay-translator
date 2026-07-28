@@ -11,6 +11,68 @@ import org.junit.Test
 class LocalBubbleBackgroundRepairerTest {
 
     @Test
+    fun `shape patch eligibility requires complete repair for each bubble`() {
+        data class Case(
+            val name: String,
+            val crops: List<LocalBubbleBackgroundRepairer.CropMetric>,
+            val expectedModelIndices: Set<Int>,
+        )
+
+        fun crop(
+            modelIndex: Int,
+            repairedPixels: Int,
+            acceptedComponents: Int,
+            totalComponents: Int,
+        ) = LocalBubbleBackgroundRepairer.CropMetric(
+            modelBubbleIndex = modelIndex,
+            bounds = IntRect(0, 0, 10, 10),
+            erasePixels = 20,
+            repairedPixels = repairedPixels,
+            acceptedComponentCount = acceptedComponents,
+            componentCount = totalComponents,
+        )
+
+        val cases = listOf(
+            Case(
+                name = "complete repair is eligible",
+                crops = listOf(crop(0, repairedPixels = 20, acceptedComponents = 2, totalComponents = 2)),
+                expectedModelIndices = setOf(0),
+            ),
+            Case(
+                name = "partial repair is rejected",
+                crops = listOf(crop(1, repairedPixels = 12, acceptedComponents = 1, totalComponents = 2)),
+                expectedModelIndices = emptySet(),
+            ),
+            Case(
+                name = "complete and partial bubbles are independent",
+                crops = listOf(
+                    crop(2, repairedPixels = 18, acceptedComponents = 2, totalComponents = 2),
+                    crop(3, repairedPixels = 9, acceptedComponents = 1, totalComponents = 2),
+                ),
+                expectedModelIndices = setOf(2),
+            ),
+            Case(
+                name = "zero components are not eligible",
+                crops = listOf(crop(4, repairedPixels = 0, acceptedComponents = 0, totalComponents = 0)),
+                expectedModelIndices = emptySet(),
+            ),
+            Case(
+                name = "zero repaired pixels are not eligible",
+                crops = listOf(crop(5, repairedPixels = 0, acceptedComponents = 1, totalComponents = 1)),
+                expectedModelIndices = emptySet(),
+            ),
+        )
+
+        cases.forEach { case ->
+            assertEquals(
+                case.name,
+                case.expectedModelIndices,
+                LocalBubbleBackgroundRepairer.fullyRepairedModelIndices(case.crops),
+            )
+        }
+    }
+
+    @Test
     fun `crop planner expands content and clips to image and model bounds`() {
         data class Case(
             val name: String,

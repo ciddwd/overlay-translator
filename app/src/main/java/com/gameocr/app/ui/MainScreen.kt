@@ -12,12 +12,16 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.VerticalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -30,7 +34,6 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -60,6 +63,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.lifecycle.Lifecycle
@@ -68,10 +72,16 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -83,7 +93,14 @@ import com.gameocr.app.R
 import com.gameocr.app.capture.CaptureRegion
 import com.gameocr.app.capture.MediaProjectionRequestActivity
 import com.gameocr.app.capture.RegionPickerActivity
+import com.gameocr.app.data.Settings as AppSettings
 import com.gameocr.app.data.SettingsRepository
+import com.gameocr.app.data.TranslationPreset
+import com.gameocr.app.data.TranslationPresetCatalog
+import com.gameocr.app.llm.LlamaEngineHolder
+import com.gameocr.app.ocr.MangaOcrModelInstaller
+import com.gameocr.app.ocr.OrientationModelInstaller
+import com.gameocr.app.ocr.PaddleModelInstaller
 import com.gameocr.app.overlay.FloatingMenuTourPalette
 import com.gameocr.app.rom.RomHelper
 import com.gameocr.app.service.CaptureService
@@ -94,7 +111,11 @@ import com.gameocr.app.update.UpdateChecker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlin.math.abs
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -110,13 +131,25 @@ fun MainScreen(
     var canDrawOverlay by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
     var region by remember { mutableStateOf<CaptureRegion?>(null) }
     var shizukuAvail by remember { mutableStateOf(ShizukuCapabilities.Availability.NOT_INSTALLED) }
-    var batteryOk by remember { mutableStateOf(false) }
+    var batteryOk by remember {
+        mutableStateOf(RomHelper.isIgnoringBatteryOptimizations(context))
+    }
     val serviceRunning by CaptureServiceState.running.collectAsState()
+    val appSettings by viewModel.settings.collectAsState(initial = null)
+    val unsavedPresetName = stringResource(R.string.settings_translation_preset_unsaved_name)
+    val presetPlans = remember(appSettings, unsavedPresetName) {
+        appSettings?.let { presetCarouselPlans(it, unsavedPresetName) }
+    }
+    val presets = presetPlans?.presets.orEmpty()
+    var presetModelIssues by remember {
+        mutableStateOf<Map<String, List<TranslationPresetModelIssue>>?>(null)
+    }
     var startMode by remember { mutableStateOf(StartMode.MEDIA_PROJECTION) }
     var userOverrodeMode by remember { mutableStateOf(false) }
     var showClearRegionDialog by remember { mutableStateOf(false) }
     var showSharePrompt by rememberSaveable { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
+    val presetNotReadyMessage = stringResource(R.string.main_preset_models_not_ready_message)
     val shareSubject = stringResource(R.string.settings_about_share_subject)
     val shareText = stringResource(
         R.string.settings_about_share_text,
@@ -131,6 +164,9 @@ fun MainScreen(
             text = shareText,
             chooserTitle = shareChooserTitle,
         )
+    }
+    LaunchedEffect(presets) {
+        presetModelIssues = viewModel.presetModelIssues(presets)
     }
 
     // 主屏一进就触发自动检查更新。autoCheckIfDue 内部 1h 节流，频繁进出主屏不会浪费 API
@@ -195,25 +231,24 @@ fun MainScreen(
     }
 
     val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
+    DisposableEffect(lifecycleOwner, presets) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 scope.launch {
                     canDrawOverlay = Settings.canDrawOverlays(context)
                     region = viewModel.currentRegion()
                     shizukuAvail = viewModel.shizukuAvailability(context)
-                    // 国产 ROM 在用户点"允许"后，PowerManager 白名单状态向 caller
-                    // 传播有几百毫秒延迟，ON_RESUME 那一刻常读到旧值。短轮询命中即停。
                     batteryOk = RomHelper.isIgnoringBatteryOptimizations(context)
                     if (!batteryOk) {
                         repeat(5) {
-                            delay(200)
-                            if (RomHelper.isIgnoringBatteryOptimizations(context)) {
-                                batteryOk = true
-                                return@launch
+                            if (!batteryOk) {
+                                delay(200)
+                                batteryOk =
+                                    RomHelper.isIgnoringBatteryOptimizations(context)
                             }
                         }
                     }
+                    presetModelIssues = viewModel.presetModelIssues(presets)
                 }
             }
         }
@@ -222,7 +257,7 @@ fun MainScreen(
     }
 
     if (showClearRegionDialog) {
-        AlertDialog(
+        CatalystAlertDialog(
             onDismissRequest = { showClearRegionDialog = false },
             title = { Text(stringResource(R.string.main_clear_region_dialog_title)) },
             text = { Text(stringResource(R.string.main_clear_region_dialog_msg)) },
@@ -290,12 +325,26 @@ fun MainScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             // 状态卡
-            StatusCard(
+            StatusPresetCarousel(
                 canDrawOverlay = canDrawOverlay,
                 region = region,
                 shizukuAvail = shizukuAvail,
                 batteryOk = batteryOk,
-                serviceRunning = serviceRunning
+                serviceRunning = serviceRunning,
+                presets = presets,
+                activePresetId = presetPlans?.currentPresetId.orEmpty(),
+                modelIssuesByPreset = presetModelIssues,
+                onPresetSelected = { preset ->
+                    scope.launch {
+                        if (!viewModel.applyTranslationPreset(preset.id)) {
+                            presetModelIssues = viewModel.presetModelIssues(presets)
+                            snackbarHostState.showSnackbar(presetNotReadyMessage)
+                        }
+                    }
+                },
+                onPresetBlocked = {
+                    scope.launch { snackbarHostState.showSnackbar(presetNotReadyMessage) }
+                },
             )
 
             // 主操作：截屏服务
@@ -443,7 +492,8 @@ fun MainScreen(
                 }
             }
 
-            // 区域
+            // 截屏区域入口暂时隐藏；按产品要求保留完整代码，便于后续恢复。
+            /* BEGIN_DISABLED_SCREENSHOT_REGION
             ActionCard(title = stringResource(R.string.main_section_region)) {
                 OutlinedButton(
                     modifier = Modifier.fillMaxWidth(),
@@ -475,6 +525,7 @@ fun MainScreen(
                     ) { Text(stringResource(R.string.main_btn_clear_region)) }
                 }
             }
+            END_DISABLED_SCREENSHOT_REGION */
 
             // 系统兼容：自启动 + 电池白名单是两件事，拆成两个按钮分别引导。
             // 电池白名单可通过 PowerManager 检测当前状态，已加入时按钮显示已开启并禁用，
@@ -490,7 +541,10 @@ fun MainScreen(
                     enabled = !batteryOk,
                     modifier = Modifier.fillMaxWidth(),
                     onClick = {
-                        RomHelper.launchFirstAvailable(context, RomHelper.batteryWhitelistIntents(context))
+                        RomHelper.launchFirstAvailable(
+                            context,
+                            RomHelper.batteryWhitelistIntents(context)
+                        )
                     }
                 ) {
                     Text(
@@ -762,38 +816,53 @@ private fun UpdateResultDialog(
     when (state) {
         is com.gameocr.app.update.UpdateViewModel.State.Loaded -> {
             val info = state.info
-            AlertDialog(
+            CatalystAlertDialog(
+                modifier = Modifier.testTag(UPDATE_DIALOG_TAG),
                 onDismissRequest = onDismiss,
+                contentScrollable = false,
                 title = {
-                    Text(stringResource(
-                        if (info.hasUpdate) R.string.update_dialog_title_new
-                        else R.string.update_dialog_title_uptodate
-                    ))
+                    Text(
+                        text = stringResource(
+                            if (info.hasUpdate) R.string.update_dialog_title_new
+                            else R.string.update_dialog_title_uptodate
+                        ),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
                 },
                 text = {
                     Column {
-                        Text(stringResource(
-                            R.string.update_dialog_versions_format,
-                            info.currentVersion, info.latestVersion
-                        ))
+                        Text(
+                            text = stringResource(
+                                R.string.update_dialog_versions_format,
+                                info.currentVersion,
+                                info.latestVersion,
+                            ),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                         if (info.hasUpdate && !info.changelog.isNullOrBlank()) {
                             Text(
                                 text = info.changelog,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(top = 8.dp)
+                                modifier = Modifier
+                                    .weight(1f, fill = false)
+                                    .padding(top = 8.dp)
+                                    .verticalScroll(rememberScrollState())
+                                    .testTag(UPDATE_DIALOG_RELEASE_NOTES_TAG)
                             )
                         }
                     }
                 },
                 confirmButton = {
                     if (info.hasUpdate) {
-                        TextButton(onClick = {
+                        Button(onClick = {
                             // 有 APK 直链就走直链让浏览器 / 系统下载器直接下；否则跳 release 页
                             onOpenRelease(info.apkUrl ?: info.releaseUrl)
                         }) { Text(stringResource(R.string.update_dialog_btn_download)) }
                     } else {
-                        TextButton(onClick = onDismiss) {
+                        Button(onClick = onDismiss) {
                             Text(stringResource(R.string.update_dialog_btn_ok))
                         }
                     }
@@ -814,7 +883,7 @@ private fun UpdateResultDialog(
             )
         }
         is com.gameocr.app.update.UpdateViewModel.State.Failed -> {
-            AlertDialog(
+            CatalystAlertDialog(
                 onDismissRequest = onDismiss,
                 title = { Text(stringResource(R.string.update_dialog_title_failed)) },
                 text = {
@@ -836,16 +905,93 @@ private fun UpdateResultDialog(
     }
 }
 
+internal const val UPDATE_DIALOG_TAG = "update_dialog"
+internal const val UPDATE_DIALOG_RELEASE_NOTES_TAG = "update_dialog_release_notes"
+
+@Composable
+private fun StatusPresetCarousel(
+    canDrawOverlay: Boolean,
+    region: CaptureRegion?,
+    shizukuAvail: ShizukuCapabilities.Availability,
+    batteryOk: Boolean,
+    serviceRunning: Boolean,
+    presets: List<TranslationPreset>,
+    activePresetId: String,
+    modelIssuesByPreset: Map<String, List<TranslationPresetModelIssue>>?,
+    onPresetSelected: (TranslationPreset) -> Unit,
+    onPresetBlocked: () -> Unit,
+) {
+    val pagerState = rememberPagerState(pageCount = { STATUS_PRESET_PAGE_COUNT })
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(196.dp),
+    ) {
+        VerticalPager(
+            state = pagerState,
+            modifier = Modifier.fillMaxSize(),
+            pageSpacing = 12.dp,
+        ) { page ->
+            when (page) {
+                STATUS_PAGE -> StatusCard(
+                    canDrawOverlay = canDrawOverlay,
+                    region = region,
+                    shizukuAvail = shizukuAvail,
+                    batteryOk = batteryOk,
+                    serviceRunning = serviceRunning,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                PRESET_PAGE -> PresetCarouselCard(
+                    presets = presets,
+                    activePresetId = activePresetId,
+                    modelIssuesByPreset = modelIssuesByPreset,
+                    onPresetSelected = onPresetSelected,
+                    onPresetBlocked = onPresetBlocked,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+        Column(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .padding(end = 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            repeat(STATUS_PRESET_PAGE_COUNT) { page ->
+                Surface(
+                    modifier = Modifier.size(
+                        width = 6.dp,
+                        height = if (page == pagerState.currentPage) 16.dp else 6.dp,
+                    ),
+                    shape = CircleShape,
+                    color = if (page == pagerState.currentPage) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.outlineVariant
+                    },
+                ) {}
+            }
+        }
+    }
+}
+
+private const val STATUS_PRESET_PAGE_COUNT = 2
+private const val STATUS_PAGE = 0
+private const val PRESET_PAGE = 1
+
 @Composable
 private fun StatusCard(
     canDrawOverlay: Boolean,
     region: CaptureRegion?,
     shizukuAvail: ShizukuCapabilities.Availability,
     batteryOk: Boolean,
-    serviceRunning: Boolean
+    serviceRunning: Boolean,
+    modifier: Modifier = Modifier,
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface,
             contentColor = MaterialTheme.colorScheme.onSurface
@@ -892,6 +1038,314 @@ private fun StatusCard(
         }
     }
 }
+
+@Composable
+private fun PresetCarouselCard(
+    presets: List<TranslationPreset>,
+    activePresetId: String,
+    modelIssuesByPreset: Map<String, List<TranslationPresetModelIssue>>?,
+    onPresetSelected: (TranslationPreset) -> Unit,
+    onPresetBlocked: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Column(
+            modifier = Modifier.padding(vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.main_preset_title),
+                modifier = Modifier.padding(horizontal = 16.dp),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            if (presets.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(122.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = stringResource(R.string.main_preset_loading),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            } else {
+                PresetCarousel(
+                    presets = presets,
+                    activePresetId = activePresetId,
+                    modelIssuesByPreset = modelIssuesByPreset,
+                    onPresetSelected = onPresetSelected,
+                    onPresetBlocked = onPresetBlocked,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PresetCarousel(
+    presets: List<TranslationPreset>,
+    activePresetId: String,
+    modelIssuesByPreset: Map<String, List<TranslationPresetModelIssue>>?,
+    onPresetSelected: (TranslationPreset) -> Unit,
+    onPresetBlocked: () -> Unit,
+) {
+    val presetIds = remember(presets) { presets.map(TranslationPreset::id) }
+    val initialIndex = remember(presetIds, activePresetId) {
+        presetCarouselActiveIndex(presetIds, activePresetId)
+    }
+    val pageCount = presetCarouselPageCount(presets.size)
+    val initialPage = remember(presetIds, initialIndex) {
+        presetCarouselInitialPage(presets.size, initialIndex)
+    }
+    val pagerState = rememberPagerState(initialPage = initialPage) { pageCount }
+    val scope = rememberCoroutineScope()
+    val density = LocalDensity.current.density
+    var userScrollObserved by remember(pagerState) { mutableStateOf(false) }
+
+    LaunchedEffect(pagerState, presetIds, activePresetId, modelIssuesByPreset) {
+        snapshotFlow { pagerState.isScrollInProgress to pagerState.settledPage }
+            .distinctUntilChanged()
+            .collect { (scrolling, settledPage) ->
+                if (scrolling) {
+                    userScrollObserved = true
+                } else if (userScrollObserved) {
+                    userScrollObserved = false
+                    presetCarouselItemIndex(settledPage, presets.size)?.let { index ->
+                        val preset = presets[index]
+                        val modelIssues = modelIssuesByPreset?.get(preset.id)
+                        if (presetCarouselCanApply(modelIssues)) {
+                            if (preset.id != activePresetId) onPresetSelected(preset)
+                        } else {
+                            onPresetBlocked()
+                        }
+                    }
+                }
+            }
+    }
+
+    LaunchedEffect(activePresetId, presetIds) {
+        val targetIndex = presetIds.indexOf(activePresetId)
+        if (targetIndex >= 0) {
+            val targetPage = presetCarouselNearestPage(
+                currentPage = pagerState.settledPage,
+                itemCount = presets.size,
+                targetIndex = targetIndex,
+            )
+            if (targetPage != pagerState.settledPage) pagerState.scrollToPage(targetPage)
+        }
+    }
+
+    HorizontalPager(
+        state = pagerState,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(140.dp),
+        contentPadding = PaddingValues(horizontal = 46.dp),
+        pageSpacing = 12.dp,
+        verticalAlignment = Alignment.CenterVertically,
+    ) { page ->
+        val preset = presets[requireNotNull(presetCarouselItemIndex(page, presets.size))]
+        val pageOffset = (
+            (page - pagerState.currentPage) - pagerState.currentPageOffsetFraction
+        ).coerceIn(-1f, 1f)
+        val centered = page == pagerState.settledPage
+        val modelIssues = modelIssuesByPreset?.get(preset.id)
+        val canApply = presetCarouselCanApply(modelIssues)
+        val selected = presetCarouselIsApplied(
+            presetId = preset.id,
+            activePresetId = activePresetId,
+            modelIssues = modelIssues,
+        )
+        val pivotX = when {
+            pageOffset < 0f -> 1f
+            pageOffset > 0f -> 0f
+            else -> 0.5f
+        }
+
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(132.dp)
+                .graphicsLayer {
+                    rotationY = presetCarouselOutwardRotation(pageOffset)
+                    scaleX = presetCarouselScale(pageOffset)
+                    scaleY = presetCarouselScale(pageOffset)
+                    alpha = 1f - (abs(pageOffset) * 0.22f)
+                    cameraDistance = 14f * density
+                    transformOrigin = TransformOrigin(pivotX, 0.5f)
+                }
+                .clickable {
+                    if (centered) {
+                        when {
+                            !canApply -> onPresetBlocked()
+                            !selected -> onPresetSelected(preset)
+                        }
+                    } else {
+                        scope.launch { pagerState.animateScrollToPage(page) }
+                    }
+                },
+            colors = CardDefaults.cardColors(
+                containerColor = if (selected) {
+                    MaterialTheme.colorScheme.primaryContainer
+                } else {
+                    MaterialTheme.colorScheme.surfaceVariant
+                },
+                contentColor = if (selected) {
+                    MaterialTheme.colorScheme.onPrimaryContainer
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            ),
+            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+            border = BorderStroke(
+                width = 1.dp,
+                color = if (selected) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.outlineVariant
+                },
+            ),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                horizontalAlignment = Alignment.Start,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Text(
+                    text = translationPresetDisplayName(preset),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (selected) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
+                    maxLines = mainTranslationPresetNameMaxLines(preset.id),
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = translationPresetSummary(preset),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 4,
+                )
+                if (modelIssuesByPreset != null && !canApply) {
+                    Text(
+                        text = stringResource(R.string.main_preset_models_not_ready),
+                        modifier = Modifier.padding(top = 2.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        maxLines = 1,
+                    )
+                }
+            }
+        }
+    }
+}
+
+internal data class PresetCarouselPlans(
+    val presets: List<TranslationPreset>,
+    val currentPresetId: String,
+)
+
+internal fun mainTranslationPresetNameMaxLines(presetId: String): Int =
+    if (TranslationPresetCatalog.isBuiltIn(presetId)) 1 else 2
+
+internal fun presetCarouselPlans(
+    settings: AppSettings,
+    unsavedPresetName: String,
+): PresetCarouselPlans {
+    val savedPresets = TranslationPresetCatalog.all(settings.translationPresets)
+        .filterNot { it.id == TranslationPresetCatalog.UNSAVED_DRAFT_ID }
+    val settingsHash = TranslationPresetCatalog.hashForSettings(settings)
+    val matchingPreset = savedPresets.firstOrNull {
+        it.id == settings.activeTranslationPresetId &&
+            TranslationPresetCatalog.matchesHash(it, settingsHash)
+    } ?: savedPresets.firstOrNull {
+        TranslationPresetCatalog.matchesHash(it, settingsHash)
+    }
+    if (matchingPreset != null) {
+        return PresetCarouselPlans(
+            presets = savedPresets,
+            currentPresetId = matchingPreset.id,
+        )
+    }
+
+    val draft = TranslationPresetCatalog.fromSettings(
+        id = TranslationPresetCatalog.UNSAVED_DRAFT_ID,
+        name = unsavedPresetName,
+        shortName = unsavedPresetName.take(8),
+        settings = settings,
+    )
+    return PresetCarouselPlans(
+        presets = listOf(draft) + savedPresets,
+        currentPresetId = draft.id,
+    )
+}
+
+internal fun presetCarouselPageCount(itemCount: Int): Int = when {
+    itemCount <= 0 -> 0
+    itemCount == 1 -> 1
+    else -> Int.MAX_VALUE
+}
+
+internal fun presetCarouselActiveIndex(presetIds: List<String>, activePresetId: String): Int =
+    presetIds.indexOf(activePresetId).takeIf { it >= 0 } ?: 0
+
+internal fun presetCarouselItemIndex(page: Int, itemCount: Int): Int? =
+    itemCount.takeIf { it > 0 }?.let { Math.floorMod(page, it) }
+
+internal fun presetCarouselCanApply(modelIssues: List<TranslationPresetModelIssue>?): Boolean =
+    modelIssues?.let(::translationPresetCanApply) == true
+
+internal fun presetCarouselIsApplied(
+    presetId: String,
+    activePresetId: String,
+    modelIssues: List<TranslationPresetModelIssue>?,
+): Boolean = presetId == activePresetId && presetCarouselCanApply(modelIssues)
+
+internal fun presetCarouselInitialPage(itemCount: Int, activeIndex: Int): Int {
+    if (itemCount <= 1) return 0
+    val anchor = Int.MAX_VALUE / 2
+    val normalizedIndex = Math.floorMod(activeIndex, itemCount)
+    return anchor - Math.floorMod(anchor, itemCount) + normalizedIndex
+}
+
+internal fun presetCarouselNearestPage(
+    currentPage: Int,
+    itemCount: Int,
+    targetIndex: Int,
+): Int {
+    if (itemCount <= 1) return 0
+    val currentIndex = Math.floorMod(currentPage, itemCount)
+    val normalizedTarget = Math.floorMod(targetIndex, itemCount)
+    val forward = Math.floorMod(normalizedTarget - currentIndex, itemCount)
+    val backward = forward - itemCount
+    val delta = if (abs(backward) < abs(forward)) backward else forward
+    return (currentPage.toLong() + delta)
+        .coerceIn(0L, (Int.MAX_VALUE - 1).toLong())
+        .toInt()
+}
+
+internal fun presetCarouselOutwardRotation(pageOffset: Float, maxRotation: Float = 18f): Float =
+    pageOffset.coerceIn(-1f, 1f) * maxRotation
+
+internal fun presetCarouselScale(pageOffset: Float): Float =
+    1f - abs(pageOffset.coerceIn(-1f, 1f)) * 0.08f
 
 @Composable
 private fun StatusRow(label: String, ok: Boolean, detail: String? = null) {
@@ -984,9 +1438,14 @@ private enum class StartMode { MEDIA_PROJECTION, SHIZUKU }
 class MainViewModel @Inject constructor(
     private val repo: SettingsRepository,
     private val shizukuManager: ShizukuManager,
-    private val shizukuCapabilities: ShizukuCapabilities
+    private val shizukuCapabilities: ShizukuCapabilities,
+    private val llamaEngineHolder: LlamaEngineHolder,
+    private val paddleModelInstaller: PaddleModelInstaller,
+    private val mangaOcrModelInstaller: MangaOcrModelInstaller,
+    private val orientationModelInstaller: OrientationModelInstaller,
 ) : ViewModel() {
     private var sharePromptEntryRecorded = false
+    val settings = repo.settings
 
     suspend fun currentRegion(): CaptureRegion? = repo.get().captureRegion
     suspend fun clearRegion() {
@@ -1003,6 +1462,39 @@ class MainViewModel @Inject constructor(
     fun shizukuAvailability(context: android.content.Context): ShizukuCapabilities.Availability =
         shizukuCapabilities.availability(context)
     suspend fun ensureShizukuReady(): Boolean = shizukuManager.ensureReady()
+    internal suspend fun presetModelIssues(
+        presets: List<TranslationPreset>,
+    ): Map<String, List<TranslationPresetModelIssue>> = withContext(Dispatchers.IO) {
+        presets.associate { preset -> preset.id to modelIssuesFor(preset) }
+    }
+    suspend fun applyTranslationPreset(id: String): Boolean {
+        val preset = TranslationPresetCatalog.find(repo.get().translationPresets, id)
+            ?: return false
+        val canApply = withContext(Dispatchers.IO) {
+            translationPresetCanApply(modelIssuesFor(preset))
+        }
+        if (!canApply) return false
+
+        var applied = false
+        repo.update { current ->
+            val latestPreset = TranslationPresetCatalog.find(current.translationPresets, id)
+                ?: return@update current
+            applied = true
+            latestPreset.applyTo(current).copy(activeTranslationPresetId = latestPreset.id)
+        }
+        return applied
+    }
+    private fun modelIssuesFor(preset: TranslationPreset): List<TranslationPresetModelIssue> =
+        translationPresetModelIssues(
+            preset = preset,
+            localLlmDeviceCapable = llamaEngineHolder.isDeviceCapable(),
+            llmModelReady = llamaEngineHolder::isModelInstalled,
+            paddleModelReady = { version ->
+                paddleModelInstaller.checkInstalled(version) != null
+            },
+            mangaOcrModelReady = mangaOcrModelInstaller.checkInstalled() != null,
+            orientationModelReady = orientationModelInstaller.checkFullyInstalled() != null,
+        )
     /** 透传 Shizuku binder 状态 flow——UI collect 后状态变化立即重算 Availability。 */
     val shizukuBinderAlive: kotlinx.coroutines.flow.StateFlow<Boolean> = shizukuManager.binderAlive
     /** Shizuku 是否拿到了 shell 特权（已配对）。binder 通但未配对时为 false。 */

@@ -66,6 +66,7 @@ class OverlayManager(
     private val settingsRepository: SettingsRepository,
     private val ioScope: CoroutineScope,
     private val onTranslationBlockDetailRequested: (source: String, translation: String) -> Unit = { _, _ -> },
+    private val onTranslationCorrectionRequested: (TranslationCorrectionRequest) -> Unit = {},
     private val onFloatingWindowDismissed: () -> Unit = {},
     @Volatile var textSizeSp: Int = 14,
     @Volatile var alpha: Float = 0.85f,
@@ -116,7 +117,7 @@ class OverlayManager(
     private var blocksDiagnosticId: Long? = null
 
     private data class TranslationBlockContent(
-        val source: String,
+        var source: String,
         var translation: String,
     )
 
@@ -140,6 +141,7 @@ class OverlayManager(
     private val floatingStreamingUpdateCounts = mutableMapOf<Int, Int>()
     private val floatingFrameUpdateCoalescers =
         mutableMapOf<Int, LatestFrameUpdateCoalescer<PendingOverlayTextUpdate>>()
+    private val floatingPendingIndexes = mutableSetOf<Int>()
     /** 上一次悬浮窗口内容（用户改配色保存时重建内容，立即生效）。Pair = (src, dst)。 */
     private var lastFloatingPairs: MutableList<Pair<String, String>>? = null
     /** 上一次是流式还是整批显示。重建 content 时保留原渲染阶段。 */
@@ -413,6 +415,7 @@ class OverlayManager(
             return
         }
         floatingStreamingUpdateCounts.clear()
+        floatingPendingIndexes.clear()
         VerticalDiagnosticLog.i("overlay showFullScreen pairs=${pairs.size} textSizeSp=$textSizeSp mode=$floatingWindowContentMode")
         pairs.forEachIndexed { index, (src, dst) ->
             VerticalDiagnosticLog.i(
@@ -441,6 +444,8 @@ class OverlayManager(
             return
         }
         floatingStreamingUpdateCounts.clear()
+        floatingPendingIndexes.clear()
+        floatingPendingIndexes.addAll(sources.indices)
         VerticalDiagnosticLog.i("overlay prepareFloatingWindow sources=${sources.size} textSizeSp=$textSizeSp mode=$floatingWindowContentMode")
         sources.forEachIndexed { index, source ->
             VerticalDiagnosticLog.i("overlay prepareFloatingWindow #${index + 1} src=${source.toDiagText()}")
@@ -482,6 +487,7 @@ class OverlayManager(
             return
         }
         val streamingUpdates = floatingStreamingUpdateCounts.remove(index) ?: 0
+        floatingPendingIndexes.remove(index)
         val coalescer = floatingFrameUpdateCoalescers.remove(index)
         coalescer?.discardPending()
         val stats = coalescer?.stats() ?: FrameUpdateStats(0, 0)
@@ -577,6 +583,33 @@ class OverlayManager(
             speechLabel = context.getString(R.string.word_card_speak_selection),
             selectionSpeechAction = {
                 translationBlockSelectionSpeechAction?.onStart
+            },
+            correctionLabel = context.getString(R.string.translation_correction_action),
+            selectionCorrectionAction = {
+                val currentPairs = lastFloatingPairs ?: pairs.toMutableList()
+                val index = floatingWindowTranslationIndexForSelection(
+                    pairs = currentPairs,
+                    mode = floatingWindowContentMode,
+                    selectionStart = contentView.selectionStart,
+                    selectionEnd = contentView.selectionEnd,
+                )
+                index?.let { pairIndex ->
+                    currentPairs.getOrNull(pairIndex)
+                        ?.takeIf {
+                            isTranslationCorrectionActionAvailable(
+                                isFinal = pairIndex !in floatingPendingIndexes,
+                                source = it.first,
+                                translation = it.second,
+                            )
+                        }
+                        ?.let { (source, translation) ->
+                            {
+                                onTranslationCorrectionRequested(
+                                    TranslationCorrectionRequest(source, translation)
+                                )
+                            }
+                        }
+                }
             },
         )
         return contentView
@@ -1200,6 +1233,27 @@ class OverlayManager(
                     enableSelectionSpeech(
                         label = context.getString(R.string.word_card_speak_selection),
                         isEnabled = { translationBlockSelectionSpeechAction != null },
+                        correctionLabel = context.getString(R.string.translation_correction_action),
+                        correctionAction = {
+                            blockContents[index]
+                                ?.takeIf {
+                                    isTranslationCorrectionActionAvailable(
+                                        isFinal = index !in blockStreamingUpdateCounts,
+                                        source = it.source,
+                                        translation = it.translation,
+                                    )
+                                }
+                                ?.let { content ->
+                                    {
+                                        onTranslationCorrectionRequested(
+                                            TranslationCorrectionRequest(
+                                                observedSource = content.source,
+                                                translation = content.translation,
+                                            )
+                                        )
+                                    }
+                                }
+                        },
                         onSpeak = { selectedText ->
                             translationBlockSelectionSpeechAction?.onStart?.invoke(selectedText)
                         },
@@ -1269,6 +1323,31 @@ class OverlayManager(
             } else {
                 content.translation
             }
+        }
+    }
+
+    fun applyTranslationCorrection(draft: TranslationCorrectionDraft) {
+        blockContents.forEach { (index, content) ->
+            if (content.source == draft.observedSource) {
+                content.source = draft.correctedSource
+                updateBlockText(index, draft.correctedTranslation)
+            }
+        }
+        val pairs = lastFloatingPairs ?: return
+        var changed = false
+        pairs.indices.forEach { index ->
+            val (source, _) = pairs[index]
+            if (source == draft.observedSource) {
+                pairs[index] = draft.correctedSource to draft.correctedTranslation
+                floatingPendingIndexes.remove(index)
+                changed = true
+            }
+        }
+        if (changed && floatingWindow.isShown()) {
+            floatingWindow.setContent(
+                buildFloatingContent(pairs, streaming = false)
+            )
+            lastFloatingStreaming = false
         }
     }
 
@@ -1656,6 +1735,7 @@ class OverlayManager(
         floatingWindow.hide()
         floatingContentView = null
         floatingStreamingUpdateCounts.clear()
+        floatingPendingIndexes.clear()
         floatingFrameUpdateCoalescers.values.forEach { it.discardPending() }
         floatingFrameUpdateCoalescers.clear()
         lastFloatingPairs = null

@@ -73,10 +73,13 @@ class TranslationCardOverlay(
     private val wm by lazy { context.getSystemService(Context.WINDOW_SERVICE) as WindowManager }
     private var dialog: Dialog? = null
     private var rootView: View? = null
+    private var sourceView: StyledTranslationTextView? = null
     private var translationView: StyledTranslationTextView? = null
     private var copyTranslationButton: TextView? = null
     private var speakTranslationButton: View? = null
+    private var currentSource: String = ""
     private var currentTranslation: String = ""
+    private var translationFinal: Boolean = false
     private var renderWordResult: ((WordResult?) -> Unit)? = null
 
     fun isShown(): Boolean = rootView != null
@@ -94,16 +97,20 @@ class TranslationCardOverlay(
             }
         }
         rootView = null
+        sourceView = null
         translationView = null
         copyTranslationButton = null
         speakTranslationButton = null
+        currentSource = ""
         currentTranslation = ""
+        translationFinal = false
         renderWordResult = null
     }
 
-    fun updateTranslation(translation: String?) {
+    fun updateTranslation(translation: String?, final: Boolean = false) {
         val normalized = translation.orEmpty()
         currentTranslation = normalized
+        translationFinal = final && normalized.isNotBlank()
         translationView?.apply {
             text = normalized
             visibility = if (normalized.isBlank()) View.GONE else View.VISIBLE
@@ -116,6 +123,13 @@ class TranslationCardOverlay(
         } else {
             View.GONE
         }
+    }
+
+    fun applyTranslationCorrection(draft: TranslationCorrectionDraft) {
+        if (currentSource != draft.observedSource) return
+        currentSource = draft.correctedSource
+        sourceView?.text = draft.correctedSource
+        updateTranslation(draft.correctedTranslation, final = true)
     }
 
     fun updateWordResult(wordResult: WordResult?) {
@@ -140,8 +154,10 @@ class TranslationCardOverlay(
         onSpeakSource: TtsPlaybackAction? = null,
         onSpeakTranslation: TtsPlaybackAction? = null,
         onSpeakDictionary: TtsPlaybackAction? = null,
+        onCorrectTranslation: ((source: String, translation: String) -> Unit)? = null,
     ) {
         dismiss()
+        currentSource = sourceText
         val density = context.resources.displayMetrics.density
         val padH = (16 * density).toInt()
         val padV = (12 * density).toInt()
@@ -229,7 +245,7 @@ class TranslationCardOverlay(
                     density = density,
                     contentDescription = context.getString(R.string.word_card_speak_source),
                     action = action,
-                    onClick = { action.onToggle(sourceText) },
+                    onClick = { currentSource.takeIf(String::isNotBlank)?.let(action.onToggle) },
                 )
             )
         }
@@ -250,11 +266,13 @@ class TranslationCardOverlay(
                 )
             }
         }
+        sourceView = sourceTv
         scrollContent.addView(sourceTv)
         scrollContent.addView(buildDivider(density, mutedColor))
 
         // 主区始终创建一次，流式分片只更新文字，不重建 Dialog。
         currentTranslation = translation.orEmpty()
+        translationFinal = !loading && currentTranslation.isNotBlank()
         val translationHeader = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -301,11 +319,27 @@ class TranslationCardOverlay(
             setPadding(0, (4 * density).toInt(), 0, (8 * density).toInt())
             setLineSpacing(2f, 1.1f)
             setTextIsSelectable(true)
-            onSpeakTranslation?.let { action ->
+            if (onSpeakTranslation != null || onCorrectTranslation != null) {
                 enableSelectionSpeech(
                     label = context.getString(R.string.word_card_speak_selection),
-                    isEnabled = { currentTranslation.isNotBlank() },
-                    onSpeak = action.onStart,
+                    isEnabled = {
+                        onSpeakTranslation != null && currentTranslation.isNotBlank()
+                    },
+                    correctionLabel = context.getString(R.string.translation_correction_action),
+                    correctionAction = {
+                        onCorrectTranslation
+                            ?.takeIf {
+                                isTranslationCorrectionActionAvailable(
+                                    isFinal = translationFinal,
+                                    source = currentSource,
+                                    translation = currentTranslation,
+                                )
+                            }
+                            ?.let { action ->
+                                { action(currentSource, currentTranslation) }
+                            }
+                    },
+                    onSpeak = { selected -> onSpeakTranslation?.onStart?.invoke(selected) },
                 )
             }
         }
@@ -375,7 +409,7 @@ class TranslationCardOverlay(
         val copySrcLabel = context.getString(R.string.word_card_btn_copy_source)
         val copySrcBtn = buildPillButton(copySrcLabel, accentColor, density)
         copySrcBtn.setOnClickListener {
-            copyToClipboard(sourceText)
+            copyToClipboard(currentSource)
             flashCopied(copySrcBtn, copySrcLabel)
         }
         actionRow.addView(copySrcBtn)

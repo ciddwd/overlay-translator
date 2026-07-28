@@ -11,6 +11,8 @@ import com.gameocr.app.ocr.OcrEngine
 import com.gameocr.app.ocr.RoutingOcrEngine
 import com.gameocr.app.translate.RoutingTranslator
 import com.gameocr.app.translate.TranslationCache
+import com.gameocr.app.translate.TranslationMemoryDao
+import com.gameocr.app.translate.TranslationMemoryDatabase
 import com.gameocr.app.translate.Translator
 import com.gameocr.app.translate.GoogleMlKitTranslationClientFactory
 import com.gameocr.app.translate.GoogleMlKitDownloadedLanguageProvider
@@ -82,6 +84,21 @@ object AppModule {
     fun provideTranslationGlossaryDao(
         database: TranslationGlossaryDatabase,
     ): TranslationGlossaryDao = database.glossaryDao()
+
+    @Provides
+    @Singleton
+    fun provideTranslationMemoryDatabase(
+        @ApplicationContext context: Context,
+    ): TranslationMemoryDatabase = Room.databaseBuilder(
+        context,
+        TranslationMemoryDatabase::class.java,
+        "translation-memory.db",
+    ).build()
+
+    @Provides
+    fun provideTranslationMemoryDao(
+        database: TranslationMemoryDatabase,
+    ): TranslationMemoryDao = database.translationMemoryDao()
 }
 
 @Module

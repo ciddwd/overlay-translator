@@ -16,6 +16,7 @@ class DetectorGuidedBubbleMaskExtractorTest {
             val draw: (IntArray, Int, Int) -> Unit,
             val expectedAccepted: Boolean,
             val expectedReason: String,
+            val expectedMemberAssignment: Int?,
         )
         val cases = listOf(
             Case(
@@ -26,6 +27,7 @@ class DetectorGuidedBubbleMaskExtractorTest {
                 },
                 expectedAccepted = true,
                 expectedReason = "accepted",
+                expectedMemberAssignment = 0,
             ),
             Case(
                 name = "open ellipse",
@@ -45,6 +47,7 @@ class DetectorGuidedBubbleMaskExtractorTest {
                 },
                 expectedAccepted = false,
                 expectedReason = "region_leaked_to_roi",
+                expectedMemberAssignment = 0,
             ),
             Case(
                 name = "detector without ocr member",
@@ -52,6 +55,7 @@ class DetectorGuidedBubbleMaskExtractorTest {
                 draw = { _, _, _ -> },
                 expectedAccepted = false,
                 expectedReason = "detector_no_ocr_members",
+                expectedMemberAssignment = null,
             ),
         )
 
@@ -71,6 +75,11 @@ class DetectorGuidedBubbleMaskExtractorTest {
 
             assertEquals(case.name, case.expectedAccepted, result.decisions.single().accepted)
             assertEquals(case.name, case.expectedReason, result.decisions.single().diagnostic.reason)
+            assertEquals(
+                case.name,
+                listOf(case.expectedMemberAssignment),
+                result.memberDetectionIndices,
+            )
             assertEquals(case.name, 1, result.decisions.single().diagnostic.attempts)
             assertEquals(
                 case.name,
@@ -107,6 +116,7 @@ class DetectorGuidedBubbleMaskExtractorTest {
 
         assertEquals(listOf(0), result.decisions[0].memberIndices)
         assertEquals(listOf(1), result.decisions[1].memberIndices)
+        assertEquals(listOf(0, 1), result.memberDetectionIndices)
         assertEquals(2, result.acceptedCount)
         assertTrue(result.durationMs >= 0L)
     }

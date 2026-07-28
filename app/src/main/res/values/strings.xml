@@ -73,6 +73,10 @@
     <string name="main_status_battery_whitelist">Battery whitelist</string>
     <string name="main_status_enabled">Enabled</string>
     <string name="main_status_disabled">Disabled</string>
+    <string name="main_preset_title">Presets · swipe or tap to switch</string>
+    <string name="main_preset_loading">Loading presets…</string>
+    <string name="main_preset_models_not_ready">Required models not ready</string>
+    <string name="main_preset_models_not_ready_message">Required models are not ready. Download or import them in Settings before applying this preset.</string>
 
     <!-- Settings -->
     <string name="settings_title">Translation settings</string>
@@ -81,6 +85,13 @@
     <string name="settings_model">Model name</string>
     <string name="settings_source_lang">Source language</string>
     <string name="settings_target_lang">Target language</string>
+    <string name="settings_language_conflict_title">Source and target languages must differ</string>
+    <string name="settings_source_language_conflict_message">This language is already the target language. Source and target languages cannot be the same. Swap them?</string>
+    <string name="settings_target_language_conflict_message">This language is already the source language. Source and target languages cannot be the same. Swap them?</string>
+    <string name="settings_language_conflict_cannot_swap_message">This language is already selected on the other side. Automatic detection cannot be used as a target language, so this pair cannot be swapped. Choose a specific source language first.</string>
+    <string name="settings_language_swap_confirm">Swap</string>
+    <string name="settings_language_swap_cancel">Cancel</string>
+    <string name="settings_language_conflict_acknowledge">Got it</string>
     <string name="settings_prompt">Prompt template</string>
     <string name="settings_save">Save</string>
     <string name="settings_text_size">Text size (sp)</string>
@@ -1266,6 +1277,21 @@
     <string name="word_card_speak_translation">Speak translated text</string>
     <string name="word_card_speak_dictionary">Speak dictionary details</string>
     <string name="word_card_speak_selection">Speak</string>
+    <string name="translation_correction_action">Correct translation</string>
+    <string name="translation_correction_title">Correct OCR and translation</string>
+    <string name="translation_correction_source_hint">OCR source</string>
+    <string name="translation_correction_translation_hint">Translation</string>
+    <string name="translation_correction_remember">Always translate this way</string>
+    <string name="translation_correction_glossary_format">Suggested: add this term to the %1$s glossary</string>
+    <string name="translation_correction_no_game">No current game was detected. This edit can update the visible text, but cannot be saved to game translation memory.</string>
+    <string name="translation_correction_cancel">Cancel</string>
+    <string name="translation_correction_save">Save correction</string>
+    <string name="translation_correction_source_required">OCR source cannot be empty</string>
+    <string name="translation_correction_translation_required">Translation cannot be empty</string>
+    <string name="translation_correction_saved_current">Visible translation updated</string>
+    <string name="translation_correction_saved_memory">Correction saved to %1$s translation memory</string>
+    <string name="translation_correction_saved_glossary">Correction and glossary term saved for %1$s</string>
+    <string name="translation_correction_save_failed">Could not save correction: %1$s</string>
     <string name="word_card_pause_speech">Pause speech</string>
     <string name="word_card_resume_speech">Resume speech</string>
 

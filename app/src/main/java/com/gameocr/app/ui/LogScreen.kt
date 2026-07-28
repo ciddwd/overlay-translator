@@ -28,7 +28,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.rememberCoroutineScope
@@ -334,7 +333,7 @@ private fun ExportLogDialog(
     onDismiss: () -> Unit,
     onExport: (includeImages: Boolean) -> Unit,
 ) {
-    AlertDialog(
+    CatalystAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.log_export_options_title)) },
         text = {
@@ -552,7 +551,7 @@ private fun LogImageDialog(
     val image = remember(path) {
         decodeLogImagePreview(path, maxDimension = LOG_IMAGE_DIALOG_MAX_DIMENSION)
     }
-    AlertDialog(
+    CatalystAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.log_capture_image_dialog_title)) },
         text = {

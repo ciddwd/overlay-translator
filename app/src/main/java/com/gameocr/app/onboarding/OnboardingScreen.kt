@@ -32,7 +32,6 @@ import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.ViewInAr
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -76,6 +75,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.gameocr.app.R
+import com.gameocr.app.ui.CatalystAlertDialog
 import com.gameocr.app.data.Languages
 import com.gameocr.app.ui.LanguagePicker
 import com.gameocr.app.ui.rememberModelDownloadNotificationPermissionGate
@@ -245,7 +245,7 @@ fun OnboardingScreen(
     BackHandler(enabled = stepIndex > 0, onBack = ::goBack)
 
     if (showSkipConfirmation) {
-        AlertDialog(
+        CatalystAlertDialog(
             onDismissRequest = { showSkipConfirmation = false },
             title = { Text(stringResource(R.string.onboarding_skip_confirm_title)) },
             text = { Text(stringResource(R.string.onboarding_skip_confirm_message)) },

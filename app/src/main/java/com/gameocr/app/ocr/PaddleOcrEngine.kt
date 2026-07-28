@@ -306,6 +306,7 @@ class PaddleOcrEngine @Inject constructor(
                 unclipRatio = s.dbnetUnclipRatio,
                 profile = s.paddleDetectionProfile,
                 maskFrameDecision = maskFrameDecision,
+                regroupDetectedBubbles = s.mergeAdjacentBlocks,
             )
         }
     }
@@ -420,6 +421,7 @@ class PaddleOcrEngine @Inject constructor(
         unclipRatio: Float = DET_UNCLIP_RATIO,
         profile: PaddleDetectionProfile = PaddleDetectionProfile.FAST,
         maskFrameDecision: MangaShapeAwareFramePolicy.Decision,
+        regroupDetectedBubbles: Boolean,
     ): List<TextBlock> {
         val runId = runCounter.incrementAndGet()
         val ver = loadedVersion?.name ?: "?"
@@ -454,6 +456,7 @@ class PaddleOcrEngine @Inject constructor(
             runId = runId,
             probabilityMask = probabilityMask,
         )
+        val sorted = quads.sortedWith(compareBy({ it.centerY }, { it.centerX }))
         val tDet = System.currentTimeMillis() - t0
         Timber.i(
             "PaddleOCR run#%d det done version=%s elapsed=%dms quads=%d bitmap=%dx%d",
@@ -464,8 +467,9 @@ class PaddleOcrEngine @Inject constructor(
             bitmap.width,
             bitmap.height,
         )
+        var shapeAwareReport: MangaMaskDebugReport? = null
         if (maskFrameDecision.analyzeFrame && probabilityMask != null) {
-            val rects = quads.map { quad ->
+            val rects = sorted.map { quad ->
                 val bounds = quad.axisAlignedBounds()
                 BubbleClusterer.IntRect(
                     left = bounds[0].coerceIn(0, bitmap.width),
@@ -485,7 +489,7 @@ class PaddleOcrEngine @Inject constructor(
                 dumpMangaMaskDebugSet(
                     context = context,
                     bitmap = bitmap,
-                    quads = quads,
+                    quads = sorted,
                     bubbles = bubbles,
                     probabilityTextMask = probabilityMask.snapshot(),
                     bubbleClusterGap = 0,
@@ -498,6 +502,7 @@ class PaddleOcrEngine @Inject constructor(
                     runLegacySegmentation = maskFrameDecision.runLegacySegmentation,
                 )
             }.onSuccess { report ->
+                shapeAwareReport = report
                 report?.delayedMaskInput?.let(shapeAwareSessionStore.manager::publish)
             }.onFailure { error ->
                 Timber.w(error, "Unable to prepare shape-aware Paddle frame")
@@ -513,12 +518,11 @@ class PaddleOcrEngine @Inject constructor(
             )
             return emptyList()
         }
-        val sorted = quads.sortedWith(compareBy({ it.centerY }, { it.centerX }))
         sorted.forEachIndexed { i, quad ->
             Timber.i("PaddleOCR run#%d quad[%d] %s", runId, i, quad.toPaddleLogString())
         }
         val tRecStart = System.currentTimeMillis()
-        val results = sorted.mapIndexedNotNull { i, quad ->
+        val indexedResults = sorted.mapIndexedNotNull { i, quad ->
             val recognition = paddleRecognizedText(recognizeQuad(bitmap, quad, runId, i))
             val text = recognition.text.trim()
             val bounds = quad.axisAlignedBounds()
@@ -541,13 +545,41 @@ class PaddleOcrEngine @Inject constructor(
                 Timber.i("PaddleOCR run#%d result[%d] dropped empty text rect=%s", runId, i, rect.toPaddleLogString())
                 null
             } else {
-                TextBlock(
+                i to TextBlock(
                     text = text,
                     boundingBox = rect,
                     confidence = recognition.confidence,
                     recognizedLanguage = "auto",
+                    sourceBoxes = listOf(Rect(rect)),
                 )
             }
+        }
+        val rawResults = indexedResults.map { it.second }
+        val memberDetectionIndices =
+            shapeAwareReport?.detectorGuidedMasks?.memberDetectionIndices
+        val results = if (
+            regroupDetectedBubbles &&
+            memberDetectionIndices != null &&
+            memberDetectionIndices.size == sorted.size
+        ) {
+            BubbleTextBlockRegrouper.regroup(
+                blocks = rawResults,
+                bubbleByBlock = indexedResults.map { (memberIndex, _) ->
+                    memberDetectionIndices[memberIndex]
+                },
+            ).also { regrouped ->
+                Timber.i(
+                    "PaddleOCR run#%d detector bubble regroup %d -> %d blocks matchedLines=%d",
+                    runId,
+                    rawResults.size,
+                    regrouped.size,
+                    indexedResults.count { (memberIndex, _) ->
+                        memberDetectionIndices[memberIndex] != null
+                    },
+                )
+            }
+        } else {
+            rawResults
         }
         val tRec = System.currentTimeMillis() - tRecStart
         val tTotal = System.currentTimeMillis() - t0

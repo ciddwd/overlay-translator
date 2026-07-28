@@ -11,7 +11,6 @@ import timber.log.Timber
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.material3.AlertDialog
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -202,6 +201,7 @@ import com.gameocr.app.data.TtsHttpResponseMode
 import com.gameocr.app.data.TtsProvider
 import com.gameocr.app.data.VolcengineTtsResource
 import com.gameocr.app.data.translationLanguageCodesConflict
+import com.gameocr.app.data.swappedTranslationLanguagePair
 import com.gameocr.app.data.MiniMaxTtsModel
 import com.gameocr.app.data.MimoTtsModel
 import com.gameocr.app.data.DEFAULT_MIMO_TTS_BASE_URL
@@ -263,6 +263,11 @@ internal const val PADDLE_AI_STUDIO_PAGE_URL = "https://aistudio.baidu.com/paddl
 
 internal fun shouldShowPaddleAiStudioHelp(ocrEngine: OcrEngineKind): Boolean =
     ocrEngine == OcrEngineKind.PADDLE_AI_STUDIO
+
+private enum class LanguageSwapRequestOrigin {
+    SOURCE_PICKER,
+    TARGET_PICKER,
+}
 
 @OptIn(ExperimentalFoundationApi::class)
 private class SettingsSearchTargetRegistry {
@@ -698,6 +703,9 @@ fun SettingsScreen(
     var initialSettings by remember { mutableStateOf<Settings?>(null) }
     var showUnsavedDialog by remember { mutableStateOf(false) }
     var showSakuraFallbackDialog by remember { mutableStateOf(false) }
+    var pendingLanguageSwapOrigin by remember {
+        mutableStateOf<LanguageSwapRequestOrigin?>(null)
+    }
     var pendingModelDownload by remember { mutableStateOf<PendingModelDownload?>(null) }
     val continueModelDownloadAfterNotificationPermission =
         rememberModelDownloadNotificationPermissionGate()
@@ -790,6 +798,32 @@ fun SettingsScreen(
         mlKitRecentSources = mlKitRecentSourceLanguages(mlKitRecentSources, languageTag)
         mlKitModelDownloadMessage = null
         selectTranslatorEngine(TranslatorEngine.GOOGLE_ML_KIT)
+    }
+
+    fun swapSelectedLanguages() {
+        val swapped = swappedTranslationLanguagePair(sourceLang, targetLang) ?: return
+        timber.log.Timber.tag("TranslationLanguage").i(
+            "[swap] %s -> %s becomes %s -> %s",
+            sourceLang,
+            targetLang,
+            swapped.first,
+            swapped.second,
+        )
+        sourceLang = swapped.first
+        targetLang = swapped.second
+        mlKitModelDownloadMessage = null
+        if (translatorEngine == TranslatorEngine.GOOGLE_ML_KIT) {
+            mlKitRecentSources = mlKitRecentSourceLanguages(
+                stored = mlKitRecentSources,
+                selected = swapped.first,
+            )
+        }
+        if (
+            translatorEngine == TranslatorEngine.LOCAL_SAKURA &&
+            !supportsSakuraLanguagePair(swapped.first, swapped.second)
+        ) {
+            showSakuraFallbackDialog = true
+        }
     }
 
     fun startMlKitModelDownload(pair: Pair<String, String>) {
@@ -1061,7 +1095,7 @@ fun SettingsScreen(
         val overwritten = plan.overwrittenNames.joinToString(", ").ifBlank {
             stringResource(R.string.settings_translation_preset_import_none)
         }
-        AlertDialog(
+        CatalystAlertDialog(
             onDismissRequest = {
                 pendingPresetImportPlan = null
                 pendingSettingsImportPreview = null
@@ -1561,21 +1595,6 @@ fun SettingsScreen(
                         )
                     }
                 },
-                onCopy = { preset ->
-                    scope.launch {
-                        val copiedName = "${presetDisplayNameForMessage(preset)} Copy"
-                        val copied = viewModel.duplicateTranslationPreset(
-                            preset.id,
-                            copiedName,
-                            copiedName.take(8)
-                        ) ?: return@launch
-                        translationPresets = TranslationPresetCatalog.upsertCustom(translationPresets, copied)
-                        presetMessage = context.getString(
-                            R.string.settings_translation_preset_copied_format,
-                            copied.name
-                        )
-                    }
-                },
                 onDownloadModels = { preset, issues ->
                     if (modelDownloadBusy) {
                         presetMessage = context.getString(R.string.settings_translation_preset_other_download_busy)
@@ -1812,7 +1831,7 @@ fun SettingsScreen(
     }
 
     if (showUnsavedDialog) {
-        AlertDialog(
+        CatalystAlertDialog(
             onDismissRequest = { showUnsavedDialog = false },
             title = { Text(stringResource(R.string.settings_unsaved_title)) },
             text = { Text(stringResource(R.string.settings_unsaved_msg)) },
@@ -1838,7 +1857,7 @@ fun SettingsScreen(
 
     // 源语言↔OCR 联动：检查能否识别当前源语言；不能则按"用户刚动的是哪一边"决定推荐方向。
     pendingModelDownload?.let { pending ->
-        AlertDialog(
+        CatalystAlertDialog(
             onDismissRequest = { pendingModelDownload = null },
             title = { Text(stringResource(R.string.settings_model_download_network_warning_title)) },
             text = {
@@ -1866,8 +1885,53 @@ fun SettingsScreen(
         )
     }
 
+    pendingLanguageSwapOrigin?.let { origin ->
+        val swapAvailable =
+            swappedTranslationLanguagePair(sourceLang, targetLang) != null
+        val messageRes = when {
+            !swapAvailable -> R.string.settings_language_conflict_cannot_swap_message
+            origin == LanguageSwapRequestOrigin.SOURCE_PICKER ->
+                R.string.settings_source_language_conflict_message
+            else -> R.string.settings_target_language_conflict_message
+        }
+        CatalystAlertDialog(
+            onDismissRequest = { pendingLanguageSwapOrigin = null },
+            title = {
+                Text(stringResource(R.string.settings_language_conflict_title))
+            },
+            text = { Text(stringResource(messageRes)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingLanguageSwapOrigin = null
+                        if (swapAvailable) swapSelectedLanguages()
+                    }
+                ) {
+                    Text(
+                        stringResource(
+                            if (swapAvailable) {
+                                R.string.settings_language_swap_confirm
+                            } else {
+                                R.string.settings_language_conflict_acknowledge
+                            }
+                        )
+                    )
+                }
+            },
+            dismissButton = if (swapAvailable) {
+                {
+                    TextButton(onClick = { pendingLanguageSwapOrigin = null }) {
+                        Text(stringResource(R.string.settings_language_swap_cancel))
+                    }
+                }
+            } else {
+                null
+            },
+        )
+    }
+
     if (showOverlayFontDeleteTip) {
-        AlertDialog(
+        CatalystAlertDialog(
             onDismissRequest = {
                 if (overlayFontDeleteTipCountdown == 0) showOverlayFontDeleteTip = false
             },
@@ -1895,7 +1959,7 @@ fun SettingsScreen(
     }
 
     pendingOverlayFontDelete?.let { font ->
-        AlertDialog(
+        CatalystAlertDialog(
             onDismissRequest = { pendingOverlayFontDelete = null },
             title = { Text(stringResource(R.string.settings_overlay_font_delete_confirm_title)) },
             text = {
@@ -1952,7 +2016,7 @@ fun SettingsScreen(
         val missingNames = prompt.missingLanguages.joinToString(", ") { languageTag ->
             Languages.nameOf(context, languageTag)
         }
-        AlertDialog(
+        CatalystAlertDialog(
             onDismissRequest = {
                 mlKitModelPromptDismissedPair = prompt.pair
                 mlKitMissingModelsPrompt = null
@@ -2026,7 +2090,7 @@ fun SettingsScreen(
                 OpenAiFallbackField.MODEL -> fallbackModelLabel
             }
         }
-        AlertDialog(
+        CatalystAlertDialog(
             onDismissRequest = {
                 showSakuraFallbackDialog = false
                 if (missingFallbackFields.isNotEmpty()) {
@@ -2236,7 +2300,7 @@ fun SettingsScreen(
     }
     ocrLangIssue?.let { issue ->
         val sourceName = com.gameocr.app.data.Languages.nameOf(context, issue.sourceCode)
-        AlertDialog(
+        CatalystAlertDialog(
             onDismissRequest = {
                 timber.log.Timber.tag("OcrLangLink").i(
                     "[dialog-dismiss-outside] mark dismissedFor=%s", issue.sourceCode
@@ -2888,6 +2952,10 @@ fun SettingsScreen(
                         unbadgedStatusLabel = stringResource(R.string.settings_mlkit_model_download_short),
                         disabledLanguageCodes = setOf(targetLang),
                         disabledStatusLabel = stringResource(R.string.lang_picker_already_target),
+                        onDisabledSelect = {
+                            pendingLanguageSwapOrigin = LanguageSwapRequestOrigin.SOURCE_PICKER
+                            showMlKitMoreLanguages = false
+                        },
                         onSelect = { languageTag ->
                             selectMlKitSourceLanguage(languageTag)
                             showMlKitMoreLanguages = false
@@ -3542,6 +3610,9 @@ fun SettingsScreen(
                     allowAuto = translatorEngine != TranslatorEngine.GOOGLE_ML_KIT,
                     disabledLanguageCodes = setOf(targetLang),
                     disabledStatusLabel = stringResource(R.string.lang_picker_already_target),
+                    onDisabledSelect = {
+                        pendingLanguageSwapOrigin = LanguageSwapRequestOrigin.SOURCE_PICKER
+                    },
                     allowedLanguageCodes = if (translatorEngine == TranslatorEngine.GOOGLE_ML_KIT) {
                         mlKitLanguagePickerCodes
                     } else {
@@ -3571,6 +3642,9 @@ fun SettingsScreen(
                     allowAuto = false,
                     disabledLanguageCodes = setOf(sourceLang),
                     disabledStatusLabel = stringResource(R.string.lang_picker_already_source),
+                    onDisabledSelect = {
+                        pendingLanguageSwapOrigin = LanguageSwapRequestOrigin.TARGET_PICKER
+                    },
                     allowedLanguageCodes = if (translatorEngine == TranslatorEngine.GOOGLE_ML_KIT) {
                         mlKitLanguagePickerCodes
                     } else {
@@ -4539,7 +4613,7 @@ fun SettingsScreen(
                         )
                     }
                     if (showDbnetResetConfirm) {
-                        AlertDialog(
+                        CatalystAlertDialog(
                             onDismissRequest = { showDbnetResetConfirm = false },
                             title = {
                                 Text(stringResource(R.string.settings_dbnet_restore_defaults_confirm_title))
@@ -6994,7 +7068,7 @@ private fun OpenAiPromptSettings(
         Text(stringResource(R.string.settings_prompt_reset))
     }
     if (showResetMainPromptDialog) {
-        AlertDialog(
+        CatalystAlertDialog(
             onDismissRequest = { showResetMainPromptDialog = false },
             title = { Text(stringResource(R.string.settings_prompt_reset_confirm_title)) },
             text = { Text(stringResource(R.string.settings_reset_confirm_message)) },
@@ -7034,7 +7108,7 @@ private fun OpenAiPromptSettings(
         Text(stringResource(R.string.settings_dictionary_prompt_reset))
     }
     if (showResetDictPromptDialog) {
-        AlertDialog(
+        CatalystAlertDialog(
             onDismissRequest = { showResetDictPromptDialog = false },
             title = { Text(stringResource(R.string.settings_dictionary_prompt_reset_confirm_title)) },
             text = { Text(stringResource(R.string.settings_reset_confirm_message)) },
@@ -8107,7 +8181,6 @@ private fun TranslationPresetSection(
     onImport: () -> Unit,
     onSaveUnsaved: (TranslationPreset) -> Unit,
     onApply: (TranslationPreset) -> Unit,
-    onCopy: (TranslationPreset) -> Unit,
     onDownloadModels: (TranslationPreset, List<TranslationPresetModelIssue>) -> Unit,
     onDelete: (TranslationPreset) -> Unit
 ) {
@@ -8168,7 +8241,6 @@ private fun TranslationPresetSection(
                 modelDownloading = modelDownloading,
             ),
             onApply = { onApply(preset) },
-            onCopy = { onCopy(preset) },
             onDownloadModels = { onDownloadModels(preset, modelIssues) },
             onDelete = { pendingDeletePreset = preset }
         )
@@ -8199,7 +8271,7 @@ private fun TranslationPresetSection(
         }
     }
     pendingDeletePreset?.let { preset ->
-        AlertDialog(
+        CatalystAlertDialog(
             onDismissRequest = { pendingDeletePreset = null },
             title = { Text(stringResource(R.string.settings_translation_preset_delete_confirm_title)) },
             text = {
@@ -8229,7 +8301,7 @@ private fun TranslationPresetSection(
     pendingSavePreset?.let { preset ->
         val duplicateName = translationPresetNameExists(pendingSavePresetName, existingPresetNames)
         val saveNameValid = normalizedTranslationPresetName(pendingSavePresetName) != null && !duplicateName
-        AlertDialog(
+        CatalystAlertDialog(
             onDismissRequest = {
                 pendingSavePreset = null
                 pendingSavePresetName = ""
@@ -8476,7 +8548,6 @@ private fun TranslationPresetRow(
     modelIssues: List<TranslationPresetModelIssue>,
     downloadState: TranslationPresetModelDownloadState,
     onApply: () -> Unit,
-    onCopy: () -> Unit,
     onDownloadModels: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -8501,7 +8572,9 @@ private fun TranslationPresetRow(
                 Text(
                     translationPresetDisplayName(preset),
                     style = MaterialTheme.typography.titleSmall,
-                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                    maxLines = settingsTranslationPresetNameMaxLines(preset.id),
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     translationPresetSummary(preset),
@@ -8547,9 +8620,6 @@ private fun TranslationPresetRow(
                     )
                 }
             }
-            OutlinedButton(onClick = onCopy) {
-                Text(stringResource(R.string.settings_translation_preset_copy))
-            }
             if (!TranslationPresetCatalog.isBuiltIn(preset.id)) {
                 TextButton(onClick = onDelete) {
                     Text(stringResource(R.string.settings_translation_preset_delete))
@@ -8577,8 +8647,11 @@ private fun TranslationPresetRow(
     }
 }
 
+internal fun settingsTranslationPresetNameMaxLines(presetId: String): Int =
+    if (TranslationPresetCatalog.isBuiltIn(presetId)) 2 else Int.MAX_VALUE
+
 @Composable
-private fun translationPresetDisplayName(preset: TranslationPreset): String = when (preset.id) {
+internal fun translationPresetDisplayName(preset: TranslationPreset): String = when (preset.id) {
     TranslationPresetCatalog.BUILTIN_MANGA_JA_ZH ->
         stringResource(R.string.settings_translation_preset_builtin_manga)
     else -> preset.name
@@ -8624,7 +8697,7 @@ private fun translationPresetDownloadModelLabel(
 }
 
 @Composable
-private fun translationPresetSummary(preset: TranslationPreset): String {
+internal fun translationPresetSummary(preset: TranslationPreset): String {
     val context = LocalContext.current
     return stringResource(
         R.string.preset_quick_summary_format,
@@ -8858,16 +8931,13 @@ private fun SettingHelpDialogButton(
         )
     }
     if (visible) {
-        AlertDialog(
+        CatalystAlertDialog(
             onDismissRequest = { visible = false },
             title = { Text(title) },
             text = {
                 Text(
                     text = text,
                     style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier
-                        .heightIn(max = 520.dp)
-                        .verticalScroll(rememberScrollState()),
                 )
             },
             confirmButton = {
@@ -9932,7 +10002,7 @@ private fun PaddleSection(
             )
         }
         if (showSupportedLanguages) {
-            AlertDialog(
+            CatalystAlertDialog(
                 onDismissRequest = { showSupportedLanguages = false },
                 title = {
                     Text(
@@ -9991,7 +10061,7 @@ private fun PaddleSection(
             modifier = Modifier.fillMaxWidth()
         ) { Text(stringResource(R.string.settings_paddle_btn_delete)) }
         if (showDeleteConfirm) {
-            AlertDialog(
+            CatalystAlertDialog(
                 onDismissRequest = { showDeleteConfirm = false },
                 title = { Text(stringResource(R.string.settings_model_delete_confirm_title)) },
                 text = { Text(stringResource(R.string.settings_model_delete_confirm_message)) },
@@ -10087,7 +10157,7 @@ private fun MangaOcrSection(
             modifier = Modifier.fillMaxWidth()
         ) { Text(stringResource(R.string.settings_manga_ocr_btn_delete)) }
         if (showDeleteConfirm) {
-            AlertDialog(
+            CatalystAlertDialog(
                 onDismissRequest = { showDeleteConfirm = false },
                 title = { Text(stringResource(R.string.settings_model_delete_confirm_title)) },
                 text = { Text(stringResource(R.string.settings_model_delete_confirm_message)) },
@@ -10185,7 +10255,7 @@ private fun OrientationModelSection(
             modifier = Modifier.fillMaxWidth()
         ) { Text(stringResource(R.string.settings_orientation_model_btn_delete)) }
         if (showDeleteConfirm) {
-            AlertDialog(
+            CatalystAlertDialog(
                 onDismissRequest = { showDeleteConfirm = false },
                 title = { Text(stringResource(R.string.settings_model_delete_confirm_title)) },
                 text = { Text(stringResource(R.string.settings_model_delete_confirm_message)) },
@@ -10458,7 +10528,7 @@ private fun LocalLlmSection(
             modifier = Modifier.fillMaxWidth()
         ) { Text(stringResource(R.string.llm_delete_button)) }
         if (showDeleteConfirm) {
-            AlertDialog(
+            CatalystAlertDialog(
                 onDismissRequest = { showDeleteConfirm = false },
                 title = { Text(stringResource(R.string.settings_model_delete_confirm_title)) },
                 text = { Text(stringResource(R.string.settings_model_delete_confirm_message)) },

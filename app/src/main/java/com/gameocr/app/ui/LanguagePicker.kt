@@ -54,6 +54,21 @@ import com.gameocr.app.data.Language
 import com.gameocr.app.data.Languages
 import kotlinx.coroutines.launch
 
+internal enum class LanguagePickerRowTapAction {
+    SELECT,
+    DISABLED_ACTION,
+    NONE,
+}
+
+internal fun languagePickerRowTapAction(
+    disabled: Boolean,
+    hasDisabledAction: Boolean,
+): LanguagePickerRowTapAction = when {
+    !disabled -> LanguagePickerRowTapAction.SELECT
+    hasDisabledAction -> LanguagePickerRowTapAction.DISABLED_ACTION
+    else -> LanguagePickerRowTapAction.NONE
+}
+
 /**
  * 检索式语言选择器。视觉模仿 Google 翻译网页的语言面板：
  * - 收起状态：一个 OutlinedButton 风格的行，左侧 label，右侧当前语言名 + 下拉箭头
@@ -74,6 +89,7 @@ fun LanguagePicker(
     allowedLanguageCodes: Set<String>? = null,
     disabledLanguageCodes: Set<String> = emptySet(),
     disabledStatusLabel: String? = null,
+    onDisabledSelect: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -127,6 +143,12 @@ fun LanguagePicker(
             allowedLanguageCodes = allowedLanguageCodes,
             disabledLanguageCodes = disabledLanguageCodes,
             disabledStatusLabel = disabledStatusLabel,
+            onDisabledSelect = onDisabledSelect?.let { callback ->
+                { code ->
+                    callback(code)
+                    expanded = false
+                }
+            },
             onSelect = { code ->
                 onSelect(code)
                 expanded = false
@@ -150,6 +172,7 @@ internal fun LanguagePickerSheet(
     unbadgedStatusLabel: String? = null,
     disabledLanguageCodes: Set<String> = emptySet(),
     disabledStatusLabel: String? = null,
+    onDisabledSelect: ((String) -> Unit)? = null,
     onSelect: (String) -> Unit,
     onTogglePin: ((String) -> Unit)?,
     onDismiss: () -> Unit
@@ -234,11 +257,16 @@ internal fun LanguagePickerSheet(
                     if (pinnedResults.isNotEmpty()) {
                         items(pinnedResults, key = { "p_${it.code}" }) { lang ->
                             val disabled = lang.code.lowercase() in disabledCodes
+                            val tapAction = languagePickerRowTapAction(
+                                disabled = disabled,
+                                hasDisabledAction = onDisabledSelect != null,
+                            )
                             LanguageRow(
                                 lang = lang,
                                 isPinned = true,
                                 isSelected = lang.code.equals(currentCode, ignoreCase = true),
                                 enabled = !disabled,
+                                clickEnabled = tapAction != LanguagePickerRowTapAction.NONE,
                                 statusLabel = if (disabled) {
                                     disabledStatusLabel
                                 } else if (lang.code in badgedLanguageCodes) {
@@ -249,7 +277,12 @@ internal fun LanguagePickerSheet(
                                 onClick = {
                                     scope.launch {
                                         sheetState.hide()
-                                        onSelect(lang.code)
+                                        when (tapAction) {
+                                            LanguagePickerRowTapAction.SELECT -> onSelect(lang.code)
+                                            LanguagePickerRowTapAction.DISABLED_ACTION ->
+                                                onDisabledSelect?.invoke(lang.code)
+                                            LanguagePickerRowTapAction.NONE -> Unit
+                                        }
                                     }
                                 },
                                 onTogglePin = onTogglePin?.let { cb -> { cb(lang.code) } }
@@ -264,11 +297,16 @@ internal fun LanguagePickerSheet(
                     }
                     items(otherResults, key = { it.code }) { lang ->
                         val disabled = lang.code.lowercase() in disabledCodes
+                        val tapAction = languagePickerRowTapAction(
+                            disabled = disabled,
+                            hasDisabledAction = onDisabledSelect != null,
+                        )
                         LanguageRow(
                             lang = lang,
                             isPinned = false,
                             isSelected = lang.code.equals(currentCode, ignoreCase = true),
                             enabled = !disabled,
+                            clickEnabled = tapAction != LanguagePickerRowTapAction.NONE,
                             statusLabel = if (disabled) {
                                 disabledStatusLabel
                             } else if (lang.code in badgedLanguageCodes) {
@@ -279,7 +317,12 @@ internal fun LanguagePickerSheet(
                             onClick = {
                                 scope.launch {
                                     sheetState.hide()
-                                    onSelect(lang.code)
+                                    when (tapAction) {
+                                        LanguagePickerRowTapAction.SELECT -> onSelect(lang.code)
+                                        LanguagePickerRowTapAction.DISABLED_ACTION ->
+                                            onDisabledSelect?.invoke(lang.code)
+                                        LanguagePickerRowTapAction.NONE -> Unit
+                                    }
                                 }
                             },
                             onTogglePin = onTogglePin?.let { cb -> { cb(lang.code) } }
@@ -563,6 +606,7 @@ private fun LanguageRow(
     isPinned: Boolean,
     isSelected: Boolean,
     enabled: Boolean,
+    clickEnabled: Boolean = enabled,
     statusLabel: String? = null,
     onClick: () -> Unit,
     onTogglePin: (() -> Unit)?
@@ -577,7 +621,7 @@ private fun LanguageRow(
                     else -> MaterialTheme.colorScheme.surface
                 }
             )
-            .clickable(enabled = enabled, onClick = onClick)
+            .clickable(enabled = clickEnabled, onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -645,7 +689,7 @@ private fun LanguageRow(
             )
         }
         if (onTogglePin != null) {
-            IconButton(onClick = onTogglePin, enabled = enabled) {
+            IconButton(onClick = onTogglePin) {
                 Icon(
                     if (isPinned) Icons.Default.Star else Icons.Outlined.StarOutline,
                     contentDescription = stringResource(

@@ -73,6 +73,10 @@
     <string name="main_status_battery_whitelist">电池白名单</string>
     <string name="main_status_enabled">已开</string>
     <string name="main_status_disabled">未开</string>
+    <string name="main_preset_title">预设 · 滑动或点按切换</string>
+    <string name="main_preset_loading">正在加载预设…</string>
+    <string name="main_preset_models_not_ready">所需模型未就绪</string>
+    <string name="main_preset_models_not_ready_message">所需模型尚未下载或导入，请先到设置中准备模型，再应用该预设。</string>
 
     <!-- 设置 -->
     <string name="settings_title">翻译设置</string>
@@ -81,6 +85,13 @@
     <string name="settings_model">模型名</string>
     <string name="settings_source_lang">源语言</string>
     <string name="settings_target_lang">目标语言</string>
+    <string name="settings_language_conflict_title">源语言与目标语言不能相同</string>
+    <string name="settings_source_language_conflict_message">该语言已经是目标语言，源语言与目标语言不能相同。是否交换两者？</string>
+    <string name="settings_target_language_conflict_message">该语言已经是源语言，源语言与目标语言不能相同。是否交换两者？</string>
+    <string name="settings_language_conflict_cannot_swap_message">该语言已在另一侧使用。“自动检测”不能作为目标语言，因此当前组合无法交换。请先选择具体的源语言。</string>
+    <string name="settings_language_swap_confirm">交换</string>
+    <string name="settings_language_swap_cancel">取消</string>
+    <string name="settings_language_conflict_acknowledge">知道了</string>
     <string name="settings_prompt">Prompt 模板</string>
     <string name="settings_save">保存</string>
     <string name="settings_text_size">译文字号 (sp)</string>
@@ -1265,6 +1276,21 @@
     <string name="word_card_speak_translation">朗读译文</string>
     <string name="word_card_speak_dictionary">朗读词典详情</string>
     <string name="word_card_speak_selection">朗读</string>
+    <string name="translation_correction_action">纠正翻译</string>
+    <string name="translation_correction_title">修改 OCR 与译文</string>
+    <string name="translation_correction_source_hint">OCR 原文</string>
+    <string name="translation_correction_translation_hint">译文</string>
+    <string name="translation_correction_remember">以后都这样翻</string>
+    <string name="translation_correction_glossary_format">建议：同时加入「%1$s」游戏术语库</string>
+    <string name="translation_correction_no_game">当前未识别到游戏。本次可以修改屏幕上的译文，但不能写入游戏翻译记忆。</string>
+    <string name="translation_correction_cancel">取消</string>
+    <string name="translation_correction_save">保存纠错</string>
+    <string name="translation_correction_source_required">OCR 原文不能为空</string>
+    <string name="translation_correction_translation_required">译文不能为空</string>
+    <string name="translation_correction_saved_current">已更新当前译文</string>
+    <string name="translation_correction_saved_memory">已保存到「%1$s」翻译记忆</string>
+    <string name="translation_correction_saved_glossary">已保存「%1$s」翻译记忆和术语</string>
+    <string name="translation_correction_save_failed">保存纠错失败：%1$s</string>
     <string name="word_card_pause_speech">暂停朗读</string>
     <string name="word_card_resume_speech">继续朗读</string>
 
