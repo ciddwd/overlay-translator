@@ -1297,6 +1297,7 @@
 
     <!-- Translation card -->
     <string name="word_card_loading">Translating…</string>
+    <string name="word_card_recognizing">Recognizing selected text…</string>
     <string name="word_card_no_text">No text recognized in the selected area</string>
     <string name="word_card_dismiss">Close</string>
     <string name="word_card_section_source">Source</string>

@@ -75,7 +75,9 @@ class TranslationCardOverlay(
     private var rootView: View? = null
     private var sourceView: StyledTranslationTextView? = null
     private var translationView: StyledTranslationTextView? = null
+    private var copySourceButton: TextView? = null
     private var copyTranslationButton: TextView? = null
+    private var speakSourceButton: View? = null
     private var speakTranslationButton: View? = null
     private var currentSource: String = ""
     private var currentTranslation: String = ""
@@ -99,12 +101,32 @@ class TranslationCardOverlay(
         rootView = null
         sourceView = null
         translationView = null
+        copySourceButton = null
         copyTranslationButton = null
+        speakSourceButton = null
         speakTranslationButton = null
         currentSource = ""
         currentTranslation = ""
         translationFinal = false
         renderWordResult = null
+    }
+
+    fun updateSource(sourceText: String) {
+        currentSource = sourceText
+        sourceView?.apply {
+            text = sourceText
+            visibility = if (sourceText.isBlank()) View.GONE else View.VISIBLE
+            requestLayout()
+        }
+        copySourceButton?.visibility = if (sourceText.isBlank()) View.GONE else View.VISIBLE
+        speakSourceButton?.visibility = if (
+            shouldShowTranslationCardSpeechButton(speechEnabled = true, text = sourceText)
+        ) {
+            View.VISIBLE
+        } else {
+            View.GONE
+        }
+        rootView?.requestLayout()
     }
 
     fun updateTranslation(translation: String?, final: Boolean = false) {
@@ -236,24 +258,36 @@ class TranslationCardOverlay(
             srcLabel,
             LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         )
-        onSpeakSource?.takeIf {
-            shouldShowTranslationCardSpeechButton(speechEnabled = true, text = sourceText)
-        }?.let { action ->
-            topRow.addView(
-                buildSpeakButton(
-                    accentColor = accentColor,
-                    density = density,
-                    contentDescription = context.getString(R.string.word_card_speak_source),
-                    action = action,
-                    onClick = { currentSource.takeIf(String::isNotBlank)?.let(action.onToggle) },
-                )
-            )
+        onSpeakSource?.let { action ->
+            val speakButton = buildSpeakButton(
+                accentColor = accentColor,
+                density = density,
+                contentDescription = context.getString(R.string.word_card_speak_source),
+                action = action,
+                onClick = { currentSource.takeIf(String::isNotBlank)?.let(action.onToggle) },
+            ).apply {
+                visibility = if (
+                    shouldShowTranslationCardSpeechButton(
+                        speechEnabled = true,
+                        text = currentSource,
+                    )
+                ) {
+                    View.VISIBLE
+                } else {
+                    View.GONE
+                }
+            }
+            speakSourceButton = speakButton
+            topRow.addView(speakButton)
         }
         topRow.addView(closeBtn)
         card.addView(topRow)
 
         val sourceTv = StyledTranslationTextView(context).apply {
-            text = sourceText
+            text = sourceText.ifBlank {
+                if (loading) context.getString(R.string.word_card_recognizing) else ""
+            }
+            visibility = if (text.isBlank()) View.GONE else View.VISIBLE
             setTextColor(fgColor)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
             setPadding(0, (4 * density).toInt(), 0, (6 * density).toInt())
@@ -407,11 +441,16 @@ class TranslationCardOverlay(
             setPadding(0, mt, 0, 0)
         }
         val copySrcLabel = context.getString(R.string.word_card_btn_copy_source)
-        val copySrcBtn = buildPillButton(copySrcLabel, accentColor, density)
-        copySrcBtn.setOnClickListener {
-            copyToClipboard(currentSource)
-            flashCopied(copySrcBtn, copySrcLabel)
+        val copySrcBtn = buildPillButton(copySrcLabel, accentColor, density).apply {
+            visibility = if (currentSource.isBlank()) View.GONE else View.VISIBLE
         }
+        copySrcBtn.setOnClickListener {
+            if (currentSource.isNotBlank()) {
+                copyToClipboard(currentSource)
+                flashCopied(copySrcBtn, copySrcLabel)
+            }
+        }
+        copySourceButton = copySrcBtn
         actionRow.addView(copySrcBtn)
         actionRow.addView(View(context).apply {
             layoutParams = LinearLayout.LayoutParams((8 * density).toInt(), 1)

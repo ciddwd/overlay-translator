@@ -1296,6 +1296,7 @@
 
     <!-- 划词翻译卡片 -->
     <string name="word_card_loading">翻译中…</string>
+    <string name="word_card_recognizing">正在识别选中文字…</string>
     <string name="word_card_no_text">选中区域内没识别到文字</string>
     <string name="word_card_dismiss">关闭</string>
     <string name="word_card_section_source">原文</string>

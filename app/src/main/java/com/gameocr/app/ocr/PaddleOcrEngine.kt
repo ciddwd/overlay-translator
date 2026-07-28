@@ -37,6 +37,38 @@ internal enum class PaddleCropOrientation {
     ROTATED_90,
 }
 
+internal data class PaddleRecognitionResizePlan(
+    val naturalWidth: Int,
+    val targetWidth: Int,
+    val capped: Boolean,
+)
+
+internal object PaddleRecognitionSizing {
+    const val TARGET_HEIGHT = 48
+    const val MIN_WIDTH = 8
+
+    /**
+     * The official PP-OCRv5 mobile and PP-OCRv6 tiny/small/medium inference
+     * configurations all declare recognition dynamic shapes up to width 3200.
+     */
+    const val MAX_DYNAMIC_WIDTH = 3200
+
+    fun plan(cropWidth: Int, cropHeight: Int): PaddleRecognitionResizePlan {
+        require(cropWidth > 0) { "cropWidth must be positive" }
+        require(cropHeight > 0) { "cropHeight must be positive" }
+
+        val naturalWidth = kotlin.math.ceil(
+            cropWidth.toDouble() * TARGET_HEIGHT.toDouble() / cropHeight.toDouble()
+        ).toInt().coerceAtLeast(MIN_WIDTH)
+        val targetWidth = naturalWidth.coerceAtMost(MAX_DYNAMIC_WIDTH)
+        return PaddleRecognitionResizePlan(
+            naturalWidth = naturalWidth,
+            targetWidth = targetWidth,
+            capped = targetWidth != naturalWidth,
+        )
+    }
+}
+
 internal fun paddleVerticalCropRotationDegrees(width: Int, height: Int): Float? =
     if (height > width * 1.5f) -90f else null
 
@@ -45,6 +77,8 @@ internal data class PaddleRecognitionCandidate(
     val score: Float,
     val orientation: PaddleCropOrientation,
     val targetWidth: Int = 0,
+    val naturalWidth: Int = targetWidth,
+    val widthCapped: Boolean = false,
     val ctcSteps: Int = 0,
     val numClasses: Int = 0,
     val nonBlankSteps: Int = 0,
@@ -226,7 +260,8 @@ private fun DBPostprocessor.Quad.toPaddleLogString(): String {
 
 private fun PaddleRecognitionCandidate.toPaddleLogString(): String =
     "orientation=${orientation.name} score=${score.fmt3()} quality=${paddleRecognitionQuality(this).fmt3()} " +
-        "targetW=$targetWidth elapsed=${elapsedMs}ms ctcSteps=$ctcSteps classes=$numClasses " +
+        "naturalW=$naturalWidth targetW=$targetWidth capped=$widthCapped " +
+        "elapsed=${elapsedMs}ms ctcSteps=$ctcSteps classes=$numClasses " +
         "nonBlank=$nonBlankSteps emitted=$emittedChars outOfRange=$outOfRangeIdx " +
         "textStats=${paddleLogTextStats(text).toLogString()} text='${text.forPaddleOcrLog()}'"
 
@@ -438,8 +473,8 @@ class PaddleOcrEngine @Inject constructor(
             unclipRatio,
             profile.maxSideLen,
             profile.enableMangaTiling,
-            REC_TARGET_H,
-            REC_MAX_W,
+            PaddleRecognitionSizing.TARGET_HEIGHT,
+            PaddleRecognitionSizing.MAX_DYNAMIC_WIDTH,
             keys.size,
         )
         val probabilityMask = if (maskFrameDecision.analyzeFrame) {
@@ -996,19 +1031,20 @@ class PaddleOcrEngine @Inject constructor(
         boxIndex: Int,
     ): PaddleRecognitionCandidate {
         val startMs = System.currentTimeMillis()
-        val ratio = REC_TARGET_H.toFloat() / crop.height
-        val targetW = (crop.width * ratio).toInt().coerceAtLeast(8).coerceAtMost(REC_MAX_W)
-        val resized = if (crop.width == targetW && crop.height == REC_TARGET_H) {
+        val resizePlan = PaddleRecognitionSizing.plan(crop.width, crop.height)
+        val targetW = resizePlan.targetWidth
+        val targetHeight = PaddleRecognitionSizing.TARGET_HEIGHT
+        val resized = if (crop.width == targetW && crop.height == targetHeight) {
             crop
         } else {
-            Bitmap.createScaledBitmap(crop, targetW, REC_TARGET_H, true)
+            Bitmap.createScaledBitmap(crop, targetW, targetHeight, true)
         }
 
         return try {
             val tensor = OnnxTensor.createTensor(
                 e,
                 FloatBuffer.wrap(bitmapToNCHW(resized, REC_MEAN, REC_STD)),
-                longArrayOf(1, 3, REC_TARGET_H.toLong(), targetW.toLong())
+                longArrayOf(1, 3, targetHeight.toLong(), targetW.toLong())
             )
             tensor.use { t ->
                 session.run(mapOf(session.inputNames.first() to t)).use { res ->
@@ -1020,6 +1056,8 @@ class PaddleOcrEngine @Inject constructor(
                         score = decoded.score,
                         orientation = orientation,
                         targetWidth = targetW,
+                        naturalWidth = resizePlan.naturalWidth,
+                        widthCapped = resizePlan.capped,
                         ctcSteps = decoded.steps,
                         numClasses = decoded.numClasses,
                         nonBlankSteps = decoded.nonBlankSteps,
@@ -1028,14 +1066,16 @@ class PaddleOcrEngine @Inject constructor(
                         elapsedMs = elapsedMs,
                     )
                     Timber.i(
-                        "PaddleOCR run#%d rec[%d] candidate orientation=%s crop=%dx%d input=%dx%d elapsed=%dms score=%.3f quality=%.3f ctcSteps=%d classes=%d nonBlank=%d emitted=%d outOfRange=%d textStats=%s text='%s'",
+                        "PaddleOCR run#%d rec[%d] candidate orientation=%s crop=%dx%d naturalW=%d input=%dx%d capped=%s elapsed=%dms score=%.3f quality=%.3f ctcSteps=%d classes=%d nonBlank=%d emitted=%d outOfRange=%d textStats=%s text='%s'",
                         runId,
                         boxIndex,
                         orientation.name,
                         crop.width,
                         crop.height,
+                        resizePlan.naturalWidth,
                         targetW,
-                        REC_TARGET_H,
+                        targetHeight,
+                        resizePlan.capped,
                         elapsedMs,
                         candidate.score,
                         paddleRecognitionQuality(candidate),
@@ -1202,8 +1242,6 @@ class PaddleOcrEngine @Inject constructor(
         private const val MIN_BOX_AREA = 16
         private const val DET_BOX_SCORE_THRESH = 0.6f
         private const val DET_UNCLIP_RATIO = 1.6f
-        private const val REC_TARGET_H = 48
-        private const val REC_MAX_W = 480
         private val DET_MEAN = floatArrayOf(0.485f, 0.456f, 0.406f)
         private val DET_STD = floatArrayOf(0.229f, 0.224f, 0.225f)
         private val REC_MEAN = floatArrayOf(0.5f, 0.5f, 0.5f)
