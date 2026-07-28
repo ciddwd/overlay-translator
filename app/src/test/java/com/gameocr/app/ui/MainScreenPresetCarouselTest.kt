@@ -228,16 +228,178 @@ class MainScreenPresetCarouselTest {
         listOf(
             Case("uses a vertical pager", carousel.contains("VerticalPager(")),
             Case("indicator overlays instead of taking width", carousel.contains("Box(")),
-            Case("pager keeps full card width", carousel.contains("modifier = Modifier.fillMaxSize()")),
+            Case(
+                "pager keeps the cards inset from the edge-to-edge container",
+                carousel.contains(".padding(horizontal = MainScreenHorizontalPadding)"),
+            ),
             Case("layout has no width-taking weight", !carousel.contains(".weight(1f)")),
             Case("status is the first page", carousel.contains("STATUS_PAGE -> StatusCard(")),
             Case("preset is the second page", carousel.contains("PRESET_PAGE -> PresetCarouselCard(")),
             Case(
                 "pager and both pages fill one viewport",
-                carousel.split("Modifier.fillMaxSize()").size - 1 == 3,
+                carousel.split(".fillMaxSize()").size - 1 == 3,
             ),
             Case("has a two-page indicator", carousel.contains("repeat(STATUS_PRESET_PAGE_COUNT)")),
         ).forEach { case -> assertTrue(case.name, case.expected) }
+    }
+
+    @Test
+    fun mainScreen_placesTheVerticalIndicatorOutsideTheCards() {
+        val source = moduleFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readText()
+        val carouselCall = source.indexOf("            StatusPresetCarousel(")
+        val captureCard = source.indexOf(
+            "            ActionCard(title = stringResource(R.string.main_section_capture))",
+            carouselCall,
+        )
+        val mainColumn = source.substring(
+            source.lastIndexOf("        Column(", carouselCall),
+            captureCard,
+        )
+        val carouselFunction = source.indexOf("private fun StatusPresetCarousel(")
+        val carouselFunctionEnd = source.indexOf(
+            "private const val STATUS_PRESET_PAGE_COUNT",
+            carouselFunction,
+        )
+        val carousel = source.substring(carouselFunction, carouselFunctionEnd)
+        val actionCardFunction = source.substring(
+            source.indexOf("private fun ActionCard("),
+            source.indexOf("private enum class StartMode"),
+        )
+
+        data class Case(val name: String, val expected: Boolean)
+
+        listOf(
+            Case(
+                "main content has no horizontal outer padding",
+                mainColumn.contains(".padding(vertical = 8.dp)") &&
+                    !mainColumn.contains(".padding(horizontal = 16.dp, vertical = 8.dp)"),
+            ),
+            Case(
+                "carousel cards keep the original 16dp horizontal position",
+                carousel.contains(".padding(horizontal = MainScreenHorizontalPadding)"),
+            ),
+            Case(
+                "indicator remains aligned to the edge-to-edge carousel container",
+                carousel.contains(".align(Alignment.CenterEnd)") &&
+                    carousel.contains(".padding(end = 8.dp)"),
+            ),
+            Case(
+                "cards below the carousel own the same horizontal padding",
+                actionCardFunction.contains(
+                    ".padding(horizontal = MainScreenHorizontalPadding)"
+                ),
+            ),
+            Case(
+                "shared horizontal padding remains 16dp",
+                source.contains("private val MainScreenHorizontalPadding = 16.dp"),
+            ),
+        ).forEach { case -> assertTrue(case.name, case.expected) }
+    }
+
+    @Test
+    fun statusPresetDiscoveryHintEligibility_isTableDriven() {
+        data class Case(
+            val name: String,
+            val presetPageSeen: Boolean,
+            val hintAlreadyPlayed: Boolean,
+            val settledPage: Int,
+            val isScrollInProgress: Boolean,
+            val pageCount: Int,
+            val expected: Boolean,
+        )
+
+        listOf(
+            Case("unseen idle status page", false, false, 0, false, 2, true),
+            Case("preset was seen in an earlier session", true, false, 0, false, 2, false),
+            Case("hint already played this session", false, true, 0, false, 2, false),
+            Case("already settled on presets", false, false, 1, false, 2, false),
+            Case("user is actively scrolling", false, false, 0, true, 2, false),
+            Case("preset page is unavailable", false, false, 0, false, 1, false),
+            Case("empty corrupted page count", false, false, 0, false, 0, false),
+            Case("unexpected settled page", false, false, 3, false, 4, false),
+        ).forEach { case ->
+            assertEquals(
+                case.name,
+                case.expected,
+                shouldRunMainStatusPresetHint(
+                    presetPageSeen = case.presetPageSeen,
+                    hintAlreadyPlayed = case.hintAlreadyPlayed,
+                    settledPage = case.settledPage,
+                    isScrollInProgress = case.isScrollInProgress,
+                    pageCount = case.pageCount,
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun statusPresetDiscoverySeenDecision_isTableDriven() {
+        data class Case(
+            val name: String,
+            val settledPage: Int,
+            val pageCount: Int,
+            val expectedSeen: Boolean,
+        )
+
+        listOf(
+            Case("status page is not discovery", 0, 2, false),
+            Case("preset page is discovery", 1, 2, true),
+            Case("preset index without a preset page", 1, 1, false),
+            Case("negative page is ignored", -1, 2, false),
+            Case("later unexpected page is ignored", 2, 3, false),
+        ).forEach { case ->
+            assertEquals(
+                case.name,
+                case.expectedSeen,
+                mainStatusPresetPageWasSeen(
+                    settledPage = case.settledPage,
+                    pageCount = case.pageCount,
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun statusPresetDiscoveryHint_isPartiallyRevealedBouncyAndPersistent() {
+        val main = moduleFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readText()
+        val repository =
+            moduleFile("src/main/java/com/gameocr/app/data/SettingsRepository.kt").readText()
+        val carouselStart = main.indexOf("private fun StatusPresetCarousel(")
+        val carouselEnd = main.indexOf(
+            "private const val STATUS_PRESET_PAGE_COUNT",
+            carouselStart,
+        )
+        val carousel = main.substring(carouselStart, carouselEnd)
+
+        data class Case(val name: String, val content: String, val marker: String)
+
+        listOf(
+            Case("waits before nudging", carousel, "STATUS_PRESET_DISCOVERY_HINT_DELAY_MS"),
+            Case("observes the settled page", carousel, "snapshotFlow { pagerState.settledPage }"),
+            Case("reveals only part of presets", carousel, "pageOffsetFraction ="),
+            Case("returns with a spring", carousel, "animationSpec = spring("),
+            Case("uses a bouncy damping ratio", carousel, "Spring.DampingRatioMediumBouncy"),
+            Case("uses a slow spring", carousel, "Spring.StiffnessVeryLow"),
+            Case("loads persisted discovery", main, "viewModel.hasSeenMainStatusPreset()"),
+            Case("persists preset discovery", main, "viewModel.markMainStatusPresetSeen()"),
+            Case(
+                "repository owns a discovery preference",
+                repository,
+                "booleanPreferencesKey(\"main_status_preset_seen\")",
+            ),
+        ).forEach { case ->
+            assertTrue("${case.name}: missing ${case.marker}", case.content.contains(case.marker))
+        }
+        listOf(
+            "hint waits one second before moving" to
+                "STATUS_PRESET_DISCOVERY_HINT_DELAY_MS = 1_000L",
+            "reveal motion is deliberately slow" to
+                "STATUS_PRESET_DISCOVERY_HINT_REVEAL_MS = 650",
+            "partial reveal remains visible before returning" to
+                "STATUS_PRESET_DISCOVERY_HINT_HOLD_MS = 1_500L",
+        ).forEach { (name, marker) ->
+            assertTrue("$name: missing $marker", main.contains(marker))
+        }
     }
 
     @Test

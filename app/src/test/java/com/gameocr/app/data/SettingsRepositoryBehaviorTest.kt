@@ -13,6 +13,28 @@ import org.junit.Test
 class SettingsRepositoryBehaviorTest {
 
     @Test
+    fun mainStatusPresetSeen_tableDriven_persistsDiscoveryState() = runBlocking {
+        data class Case(
+            val name: String,
+            val markSeen: Boolean,
+            val expectedSeen: Boolean,
+        )
+
+        listOf(
+            Case("fresh install has not discovered presets", markSeen = false, expectedSeen = false),
+            Case("visiting presets is persisted", markSeen = true, expectedSeen = true),
+        ).forEach { case ->
+            val repository = fileBackedRepository(
+                Files.createTempDirectory("settings-main-preset-seen-test").toFile()
+            )
+
+            if (case.markSeen) repository.markMainStatusPresetSeen()
+
+            assertEquals(case.name, case.expectedSeen, repository.hasSeenMainStatusPreset())
+        }
+    }
+
+    @Test
     fun translationLanguagePair_tableDriven_rejectsConflictingUpdates() = runBlocking {
         data class Case(
             val name: String,

@@ -5,6 +5,10 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -63,6 +67,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -148,6 +153,7 @@ fun MainScreen(
     var userOverrodeMode by remember { mutableStateOf(false) }
     var showClearRegionDialog by remember { mutableStateOf(false) }
     var showSharePrompt by rememberSaveable { mutableStateOf(false) }
+    var presetPageSeen by rememberSaveable { mutableStateOf<Boolean?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
     val presetNotReadyMessage = stringResource(R.string.main_preset_models_not_ready_message)
     val shareSubject = stringResource(R.string.settings_about_share_subject)
@@ -167,6 +173,10 @@ fun MainScreen(
     }
     LaunchedEffect(presets) {
         presetModelIssues = viewModel.presetModelIssues(presets)
+    }
+    LaunchedEffect(viewModel) {
+        val storedValue = viewModel.hasSeenMainStatusPreset()
+        if (presetPageSeen != true) presetPageSeen = storedValue
     }
 
     // 主屏一进就触发自动检查更新。autoCheckIfDue 内部 1h 节流，频繁进出主屏不会浪费 API
@@ -321,7 +331,7 @@ fun MainScreen(
                 .fillMaxSize()
                 .padding(inner)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             // 状态卡
@@ -344,6 +354,17 @@ fun MainScreen(
                 },
                 onPresetBlocked = {
                     scope.launch { snackbarHostState.showSnackbar(presetNotReadyMessage) }
+                },
+                showPresetDiscoveryHint =
+                    presetPageSeen == false &&
+                        !autoChecking &&
+                        !showSharePrompt &&
+                        topUpdateState is com.gameocr.app.update.UpdateViewModel.State.Idle,
+                onPresetPageSeen = {
+                    if (presetPageSeen != true) {
+                        presetPageSeen = true
+                        scope.launch { viewModel.markMainStatusPresetSeen() }
+                    }
                 },
             )
 
@@ -920,8 +941,56 @@ private fun StatusPresetCarousel(
     modelIssuesByPreset: Map<String, List<TranslationPresetModelIssue>>?,
     onPresetSelected: (TranslationPreset) -> Unit,
     onPresetBlocked: () -> Unit,
+    showPresetDiscoveryHint: Boolean,
+    onPresetPageSeen: () -> Unit,
 ) {
     val pagerState = rememberPagerState(pageCount = { STATUS_PRESET_PAGE_COUNT })
+    val currentOnPresetPageSeen by rememberUpdatedState(onPresetPageSeen)
+    var discoveryHintPlayed by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(pagerState) {
+        snapshotFlow { pagerState.settledPage }
+            .distinctUntilChanged()
+            .collect { settledPage ->
+                if (mainStatusPresetPageWasSeen(settledPage, pagerState.pageCount)) {
+                    currentOnPresetPageSeen()
+                }
+            }
+    }
+
+    LaunchedEffect(pagerState, showPresetDiscoveryHint) {
+        if (!showPresetDiscoveryHint) return@LaunchedEffect
+        delay(STATUS_PRESET_DISCOVERY_HINT_DELAY_MS)
+        if (
+            !shouldRunMainStatusPresetHint(
+                presetPageSeen = false,
+                hintAlreadyPlayed = discoveryHintPlayed,
+                settledPage = pagerState.settledPage,
+                isScrollInProgress = pagerState.isScrollInProgress,
+                pageCount = pagerState.pageCount,
+            )
+        ) {
+            return@LaunchedEffect
+        }
+
+        discoveryHintPlayed = true
+        pagerState.animateScrollToPage(
+            page = STATUS_PAGE,
+            pageOffsetFraction = STATUS_PRESET_DISCOVERY_HINT_OFFSET_FRACTION,
+            animationSpec = tween(
+                durationMillis = STATUS_PRESET_DISCOVERY_HINT_REVEAL_MS,
+                easing = FastOutSlowInEasing,
+            ),
+        )
+        delay(STATUS_PRESET_DISCOVERY_HINT_HOLD_MS)
+        pagerState.animateScrollToPage(
+            page = STATUS_PAGE,
+            animationSpec = spring(
+                dampingRatio = Spring.DampingRatioMediumBouncy,
+                stiffness = Spring.StiffnessVeryLow,
+            ),
+        )
+    }
 
     Box(
         modifier = Modifier
@@ -930,7 +999,9 @@ private fun StatusPresetCarousel(
     ) {
         VerticalPager(
             state = pagerState,
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = MainScreenHorizontalPadding),
             pageSpacing = 12.dp,
         ) { page ->
             when (page) {
@@ -980,6 +1051,26 @@ private fun StatusPresetCarousel(
 private const val STATUS_PRESET_PAGE_COUNT = 2
 private const val STATUS_PAGE = 0
 private const val PRESET_PAGE = 1
+private const val STATUS_PRESET_DISCOVERY_HINT_DELAY_MS = 1_000L
+private const val STATUS_PRESET_DISCOVERY_HINT_REVEAL_MS = 650
+private const val STATUS_PRESET_DISCOVERY_HINT_HOLD_MS = 1_500L
+private const val STATUS_PRESET_DISCOVERY_HINT_OFFSET_FRACTION = 0.18f
+
+internal fun shouldRunMainStatusPresetHint(
+    presetPageSeen: Boolean,
+    hintAlreadyPlayed: Boolean,
+    settledPage: Int,
+    isScrollInProgress: Boolean,
+    pageCount: Int,
+): Boolean =
+    !presetPageSeen &&
+        !hintAlreadyPlayed &&
+        settledPage == STATUS_PAGE &&
+        !isScrollInProgress &&
+        pageCount > PRESET_PAGE
+
+internal fun mainStatusPresetPageWasSeen(settledPage: Int, pageCount: Int): Boolean =
+    pageCount > PRESET_PAGE && settledPage == PRESET_PAGE
 
 @Composable
 private fun StatusCard(
@@ -1381,7 +1472,9 @@ private fun ActionCard(
     content: @Composable () -> Unit,
 ) {
     Card(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .padding(horizontal = MainScreenHorizontalPadding)
+            .fillMaxWidth(),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface,
             contentColor = MaterialTheme.colorScheme.onSurface
@@ -1432,6 +1525,8 @@ private fun AutoUpdateCheckOverlay() {
     }
 }
 
+private val MainScreenHorizontalPadding = 16.dp
+
 private enum class StartMode { MEDIA_PROJECTION, SHIZUKU }
 
 @HiltViewModel
@@ -1458,6 +1553,10 @@ class MainViewModel @Inject constructor(
     }
     suspend fun markSharePromptShown() {
         repo.markSharePromptShown()
+    }
+    suspend fun hasSeenMainStatusPreset(): Boolean = repo.hasSeenMainStatusPreset()
+    suspend fun markMainStatusPresetSeen() {
+        repo.markMainStatusPresetSeen()
     }
     fun shizukuAvailability(context: android.content.Context): ShizukuCapabilities.Availability =
         shizukuCapabilities.availability(context)
