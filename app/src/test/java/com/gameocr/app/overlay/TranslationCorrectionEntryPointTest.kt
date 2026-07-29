@@ -3,6 +3,8 @@ package com.gameocr.app.overlay
 import com.gameocr.app.data.FloatingWindowContentMode
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -120,6 +122,82 @@ class TranslationCorrectionEntryPointTest {
                     translation = case.translation,
                 ),
             )
+        }
+    }
+
+    @Test
+    fun quickGlossaryDraft_tableDriven_isIndependentFromTranslationMemoryRules() {
+        data class Case(
+            val name: String,
+            val enabled: Boolean,
+            val source: String,
+            val target: String,
+            val expected: TranslationCorrectionGlossaryDraft?,
+        )
+
+        listOf(
+            Case("disabled", false, "", "", null),
+            Case(
+                "trims a character name",
+                true,
+                "  アルトリア  ",
+                "  阿尔托莉雅  ",
+                TranslationCorrectionGlossaryDraft("アルトリア", "阿尔托莉雅"),
+            ),
+            Case(
+                "accepts a long phrase without the old suggestion gate",
+                true,
+                "The Promised Place Beyond the Silver Horizon",
+                "银色地平线彼端的约定之地",
+                TranslationCorrectionGlossaryDraft(
+                    "The Promised Place Beyond the Silver Horizon",
+                    "银色地平线彼端的约定之地",
+                ),
+            ),
+        ).forEach { case ->
+            assertEquals(
+                case.name,
+                case.expected,
+                buildTranslationCorrectionGlossaryDraft(
+                    enabled = case.enabled,
+                    sourceTerm = case.source,
+                    targetTerm = case.target,
+                ),
+            )
+        }
+
+        listOf(
+            "blank source" to ("" to "Translation"),
+            "blank target" to ("Source" to " "),
+        ).forEach { (name, pair) ->
+            assertThrows(name, IllegalArgumentException::class.java) {
+                buildTranslationCorrectionGlossaryDraft(
+                    enabled = true,
+                    sourceTerm = pair.first,
+                    targetTerm = pair.second,
+                )
+            }
+        }
+        assertNull(buildTranslationCorrectionGlossaryDraft(false, "Source", "Translation"))
+    }
+
+    @Test
+    fun correctionOverlay_exposesQuickGlossaryFields_tableDriven() {
+        val source = sourceFile(
+            "src/main/java/com/gameocr/app/overlay/TranslationCorrectionOverlay.kt"
+        ).readText()
+        data class Case(val name: String, val marker: String)
+
+        listOf(
+            Case("quick add is opt in", "checked = false"),
+            Case("game-scoped label", "R.string.translation_correction_glossary_format"),
+            Case("global fallback label", "R.string.translation_correction_glossary_global"),
+            Case("separate source term field", "translation_correction_glossary_source_hint"),
+            Case("separate target term field", "translation_correction_glossary_target_hint"),
+            Case("fields expand on demand", "glossaryFields.visibility = if (checked)"),
+            Case("draft carries independent term pair", "glossary = buildTranslationCorrectionGlossaryDraft("),
+        ).forEach { case ->
+            assertTrue(case.name, source.contains(case.marker))
         }
     }
 

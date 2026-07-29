@@ -358,7 +358,15 @@ data class Settings(
     val translationPresets: List<TranslationPreset> = emptyList(),
     val activeTranslationPresetId: String = "",
     @kotlinx.serialization.Transient
-    val runtimeTranslationContext: String = ""
+    val runtimeTranslationContext: String = "",
+    /**
+     * Request-scoped glossary/memory override. null resolves the foreground app as before;
+     * an empty string explicitly selects global glossary entries and disables app memory.
+     */
+    @kotlinx.serialization.Transient
+    val runtimeTranslationScopePackage: String? = null,
+    @kotlinx.serialization.Transient
+    val runtimeTranslationScopeLabel: String = "",
 ) {
     companion object {
         const val DEFAULT_LOOP_TEXT_STABLE_DURATION_MS: Long = 500L
@@ -562,12 +570,13 @@ data class TranslationPreset(
 
 object TranslationPresetCatalog {
     const val BUILTIN_MANGA_JA_ZH: String = "builtin_manga_ja_zh"
+    const val BUILTIN_MANGA_JA_ZH_NAME: String = "Offline Manga OCR to Chinese"
     const val UNSAVED_DRAFT_ID: String = "custom_unsaved_translation_preset"
 
     fun builtIns(): List<TranslationPreset> = listOf(
         fromSettings(
             id = BUILTIN_MANGA_JA_ZH,
-            name = "Offline Manga OCR to Chinese",
+            name = BUILTIN_MANGA_JA_ZH_NAME,
             shortName = "Manga",
             settings = Settings().copy(
                 sourceLang = "ja",

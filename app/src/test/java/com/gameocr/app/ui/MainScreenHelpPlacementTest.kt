@@ -15,7 +15,7 @@ class MainScreenHelpPlacementTest {
             source.indexOf("snackbarHost ="),
         )
         val captureSection = source.substring(
-            source.indexOf("ActionCard(title = stringResource(R.string.main_section_capture))"),
+            source.indexOf("CaptureGalleryCarousel("),
             source.indexOf("ActionCard(title = stringResource(R.string.main_section_region))"),
         )
 
@@ -31,6 +31,7 @@ class MainScreenHelpPlacementTest {
             Case("capture section owns help", captureSection, "onClick = onOpenOnboarding", true),
             Case("usage and help share a row", captureSection, "horizontalArrangement = Arrangement.SpaceBetween", true),
             Case("usage label remains visible", captureSection, "R.string.main_label_usage", true),
+            Case("usage help text remains visible", captureSection, "R.string.main_usage_text", true),
             Case("help keeps its icon", captureSection, "Icons.AutoMirrored.Outlined.HelpOutline", true),
             Case("help keeps its text", captureSection, "R.string.main_help", true),
         )

@@ -25,16 +25,29 @@ data class ForegroundApp(
 
 internal fun isUsageAccessModeGranted(mode: Int): Boolean = mode == AppOpsManager.MODE_ALLOWED
 
+internal fun isUsageAccessGranted(
+    mode: Int,
+    hasReadableUsageEvents: Boolean,
+): Boolean = isUsageAccessModeGranted(mode) || hasReadableUsageEvents
+
 internal fun isUsageAccessGranted(context: Context): Boolean {
     val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
-    return isUsageAccessModeGranted(
-        appOps.checkOpNoThrow(
-            AppOpsManager.OPSTR_GET_USAGE_STATS,
-            Process.myUid(),
-            context.packageName,
-        )
+    val mode = appOps.checkOpNoThrow(
+        AppOpsManager.OPSTR_GET_USAGE_STATS,
+        Process.myUid(),
+        context.packageName,
     )
+    if (isUsageAccessModeGranted(mode)) return true
+
+    val usage = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+    val now = System.currentTimeMillis()
+    val hasReadableUsageEvents = runCatching {
+        usage.queryEvents(now - USAGE_ACCESS_PROBE_LOOKBACK_MS, now).hasNextEvent()
+    }.getOrDefault(false)
+    return isUsageAccessGranted(mode, hasReadableUsageEvents)
 }
+
+private const val USAGE_ACCESS_PROBE_LOOKBACK_MS = 24L * 60L * 60L * 1000L
 
 internal object ForegroundAppSelectionPolicy {
     fun select(

@@ -42,7 +42,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SecondaryTabRow
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -54,6 +56,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -82,6 +85,11 @@ private data class PendingGlossaryConflict(
     val existing: GlossaryTermEntity,
 )
 
+private enum class TranslationLibraryTab {
+    TERMS,
+    MEMORY,
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GlossaryScreen(
@@ -90,6 +98,8 @@ fun GlossaryScreen(
 ) {
     val scope = rememberCoroutineScope()
     val terms by viewModel.terms.collectAsState()
+    val memories by viewModel.memories.collectAsState()
+    var selectedTab by rememberSaveable { mutableStateOf(TranslationLibraryTab.TERMS) }
     var currentApp by remember { mutableStateOf<ForegroundApp?>(null) }
     var defaultLanguages by remember { mutableStateOf("auto" to "zh-CN") }
     var selectableApps by remember { mutableStateOf<List<SelectableApp>>(emptyList()) }
@@ -137,16 +147,18 @@ fun GlossaryScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { showFilter = true }) {
-                        Icon(
-                            Icons.Default.Search,
-                            stringResource(R.string.glossary_filter),
-                            tint = if (listFilter.isActive) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurface
-                            },
-                        )
+                    if (selectedTab == TranslationLibraryTab.TERMS) {
+                        IconButton(onClick = { showFilter = true }) {
+                            Icon(
+                                Icons.Default.Search,
+                                stringResource(R.string.glossary_filter),
+                                tint = if (listFilter.isActive) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface
+                                },
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -155,38 +167,71 @@ fun GlossaryScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = {
-                editing = null
-                showEditor = true
-            }) {
-                Icon(Icons.Default.Add, stringResource(R.string.glossary_add))
+            if (selectedTab == TranslationLibraryTab.TERMS) {
+                FloatingActionButton(onClick = {
+                    editing = null
+                    showEditor = true
+                }) {
+                    Icon(Icons.Default.Add, stringResource(R.string.glossary_add))
+                }
             }
         },
     ) { padding ->
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            if (visibleTerms.isEmpty()) {
-                item {
-                    Text(
-                        text = stringResource(
-                            if (terms.isEmpty()) R.string.glossary_empty else R.string.glossary_filter_empty
-                        ),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.fillMaxWidth().padding(24.dp),
-                    )
-                }
+        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            SecondaryTabRow(selectedTabIndex = selectedTab.ordinal) {
+                Tab(
+                    selected = selectedTab == TranslationLibraryTab.TERMS,
+                    onClick = { selectedTab = TranslationLibraryTab.TERMS },
+                    text = { Text(stringResource(R.string.translation_library_terms_tab)) },
+                )
+                Tab(
+                    selected = selectedTab == TranslationLibraryTab.MEMORY,
+                    onClick = { selectedTab = TranslationLibraryTab.MEMORY },
+                    text = { Text(stringResource(R.string.translation_library_memory_tab)) },
+                )
             }
-            items(visibleTerms, key = GlossaryTermEntity::id) { term ->
-                GlossaryTermCard(
-                    term = term,
-                    onEdit = {
-                        editing = term
-                        showEditor = true
+            when (selectedTab) {
+                TranslationLibraryTab.TERMS -> LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (visibleTerms.isEmpty()) {
+                        item {
+                            Text(
+                                text = stringResource(
+                                    if (terms.isEmpty()) {
+                                        R.string.glossary_empty
+                                    } else {
+                                        R.string.glossary_filter_empty
+                                    }
+                                ),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.fillMaxWidth().padding(24.dp),
+                            )
+                        }
+                    }
+                    items(visibleTerms, key = GlossaryTermEntity::id) { term ->
+                        GlossaryTermCard(
+                            term = term,
+                            onEdit = {
+                                editing = term
+                                showEditor = true
+                            },
+                            onDelete = { pendingDelete = term },
+                        )
+                    }
+                }
+                TranslationLibraryTab.MEMORY -> TranslationMemoryPane(
+                    entries = memories,
+                    onUpdate = { id, correctedSource, correctedTranslation ->
+                        scope.launch {
+                            viewModel.updateMemory(id, correctedSource, correctedTranslation)
+                        }
                     },
-                    onDelete = { pendingDelete = term },
+                    onDelete = { id ->
+                        scope.launch { viewModel.deleteMemory(id) }
+                    },
                 )
             }
         }

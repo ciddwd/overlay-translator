@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Rect
 import com.gameocr.app.data.MergeStrength
 import com.gameocr.app.data.OcrEngineKind
+import com.gameocr.app.data.Settings
 import com.gameocr.app.data.SettingsRepository
 import com.gameocr.app.ocr.BubbleClusterer.IntRect
 import javax.inject.Inject
@@ -31,6 +32,14 @@ class RoutingOcrEngine @Inject constructor(
 ) : OcrEngine {
 
     override suspend fun recognize(bitmap: Bitmap, kind: OcrEngineKind): List<TextBlock> {
+        return recognizeWithSettings(bitmap, kind, settingsRepository.get())
+    }
+
+    suspend fun recognizeWithSettings(
+        bitmap: Bitmap,
+        kind: OcrEngineKind,
+        settings: Settings,
+    ): List<TextBlock> {
         val raw = when (kind) {
             OcrEngineKind.BAIDU -> baidu.recognize(bitmap, kind)
             OcrEngineKind.TENCENT -> tencent.recognize(bitmap, kind)
@@ -42,7 +51,6 @@ class RoutingOcrEngine @Inject constructor(
             OcrEngineKind.MANGA_OCR_JA -> manga.recognize(bitmap, kind)
             else -> mlKit.recognize(bitmap, kind)
         }
-        val settings = settingsRepository.get()
         Timber.tag("OcrMerge").i(
             "engine=%s raw=%d merge=%s strength=%s",
             kind, raw.size, settings.mergeAdjacentBlocks, settings.mergeStrength

@@ -83,7 +83,17 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class Route { Main, Onboarding, Settings, Glossary, Logs, LegalNotices }
+private enum class Route {
+    Main,
+    Onboarding,
+    Settings,
+    Glossary,
+    Logs,
+    LegalNotices,
+    GalleryConfirm,
+    GalleryTasks,
+    GalleryTaskDetail,
+}
 
 @Composable
 private fun AppRoot(routeRequest: State<String?>) {
@@ -105,6 +115,10 @@ private fun AppRoot(routeRequest: State<String?>) {
         )
     }
     val settingsListState = rememberLazyListState()
+    var selectedGalleryUris by rememberSaveable { mutableStateOf(emptyList<String>()) }
+    var selectedGalleryTaskId by rememberSaveable { mutableStateOf("") }
+    var mainStatusPresetPageIndex by rememberSaveable { mutableIntStateOf(0) }
+    var mainCarouselPageIndex by rememberSaveable { mutableIntStateOf(0) }
     LaunchedEffect(routeRequest.value) {
         val requested = routeRequest.value ?: return@LaunchedEffect
         if (Route.entries.any { it.name == requested }) {
@@ -131,6 +145,19 @@ private fun AppRoot(routeRequest: State<String?>) {
                     onboardingFirstRun = false
                     routeName = Route.Onboarding.name
                 },
+                onGalleryImagesSelected = { uris ->
+                    selectedGalleryUris = uris
+                    routeName = Route.GalleryConfirm.name
+                },
+                onOpenGalleryTasks = { routeName = Route.GalleryTasks.name },
+                onOpenGalleryTask = { taskId ->
+                    selectedGalleryTaskId = taskId
+                    routeName = Route.GalleryTaskDetail.name
+                },
+                initialStatusPresetPageIndex = mainStatusPresetPageIndex,
+                onStatusPresetPageChanged = { mainStatusPresetPageIndex = it },
+                initialCarouselPageIndex = mainCarouselPageIndex,
+                onCarouselPageChanged = { mainCarouselPageIndex = it },
             )
             Route.Onboarding -> OnboardingScreen(
                 firstRun = onboardingFirstRun,
@@ -165,6 +192,38 @@ private fun AppRoot(routeRequest: State<String?>) {
             Route.Glossary -> GlossaryScreen(onBack = { routeName = Route.Settings.name })
             Route.Logs -> LogScreen(onBack = { routeName = Route.Main.name })
             Route.LegalNotices -> LegalNoticesScreen(onBack = { routeName = Route.Main.name })
+            Route.GalleryConfirm -> GalleryTranslationConfirmScreen(
+                selectedUris = selectedGalleryUris,
+                onSelectionChanged = { selectedGalleryUris = it },
+                onBack = {
+                    selectedGalleryUris = emptyList()
+                    routeName = Route.Main.name
+                },
+                onCreated = { taskId ->
+                    selectedGalleryUris = emptyList()
+                    selectedGalleryTaskId = taskId
+                    routeName = Route.GalleryTaskDetail.name
+                },
+            )
+            Route.GalleryTasks -> GalleryTranslationTasksScreen(
+                onBack = { routeName = Route.Main.name },
+                onImagesSelected = { uris ->
+                    selectedGalleryUris = uris
+                    routeName = Route.GalleryConfirm.name
+                },
+                onOpenTask = { taskId ->
+                    selectedGalleryTaskId = taskId
+                    routeName = Route.GalleryTaskDetail.name
+                },
+            )
+            Route.GalleryTaskDetail -> GalleryTranslationTaskDetailScreen(
+                taskId = selectedGalleryTaskId,
+                onBack = { routeName = Route.GalleryTasks.name },
+                onDeleted = {
+                    selectedGalleryTaskId = ""
+                    routeName = Route.GalleryTasks.name
+                },
+            )
         }
     }
 }

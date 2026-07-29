@@ -73,26 +73,37 @@ class TranslationContextResolver @Inject constructor(
         }
         if (!settings.translationGlossaryEnabled && !settings.sendAppNameToTranslator) return settings
         val startedAt = SystemClock.elapsedRealtime()
-        val app = foregroundAppResolver.resolve(settings.foregroundAppDetectionMode)
+        val explicitScope = settings.runtimeTranslationScopePackage
+        val app = if (explicitScope == null) {
+            foregroundAppResolver.resolve(settings.foregroundAppDetectionMode)
+        } else {
+            null
+        }
+        val packageName = explicitScope ?: app?.packageName
+        val appLabel = if (explicitScope == null) {
+            app?.displayName
+        } else {
+            settings.runtimeTranslationScopeLabel.takeIf(String::isNotBlank)
+        }
         val matches = if (settings.translationGlossaryEnabled) {
             glossaryRepository.matchingTerms(
                 source = source,
                 sourceLang = settings.sourceLang,
                 targetLang = settings.targetLang,
-                packageName = app?.packageName,
+                packageName = packageName?.takeIf(String::isNotBlank),
             )
         } else {
             emptyList()
         }
         val prompt = TranslationPromptContextBuilder.build(
-            appName = app?.displayName?.takeIf { settings.sendAppNameToTranslator },
+            appName = appLabel?.takeIf { settings.sendAppNameToTranslator },
             matches = matches,
             json = json,
         )
         Timber.tag("TranslationPerf").i(
             "stage=context_ready mode=%s appSource=%s glossaryTerms=%d elapsedMs=%d",
             settings.foregroundAppDetectionMode.name,
-            app?.source?.name ?: "none",
+            if (explicitScope == null) app?.source?.name ?: "none" else "explicit",
             matches.size,
             SystemClock.elapsedRealtime() - startedAt,
         )

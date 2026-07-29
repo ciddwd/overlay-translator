@@ -32,8 +32,27 @@ data class TranslationCorrectionDraft(
     val correctedSource: String,
     val correctedTranslation: String,
     val rememberTranslation: Boolean,
-    val addToGlossary: Boolean,
+    val glossary: TranslationCorrectionGlossaryDraft?,
 )
+
+data class TranslationCorrectionGlossaryDraft(
+    val sourceTerm: String,
+    val targetTerm: String,
+)
+
+internal fun buildTranslationCorrectionGlossaryDraft(
+    enabled: Boolean,
+    sourceTerm: String,
+    targetTerm: String,
+): TranslationCorrectionGlossaryDraft? {
+    if (!enabled) return null
+    require(sourceTerm.isNotBlank()) { "Glossary source term is empty." }
+    require(targetTerm.isNotBlank()) { "Glossary target term is empty." }
+    return TranslationCorrectionGlossaryDraft(
+        sourceTerm = sourceTerm.trim(),
+        targetTerm = targetTerm.trim(),
+    )
+}
 
 internal fun isTranslationCorrectionActionAvailable(
     isFinal: Boolean,
@@ -58,7 +77,6 @@ class TranslationCorrectionOverlay(
     fun show(
         request: TranslationCorrectionRequest,
         scope: TranslationMemoryScope?,
-        suggestGlossary: Boolean,
         onSave: (TranslationCorrectionDraft) -> Unit,
     ) {
         dismiss()
@@ -90,14 +108,41 @@ class TranslationCorrectionOverlay(
         ).apply {
             isEnabled = scope != null
         }
-        val glossary = checkbox(
+        val quickGlossary = checkbox(
             label = scope?.let {
                 context.getString(R.string.translation_correction_glossary_format, it.appLabel)
-            }.orEmpty(),
-            checked = suggestGlossary,
+            } ?: context.getString(R.string.translation_correction_glossary_global),
+            checked = false,
             palette = palette,
-        ).apply {
-            visibility = if (scope != null && suggestGlossary) View.VISIBLE else View.GONE
+        )
+        val glossarySourceInput = termEditor(
+            hint = context.getString(R.string.translation_correction_glossary_source_hint),
+            palette = palette,
+            density = density,
+        )
+        val glossaryTargetInput = termEditor(
+            hint = context.getString(R.string.translation_correction_glossary_target_hint),
+            palette = palette,
+            density = density,
+        )
+        val glossaryFields = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            setPadding((32 * density).toInt(), 0, 0, (4 * density).toInt())
+            addView(glossarySourceInput, matchWidth())
+            addView(spacer((8 * density).toInt()))
+            addView(glossaryTargetInput, matchWidth())
+        }
+        quickGlossary.setOnCheckedChangeListener { _, checked ->
+            if (checked) {
+                if (glossarySourceInput.text.isBlank()) {
+                    glossarySourceInput.setText(sourceInput.text.toString().trim())
+                }
+                if (glossaryTargetInput.text.isBlank()) {
+                    glossaryTargetInput.setText(translationInput.text.toString().trim())
+                }
+            }
+            glossaryFields.visibility = if (checked) View.VISIBLE else View.GONE
         }
 
         val content = LinearLayout(context).apply {
@@ -107,7 +152,22 @@ class TranslationCorrectionOverlay(
             addView(translationInput, matchWidth())
             addView(spacer((12 * density).toInt()))
             addView(remember, matchWidth())
-            addView(glossary, matchWidth())
+            if (scope != null) {
+                addView(TextView(context).apply {
+                    text = context.getString(R.string.translation_correction_remember_summary)
+                    setTextColor(palette.secondaryText)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                    setPadding((32 * density).toInt(), 0, 0, (4 * density).toInt())
+                })
+            }
+            addView(quickGlossary, matchWidth())
+            addView(TextView(context).apply {
+                text = context.getString(R.string.translation_correction_glossary_summary)
+                setTextColor(palette.secondaryText)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                setPadding((32 * density).toInt(), 0, 0, (4 * density).toInt())
+            })
+            addView(glossaryFields, matchWidth())
             if (scope == null) {
                 addView(TextView(context).apply {
                     text = context.getString(R.string.translation_correction_no_game)
@@ -205,13 +265,29 @@ class TranslationCorrectionOverlay(
                     translationInput.requestFocus()
                     return@setOnClickListener
                 }
+                if (quickGlossary.isChecked && glossarySourceInput.text.isNullOrBlank()) {
+                    glossarySourceInput.error =
+                        context.getString(R.string.translation_correction_glossary_source_required)
+                    glossarySourceInput.requestFocus()
+                    return@setOnClickListener
+                }
+                if (quickGlossary.isChecked && glossaryTargetInput.text.isNullOrBlank()) {
+                    glossaryTargetInput.error =
+                        context.getString(R.string.translation_correction_glossary_target_required)
+                    glossaryTargetInput.requestFocus()
+                    return@setOnClickListener
+                }
                 onSave(
                     TranslationCorrectionDraft(
                         observedSource = request.observedSource,
                         correctedSource = correctedSource,
                         correctedTranslation = correctedTranslation,
                         rememberTranslation = remember.isChecked && scope != null,
-                        addToGlossary = glossary.isChecked && glossary.visibility == View.VISIBLE,
+                        glossary = buildTranslationCorrectionGlossaryDraft(
+                            enabled = quickGlossary.isChecked,
+                            sourceTerm = glossarySourceInput.text.toString(),
+                            targetTerm = glossaryTargetInput.text.toString(),
+                        ),
                     )
                 )
                 dismiss()
@@ -318,6 +394,22 @@ class TranslationCorrectionOverlay(
             (12 * density).toInt(),
             (8 * density).toInt(),
         )
+    }
+
+    private fun termEditor(
+        hint: String,
+        palette: FloatingMenuTourColors,
+        density: Float,
+    ): EditText = editor(
+        hint = hint,
+        value = "",
+        palette = palette,
+        density = density,
+    ).apply {
+        inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+        minLines = 1
+        maxLines = 1
+        isSingleLine = true
     }
 
     private fun checkbox(

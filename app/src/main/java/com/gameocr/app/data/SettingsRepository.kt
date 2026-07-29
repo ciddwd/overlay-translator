@@ -1003,7 +1003,8 @@ class SettingsRepository @Inject constructor(
                 ?: default.mangaOcrDbnetUnclipRatio,
             bubbleClusterGap = MangaOcrAdvancedSettingsPolicy.BUBBLE_CLUSTER_GAP,
             mangaOcrCropPaddingPx = MangaOcrAdvancedSettingsPolicy.CROP_PADDING_PX
-            // runtimeTranslationContext is request-scoped and deliberately never persisted.
+            // runtimeTranslationContext, runtimeTranslationScopePackage, and
+            // runtimeTranslationScopeLabel are request-scoped and deliberately never persisted.
         ))
     }
 }

@@ -3697,15 +3697,23 @@ fun SettingsScreen(
                     },
                     usageAccessGranted = usageAccessGranted,
                     onOpenUsageAccess = {
-                        runCatching {
-                            context.startActivity(Intent(AndroidSettings.ACTION_USAGE_ACCESS_SETTINGS))
-                        }.onFailure {
-                            Toast.makeText(
-                                context,
-                                R.string.settings_usage_access_unavailable,
-                                Toast.LENGTH_SHORT,
-                            ).show()
+                        val packageIntent = Intent(
+                            AndroidSettings.ACTION_USAGE_ACCESS_SETTINGS
+                        ).apply {
+                            data = Uri.parse(usageAccessPackageUri(context.packageName))
                         }
+                        runCatching { context.startActivity(packageIntent) }
+                            .recoverCatching {
+                                context.startActivity(
+                                    Intent(AndroidSettings.ACTION_USAGE_ACCESS_SETTINGS)
+                                )
+                            }.onFailure {
+                                Toast.makeText(
+                                    context,
+                                    R.string.settings_usage_access_unavailable,
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            }
                     },
                     onOpenGlossary = onOpenGlossary,
                     retryEmptyTranslation = retryEmptyTranslation,
@@ -5759,6 +5767,8 @@ private fun rememberUsageAccessGranted(context: Context): Boolean {
     }
     return granted
 }
+
+internal fun usageAccessPackageUri(packageName: String): String = "package:$packageName"
 
 private fun ttsProviderGroupLabelRes(group: TtsProviderGroup): Int = when (group) {
     TtsProviderGroup.ON_DEVICE -> R.string.settings_tts_group_on_device
@@ -7977,7 +7987,7 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_send_app_name, listOf("send app name", "prompt app context", "发送应用名称", "模型应用名称")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_foreground_app_detection, listOf("app detection", "foreground app", "accessibility", "usage access", "应用识别", "前台应用")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_grant_usage_access, listOf("usage permission", "usage access", "permission", "使用情况权限", "使用情况访问", "授权")),
-    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_manage_glossary, listOf("glossary", "terminology", "term library", "术语库", "专业名词")),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_manage_glossary, listOf("translation library", "glossary", "terminology", "translation memory", "翻译库", "术语库", "翻译记忆", "专业名词")),
     SearchEntry(
         SectionKeys.TEXT_ORIENTATION,
         R.string.settings_text_orientation_section_title,
@@ -8797,7 +8807,7 @@ private fun DbnetAdvancedSliderSection(
     }
 }
 
-private fun newCustomPresetId(): String = "custom_${System.currentTimeMillis()}"
+internal fun newCustomPresetId(): String = "custom_${System.currentTimeMillis()}"
 
 internal const val TRANSLATION_PRESET_COLLAPSED_LIMIT: Int = 3
 
@@ -9267,7 +9277,7 @@ private fun OverlayFontChip(
 }
 
 @androidx.annotation.StringRes
-private fun ocrEngineLabelRes(engine: com.gameocr.app.data.OcrEngineKind): Int = when (engine) {
+internal fun ocrEngineLabelRes(engine: com.gameocr.app.data.OcrEngineKind): Int = when (engine) {
     com.gameocr.app.data.OcrEngineKind.ML_KIT_AUTO -> R.string.settings_ocr_chip_auto
     com.gameocr.app.data.OcrEngineKind.ML_KIT_LATIN -> R.string.settings_ocr_chip_latin
     com.gameocr.app.data.OcrEngineKind.ML_KIT_JAPANESE -> R.string.settings_ocr_chip_japanese
@@ -9281,6 +9291,21 @@ private fun ocrEngineLabelRes(engine: com.gameocr.app.data.OcrEngineKind): Int =
     com.gameocr.app.data.OcrEngineKind.LUNA_OCR -> R.string.settings_ocr_chip_luna
     com.gameocr.app.data.OcrEngineKind.PADDLE_ONNX -> R.string.settings_ocr_chip_paddle
     com.gameocr.app.data.OcrEngineKind.MANGA_OCR_JA -> R.string.settings_ocr_chip_manga_ocr_ja
+}
+
+@androidx.annotation.StringRes
+internal fun translatorEngineLabelRes(engine: TranslatorEngine): Int = when (engine) {
+    TranslatorEngine.OPENAI -> R.string.settings_engine_openai_llm
+    TranslatorEngine.ANTHROPIC -> R.string.settings_engine_anthropic_llm
+    TranslatorEngine.DEEPL -> R.string.settings_engine_deepl
+    TranslatorEngine.YOUDAO_PICTRANS -> R.string.settings_engine_youdao_pictrans
+    TranslatorEngine.GOOGLE -> R.string.settings_engine_google
+    TranslatorEngine.GOOGLE_ML_KIT -> R.string.settings_translator_group_on_device
+    TranslatorEngine.VOLC -> R.string.settings_engine_volc
+    TranslatorEngine.BAIDU_FANYI -> R.string.settings_engine_baidu_fanyi
+    TranslatorEngine.TENCENT -> R.string.settings_engine_tencent
+    TranslatorEngine.LOCAL_SAKURA -> R.string.settings_engine_local_sakura
+    TranslatorEngine.LOCAL_HY_MT2 -> R.string.settings_engine_local_hymt2
 }
 
 /**

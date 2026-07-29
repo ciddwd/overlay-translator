@@ -116,7 +116,6 @@ import com.gameocr.app.translate.BatchTranslationProgressState
 import com.gameocr.app.translate.BatchTranslationUpdate
 import com.gameocr.app.translate.CrossLineTranslationUnit
 import com.gameocr.app.translate.TranslationException
-import com.gameocr.app.translate.TranslationCorrectionPolicy
 import com.gameocr.app.translate.TranslationMemoryService
 import com.gameocr.app.translate.Translator
 import com.gameocr.app.translate.RoutingTranslator
@@ -1203,11 +1202,6 @@ class CaptureService : Service() {
         scope.launch {
             val settings = settingsRepository.get()
             val memoryScope = translationMemoryService.currentScope(settings)
-            val suggestGlossary = TranslationCorrectionPolicy.shouldSuggestGlossary(
-                correctedSource = request.observedSource,
-                correctedTranslation = request.translation,
-                scopePackage = memoryScope?.packageName.orEmpty(),
-            )
             withContext(Dispatchers.Main) {
                 translationBlockCopyOverlay?.dismiss()
                 val editor = translationCorrectionOverlay
@@ -1217,7 +1211,6 @@ class CaptureService : Service() {
                 editor.show(
                     request = request,
                     scope = memoryScope,
-                    suggestGlossary = suggestGlossary,
                     onSave = { draft ->
                         overlay?.applyTranslationCorrection(draft)
                         translationCard?.applyTranslationCorrection(draft)
@@ -1251,32 +1244,27 @@ class CaptureService : Service() {
                     )
                     memorySaved = true
                 }
-                if (
-                    memoryScope != null &&
-                    draft.addToGlossary &&
-                    TranslationCorrectionPolicy.shouldSuggestGlossary(
-                        correctedSource = draft.correctedSource,
-                        correctedTranslation = draft.correctedTranslation,
-                        scopePackage = memoryScope.packageName,
-                    )
-                ) {
+                draft.glossary?.let { glossary ->
                     translationGlossaryRepository.upsert(
                         GlossaryTermEntity(
-                            scopePackage = memoryScope.packageName,
-                            appLabel = memoryScope.appLabel,
+                            scopePackage = memoryScope?.packageName.orEmpty(),
+                            appLabel = memoryScope?.appLabel.orEmpty(),
                             sourceLang = settings.sourceLang,
                             targetLang = settings.targetLang,
-                            sourceTerm = draft.correctedSource,
-                            targetTerm = draft.correctedTranslation,
+                            sourceTerm = glossary.sourceTerm,
+                            targetTerm = glossary.targetTerm,
                             category = GlossaryTermCategory.TERM,
                         )
                     )
                     glossarySaved = true
                 }
                 when {
+                    memorySaved && glossarySaved -> getString(
+                        R.string.translation_correction_saved_memory_and_glossary,
+                        memoryScope?.appLabel.orEmpty(),
+                    )
                     glossarySaved -> getString(
                         R.string.translation_correction_saved_glossary,
-                        memoryScope?.appLabel.orEmpty(),
                     )
                     memorySaved -> getString(
                         R.string.translation_correction_saved_memory,

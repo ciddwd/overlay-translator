@@ -12,6 +12,28 @@ import org.junit.Test
 class MainScreenPresetCarouselTest {
 
     @Test
+    fun presetHeading_isConciseInEveryLocale() {
+        data class Case(
+            val name: String,
+            val path: String,
+            val expected: String,
+        )
+
+        listOf(
+            Case("English", "src/main/res/values/strings.xml", "Presets"),
+            Case("Simplified Chinese", "src/main/res/values-zh-rCN/strings.xml", "预设"),
+        ).forEach { case ->
+            val resources = moduleFile(case.path).readText()
+            assertTrue(
+                case.name,
+                resources.contains(
+                    """<string name="main_preset_title">${case.expected}</string>"""
+                ),
+            )
+        }
+    }
+
+    @Test
     fun carouselPlans_addUnsavedDraftOnlyWhenCurrentSettingsDoNotMatch() {
         val unsavedName = "未保存预设"
         val builtIn = TranslationPresetCatalog.builtIns().single()
@@ -109,7 +131,7 @@ class MainScreenPresetCarouselTest {
     }
 
     @Test
-    fun readinessAndAppliedState_requireEveryPresetModel() {
+    fun readinessGatesApplicationButActiveIdentityRemainsVisible() {
         data class Case(
             val name: String,
             val presetId: String,
@@ -127,7 +149,7 @@ class MainScreenPresetCarouselTest {
             TranslationPresetModelIssueKind.ORIENTATION_MISSING,
         )
         val cases = buildList {
-            add(Case("readiness not checked", "a", "a", null, false, false))
+            add(Case("readiness not checked", "a", "a", null, false, true))
             add(Case("all models ready and active", "a", "a", emptyList(), true, true))
             add(Case("all models ready but inactive", "a", "b", emptyList(), true, false))
             issueKinds.forEach { kind ->
@@ -138,7 +160,7 @@ class MainScreenPresetCarouselTest {
                         activeId = "a",
                         issues = listOf(TranslationPresetModelIssue(kind)),
                         expectedCanApply = false,
-                        expectedApplied = false,
+                        expectedApplied = true,
                     )
                 )
             }
@@ -149,7 +171,7 @@ class MainScreenPresetCarouselTest {
                     activeId = "a",
                     issues = issueKinds.map(::TranslationPresetModelIssue),
                     expectedCanApply = false,
-                    expectedApplied = false,
+                    expectedApplied = true,
                 )
             )
         }
@@ -163,7 +185,50 @@ class MainScreenPresetCarouselTest {
             assertEquals(
                 "${case.name}: applied",
                 case.expectedApplied,
-                presetCarouselIsApplied(case.presetId, case.activeId, case.issues),
+                presetCarouselIsApplied(case.presetId, case.activeId),
+            )
+        }
+    }
+
+    @Test
+    fun unsavedPresetSwitchConfirmation_isTableDriven() {
+        data class Case(
+            val name: String,
+            val currentId: String,
+            val targetId: String,
+            val expected: Boolean,
+        )
+
+        listOf(
+            Case(
+                name = "unsaved draft switching to a saved preset asks first",
+                currentId = TranslationPresetCatalog.UNSAVED_DRAFT_ID,
+                targetId = "saved",
+                expected = true,
+            ),
+            Case(
+                name = "unsaved draft pointing to itself does nothing",
+                currentId = TranslationPresetCatalog.UNSAVED_DRAFT_ID,
+                targetId = TranslationPresetCatalog.UNSAVED_DRAFT_ID,
+                expected = false,
+            ),
+            Case(
+                name = "saved preset switches directly",
+                currentId = "current",
+                targetId = "target",
+                expected = false,
+            ),
+            Case(
+                name = "blank current id is not treated as a draft",
+                currentId = "",
+                targetId = "target",
+                expected = false,
+            ),
+        ).forEach { case ->
+            assertEquals(
+                case.name,
+                case.expected,
+                shouldConfirmUnsavedPresetSwitch(case.currentId, case.targetId),
             )
         }
     }
@@ -194,11 +259,37 @@ class MainScreenPresetCarouselTest {
     }
 
     @Test
+    fun saveThenApply_validatesBeforeTheAtomicSettingsUpdate() {
+        val source = moduleFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readText()
+        val start = source.indexOf("suspend fun saveTranslationPresetAndApply(")
+        val end = source.indexOf("private fun modelIssuesFor(", start)
+        assertTrue("save-then-apply function exists", start >= 0)
+        assertTrue("save-then-apply function has an end", end > start)
+        val block = source.substring(start, end)
+
+        data class Case(val name: String, val marker: String)
+
+        listOf(
+            Case("loads the target preset", "TranslationPresetCatalog.find("),
+            Case("validates target model readiness", "translationPresetCanApply(modelIssuesFor(target))"),
+            Case("rejects before persistence", "if (!canApply) return false"),
+            Case("saves the draft in the same update", "TranslationPresetCatalog.upsertCustom("),
+            Case("applies the target in the same update", "latestTarget.applyTo(withSavedPreset)"),
+        ).forEach { case ->
+            assertTrue("${case.name}: missing ${case.marker}", block.contains(case.marker))
+        }
+        assertTrue(
+            "validation precedes the settings update",
+            block.indexOf("translationPresetCanApply") < block.indexOf("repo.update"),
+        )
+    }
+
+    @Test
     fun mainScreen_showsStatusAndPresetAsTwoPagesInOneVerticalCarousel() {
         val source = moduleFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readText()
         val carouselCall = source.indexOf("            StatusPresetCarousel(")
         val captureCard = source.indexOf(
-            "            ActionCard(title = stringResource(R.string.main_section_capture))",
+            "            CaptureGalleryCarousel(",
             carouselCall,
         )
         val carouselFunction = source.indexOf("private fun StatusPresetCarousel(")
@@ -248,7 +339,7 @@ class MainScreenPresetCarouselTest {
         val source = moduleFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readText()
         val carouselCall = source.indexOf("            StatusPresetCarousel(")
         val captureCard = source.indexOf(
-            "            ActionCard(title = stringResource(R.string.main_section_capture))",
+            "            CaptureGalleryCarousel(",
             carouselCall,
         )
         val mainColumn = source.substring(
@@ -360,6 +451,25 @@ class MainScreenPresetCarouselTest {
     }
 
     @Test
+    fun statusPresetInitialPage_clampsRestoredValues() {
+        data class Case(val name: String, val savedPage: Int, val expected: Int)
+
+        listOf(
+            Case("negative value", -1, 0),
+            Case("status page", 0, 0),
+            Case("preset page", 1, 1),
+            Case("page past the end", 2, 1),
+            Case("corrupt large value", Int.MAX_VALUE, 1),
+        ).forEach { case ->
+            assertEquals(
+                case.name,
+                case.expected,
+                mainStatusPresetInitialPage(case.savedPage),
+            )
+        }
+    }
+
+    @Test
     fun statusPresetDiscoveryHint_isPartiallyRevealedBouncyAndPersistent() {
         val main = moduleFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readText()
         val repository =
@@ -420,12 +530,210 @@ class MainScreenPresetCarouselTest {
             ),
             Case(
                 "uses the same OCR, translator, language and TTS summary as settings",
-                carousel.contains("translationPresetSummary(preset)"),
+                carousel.contains(
+                    "mainPresetDetailLines(translationPresetSummary(preset))"
+                ),
+            ),
+            Case(
+                "renders each of the four details on its own line",
+                source.contains("MAIN_PRESET_DETAIL_COUNT = 4") &&
+                    carousel.contains("maxLines = 1"),
+            ),
+            Case(
+                "keeps the original compact pager and card heights",
+                source.contains(".height(196.dp)") &&
+                    carousel.contains(".height(140.dp)") &&
+                    carousel.contains(".height(132.dp)") &&
+                    !carousel.contains(".height(172.dp)"),
             ),
             Case("keeps the horizontal pager", carousel.contains("HorizontalPager(")),
+            Case(
+                "settled swipes wait 600ms before applying",
+                carousel.contains("snapshotFlow { pagerState.isScrollInProgress") &&
+                    carousel.contains(".collectLatest") &&
+                    carousel.contains("autoApplyProgress.animateTo(") &&
+                    carousel.contains(
+                        "durationMillis = PRESET_AUTO_APPLY_SETTLE_DELAY_MS.toInt()"
+                    ) &&
+                    source.contains("PRESET_AUTO_APPLY_SETTLE_DELAY_MS = 600L"),
+            ),
+            Case(
+                "new scrolling cancels the pending visual cue and application",
+                carousel.contains("pendingAutoApplyPage = null") &&
+                    carousel.contains(".collectLatest"),
+            ),
+            Case(
+                "the waiting card shows one primary flow-border lap",
+                carousel.contains("Animatable(0f)") &&
+                    carousel.contains("autoApplyProgress.animateTo(") &&
+                    carousel.contains("presetAutoApplyFlowBorder(") &&
+                    carousel.contains("color = MaterialTheme.colorScheme.primary"),
+            ),
+            Case(
+                "the progress line is one dp and fully outside the card",
+                source.contains("val strokeWidth = 1.dp.toPx()") &&
+                    source.contains("left = -outset") &&
+                    source.contains("top = -outset") &&
+                    source.contains("right = size.width + outset") &&
+                    source.contains("bottom = size.height + outset") &&
+                    !source.contains("Stroke(width = 5.dp.toPx()"),
+            ),
+            Case(
+                "side cards only animate into the center",
+                carousel.contains(".clickable(enabled = !centered)") &&
+                    carousel.contains("pagerState.animateScrollToPage(page)"),
+            ),
+            Case(
+                "the final settled preset is applied automatically",
+                carousel.contains("onPresetSelected(preset)"),
+            ),
+            Case(
+                "unsaved current settings are intercepted by the confirmation path",
+                source.contains("shouldConfirmUnsavedPresetSwitch(") &&
+                    source.contains("pendingPresetSwitch = preset"),
+            ),
+            Case(
+                "preset cards have transparent backgrounds",
+                carousel.contains("containerColor = Color.Transparent"),
+            ),
+            Case(
+                "preset cards keep a one dp stateful outline",
+                carousel.contains("width = 1.dp") &&
+                    carousel.contains("MaterialTheme.colorScheme.primary") &&
+                    carousel.contains("MaterialTheme.colorScheme.outlineVariant"),
+            ),
+            Case(
+                "preset cards do not retain filled container colors",
+                !carousel.contains("MaterialTheme.colorScheme.primaryContainer") &&
+                    !carousel.contains("MaterialTheme.colorScheme.surfaceVariant"),
+            ),
             Case("removes horizontal dots", !carousel.contains("repeat(presets.size)")),
             Case("removes horizontal indicator state", !carousel.contains("indicatorIndex")),
         ).forEach { case -> assertTrue(case.name, case.expected) }
+    }
+
+    @Test
+    fun mainPresetDetailLines_preserveFourRowsIncludingTts() {
+        data class Case(
+            val name: String,
+            val summary: String,
+            val expected: List<String>,
+        )
+
+        listOf(
+            Case(
+                "four standard details",
+                "OCR\nTranslator\nLanguages\nTTS",
+                listOf("OCR", "Translator", "Languages", "TTS"),
+            ),
+            Case(
+                "Windows line endings",
+                "OCR\r\nTranslator\r\nLanguages\r\nTTS",
+                listOf("OCR", "Translator", "Languages", "TTS"),
+            ),
+            Case(
+                "fifth line cannot displace TTS",
+                "OCR\nTranslator\nLanguages\nTTS\nExtra",
+                listOf("OCR", "Translator", "Languages", "TTS"),
+            ),
+        ).forEach { case ->
+            assertEquals(case.name, case.expected, mainPresetDetailLines(case.summary))
+        }
+    }
+
+    @Test
+    fun presetFlowSegments_accumulateUntilTheWholeBorderIsFilled() {
+        data class Case(
+            val name: String,
+            val progress: Float,
+            val pathLength: Float,
+            val expected: List<PresetFlowSegment>,
+        )
+
+        listOf(
+            Case("empty path", 0.5f, 0f, emptyList()),
+            Case("lap start has not drawn yet", 0f, 100f, emptyList()),
+            Case(
+                "early progress keeps everything already drawn",
+                0.1f,
+                100f,
+                listOf(PresetFlowSegment(0f, 10f)),
+            ),
+            Case(
+                "half of the border remains filled",
+                0.5f,
+                100f,
+                listOf(PresetFlowSegment(0f, 50f)),
+            ),
+            Case(
+                "lap end fills the complete border",
+                1f,
+                100f,
+                listOf(PresetFlowSegment(0f, 100f)),
+            ),
+            Case(
+                "progress past the end is clamped",
+                2f,
+                100f,
+                listOf(PresetFlowSegment(0f, 100f)),
+            ),
+            Case("negative progress is clamped to empty", -1f, 100f, emptyList()),
+        ).forEach { case ->
+            val actual = presetFlowSegments(case.progress, case.pathLength)
+            assertEquals("${case.name}: segment count", case.expected.size, actual.size)
+            case.expected.zip(actual).forEachIndexed { index, (expected, result) ->
+                assertEquals(
+                    "${case.name}: segment $index start",
+                    expected.startDistance,
+                    result.startDistance,
+                    0.001f,
+                )
+                assertEquals(
+                    "${case.name}: segment $index stop",
+                    expected.stopDistance,
+                    result.stopDistance,
+                    0.001f,
+                )
+            }
+        }
+    }
+
+    @Test
+    fun mainRouteHoistsStatusPresetPageAcrossNavigation() {
+        val activity = moduleFile("src/main/java/com/gameocr/app/ui/MainActivity.kt").readText()
+        val main = moduleFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readText()
+
+        data class Case(val name: String, val content: String, val marker: String)
+
+        listOf(
+            Case(
+                "route container saves the status/preset page",
+                activity,
+                "mainStatusPresetPageIndex by rememberSaveable",
+            ),
+            Case(
+                "main screen restores the saved page",
+                activity,
+                "initialStatusPresetPageIndex = mainStatusPresetPageIndex",
+            ),
+            Case(
+                "settled page changes update the saved page",
+                activity,
+                "onStatusPresetPageChanged = { mainStatusPresetPageIndex = it }",
+            ),
+            Case(
+                "vertical pager starts from the restored page",
+                main,
+                "mainStatusPresetInitialPage(initialPageIndex)",
+            ),
+            Case(
+                "vertical pager reports settled page changes",
+                main,
+                "currentOnPageChanged(settledPage)",
+            ),
+        ).forEach { case ->
+            assertTrue("${case.name}: missing ${case.marker}", case.content.contains(case.marker))
+        }
     }
 
     @Test

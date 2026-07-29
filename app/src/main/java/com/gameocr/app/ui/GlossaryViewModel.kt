@@ -9,6 +9,7 @@ import com.gameocr.app.appcontext.SelectableApp
 import com.gameocr.app.data.SettingsRepository
 import com.gameocr.app.glossary.GlossaryTermEntity
 import com.gameocr.app.glossary.TranslationGlossaryRepository
+import com.gameocr.app.translate.TranslationMemoryRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.SharingStarted
@@ -20,8 +21,15 @@ class GlossaryViewModel @Inject constructor(
     private val foregroundAppResolver: ForegroundAppResolver,
     private val installedAppCatalog: InstalledAppCatalog,
     private val settingsRepository: SettingsRepository,
+    private val translationMemoryRepository: TranslationMemoryRepository,
 ) : ViewModel() {
     val terms = glossaryRepository.observeAll().stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = emptyList(),
+    )
+
+    val memories = translationMemoryRepository.observeAll().stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
         initialValue = emptyList(),
@@ -48,4 +56,16 @@ class GlossaryViewModel @Inject constructor(
         glossaryRepository.overwriteConflict(term)
 
     suspend fun delete(id: Long) = glossaryRepository.delete(id)
+
+    suspend fun updateMemory(
+        id: Long,
+        correctedSource: String,
+        correctedTranslation: String,
+    ): Boolean = translationMemoryRepository.updateCorrection(
+        id = id,
+        correctedSource = correctedSource,
+        correctedTranslation = correctedTranslation,
+    )
+
+    suspend fun deleteMemory(id: Long) = translationMemoryRepository.delete(id)
 }

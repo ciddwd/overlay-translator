@@ -127,38 +127,63 @@ class TranslationMemoryPolicyTest {
     }
 
     @Test
-    fun glossarySuggestion_tableDriven_rejectsSentencesAndMissingGameScope() {
+    fun editedCorrection_tableDriven_normalizesManagedFieldsAndPreservesIdentity() {
         data class Case(
             val name: String,
             val source: String,
-            val target: String,
-            val scope: String,
-            val expected: Boolean,
+            val translation: String,
+            val expectedSource: String,
+            val expectedNormalizedSource: String,
+            val expectedTranslation: String,
         )
 
         listOf(
-            Case("game character name", "アルトリア", "阿尔托莉雅", "game.package", true),
-            Case("short game phrase", "New Game Plus", "二周目", "game.package", true),
-            Case("sentence ending", "Are you ready?", "准备好了吗？", "game.package", false),
-            Case("multiline dialogue", "Line one\nLine two", "第一行\n第二行", "game.package", false),
-            Case("unresolved game", "アルトリア", "阿尔托莉雅", "", false),
             Case(
-                "long source",
-                "This source phrase is deliberately far too long for a glossary term",
-                "过长术语",
-                "game.package",
-                false,
+                name = "trims both values",
+                source = "  Welcome back  ",
+                translation = "  欢迎回来  ",
+                expectedSource = "Welcome back",
+                expectedNormalizedSource = "welcome back",
+                expectedTranslation = "欢迎回来",
+            ),
+            Case(
+                name = "collapses whitespace only in the match key",
+                source = "Line one \n  line two",
+                translation = "第一行\n第二行",
+                expectedSource = "Line one \n  line two",
+                expectedNormalizedSource = "line one line two",
+                expectedTranslation = "第一行\n第二行",
+            ),
+            Case(
+                name = "normalizes unicode composition in the match key",
+                source = "Cafe\u0301",
+                translation = "咖啡馆",
+                expectedSource = "Cafe\u0301",
+                expectedNormalizedSource = "café",
+                expectedTranslation = "咖啡馆",
             ),
         ).forEach { case ->
-            assertEquals(
-                case.name,
-                case.expected,
-                TranslationCorrectionPolicy.shouldSuggestGlossary(
-                    correctedSource = case.source,
-                    correctedTranslation = case.target,
-                    scopePackage = case.scope,
-                ),
+            val original = entity(
+                id = 7,
+                observed = "OCR alias",
+                corrected = "Old source",
+                translation = "Old translation",
+                updatedAtMs = 10,
+            ).copy(hitCount = 9, lastUsedAtMs = 11)
+
+            val actual = original.withEditedCorrection(
+                correctedSource = case.source,
+                correctedTranslation = case.translation,
+                updatedAtMs = 20,
             )
+
+            assertEquals(case.name, case.expectedSource, actual.correctedSource)
+            assertEquals(case.name, case.expectedNormalizedSource, actual.normalizedCorrectedSource)
+            assertEquals(case.name, case.expectedTranslation, actual.correctedTranslation)
+            assertEquals(case.name, 20L, actual.updatedAtMs)
+            assertEquals(case.name, original.observedSource, actual.observedSource)
+            assertEquals(case.name, original.hitCount, actual.hitCount)
+            assertEquals(case.name, original.lastUsedAtMs, actual.lastUsedAtMs)
         }
     }
 

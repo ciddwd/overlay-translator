@@ -1,6 +1,7 @@
 package com.gameocr.app.ui
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -53,6 +54,33 @@ class TranslationSettingsUiAuditTest {
             Case("not granted status", "R.string.settings_permission_not_granted"),
             Case("resume refresh", "Lifecycle.Event.ON_RESUME"),
         ).forEach { case -> assertTrue(case.name, source.contains(case.marker)) }
+    }
+
+    @Test
+    fun usageAccessIntent_targetsTheCurrentPackageAndKeepsGenericFallback() {
+        data class UriCase(val packageName: String, val expected: String)
+
+        listOf(
+            UriCase("com.gameocr.app", "package:com.gameocr.app"),
+            UriCase("com.gameocr.app.debug", "package:com.gameocr.app.debug"),
+            UriCase("example.variant", "package:example.variant"),
+        ).forEach { case ->
+            assertEquals(case.packageName, case.expected, usageAccessPackageUri(case.packageName))
+        }
+
+        data class SourceCase(val name: String, val marker: String)
+
+        listOf(
+            SourceCase("current package URI", "usageAccessPackageUri(context.packageName)"),
+            SourceCase("package-specific intent", "context.startActivity(packageIntent)"),
+            SourceCase(
+                "generic OEM fallback",
+                "Intent(AndroidSettings.ACTION_USAGE_ACCESS_SETTINGS)",
+            ),
+            SourceCase("resume refresh", "Lifecycle.Event.ON_RESUME"),
+        ).forEach { case ->
+            assertTrue("${case.name}: missing ${case.marker}", source.contains(case.marker))
+        }
     }
 
     private fun sourceFile(path: String): File = listOf(File(path), File("app", path))

@@ -16,6 +16,7 @@ import java.text.Normalizer
 import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.flow.Flow
 import kotlin.math.max
 import kotlin.math.min
 import timber.log.Timber
@@ -63,6 +64,12 @@ data class TranslationMemoryEntity(
 
 @Dao
 interface TranslationMemoryDao {
+    @Query("SELECT * FROM translation_memory_entries ORDER BY updatedAtMs DESC")
+    fun observeAll(): Flow<List<TranslationMemoryEntity>>
+
+    @Query("SELECT * FROM translation_memory_entries WHERE id = :id LIMIT 1")
+    suspend fun findById(id: Long): TranslationMemoryEntity?
+
     @Query(
         "SELECT * FROM translation_memory_entries " +
             "WHERE scopePackage = :scopePackage " +
@@ -115,6 +122,9 @@ interface TranslationMemoryDao {
     @Update
     suspend fun update(entry: TranslationMemoryEntity)
 
+    @Query("DELETE FROM translation_memory_entries WHERE id = :id")
+    suspend fun delete(id: Long)
+
     @Query(
         "UPDATE translation_memory_entries " +
             "SET hitCount = hitCount + 1, lastUsedAtMs = :usedAtMs WHERE id = :id"
@@ -166,6 +176,8 @@ data class TranslationMemoryScope(
 class TranslationMemoryRepository @Inject constructor(
     private val dao: TranslationMemoryDao,
 ) {
+    fun observeAll(): Flow<List<TranslationMemoryEntity>> = dao.observeAll()
+
     suspend fun recall(
         source: String,
         sourceLang: String,
@@ -258,6 +270,24 @@ class TranslationMemoryRepository @Inject constructor(
         return id
     }
 
+    suspend fun updateCorrection(
+        id: Long,
+        correctedSource: String,
+        correctedTranslation: String,
+    ): Boolean {
+        val existing = dao.findById(id) ?: return false
+        dao.update(
+            existing.withEditedCorrection(
+                correctedSource = correctedSource,
+                correctedTranslation = correctedTranslation,
+                updatedAtMs = System.currentTimeMillis(),
+            )
+        )
+        return true
+    }
+
+    suspend fun delete(id: Long) = dao.delete(id)
+
     private fun TranslationMemoryEntity.toMatch(
         kind: TranslationMemoryMatchKind,
         similarity: Double,
@@ -280,17 +310,28 @@ class TranslationMemoryService @Inject constructor(
     private val repository: TranslationMemoryRepository,
     private val foregroundAppResolver: ForegroundAppResolver,
 ) {
-    suspend fun currentScope(settings: Settings): TranslationMemoryScope? =
-        runCatching {
-            foregroundAppResolver.resolve(settings.foregroundAppDetectionMode)?.let {
+    suspend fun currentScope(settings: Settings): TranslationMemoryScope? {
+        val explicitScope = settings.runtimeTranslationScopePackage
+        return if (explicitScope != null) {
+            explicitScope.takeIf(String::isNotBlank)?.let {
                 TranslationMemoryScope(
-                    packageName = it.packageName,
-                    appLabel = it.displayName,
+                    packageName = it,
+                    appLabel = settings.runtimeTranslationScopeLabel.ifBlank { it },
                 )
             }
-        }.onFailure {
-            Timber.w(it, "Translation memory could not resolve the current game")
-        }.getOrNull()
+        } else {
+            runCatching {
+                foregroundAppResolver.resolve(settings.foregroundAppDetectionMode)?.let {
+                    TranslationMemoryScope(
+                        packageName = it.packageName,
+                        appLabel = it.displayName,
+                    )
+                }
+            }.onFailure {
+                Timber.w(it, "Translation memory could not resolve the current game")
+            }.getOrNull()
+        }
+    }
 
     suspend fun recall(
         source: String,
@@ -454,32 +495,27 @@ internal object TranslationMemoryMatcher {
     }
 }
 
-internal object TranslationCorrectionPolicy {
-    private const val MAX_GLOSSARY_SOURCE_CODE_POINTS = 32
-    private const val MAX_GLOSSARY_TARGET_CODE_POINTS = 64
-    private val sentenceEnding = Regex("""[.!?。！？…]+$""")
-
-    fun shouldSuggestGlossary(
-        correctedSource: String,
-        correctedTranslation: String,
-        scopePackage: String,
-    ): Boolean {
-        if (scopePackage.isBlank()) return false
-        val source = correctedSource.trim()
-        val target = correctedTranslation.trim()
-        if (source.isBlank() || target.isBlank()) return false
-        if ('\n' in source || '\r' in source || '\n' in target || '\r' in target) return false
-        if (source.codePointCount() > MAX_GLOSSARY_SOURCE_CODE_POINTS) return false
-        if (target.codePointCount() > MAX_GLOSSARY_TARGET_CODE_POINTS) return false
-        if (sentenceEnding.containsMatchIn(source)) return false
-        return source.split(Regex("""\s+""")).size <= 5
-    }
-}
-
 fun normalizeTranslationMemorySource(value: String): String =
     Normalizer.normalize(value.trim(), Normalizer.Form.NFC)
         .replace(Regex("""\s+"""), " ")
         .lowercase(Locale.ROOT)
+
+internal fun TranslationMemoryEntity.withEditedCorrection(
+    correctedSource: String,
+    correctedTranslation: String,
+    updatedAtMs: Long,
+): TranslationMemoryEntity {
+    val normalizedSource = normalizeTranslationMemorySource(correctedSource)
+    require(normalizedSource.isNotBlank()) { "Corrected source is empty." }
+    require(correctedTranslation.isNotBlank()) { "Corrected translation is empty." }
+    return copy(
+        correctedSource = correctedSource.trim(),
+        normalizedCorrectedSource = normalizedSource,
+        normalizedCorrectedLength = normalizedSource.codePointCount(),
+        correctedTranslation = correctedTranslation.trim(),
+        updatedAtMs = updatedAtMs,
+    )
+}
 
 private fun String.codePointsArray(): IntArray = codePoints().toArray()
 

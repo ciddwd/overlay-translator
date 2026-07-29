@@ -8,6 +8,9 @@ import org.junit.Test
 
 class GlossaryScreenUiAuditTest {
     private val source by lazy { sourceFile("src/main/java/com/gameocr/app/ui/GlossaryScreen.kt").readText() }
+    private val memorySource by lazy {
+        sourceFile("src/main/java/com/gameocr/app/ui/TranslationMemoryPane.kt").readText()
+    }
 
     @Test
     fun glossaryScreen_usesSharedPickersAndSettingsStyling() {
@@ -59,6 +62,29 @@ class GlossaryScreenUiAuditTest {
         )
         assertFalse("stock alert dialog would reintroduce a non-zinc container", source.contains("AlertDialog("))
         assertFalse("raw switches would drift from settings styling", source.contains("Switch("))
+    }
+
+    @Test
+    fun translationLibrary_tableDriven_exposesBothManagedResourceTypes() {
+        data class Case(
+            val name: String,
+            val sourceText: String,
+            val marker: String,
+        )
+
+        listOf(
+            Case("terms tab", source, "R.string.translation_library_terms_tab"),
+            Case("translation memory tab", source, "R.string.translation_library_memory_tab"),
+            Case("memory flow is collected", source, "viewModel.memories.collectAsState()"),
+            Case("memory search", memorySource, "TranslationMemoryListFilterPolicy.filter"),
+            Case("memory card", memorySource, "private fun TranslationMemoryCard"),
+            Case("memory editor", memorySource, "private fun TranslationMemoryEditor"),
+            Case("memory delete confirmation", memorySource, "private fun TranslationMemoryDeleteDialog"),
+            Case("memory edit callback", source, "viewModel.updateMemory"),
+            Case("memory delete callback", source, "viewModel.deleteMemory"),
+        ).forEach { case ->
+            assertTrue(case.name, case.sourceText.contains(case.marker))
+        }
     }
 
     private fun String.countOccurrences(value: String): Int = windowed(value.length).count { it == value }

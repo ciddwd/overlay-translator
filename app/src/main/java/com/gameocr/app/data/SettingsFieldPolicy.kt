@@ -286,6 +286,18 @@ object SettingsFieldPolicy {
             portability = SettingsPortability.RUNTIME_ONLY,
             diagnostic = SettingsDiagnostic.OMITTED,
         ),
+        SettingsFieldRule(
+            name = "runtimeTranslationScopePackage",
+            persistence = SettingsPersistence.RUNTIME_ONLY,
+            portability = SettingsPortability.RUNTIME_ONLY,
+            diagnostic = SettingsDiagnostic.OMITTED,
+        ),
+        SettingsFieldRule(
+            name = "runtimeTranslationScopeLabel",
+            persistence = SettingsPersistence.RUNTIME_ONLY,
+            portability = SettingsPortability.RUNTIME_ONLY,
+            diagnostic = SettingsDiagnostic.OMITTED,
+        ),
     )
 
     init {
@@ -345,6 +357,8 @@ object SettingsFieldPolicy {
         return MangaOcrAdvancedSettingsPolicy.normalize(
             json.decodeFromJsonElement<Settings>(JsonObject(merged)).copy(
                 runtimeTranslationContext = current.runtimeTranslationContext,
+                runtimeTranslationScopePackage = current.runtimeTranslationScopePackage,
+                runtimeTranslationScopeLabel = current.runtimeTranslationScopeLabel,
             )
         )
     }
