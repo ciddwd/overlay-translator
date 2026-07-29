@@ -13,6 +13,7 @@ class MangaOcrCropPlannerTest {
             val name: String,
             val rects: List<IntRect>,
             val bubbleMemberIndices: List<Int> = rects.indices.toList(),
+            val splitByTextBand: Boolean = false,
             val expectedCropMembers: List<List<Int>>,
         )
 
@@ -62,6 +63,27 @@ class MangaOcrCropPlannerTest {
                 expectedCropMembers = listOf(listOf(0, 1, 2, 3, 4, 5, 6)),
             ),
             Case(
+                name = "free-text-title-splits-each-horizontal-band",
+                rects = horizontalRows(count = 2),
+                splitByTextBand = true,
+                expectedCropMembers = listOf(listOf(0), listOf(1)),
+            ),
+            Case(
+                name = "free-text-same-row-fragments-stay-in-one-crop",
+                rects = listOf(
+                    IntRect(0, 0, 80, 20),
+                    IntRect(90, 1, 180, 21),
+                ),
+                splitByTextBand = true,
+                expectedCropMembers = listOf(listOf(0, 1)),
+            ),
+            Case(
+                name = "free-text-vertical-columns-split-right-to-left",
+                rects = verticalColumns(count = 2),
+                splitByTextBand = true,
+                expectedCropMembers = listOf(listOf(1), listOf(0)),
+            ),
+            Case(
                 name = "vertical-columns-split-in-right-to-left-order",
                 rects = verticalColumns(count = 7),
                 expectedCropMembers = listOf(
@@ -94,6 +116,8 @@ class MangaOcrCropPlannerTest {
                 imageWidth = 1600,
                 imageHeight = 2400,
                 padding = 0,
+                splitByTextBandBubbleIndices =
+                    if (case.splitByTextBand) setOf(0) else emptySet(),
             )
             assertEquals(
                 case.name,

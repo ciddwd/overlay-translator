@@ -12,6 +12,7 @@ class BubbleModelRegrouperTest {
         val members: List<IntRect>,
         val modelBounds: List<IntRect>,
         val modelByMember: List<Int?>,
+        val excludedMemberIndices: Set<Int> = emptySet(),
         val expected: List<ExpectedGroup>,
     )
 
@@ -84,19 +85,33 @@ class BubbleModelRegrouperTest {
                     ExpectedGroup(BubbleModelRegrouper.Source.LEGACY_FALLBACK, null, listOf(1)),
                 ),
             ),
+            RegroupCase(
+                name = "text-refined bubble fragments are omitted instead of becoming fallbacks",
+                members = listOf(
+                    IntRect(10, 10, 25, 40),
+                    IntRect(42, 12, 57, 42),
+                    IntRect(70, 12, 85, 42),
+                ),
+                modelBounds = listOf(IntRect(5, 5, 32, 48)),
+                modelByMember = listOf(0, null, null),
+                excludedMemberIndices = setOf(1),
+                expected = listOf(
+                    ExpectedGroup(BubbleModelRegrouper.Source.MODEL, 0, listOf(0)),
+                    ExpectedGroup(BubbleModelRegrouper.Source.LEGACY_FALLBACK, null, listOf(2)),
+                ),
+            ),
         )
 
         cases.forEach { case ->
-            val result = BubbleModelRegrouper.regroup(
+            val result = BubbleModelRegrouper.regroupByModelAssignments(
                 width = 100,
                 height = 100,
                 memberBounds = case.members,
                 modelBounds = case.modelBounds,
-                associations = case.modelByMember.mapIndexed { memberIndex, modelIndex ->
-                    association(memberIndex, modelIndex)
-                },
+                modelByMember = case.modelByMember,
                 fallbackPadding = 0,
                 fallbackGap = 3,
+                excludedMemberIndices = case.excludedMemberIndices,
             )
             assertEquals(
                 case.name,
@@ -107,7 +122,7 @@ class BubbleModelRegrouperTest {
             )
             assertEquals(
                 "${case.name}: every member appears exactly once",
-                case.members.indices.toList(),
+                case.members.indices.filterNot(case.excludedMemberIndices::contains),
                 result.flatMap { it.memberIndices }.sorted(),
             )
         }

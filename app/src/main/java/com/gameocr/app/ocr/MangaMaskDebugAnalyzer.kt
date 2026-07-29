@@ -35,9 +35,11 @@ internal object MangaMaskDebugAnalyzer {
         val contentBounds: IntRect,
         val memberIndices: List<Int>,
         val searchBounds: IntRect? = null,
+        val retrySearchBounds: IntRect? = null,
         /**
-         * Detector boxes already provide a bounded local work area. When true, use that crop once
-         * instead of expanding it twice like the OCR-only heuristic path.
+         * Detector boxes already provide bounded local work areas. When true, use the supplied
+         * crops instead of deriving the wider OCR-only heuristic crops. [retrySearchBounds] is
+         * attempted only when the first crop leaks at its boundary.
          */
         val useExactSearchBounds: Boolean = false,
     )
@@ -317,7 +319,9 @@ internal object MangaMaskDebugAnalyzer {
         }
 
         val candidateRois = if (bubble.useExactSearchBounds && bubble.searchBounds != null) {
-            listOf(clamp(bubble.searchBounds, width, height))
+            listOfNotNull(bubble.searchBounds, bubble.retrySearchBounds)
+                .map { bounds -> clamp(bounds, width, height) }
+                .distinct()
         } else {
             candidateRois(
                 content = bubble.searchBounds ?: content,

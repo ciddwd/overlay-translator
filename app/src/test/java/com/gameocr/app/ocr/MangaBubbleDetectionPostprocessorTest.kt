@@ -114,4 +114,115 @@ class MangaBubbleDetectionPostprocessorTest {
         assertTrue(result[0].confidence > result[1].confidence)
         assertEquals(60f, result[0].left)
     }
+
+    @Test
+    fun processAll_tableDriven_preservesSupportedModelClasses() {
+        data class Case(
+            val name: String,
+            val label: Long,
+            val expectedKind: MangaBubbleDetectionPostprocessor.Kind?,
+        )
+        val cases = listOf(
+            Case("bubble", 0L, MangaBubbleDetectionPostprocessor.Kind.BUBBLE),
+            Case("text in bubble", 1L, MangaBubbleDetectionPostprocessor.Kind.TEXT_BUBBLE),
+            Case("free text", 2L, MangaBubbleDetectionPostprocessor.Kind.TEXT_FREE),
+            Case("unknown model class", 99L, null),
+        )
+
+        cases.forEach { case ->
+            val result = MangaBubbleDetectionPostprocessor.processAll(
+                imageWidth = 120,
+                imageHeight = 100,
+                labels = longArrayOf(case.label),
+                boxes = arrayOf(floatArrayOf(10f, 20f, 90f, 80f)),
+                scores = floatArrayOf(0.9f),
+            )
+
+            assertEquals(case.name, listOfNotNull(case.expectedKind), result.map { it.kind })
+        }
+    }
+
+    @Test
+    fun processAll_nearDuplicateCollapse_isScopedToEachClass() {
+        val result = MangaBubbleDetectionPostprocessor.processAll(
+            imageWidth = 120,
+            imageHeight = 100,
+            labels = longArrayOf(0L, 0L, 2L),
+            boxes = arrayOf(
+                floatArrayOf(10f, 20f, 90f, 80f),
+                floatArrayOf(11f, 20f, 90f, 80f),
+                floatArrayOf(10f, 20f, 90f, 80f),
+            ),
+            scores = floatArrayOf(0.9f, 0.8f, 0.85f),
+        )
+
+        assertEquals(
+            listOf(
+                MangaBubbleDetectionPostprocessor.Kind.BUBBLE,
+                MangaBubbleDetectionPostprocessor.Kind.TEXT_FREE,
+            ),
+            result.map { it.kind },
+        )
+    }
+
+    @Test
+    fun process_tableDriven_collapsesOnlyNearDuplicateBubbleBoxes() {
+        data class Case(
+            val name: String,
+            val boxes: Array<FloatArray>,
+            val scores: FloatArray,
+            val expectedConfidences: List<Float>,
+        )
+        val cases = listOf(
+            Case(
+                name = "identical boxes keep highest confidence",
+                boxes = arrayOf(
+                    floatArrayOf(10f, 10f, 90f, 90f),
+                    floatArrayOf(10f, 10f, 90f, 90f),
+                ),
+                scores = floatArrayOf(0.72f, 0.91f),
+                expectedConfidences = listOf(0.91f),
+            ),
+            Case(
+                name = "minor coordinate jitter is a duplicate",
+                boxes = arrayOf(
+                    floatArrayOf(10f, 10f, 90f, 90f),
+                    floatArrayOf(12f, 11f, 91f, 90f),
+                ),
+                scores = floatArrayOf(0.91f, 0.72f),
+                expectedConfidences = listOf(0.91f),
+            ),
+            Case(
+                name = "overlapping neighboring bubbles remain distinct",
+                boxes = arrayOf(
+                    floatArrayOf(10f, 10f, 90f, 90f),
+                    floatArrayOf(50f, 10f, 130f, 90f),
+                ),
+                scores = floatArrayOf(0.91f, 0.72f),
+                expectedConfidences = listOf(0.91f, 0.72f),
+            ),
+            Case(
+                name = "unique low confidence bubble remains",
+                boxes = arrayOf(floatArrayOf(10f, 10f, 90f, 90f)),
+                scores = floatArrayOf(0.31f),
+                expectedConfidences = listOf(0.31f),
+            ),
+        )
+
+        cases.forEach { case ->
+            val result = MangaBubbleDetectionPostprocessor.process(
+                imageWidth = 160,
+                imageHeight = 120,
+                labels = LongArray(case.boxes.size) { 0L },
+                boxes = case.boxes,
+                scores = case.scores,
+            )
+
+            assertEquals(
+                case.name,
+                case.expectedConfidences,
+                result.map(MangaBubbleDetectionPostprocessor.Detection::confidence),
+            )
+        }
+    }
 }

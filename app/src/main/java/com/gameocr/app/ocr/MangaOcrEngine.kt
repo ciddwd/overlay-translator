@@ -605,7 +605,7 @@ class MangaOcrEngine @Inject constructor(
         // 2) quad → IntRect → 气泡聚类（用 BubbleClusterer.IntRect 而非 android.graphics.Rect，
         //    后者在 JVM 单测里是 Stub 不能直接构造）
         val clusterStartedAt = SystemClock.elapsedRealtime()
-        val (rects, bubbles) = traceSection(
+        val (rects, legacyBubbles) = traceSection(
             MangaOcrTracePolicy.sectionName(MangaOcrTraceStage.CLUSTER)
         ) {
             val clusteredRects = quads.map { quad ->
@@ -639,13 +639,14 @@ class MangaOcrEngine @Inject constructor(
             settings.mangaOcrCropPaddingPx
         )
         val clusterMs = InferenceTiming.elapsedMs(clusterStartedAt, SystemClock.elapsedRealtime())
+        var shapeAwareReport: MangaMaskDebugReport? = null
         if (shapeAwareFrameDecision.analyzeFrame && probabilityMask != null) {
             runCatching {
                 dumpMangaMaskDebugSet(
                     context = context,
                     bitmap = bitmap,
                     quads = quads,
-                    bubbles = bubbles,
+                    bubbles = legacyBubbles,
                     probabilityTextMask = probabilityMask.snapshot(),
                     bubbleClusterGap = bubbleClusterGap,
                     cropPaddingPx = cropPaddingPx,
@@ -658,11 +659,44 @@ class MangaOcrEngine @Inject constructor(
                         shapeAwareFrameDecision.runLegacySegmentation,
                 )
             }.onSuccess { report ->
+                shapeAwareReport = report
                 report?.delayedMaskInput?.let(shapeAwareSessionStore.manager::publish)
             }.onFailure { error ->
                 Timber.w(error, "Unable to prepare shape-aware manga frame")
             }
         }
+        val bubbleSelection = MangaOcrBubbleGroupingPolicy.select(
+            legacyBubbles = legacyBubbles,
+            guidedGroups = shapeAwareReport?.detectorGuidedRegroupedGroups.orEmpty(),
+            memberCount = rects.size,
+            enabled = shapeAwareFrameDecision.useDetectorGuidedPatches,
+            excludedMemberIndices =
+                shapeAwareReport?.detectorGuidedExcludedMemberIndices.orEmpty(),
+        )
+        val textEvidenceResult = MangaOcrTextEvidencePolicy.filter(
+            entries = bubbleSelection.entries,
+            textDetections = shapeAwareReport?.boxDetection?.textDetections.orEmpty(),
+            evidenceAvailable = shapeAwareReport?.boxDetection != null,
+        )
+        val selectedEntries = textEvidenceResult.entries
+        val bubbles = selectedEntries.map(MangaOcrBubbleGroupingPolicy.Entry::bubble)
+        val splitByTextBandBubbleIndices = selectedEntries.mapIndexedNotNull { index, entry ->
+            index.takeIf {
+                entry.guidedSource == BubbleModelRegrouper.Source.LEGACY_FALLBACK &&
+                    index !in textEvidenceResult.textSupportedEntryIndices
+            }
+        }.toSet()
+        Timber.i(
+            "MangaOcr grouping source=%s legacy=%d selected=%d guided=%d excluded=%s droppedUnsupported=%s textSupported=%s splitFallback=%s",
+            bubbleSelection.source,
+            legacyBubbles.size,
+            bubbles.size,
+            shapeAwareReport?.detectorGuidedRegroupedGroups?.size ?: 0,
+            shapeAwareReport?.detectorGuidedExcludedMemberIndices.orEmpty(),
+            textEvidenceResult.droppedIndices,
+            textEvidenceResult.textSupportedEntryIndices,
+            splitByTextBandBubbleIndices,
+        )
         Timber.i(
             "MangaOcr: %d quads -> %d bubbles (profile=%s maxSide=%d tiling=%s gap=%d cropPad=%d dbnet=%.2f/%.2f×%.2f)",
             quads.size,
@@ -682,6 +716,7 @@ class MangaOcrEngine @Inject constructor(
             imageWidth = bitmap.width,
             imageHeight = bitmap.height,
             padding = cropPaddingPx,
+            splitByTextBandBubbleIndices = splitByTextBandBubbleIndices,
         )
         cropPlans
             .groupBy(MangaOcrCropPlan::sourceBubbleIndex)

@@ -27,6 +27,7 @@ import kotlinx.coroutines.withContext
 internal object MangaBubbleDetectionDebugEngine {
     data class Output(
         val detections: List<MangaBubbleDetectionPostprocessor.Detection>,
+        val textDetections: List<MangaBubbleDetectionPostprocessor.Detection>,
         val sessionPrepareMs: Long,
         val preprocessMs: Long,
         val inferenceMs: Long,
@@ -95,16 +96,23 @@ internal object MangaBubbleDetectionDebugEngine {
         }
         val inferenceMs = SystemClock.elapsedRealtime() - inferenceStartedAt
         val postprocessStartedAt = SystemClock.elapsedRealtime()
-        val detections = MangaBubbleDetectionPostprocessor.process(
+        val allDetections = MangaBubbleDetectionPostprocessor.processAll(
             imageWidth = bitmap.width,
             imageHeight = bitmap.height,
             labels = raw.labels,
             boxes = raw.boxes,
             scores = raw.scores,
         )
+        val detections = allDetections.filter { detection ->
+            detection.kind == MangaBubbleDetectionPostprocessor.Kind.BUBBLE
+        }
+        val textDetections = allDetections.filter { detection ->
+            detection.kind != MangaBubbleDetectionPostprocessor.Kind.BUBBLE
+        }
         val postprocessMs = SystemClock.elapsedRealtime() - postprocessStartedAt
         return Output(
             detections = detections,
+            textDetections = textDetections,
             sessionPrepareMs = sessionPrepareMs,
             preprocessMs = preprocessMs,
             inferenceMs = inferenceMs,

@@ -30,6 +30,7 @@ internal object MangaOcrCropPlanner {
         imageWidth: Int,
         imageHeight: Int,
         padding: Int,
+        splitByTextBandBubbleIndices: Set<Int> = emptySet(),
     ): List<MangaOcrCropPlan> = bubbles.flatMapIndexed { bubbleIndex, bubble ->
         val members = bubble.memberIndices.mapNotNull { memberIndex ->
             rects.getOrNull(memberIndex)?.let { rect ->
@@ -47,13 +48,18 @@ internal object MangaOcrCropPlanner {
             blockBounds = bubble.contentRect,
         )
         val bands = groupIntoTextBands(members, orientation)
-        if (bands.size <= MAX_TEXT_BANDS_PER_CROP) {
+        val splitEveryBand = bubbleIndex in splitByTextBandBubbleIndices && bands.size > 1
+        if (!splitEveryBand && bands.size <= MAX_TEXT_BANDS_PER_CROP) {
             return@flatMapIndexed listOf(
                 MangaOcrCropPlan(bubbleIndex, cropIndex = 0, cropCount = 1, bubble),
             )
         }
 
-        val chunks = bands.chunked(MAX_TEXT_BANDS_PER_CROP)
+        val chunks = if (splitEveryBand) {
+            bands.map(::listOf)
+        } else {
+            bands.chunked(MAX_TEXT_BANDS_PER_CROP)
+        }
         chunks.mapIndexed { cropIndex, chunk ->
             MangaOcrCropPlan(
                 sourceBubbleIndex = bubbleIndex,

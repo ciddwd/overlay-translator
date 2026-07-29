@@ -9,7 +9,8 @@ import kotlin.math.min
  *
  * Members assigned to the same model bubble become one recognition crop. Every unassigned,
  * ambiguous, or otherwise invalid member remains in the existing geometric cluster path. The
- * result is diagnostic-only until the model weights and the full rendering path are approved.
+ * caller validates that the resulting groups form a complete partition of all non-excluded
+ * members before using them for recognition.
  */
 internal object BubbleModelRegrouper {
 
@@ -65,13 +66,16 @@ internal object BubbleModelRegrouper {
         modelByMember: List<Int?>,
         fallbackPadding: Int,
         fallbackGap: Int,
+        excludedMemberIndices: Set<Int> = emptySet(),
     ): List<Group> {
         require(width > 0 && height > 0)
         require(modelByMember.size == memberBounds.size)
+        require(excludedMemberIndices.all(memberBounds.indices::contains))
 
         val membersByModel = linkedMapOf<Int, MutableList<Int>>()
         val fallbackMemberIndices = mutableListOf<Int>()
         memberBounds.indices.forEach { memberIndex ->
+            if (memberIndex in excludedMemberIndices) return@forEach
             val modelIndex = modelByMember[memberIndex]
             val usableModelIndex = modelIndex?.takeIf { index ->
                 index in modelBounds.indices && isValid(clamp(modelBounds[index], width, height))

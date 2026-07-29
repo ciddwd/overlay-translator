@@ -143,6 +143,7 @@ internal data class MangaMaskDebugReport(
     val detectorGuidedMasks: DetectorGuidedBubbleMaskExtractor.Result? = null,
     val detectorGuidedMemberAssociations: List<BubbleMaskAssociator.Association> =
         emptyList(),
+    val detectorGuidedExcludedMemberIndices: Set<Int> = emptySet(),
     val detectorGuidedRegroupedGroups: List<BubbleModelRegrouper.Group> = emptyList(),
     val modelSegmentation: MangaBubbleSegmentationDebugEngine.Output? = null,
     val modelAssociations: List<BubbleMaskAssociator.Association> = emptyList(),
@@ -216,8 +217,9 @@ internal suspend fun dumpMangaMaskDebugSet(
     }
     boxDetection?.let { detection ->
         timber.log.Timber.i(
-            "Manga bubble detection debug detections=%d session=%dms preprocess=%dms inference=%dms postprocess=%dms total=%dms",
+            "Manga bubble detection debug bubbles=%d text=%d session=%dms preprocess=%dms inference=%dms postprocess=%dms total=%dms",
             detection.detections.size,
+            detection.textDetections.size,
             detection.sessionPrepareMs,
             detection.preprocessMs,
             detection.inferenceMs,
@@ -233,6 +235,18 @@ internal suspend fun dumpMangaMaskDebugSet(
                 bubble.top,
                 bubble.right,
                 bubble.bottom,
+            )
+        }
+        detection.textDetections.forEachIndexed { index, text ->
+            timber.log.Timber.i(
+                "Manga model text[%d] kind=%s confidence=%.3f box=%.1f,%.1f,%.1f,%.1f",
+                index,
+                text.kind,
+                text.confidence,
+                text.left,
+                text.top,
+                text.right,
+                text.bottom,
             )
         }
     }
@@ -280,6 +294,18 @@ internal suspend fun dumpMangaMaskDebugSet(
             },
         )
     }.orEmpty()
+    val refinedGuidedMemberAssignmentResult = detectorGuidedMasks?.let { guided ->
+        MangaBubbleTextAssignmentRefiner.refine(
+            memberBounds = polygons.map { polygon -> polygon.bounds },
+            bubbleDetections = boxDetection?.detections.orEmpty(),
+            textDetections = boxDetection?.textDetections.orEmpty(),
+            modelByMember = guided.memberDetectionIndices,
+        )
+    }
+    val refinedGuidedMemberAssignments =
+        refinedGuidedMemberAssignmentResult?.assignments.orEmpty()
+    val excludedGuidedMemberIndices =
+        refinedGuidedMemberAssignmentResult?.excludedMemberIndices.orEmpty()
     val guidedRegroupedGroups = detectorGuidedMasks?.let { guided ->
         BubbleModelRegrouper.regroupByModelAssignments(
             width = width,
@@ -293,16 +319,22 @@ internal suspend fun dumpMangaMaskDebugSet(
                     bottom = ceil(detection.bottom).toInt(),
                 )
             },
-            modelByMember = guided.memberDetectionIndices,
+            modelByMember = refinedGuidedMemberAssignments,
             fallbackPadding = cropPaddingPx,
             fallbackGap = bubbleClusterGap,
+            excludedMemberIndices = excludedGuidedMemberIndices,
         )
     }.orEmpty()
     detectorGuidedMasks?.let { guided ->
         timber.log.Timber.i(
-            "Manga guided regroup detectorMatched=%d/%d maskMatched=%d/%d modelGroups=%d fallbackGroups=%d",
+            "Manga guided regroup detectorMatched=%d/%d textRefined=%d excludedByText=%d maskMatched=%d/%d modelGroups=%d fallbackGroups=%d",
             guided.memberDetectionIndices.count { it != null },
             guided.memberDetectionIndices.size,
+            refinedGuidedMemberAssignments.count { it != null },
+            guided.memberDetectionIndices.indices.count { index ->
+                guided.memberDetectionIndices[index] != null &&
+                    refinedGuidedMemberAssignments.getOrNull(index) == null
+            },
             guidedMemberAssociations.count { it.matched },
             guidedMemberAssociations.size,
             guidedRegroupedGroups.count { it.source == BubbleModelRegrouper.Source.MODEL },
@@ -494,6 +526,7 @@ internal suspend fun dumpMangaMaskDebugSet(
         boxDetection = boxDetection,
         detectorGuidedMasks = detectorGuidedMasks,
         detectorGuidedMemberAssociations = guidedMemberAssociations,
+        detectorGuidedExcludedMemberIndices = excludedGuidedMemberIndices,
         detectorGuidedRegroupedGroups = guidedRegroupedGroups,
         modelSegmentation = modelSegmentation,
         modelAssociations = modelAssociations,

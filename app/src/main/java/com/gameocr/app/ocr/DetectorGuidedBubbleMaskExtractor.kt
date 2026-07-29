@@ -8,8 +8,9 @@ import kotlin.math.roundToInt
 /**
  * Converts permissively licensed detector boxes into local bubble masks using image edges/colors.
  *
- * Every failed extraction produces an empty instance mask. Downstream association therefore falls
- * back safely instead of treating a detector rectangle as a verified bubble shape.
+ * Boundary leaks can fall back to a conservative ellipse inside a detector box, matching the
+ * detector author's reference pipeline. All other failed extractions still produce an empty
+ * instance mask so dark backgrounds and unrelated detector boxes cannot become replacement shapes.
  */
 internal object DetectorGuidedBubbleMaskExtractor {
     data class Decision(
@@ -97,28 +98,54 @@ internal object DetectorGuidedBubbleMaskExtractor {
                         width = width,
                         height = height,
                     ),
+                    retrySearchBounds = paddedDetectorBounds(
+                        detectorBounds = detectorBounds,
+                        width = width,
+                        height = height,
+                        marginMultiplier = DETECTOR_ROI_RETRY_MARGIN_MULTIPLIER,
+                    ),
                     useExactSearchBounds = true,
                 ),
                 output = scratch,
             )
-            decisions += Decision(detectionIndex, members, diagnostic)
             if (!diagnostic.accepted) {
                 clear(scratch, width, diagnostic.roi)
+                val ellipseFallback = buildEllipseFallback(
+                    detectorBounds = detectorBounds,
+                    polygons = members.map(polygons::get),
+                    failedDiagnostic = diagnostic,
+                )
+                if (ellipseFallback != null) {
+                    mergeIntoUnion(
+                        instanceMask = ellipseFallback.instanceMask,
+                        unionMask = unionMask,
+                        unionWidth = width,
+                    )
+                    decisions += Decision(
+                        detectionIndex = detectionIndex,
+                        memberIndices = members,
+                        diagnostic = diagnostic.copy(
+                            roi = detectorBounds,
+                            accepted = true,
+                            confidence = detection.confidence * ellipseFallback.memberCoverage,
+                            reason = "accepted_ellipse_fallback",
+                            regionPixels = ellipseFallback.instanceMask.pixels.count { it },
+                            memberCoverage = ellipseFallback.memberCoverage,
+                        ),
+                    )
+                    return@mapIndexed ellipseFallback.instanceMask
+                }
+                decisions += Decision(detectionIndex, members, diagnostic)
                 return@mapIndexed emptyInstanceMask(detectorBounds)
             }
+            decisions += Decision(detectionIndex, members, diagnostic)
             val crop = cropMask(
                 source = scratch,
                 sourceWidth = width,
                 sourceHeight = height,
                 bounds = diagnostic.roi,
             )
-            for (localY in 0 until crop.height) {
-                val globalY = crop.top + localY
-                for (localX in 0 until crop.width) {
-                    if (!crop.pixels[localY * crop.width + localX]) continue
-                    unionMask[globalY * width + crop.left + localX] = true
-                }
-            }
+            mergeIntoUnion(crop, unionMask, width)
             clear(scratch, width, diagnostic.roi)
             crop
         }
@@ -168,6 +195,113 @@ internal object DetectorGuidedBubbleMaskExtractor {
             }
         }
         return output
+    }
+
+    private fun buildEllipseFallback(
+        detectorBounds: IntRect,
+        polygons: List<MangaMaskDebugAnalyzer.Polygon>,
+        failedDiagnostic: MangaMaskDebugAnalyzer.BubbleDiagnostic,
+    ): EllipseFallback? {
+        if (failedDiagnostic.reason !in ELLIPSE_FALLBACK_REASONS) return null
+        if (detectorBounds.width <= 0 || detectorBounds.height <= 0) return null
+
+        val inset = ELLIPSE_INSET_PX.coerceAtMost(
+            (minOf(detectorBounds.width, detectorBounds.height) - 2)
+                .coerceAtLeast(0) / 2,
+        )
+        val centerX = (detectorBounds.left + detectorBounds.right) / 2f
+        val centerY = (detectorBounds.top + detectorBounds.bottom) / 2f
+        val radiusX = ((detectorBounds.width - inset * 2) / 2f).coerceAtLeast(1f)
+        val radiusY = ((detectorBounds.height - inset * 2) / 2f).coerceAtLeast(1f)
+        val pixels = BooleanArray(detectorBounds.width * detectorBounds.height)
+        for (localY in 0 until detectorBounds.height) {
+            val normalizedY =
+                (detectorBounds.top + localY + PIXEL_CENTER_OFFSET - centerY) / radiusY
+            for (localX in 0 until detectorBounds.width) {
+                val normalizedX =
+                    (detectorBounds.left + localX + PIXEL_CENTER_OFFSET - centerX) / radiusX
+                pixels[localY * detectorBounds.width + localX] =
+                    normalizedX * normalizedX + normalizedY * normalizedY <= 1f
+            }
+        }
+        val instanceMask = BubbleSegmentationPostprocessor.InstanceMask(
+            left = detectorBounds.left,
+            top = detectorBounds.top,
+            width = detectorBounds.width,
+            height = detectorBounds.height,
+            pixels = pixels,
+        )
+        val memberCoverage = memberMaskCoverage(instanceMask, polygons)
+        if (memberCoverage < MIN_ELLIPSE_MEMBER_COVERAGE) return null
+        return EllipseFallback(instanceMask, memberCoverage)
+    }
+
+    private fun memberMaskCoverage(
+        mask: BubbleSegmentationPostprocessor.InstanceMask,
+        polygons: List<MangaMaskDebugAnalyzer.Polygon>,
+    ): Float {
+        var memberPixels = 0
+        var coveredPixels = 0
+        polygons.forEach { polygon ->
+            val bounds = polygon.bounds
+            val left = maxOf(bounds.left, mask.left)
+            val top = maxOf(bounds.top, mask.top)
+            val right = minOf(bounds.right, mask.left + mask.width)
+            val bottom = minOf(bounds.bottom, mask.top + mask.height)
+            for (y in top until bottom) {
+                for (x in left until right) {
+                    if (!pointInPolygon(
+                            x = x + PIXEL_CENTER_OFFSET,
+                            y = y + PIXEL_CENTER_OFFSET,
+                            points = polygon.points,
+                        )
+                    ) {
+                        continue
+                    }
+                    memberPixels++
+                    if (mask.contains(x, y)) coveredPixels++
+                }
+            }
+        }
+        return if (memberPixels == 0) {
+            0f
+        } else {
+            coveredPixels.toFloat() / memberPixels
+        }
+    }
+
+    private fun pointInPolygon(
+        x: Float,
+        y: Float,
+        points: List<MangaMaskDebugAnalyzer.Point>,
+    ): Boolean {
+        var inside = false
+        var previous = points.last()
+        points.forEach { current ->
+            if (
+                (current.y > y) != (previous.y > y) &&
+                x < (previous.x - current.x) * (y - current.y) /
+                    (previous.y - current.y + MIN_POLYGON_DIVISOR) + current.x
+            ) {
+                inside = !inside
+            }
+            previous = current
+        }
+        return inside
+    }
+
+    private fun mergeIntoUnion(
+        instanceMask: BubbleSegmentationPostprocessor.InstanceMask,
+        unionMask: BooleanArray,
+        unionWidth: Int,
+    ) {
+        for (localY in 0 until instanceMask.height) {
+            val globalY = instanceMask.top + localY
+            for (localX in 0 until instanceMask.width) {
+                if (!instanceMask.pixels[localY * instanceMask.width + localX]) continue
+                unionMask[globalY * unionWidth + instanceMask.left + localX] = true
+            }
+        }
     }
 
     private fun cropMask(
@@ -251,11 +385,14 @@ internal object DetectorGuidedBubbleMaskExtractor {
         detectorBounds: IntRect,
         width: Int,
         height: Int,
+        marginMultiplier: Int = 1,
     ): IntRect {
-        val margin = (
+        val baseMargin = (
             minOf(detectorBounds.width, detectorBounds.height) *
                 DETECTOR_ROI_MARGIN_RATIO
             ).roundToInt().coerceIn(MIN_DETECTOR_ROI_MARGIN_PX, MAX_DETECTOR_ROI_MARGIN_PX)
+        val margin = (baseMargin * marginMultiplier)
+            .coerceAtMost(MAX_DETECTOR_ROI_RETRY_MARGIN_PX)
         return clamp(
             IntRect(
                 left = detectorBounds.left - margin,
@@ -279,11 +416,28 @@ internal object DetectorGuidedBubbleMaskExtractor {
         val score: Float,
     )
 
+    private data class EllipseFallback(
+        val instanceMask: BubbleSegmentationPostprocessor.InstanceMask,
+        val memberCoverage: Float,
+    )
+
+    private val ELLIPSE_FALLBACK_REASONS = setOf(
+        "region_leaked_to_roi",
+        "region_too_large",
+        "edge_region_leaked",
+        "edge_region_too_large",
+    )
     private const val MIN_MEMBER_BOX_COVERAGE = 0.35f
+    private const val MIN_ELLIPSE_MEMBER_COVERAGE = 0.72f
+    private const val ELLIPSE_INSET_PX = 7
+    private const val PIXEL_CENTER_OFFSET = 0.5f
+    private const val MIN_POLYGON_DIVISOR = 0.000001f
     private const val CENTER_INSIDE_WEIGHT = 2f
     private const val COVERAGE_WEIGHT = 1f
     private const val CONFIDENCE_WEIGHT = 0.05f
     private const val DETECTOR_ROI_MARGIN_RATIO = 0.05f
     private const val MIN_DETECTOR_ROI_MARGIN_PX = 4
     private const val MAX_DETECTOR_ROI_MARGIN_PX = 24
+    private const val DETECTOR_ROI_RETRY_MARGIN_MULTIPLIER = 2
+    private const val MAX_DETECTOR_ROI_RETRY_MARGIN_PX = 48
 }
