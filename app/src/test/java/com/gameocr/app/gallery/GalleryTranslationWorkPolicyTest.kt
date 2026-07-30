@@ -103,6 +103,73 @@ class GalleryTranslationWorkPolicyTest {
     }
 
     @Test
+    fun `shared image selection is table driven`() {
+        data class Case(
+            val name: String,
+            val action: String?,
+            val mimeType: String?,
+            val singleUri: String? = null,
+            val multipleUris: List<String> = emptyList(),
+            val expected: List<String>,
+        )
+
+        listOf(
+            Case(
+                name = "single shared image",
+                action = GalleryTranslationWorkPolicy.ACTION_SEND,
+                mimeType = "image/png",
+                singleUri = "content://screenshot",
+                expected = listOf("content://screenshot"),
+            ),
+            Case(
+                name = "multiple shared images keep order and remove duplicates",
+                action = GalleryTranslationWorkPolicy.ACTION_SEND_MULTIPLE,
+                mimeType = "image/jpeg",
+                multipleUris = listOf("content://a", "content://b", "content://a"),
+                expected = listOf("content://a", "content://b"),
+            ),
+            Case(
+                name = "wildcard image mime is accepted",
+                action = GalleryTranslationWorkPolicy.ACTION_SEND,
+                mimeType = "image/*",
+                singleUri = "content://image",
+                expected = listOf("content://image"),
+            ),
+            Case(
+                name = "non image share is rejected",
+                action = GalleryTranslationWorkPolicy.ACTION_SEND,
+                mimeType = "text/plain",
+                singleUri = "content://text",
+                expected = emptyList(),
+            ),
+            Case(
+                name = "unsupported action is rejected",
+                action = "android.intent.action.VIEW",
+                mimeType = "image/png",
+                singleUri = "content://image",
+                expected = emptyList(),
+            ),
+            Case(
+                name = "single share without stream is empty",
+                action = GalleryTranslationWorkPolicy.ACTION_SEND,
+                mimeType = "image/png",
+                expected = emptyList(),
+            ),
+        ).forEach { case ->
+            assertEquals(
+                case.name,
+                case.expected,
+                GalleryTranslationWorkPolicy.sharedImageSelection(
+                    action = case.action,
+                    mimeType = case.mimeType,
+                    singleUri = case.singleUri,
+                    multipleUris = case.multipleUris,
+                ),
+            )
+        }
+    }
+
+    @Test
     fun `network constraints are table driven across engine combinations`() {
         data class Case(
             val name: String,

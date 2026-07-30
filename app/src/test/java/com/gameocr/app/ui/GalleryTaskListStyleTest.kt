@@ -107,6 +107,11 @@ class GalleryTaskListStyleTest {
                 true,
             ),
             Case(
+                "summary displays OCR translator and languages",
+                "GalleryTaskSettingsSummary(task)",
+                true,
+            ),
+            Case(
                 "summary no longer uses a filled container",
                 "containerColor = MaterialTheme.colorScheme.surfaceContainer",
                 false,
@@ -120,6 +125,18 @@ class GalleryTaskListStyleTest {
             summary.indexOf("GalleryStatusText(task.status)") >
                 summary.indexOf("R.string.gallery_task_images"),
         )
+        val settingsSummary = source.substring(
+            source.indexOf("private fun GalleryTaskSettingsSummary("),
+            source.indexOf("private fun GalleryTaskSummary("),
+        )
+        listOf(
+            "OCR display label" to "ocrEngineLabelRes",
+            "translator display label" to "translatorEngineLabelRes",
+            "source language display label" to "Languages.nameOf(context, task.sourceLang)",
+            "target language display label" to "Languages.nameOf(context, task.targetLang)",
+        ).forEach { (name, marker) ->
+            assertTrue(name, marker in settingsSummary)
+        }
         val detailScreen = source.substring(
             source.indexOf("fun GalleryTranslationTaskDetailScreen("),
             source.indexOf("private fun GalleryTaskCard("),

@@ -7,7 +7,7 @@ import org.junit.Test
 class GalleryImagePreviewContractTest {
 
     @Test
-    fun `gallery thumbnails open a safe original image preview`() {
+    fun `gallery thumbnails open the expected original or translated preview`() {
         val screen = sourceFile(
             "src/main/java/com/gameocr/app/ui/GalleryTranslationScreens.kt"
         ).readText()
@@ -34,15 +34,43 @@ class GalleryImagePreviewContractTest {
                 screen.contains("onClick = onPreview"),
             ),
             Case(
-                "result thumbnail is clickable",
-                screen.contains(".clickable(onClick = onPreview)"),
+                "finished result thumbnail is clickable",
+                resultThumbnail.contains("enabled = !showProcessingPlaceholder") &&
+                    resultThumbnail.contains("onClick = onPreview"),
             ),
             Case(
-                "result thumbnail shows the same clean original image",
-                resultThumbnail.contains("Image(") &&
-                    !resultThumbnail.contains("Canvas(") &&
-                    !resultThumbnail.contains("segments") &&
-                    !resultThumbnail.contains("E11D48"),
+                "result thumbnail loads the translated result when available",
+                resultThumbnail.contains("thumbnailLoader(item)"),
+            ),
+            Case(
+                "result thumbnail has a one dp outline",
+                resultThumbnail.contains(".border(") &&
+                    resultThumbnail.contains("width = 1.dp") &&
+                    resultThumbnail.contains(
+                        "color = MaterialTheme.colorScheme.outlineVariant"
+                    ),
+            ),
+            Case(
+                "result thumbnail clips image and border to the same rounded shape",
+                resultThumbnail.contains("val thumbnailShape = RoundedCornerShape(4.dp)") &&
+                    resultThumbnail.contains(".clip(thumbnailShape)") &&
+                    resultThumbnail.contains("shape = thumbnailShape") &&
+                    resultThumbnail.indexOf(".clip(thumbnailShape)") <
+                    resultThumbnail.indexOf(".border("),
+            ),
+            Case(
+                "processing result shows text instead of an image",
+                resultThumbnail.contains("if (showProcessingPlaceholder)") &&
+                    resultThumbnail.contains("R.string.gallery_item_processing"),
+            ),
+            Case(
+                "processing result skips thumbnail decoding",
+                resultThumbnail.indexOf("if (!showProcessingPlaceholder)") <
+                    resultThumbnail.indexOf("thumbnailLoader(item)"),
+            ),
+            Case(
+                "result thumbnail does not recycle a bitmap still owned by Compose",
+                !resultThumbnail.contains(".recycle()"),
             ),
             Case(
                 "delete action remains independent",
@@ -78,9 +106,31 @@ class GalleryImagePreviewContractTest {
                 ),
             ),
             Case(
-                "result preview remains a single original image",
+                "result preview remains a single translated result image",
                 screen.contains("sources = listOf(source)") &&
-                    screen.contains("initialPage = 0"),
+                    screen.contains("resultPreviewLoader = viewModel::loadResultPreview"),
+            ),
+            Case(
+                "result preview source carries its completed item",
+                screen.contains("resultItem = item"),
+            ),
+            Case(
+                "selected image preview still decodes the original",
+                preview.contains("imageDecoder.decodePreview(") &&
+                    preview.contains("resultItem != null && resultLoader != null"),
+            ),
+            Case(
+                "result preview uses the translated preview loader",
+                preview.contains("resultLoader(resultItem)"),
+            ),
+            Case(
+                "result image falls back to the original when translated rendering is unavailable",
+                screen.contains(
+                    "translated ?: imageDecoder.decodePreview(item.sourceUri, item.localPath)"
+                ) &&
+                    screen.contains(
+                        "translated ?: imageDecoder.decodeThumbnail(item.sourceUri, item.localPath)"
+                    ),
             ),
             Case(
                 "preview is full screen",

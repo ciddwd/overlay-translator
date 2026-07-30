@@ -690,36 +690,56 @@ fun MainScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
 
-                    // 悬浮圆球的交互说明：用户经常找不到"循环模式"在哪里开关，集中在这里说一下
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 8.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
+                // 已授权时恢复原使用说明布局；未授权时紧凑显示授权提示。
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (canDrawOverlay) {
                         Text(
                             stringResource(R.string.main_label_usage),
                             style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        TextButton(onClick = onOpenOnboarding) {
-                            Icon(
-                                Icons.AutoMirrored.Outlined.HelpOutline,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp),
+                    } else {
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            Text(
+                                stringResource(R.string.main_label_usage),
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                             Text(
-                                stringResource(R.string.main_help),
-                                modifier = Modifier.padding(start = 4.dp),
+                                stringResource(mainUsageTextRes(canDrawOverlay)),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                     }
+                    TextButton(onClick = onOpenOnboarding) {
+                        Icon(
+                            Icons.AutoMirrored.Outlined.HelpOutline,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Text(
+                            stringResource(R.string.main_help),
+                            modifier = Modifier.padding(start = 4.dp),
+                        )
+                    }
+                }
+                if (canDrawOverlay) {
                     Text(
-                        stringResource(R.string.main_usage_text),
+                        stringResource(mainUsageTextRes(canDrawOverlay)),
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                     }
@@ -768,6 +788,7 @@ fun MainScreen(
                     )
                 ) {
                     MainGalleryTaskSlot.PLACEHOLDER -> MainGalleryTaskSummaryPlaceholder()
+                    MainGalleryTaskSlot.EMPTY -> MainGalleryTaskEmptyPlaceholder()
                     MainGalleryTaskSlot.TASK -> {
                         val task = requireNotNull(featuredGalleryTask)
                         MainGalleryTaskSummary(
@@ -1370,6 +1391,26 @@ private fun MainGalleryTaskSummaryPlaceholder() {
 }
 
 @Composable
+private fun MainGalleryTaskEmptyPlaceholder() {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = Color.Transparent,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Box {
+            MainGalleryTaskSummaryContent(task = null)
+            Text(
+                stringResource(R.string.gallery_main_no_history_task),
+                modifier = Modifier.align(Alignment.Center),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
 private fun MainGalleryTaskSummaryContent(
     task: GalleryTranslationTaskEntity?,
 ) {
@@ -1487,6 +1528,7 @@ internal sealed interface MainGalleryTaskLoadState {
 internal enum class MainGalleryTaskSlot {
     HIDDEN,
     PLACEHOLDER,
+    EMPTY,
     TASK,
 }
 
@@ -1498,13 +1540,20 @@ internal fun mainGalleryTaskSlot(
     !canDrawOverlay -> MainGalleryTaskSlot.HIDDEN
     !isLoaded -> MainGalleryTaskSlot.PLACEHOLDER
     hasTask -> MainGalleryTaskSlot.TASK
-    else -> MainGalleryTaskSlot.HIDDEN
+    else -> MainGalleryTaskSlot.EMPTY
 }
 
 internal fun isMainGalleryTaskActive(status: GalleryTaskStatus): Boolean =
     status == GalleryTaskStatus.QUEUED ||
         status == GalleryTaskStatus.RUNNING ||
         status == GalleryTaskStatus.WAITING_RETRY
+
+internal fun mainUsageTextRes(canDrawOverlay: Boolean): Int =
+    if (canDrawOverlay) {
+        R.string.main_usage_text
+    } else {
+        R.string.main_usage_overlay_permission_required
+    }
 
 internal fun mainGalleryTaskProgress(completedCount: Int, totalCount: Int): Float =
     if (totalCount <= 0) {
@@ -1739,7 +1788,7 @@ private fun StatusCard(
 }
 
 @Composable
-private fun PresetCarouselCard(
+internal fun PresetCarouselCard(
     presets: List<TranslationPreset>,
     activePresetId: String,
     modelIssuesByPreset: Map<String, List<TranslationPresetModelIssue>>?,
@@ -1793,7 +1842,7 @@ private fun PresetCarouselCard(
 }
 
 @Composable
-private fun PresetCarousel(
+internal fun PresetCarousel(
     presets: List<TranslationPreset>,
     activePresetId: String,
     modelIssuesByPreset: Map<String, List<TranslationPresetModelIssue>>?,
@@ -1933,7 +1982,7 @@ private fun PresetCarousel(
                     .fillMaxSize()
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 horizontalAlignment = Alignment.Start,
-                verticalArrangement = Arrangement.Top,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
                     text = translationPresetDisplayName(preset),

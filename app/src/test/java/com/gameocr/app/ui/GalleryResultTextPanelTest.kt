@@ -34,13 +34,28 @@ class GalleryResultTextPanelTest {
                 true,
             ),
             Case(
+                "filename stays on one line",
+                "maxLines = 1",
+                true,
+            ),
+            Case(
+                "long filename is truncated at the end",
+                "overflow = TextOverflow.Ellipsis",
+                true,
+            ),
+            Case(
                 "text panel height follows the thumbnail ratio",
-                "Modifier.height(textPaneHeight)",
+                "galleryResultTextPaneHeightDp(thumbnailRatio).dp",
                 true,
             ),
             Case(
                 "source and translation use separate sections",
                 "GalleryResultTextSection(",
+                true,
+            ),
+            Case(
+                "source and translation are separated by one divider",
+                "HorizontalDivider(",
                 true,
             ),
             Case(
@@ -71,15 +86,37 @@ class GalleryResultTextPanelTest {
             2,
             Regex("""GalleryResultTextSection\s*\(""").findAll(itemContent).count(),
         )
+        assertEquals(
+            "source and translation each receive half of the remaining height",
+            2,
+            Regex(
+                """GalleryResultTextSection\([\s\S]*?modifier = Modifier\.weight\(1f\),\s*\)"""
+            ).findAll(itemContent).count(),
+        )
+        val sourceSection = itemContent.indexOf(
+            "title = stringResource(R.string.gallery_item_source)"
+        )
+        val divider = itemContent.indexOf("HorizontalDivider(", sourceSection)
+        val translationSection = itemContent.indexOf(
+            "title = stringResource(R.string.gallery_item_translation)"
+        )
+        assertTrue(
+            "the only divider sits between source and translation",
+            sourceSection >= 0 && divider > sourceSection && translationSection > divider,
+        )
         listOf(
             "each section owns its scroll state" to "val scrollState = rememberScrollState()",
             "each section scrolls internally" to ".verticalScroll(scrollState)",
-            "each section has its own outline" to
-                "border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)",
             "text remains selectable" to "SelectionContainer",
         ).forEach { (name, marker) ->
             assertTrue(name, marker in sectionContent)
         }
+        assertTrue("individual text outlines are removed", "BorderStroke" !in sectionContent)
+        assertTrue("individual text surfaces are removed", "Surface(" !in sectionContent)
+        assertTrue(
+            "portrait text panel is not capped below the thumbnail",
+            ".coerceIn(112.dp, 220.dp)" !in itemContent,
+        )
     }
 
     @Test
@@ -103,6 +140,29 @@ class GalleryResultTextPanelTest {
                 case.name,
                 case.expected,
                 galleryResultThumbnailRatio(case.width, case.height),
+                0.0001f,
+            )
+        }
+    }
+
+    @Test
+    fun `text pane follows tall thumbnails and keeps a readable landscape minimum`() {
+        data class Case(
+            val name: String,
+            val thumbnailRatio: Float,
+            val expectedHeightDp: Float,
+        )
+
+        listOf(
+            Case("square", 1f, 112f),
+            Case("landscape keeps minimum", 2f, 112f),
+            Case("portrait follows thumbnail", 0.5f, 224f),
+            Case("tall clamped ratio remains fully matched", 0.45f, 112f / 0.45f),
+        ).forEach { case ->
+            assertEquals(
+                case.name,
+                case.expectedHeightDp,
+                galleryResultTextPaneHeightDp(case.thumbnailRatio),
                 0.0001f,
             )
         }

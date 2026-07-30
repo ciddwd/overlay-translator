@@ -34,6 +34,7 @@ class GalleryTranslationWorker @AssistedInject constructor(
     private val imageDecoder: GalleryImageDecoder,
     private val ocrEngine: RoutingOcrEngine,
     private val translator: RoutingTranslator,
+    private val translatedPreviewStore: GalleryTranslatedPreviewStore,
 ) : CoroutineWorker(appContext, workerParams) {
 
     override suspend fun doWork(): Result {
@@ -141,6 +142,14 @@ class GalleryTranslationWorker @AssistedInject constructor(
             if (segments.all { it.translatedText.isBlank() }) {
                 throw EmptyTranslationException()
             }
+            translatedPreviewStore.storeTranslatedPreview(
+                item = item,
+                source = decoded.bitmap,
+                processedWidth = decoded.bitmap.width,
+                processedHeight = decoded.bitmap.height,
+                segments = segments,
+                settings = settings,
+            )
             repository.completeItem(
                 itemId = item.id,
                 decoded = decoded,

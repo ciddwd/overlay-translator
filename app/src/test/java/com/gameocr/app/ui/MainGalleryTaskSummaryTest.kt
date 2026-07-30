@@ -38,7 +38,7 @@ class MainGalleryTaskSummaryTest {
                 true,
                 true,
                 false,
-                MainGalleryTaskSlot.HIDDEN,
+                MainGalleryTaskSlot.EMPTY,
             ),
             Case(
                 "permission missing while loading",
@@ -52,6 +52,13 @@ class MainGalleryTaskSummaryTest {
                 false,
                 true,
                 true,
+                MainGalleryTaskSlot.HIDDEN,
+            ),
+            Case(
+                "permission missing with confirmed empty result",
+                false,
+                true,
+                false,
                 MainGalleryTaskSlot.HIDDEN,
             ),
         ).forEach { case ->
@@ -200,9 +207,25 @@ class MainGalleryTaskSummaryTest {
                 ),
             ),
             Case(
+                "confirmed empty state renders a visible history placeholder",
+                screen.contains(
+                    "MainGalleryTaskSlot.EMPTY -> MainGalleryTaskEmptyPlaceholder()"
+                ) && screen.contains("R.string.gallery_main_no_history_task"),
+            ),
+            Case(
                 "placeholder reuses summary content without accessibility ghosts",
                 screen.contains("MainGalleryTaskSummaryContent(task = null)") &&
                     screen.contains(".clearAndSetSemantics {}"),
+            ),
+            Case(
+                "empty placeholder preserves the summary footprint",
+                screen.substring(
+                    screen.indexOf("private fun MainGalleryTaskEmptyPlaceholder("),
+                    screen.indexOf("private fun MainGalleryTaskSummaryContent("),
+                ).let { placeholder ->
+                    placeholder.contains("MainGalleryTaskSummaryContent(task = null)") &&
+                        placeholder.contains("Modifier.align(Alignment.Center)")
+                },
             ),
             Case(
                 "summary is placed after the task list action",

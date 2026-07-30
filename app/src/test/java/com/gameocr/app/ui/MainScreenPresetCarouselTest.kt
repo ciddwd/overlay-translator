@@ -515,7 +515,7 @@ class MainScreenPresetCarouselTest {
     @Test
     fun horizontalPresetCards_reuseSettingsContentAndHaveNoIndicator() {
         val source = moduleFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readText()
-        val carouselStart = source.indexOf("private fun PresetCarousel(")
+        val carouselStart = source.indexOf("internal fun PresetCarousel(")
         val carouselEnd = source.indexOf("internal data class PresetCarouselPlans(", carouselStart)
         assertTrue("preset carousel exists", carouselStart >= 0)
         assertTrue("preset carousel has an end", carouselEnd > carouselStart)
@@ -538,6 +538,10 @@ class MainScreenPresetCarouselTest {
                 "renders each of the four details on its own line",
                 source.contains("MAIN_PRESET_DETAIL_COUNT = 4") &&
                     carousel.contains("maxLines = 1"),
+            ),
+            Case(
+                "keeps a visible four dp gap between all preset lines",
+                carousel.contains("verticalArrangement = Arrangement.spacedBy(4.dp)"),
             ),
             Case(
                 "keeps the original compact pager and card heights",

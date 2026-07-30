@@ -171,6 +171,7 @@ dependencies {
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
+    implementation(libs.androidx.exifinterface)
 
     // 物理动画：悬浮球松手吸边用 SpringAnimation
     implementation(libs.androidx.dynamicanimation)

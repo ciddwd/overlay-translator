@@ -5,6 +5,8 @@ import com.gameocr.app.data.TranslatorEngine
 import java.io.IOException
 
 internal object GalleryTranslationWorkPolicy {
+    const val ACTION_SEND = "android.intent.action.SEND"
+    const val ACTION_SEND_MULTIPLE = "android.intent.action.SEND_MULTIPLE"
     const val MAX_IMAGES_PER_TASK = 100
     const val MAX_RETRY_ATTEMPTS = 3
     const val FOREGROUND_IMAGE_THRESHOLD = 10
@@ -26,6 +28,21 @@ internal object GalleryTranslationWorkPolicy {
     fun removeSelection(current: List<String>, uriString: String): List<String> {
         val target = uriString.trim()
         return normalizeSelection(current).filterNot { it == target }
+    }
+
+    fun sharedImageSelection(
+        action: String?,
+        mimeType: String?,
+        singleUri: String?,
+        multipleUris: List<String>,
+    ): List<String> {
+        if (mimeType?.startsWith("image/", ignoreCase = true) != true) return emptyList()
+        val candidates = when (action) {
+            ACTION_SEND -> listOfNotNull(singleUri)
+            ACTION_SEND_MULTIPLE -> multipleUris
+            else -> emptyList()
+        }
+        return normalizeSelection(candidates)
     }
 
     fun requiresNetwork(

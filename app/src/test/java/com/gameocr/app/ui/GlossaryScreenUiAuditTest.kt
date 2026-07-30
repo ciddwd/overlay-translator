@@ -11,6 +11,12 @@ class GlossaryScreenUiAuditTest {
     private val memorySource by lazy {
         sourceFile("src/main/java/com/gameocr/app/ui/TranslationMemoryPane.kt").readText()
     }
+    private val englishStrings by lazy {
+        sourceFile("src/main/res/values/strings.xml").readText()
+    }
+    private val chineseStrings by lazy {
+        sourceFile("src/main/res/values-zh-rCN/strings.xml").readText()
+    }
 
     @Test
     fun glossaryScreen_usesSharedPickersAndSettingsStyling() {
@@ -25,7 +31,7 @@ class GlossaryScreenUiAuditTest {
             Case("source language picker", "label = stringResource(R.string.glossary_source_language)"),
             Case("target language picker", "label = stringResource(R.string.glossary_target_language)"),
             Case("manual app scope", "GlossaryScopeMode.SELECTED_APP"),
-            Case("top bar filter action", "IconButton(onClick = { showFilter = true })"),
+            Case("top bar filter action", "TranslationLibraryTab.TERMS -> showFilter = true"),
             Case("fuzzy list filter", "GlossaryListFilterPolicy.filter"),
             Case("category filter chips", "selected = category in categories"),
             Case("enabled status label", "R.string.glossary_status_enabled"),
@@ -77,6 +83,11 @@ class GlossaryScreenUiAuditTest {
             Case("translation memory tab", source, "R.string.translation_library_memory_tab"),
             Case("memory flow is collected", source, "viewModel.memories.collectAsState()"),
             Case("memory search", memorySource, "TranslationMemoryListFilterPolicy.filter"),
+            Case("memory query is owned by the library", source, "var memoryQuery by rememberSaveable"),
+            Case("memory query is passed into its list", source, "query = memoryQuery"),
+            Case("memory filter dialog", source, "private fun TranslationMemoryFilterDialog"),
+            Case("memory filter entry", source, "TranslationLibraryTab.MEMORY -> showMemoryFilter = true"),
+            Case("memory filter active tint", source, "TranslationLibraryTab.MEMORY -> memoryQuery.isNotBlank()"),
             Case("memory card", memorySource, "private fun TranslationMemoryCard"),
             Case("memory editor", memorySource, "private fun TranslationMemoryEditor"),
             Case("memory delete confirmation", memorySource, "private fun TranslationMemoryDeleteDialog"),
@@ -84,6 +95,201 @@ class GlossaryScreenUiAuditTest {
             Case("memory delete callback", source, "viewModel.deleteMemory"),
         ).forEach { case ->
             assertTrue(case.name, case.sourceText.contains(case.marker))
+        }
+    }
+
+    @Test
+    fun translationLibraryFilters_tableDriven_shareTheTopBarDialogPattern() {
+        val memoryList = memorySource.substring(
+            memorySource.indexOf("internal fun TranslationMemoryPane("),
+            memorySource.indexOf("private fun TranslationMemoryCard("),
+        )
+
+        data class Case(
+            val name: String,
+            val content: String,
+            val marker: String,
+            val expected: Boolean,
+        )
+
+        listOf(
+            Case(
+                "terms open from the shared top-bar action",
+                source,
+                "TranslationLibraryTab.TERMS -> showFilter = true",
+                true,
+            ),
+            Case(
+                "memory opens from the shared top-bar action",
+                source,
+                "TranslationLibraryTab.MEMORY -> showMemoryFilter = true",
+                true,
+            ),
+            Case(
+                "memory dialog uses the shared zinc surface",
+                source,
+                "text = stringResource(R.string.translation_memory_filter_title)",
+                true,
+            ),
+            Case(
+                "memory dialog keeps an outlined query field",
+                source,
+                "R.string.translation_memory_search_hint",
+                true,
+            ),
+            Case(
+                "memory dialog supports clearing its draft",
+                source,
+                "IconButton(onClick = { query = \"\" })",
+                true,
+            ),
+            Case(
+                "memory dialog applies its draft explicitly",
+                source,
+                "Button(onClick = { onApply(query) })",
+                true,
+            ),
+            Case(
+                "memory list no longer owns a persistent query field",
+                memoryList,
+                "OutlinedTextField(",
+                false,
+            ),
+        ).forEach { case ->
+            assertEquals(case.name, case.expected, case.marker in case.content)
+        }
+    }
+
+    @Test
+    fun translationLibraryHelp_tableDriven_keepsApprovedContentAndLayout() {
+        val topBar = source.substring(
+            source.indexOf("TopAppBar("),
+            source.indexOf("floatingActionButton ="),
+        )
+        val helpDialog = source.substring(
+            source.indexOf("private fun TranslationLibraryHelpDialog("),
+            source.indexOf("private fun TranslationMemoryFilterDialog("),
+        )
+
+        data class Case(
+            val name: String,
+            val content: String,
+            val marker: String,
+            val expected: Boolean = true,
+        )
+
+        listOf(
+            Case("help icon follows the navbar title", topBar, "Icons.AutoMirrored.Outlined.HelpOutline"),
+            Case("help icon opens the help dialog", topBar, "onClick = { showHelp = true }"),
+            Case("help dialog uses zinc styling", helpDialog, "color = zinc.surface"),
+            Case("help dialog body scrolls internally", helpDialog, ".verticalScroll(rememberScrollState())"),
+            Case("help dialog has a fixed footer", helpDialog, "R.string.translation_library_help_close"),
+            Case("terms help section", helpDialog, "R.string.translation_library_help_terms_body"),
+            Case("memory help section", helpDialog, "R.string.translation_library_help_memory_body"),
+            Case("priority help section", helpDialog, "R.string.translation_library_help_priority_body"),
+            Case("correction help section", helpDialog, "R.string.translation_library_help_add_body"),
+            Case(
+                "correction illustration follows its help text",
+                helpDialog,
+                "imageRes = R.drawable.translation_correction_help",
+            ),
+            Case(
+                "correction illustration has an accessible description",
+                helpDialog,
+                "R.string.translation_library_help_add_image_description",
+            ),
+            Case("help illustration fills the available width", helpDialog, ".fillMaxWidth()"),
+            Case("help illustration preserves its aspect ratio", helpDialog, ".aspectRatio(1117f / 633f)"),
+            Case(
+                "help illustration uses a one-dp theme border",
+                helpDialog,
+                "MaterialTheme.colorScheme.outlineVariant",
+            ),
+            Case("management help section", helpDialog, "R.string.translation_library_help_manage_body"),
+            Case("Chinese copy explains terms", chineseStrings, "术语：统一角色名和专有名词"),
+            Case("Chinese copy explains memory", chineseStrings, "翻译记忆：记住你改过的整句话"),
+            Case("Chinese copy explains priority", chineseStrings, "两者谁先使用"),
+            Case("English copy is present", englishStrings, "Which one is used first?"),
+        ).forEach { case ->
+            assertEquals(case.name, case.expected, case.marker in case.content)
+        }
+
+        assertTrue(
+            "help icon must be placed after the translation library title",
+            topBar.indexOf("R.string.glossary_title") <
+                topBar.indexOf("Icons.AutoMirrored.Outlined.HelpOutline"),
+        )
+        assertTrue(
+            "correction illustration must appear after the correction copy",
+            helpDialog.indexOf("R.string.translation_library_help_add_body") <
+                helpDialog.indexOf("R.drawable.translation_correction_help"),
+        )
+        assertTrue(
+            "management help must stay below the correction illustration",
+            helpDialog.indexOf("R.drawable.translation_correction_help") <
+                helpDialog.indexOf("R.string.translation_library_help_manage_title"),
+        )
+        assertTrue(
+            "compressed correction illustration must be packaged",
+            sourceFile("src/main/res/drawable-nodpi/translation_correction_help.jpg").isFile,
+        )
+    }
+
+    @Test
+    fun translationLibraryCards_tableDriven_shareTheSourceTranslationLayout() {
+        val termCard = source.substring(
+            source.indexOf("private fun GlossaryTermCard("),
+            source.indexOf("private fun GlossaryTermEditor("),
+        )
+        val memoryCard = memorySource.substring(
+            memorySource.indexOf("private fun TranslationMemoryCard("),
+            memorySource.indexOf("private fun TranslationMemoryEditor("),
+        )
+
+        data class Case(
+            val name: String,
+            val content: String,
+            val marker: String,
+            val expected: Boolean,
+        )
+
+        listOf(
+            Case("term source has its own row", termCard, "text = term.sourceTerm", true),
+            Case("term translation has its own row", termCard, "text = term.targetTerm", true),
+            Case(
+                "term source and translation no longer use an arrow title",
+                termCard,
+                "\${term.sourceTerm} -> \${term.targetTerm}",
+                false,
+            ),
+            Case(
+                "term translation matches memory emphasis",
+                termCard,
+                "color = MaterialTheme.colorScheme.primary",
+                true,
+            ),
+            Case("memory app has its own row", memoryCard, "text = appLabel", true),
+            Case(
+                "memory language direction has its own row",
+                memoryCard,
+                "text = \"\$sourceLanguage -> \$targetLanguage\"",
+                true,
+            ),
+            Case(
+                "memory no longer combines app and languages",
+                memoryCard,
+                "translation_memory_scope_format",
+                false,
+            ),
+            Case(
+                "memory no longer shows usage count",
+                memoryCard,
+                "translation_memory_hit_count",
+                false,
+            ),
+            Case("memory no longer reads hit count", memoryCard, "entry.hitCount", false),
+        ).forEach { case ->
+            assertEquals(case.name, case.expected, case.marker in case.content)
         }
     }
 

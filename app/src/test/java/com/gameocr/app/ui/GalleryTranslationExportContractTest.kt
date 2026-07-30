@@ -88,6 +88,22 @@ class GalleryTranslationExportContractTest {
                     exporter.contains("""const val PNG_MIME_TYPE = "image/png""""),
             ),
             Case(
+                "exported png records its author and generating software",
+                exporter.contains("ExifInterface.TAG_ARTIST") &&
+                    exporter.contains("ExifInterface.TAG_SOFTWARE") &&
+                    exporter.contains("saveAttributes()"),
+            ),
+            Case(
+                "metadata is written before copying through the system provider",
+                exporter.indexOf("encodedFile = encodeTranslatedPng(rendered)") <
+                    exporter.indexOf("DocumentsContract.createDocument") &&
+                    exporter.contains("encodedFile.inputStream().use"),
+            ),
+            Case(
+                "temporary encoded images are always cleaned up",
+                exporter.contains("file.exists() && !file.delete()"),
+            ),
+            Case(
                 "failed or canceled writes remove partial documents",
                 exporter.contains("DocumentsContract.deleteDocument"),
             ),
@@ -163,6 +179,11 @@ class GalleryTranslationExportContractTest {
                     """<string name="$name">""" in english &&
                         """<string name="$name">""" in chinese
                 },
+            ),
+            Case(
+                "task result export action uses save as wording in both locales",
+                """<string name="gallery_export_action">Save as…</string>""" in english &&
+                    """<string name="gallery_export_action">另存为…</string>""" in chinese,
             ),
         ).forEach { case ->
             assertEquals(case.name, true, case.actual)

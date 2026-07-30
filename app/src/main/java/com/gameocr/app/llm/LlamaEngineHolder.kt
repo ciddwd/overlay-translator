@@ -154,17 +154,17 @@ class LlamaEngineHolder @Inject constructor(
         // 状态机救援：上一次 loadModel 失败让 engine 卡在 Error；cleanUp() 把它拉回 Initialized。
         // 切换 kind 时也走 cleanUp 卸掉旧权重（同一 engine 不能并存两份）。
         val st = e.state.value
-        if (st is InferenceEngine.State.Error) {
+        if (llamaEngineLoadPreparation(st) == LlamaEngineLoadPreparation.RESET_THEN_LOAD) {
             Timber.w(
-                "LlamaEngineHolder previous engine in Error (${st.exception.javaClass.simpleName}: " +
-                    "${st.exception.message}); cleanUp() to retry."
+                "LlamaEngineHolder reset before load state=%s trackedKind=%s requestedKind=%s " +
+                    "trackedEngine=%s",
+                st.javaClass.simpleName,
+                loadedKind?.name ?: "none",
+                kind.name,
+                current != null,
             )
             runCatching { e.cleanUp() }
-                .onFailure { Timber.w(it, "cleanUp from Error failed") }
-        } else if (current != null && loadedKind != null) {
-            Timber.i("LlamaEngineHolder switch: $loadedKind -> $kind")
-            runCatching { e.cleanUp() }
-                .onFailure { Timber.w(it, "cleanUp before switch failed") }
+                .onFailure { Timber.w(it, "cleanUp before model load failed") }
         }
 
         try {
@@ -256,4 +256,19 @@ class LlamaEngineHolder @Inject constructor(
         private const val PERF_TAG = "LocalLlmPerf"
         const val IDLE_TIMEOUT_MS = 5 * 60 * 1000L
     }
+}
+
+internal enum class LlamaEngineLoadPreparation {
+    LOAD,
+    RESET_THEN_LOAD,
+}
+
+internal fun llamaEngineLoadPreparation(
+    state: InferenceEngine.State,
+): LlamaEngineLoadPreparation = when (state) {
+    is InferenceEngine.State.Error,
+    InferenceEngine.State.ModelReady,
+    -> LlamaEngineLoadPreparation.RESET_THEN_LOAD
+
+    else -> LlamaEngineLoadPreparation.LOAD
 }

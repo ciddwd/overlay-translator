@@ -3,6 +3,7 @@ package com.gameocr.app.ui
 import android.content.Intent
 import android.content.Context
 import android.net.Uri
+import android.os.Build
 import android.provider.Settings as AndroidSettings
 import android.text.format.Formatter
 import android.util.TypedValue
@@ -703,6 +704,7 @@ fun SettingsScreen(
     var initialSettings by remember { mutableStateOf<Settings?>(null) }
     var showUnsavedDialog by remember { mutableStateOf(false) }
     var showSakuraFallbackDialog by remember { mutableStateOf(false) }
+    var showUnsupportedPresetDownloadDialog by remember { mutableStateOf(false) }
     var pendingLanguageSwapOrigin by remember {
         mutableStateOf<LanguageSwapRequestOrigin?>(null)
     }
@@ -1596,7 +1598,9 @@ fun SettingsScreen(
                     }
                 },
                 onDownloadModels = { preset, issues ->
-                    if (modelDownloadBusy) {
+                    if (translationPresetDownloadRequiresAndroidUpgrade(issues)) {
+                        showUnsupportedPresetDownloadDialog = true
+                    } else if (modelDownloadBusy) {
                         presetMessage = context.getString(R.string.settings_translation_preset_other_download_busy)
                     } else {
                         val downloadModelLabel = translationPresetDownloadModelLabel(context, issues)
@@ -1852,6 +1856,28 @@ fun SettingsScreen(
                     }
                 }
             }
+        )
+    }
+
+    if (showUnsupportedPresetDownloadDialog) {
+        CatalystAlertDialog(
+            onDismissRequest = { showUnsupportedPresetDownloadDialog = false },
+            title = {
+                Text(stringResource(R.string.settings_translation_preset_android_unsupported_title))
+            },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.settings_translation_preset_android_unsupported_message,
+                        Build.VERSION.RELEASE,
+                    )
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showUnsupportedPresetDownloadDialog = false }) {
+                    Text(stringResource(R.string.settings_translation_preset_android_unsupported_confirm))
+                }
+            },
         )
     }
 
@@ -9491,6 +9517,10 @@ internal fun translationPresetModelIssues(
 
 internal fun translationPresetCanApply(issues: List<TranslationPresetModelIssue>): Boolean =
     issues.isEmpty()
+
+internal fun translationPresetDownloadRequiresAndroidUpgrade(
+    issues: List<TranslationPresetModelIssue>,
+): Boolean = issues.any { it.kind == TranslationPresetModelIssueKind.LOCAL_LLM_UNSUPPORTED }
 
 internal fun normalizedTranslationPresetName(input: String): String? =
     input.trim().takeIf { it.isNotEmpty() }

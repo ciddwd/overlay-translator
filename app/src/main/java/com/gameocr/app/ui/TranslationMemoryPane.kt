@@ -19,7 +19,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -35,7 +34,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,10 +50,10 @@ import com.gameocr.app.translate.TranslationMemoryEntity
 @Composable
 internal fun TranslationMemoryPane(
     entries: List<TranslationMemoryEntity>,
+    query: String,
     onUpdate: (id: Long, correctedSource: String, correctedTranslation: String) -> Unit,
     onDelete: (id: Long) -> Unit,
 ) {
-    var query by rememberSaveable { mutableStateOf("") }
     var editing by remember { mutableStateOf<TranslationMemoryEntity?>(null) }
     var pendingDelete by remember { mutableStateOf<TranslationMemoryEntity?>(null) }
     val visibleEntries = remember(entries, query) {
@@ -63,26 +61,6 @@ internal fun TranslationMemoryPane(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        OutlinedTextField(
-            value = query,
-            onValueChange = { query = it },
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-            placeholder = { Text(stringResource(R.string.translation_memory_search_hint)) },
-            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-            trailingIcon = if (query.isNotEmpty()) {
-                {
-                    IconButton(onClick = { query = "" }) {
-                        Icon(
-                            Icons.Default.Close,
-                            stringResource(R.string.translation_memory_clear_search),
-                        )
-                    }
-                }
-            } else {
-                null
-            },
-            singleLine = true,
-        )
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
@@ -187,21 +165,18 @@ private fun TranslationMemoryCard(
                     )
                 }
                 Text(
-                    text = stringResource(
-                        R.string.translation_memory_scope_format,
-                        appLabel,
-                        sourceLanguage,
-                        targetLanguage,
-                    ),
+                    text = appLabel,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = stringResource(R.string.translation_memory_hit_count, entry.hitCount),
-                    style = MaterialTheme.typography.labelSmall,
+                    text = "$sourceLanguage -> $targetLanguage",
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
             IconButton(onClick = onEdit) {

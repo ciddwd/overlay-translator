@@ -3,6 +3,7 @@ package com.gameocr.app.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,6 +11,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -23,6 +25,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Check
@@ -60,10 +63,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -78,6 +84,7 @@ import com.gameocr.app.appcontext.SelectableAppPolicy
 import com.gameocr.app.data.Languages
 import com.gameocr.app.glossary.GlossaryTermCategory
 import com.gameocr.app.glossary.GlossaryTermEntity
+import com.gameocr.app.translate.TranslationMemoryEntity
 import kotlinx.coroutines.launch
 
 private data class PendingGlossaryConflict(
@@ -106,8 +113,11 @@ fun GlossaryScreen(
     var appsLoading by remember { mutableStateOf(true) }
     var editing by remember { mutableStateOf<GlossaryTermEntity?>(null) }
     var showEditor by remember { mutableStateOf(false) }
+    var showHelp by remember { mutableStateOf(false) }
     var showFilter by remember { mutableStateOf(false) }
+    var showMemoryFilter by remember { mutableStateOf(false) }
     var listFilter by remember { mutableStateOf(GlossaryListFilter()) }
+    var memoryQuery by rememberSaveable { mutableStateOf("") }
     var pendingDelete by remember { mutableStateOf<GlossaryTermEntity?>(null) }
     var pendingConflict by remember { mutableStateOf<PendingGlossaryConflict?>(null) }
     var saveInProgress by remember { mutableStateOf(false) }
@@ -140,25 +150,54 @@ fun GlossaryScreen(
         modifier = Modifier.fillMaxSize(),
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.glossary_title)) },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(stringResource(R.string.glossary_title))
+                        IconButton(
+                            onClick = { showHelp = true },
+                            modifier = Modifier.size(40.dp),
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Outlined.HelpOutline,
+                                stringResource(R.string.translation_library_help),
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.common_back))
                     }
                 },
                 actions = {
-                    if (selectedTab == TranslationLibraryTab.TERMS) {
-                        IconButton(onClick = { showFilter = true }) {
-                            Icon(
-                                Icons.Default.Search,
-                                stringResource(R.string.glossary_filter),
-                                tint = if (listFilter.isActive) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    MaterialTheme.colorScheme.onSurface
-                                },
-                            )
+                    IconButton(
+                        onClick = {
+                            when (selectedTab) {
+                                TranslationLibraryTab.TERMS -> showFilter = true
+                                TranslationLibraryTab.MEMORY -> showMemoryFilter = true
+                            }
+                        },
+                    ) {
+                        val filterActive = when (selectedTab) {
+                            TranslationLibraryTab.TERMS -> listFilter.isActive
+                            TranslationLibraryTab.MEMORY -> memoryQuery.isNotBlank()
                         }
+                        Icon(
+                            Icons.Default.Search,
+                            stringResource(
+                                if (selectedTab == TranslationLibraryTab.TERMS) {
+                                    R.string.glossary_filter
+                                } else {
+                                    R.string.translation_memory_filter
+                                }
+                            ),
+                            tint = if (filterActive) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurface
+                            },
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -224,6 +263,7 @@ fun GlossaryScreen(
                 }
                 TranslationLibraryTab.MEMORY -> TranslationMemoryPane(
                     entries = memories,
+                    query = memoryQuery,
                     onUpdate = { id, correctedSource, correctedTranslation ->
                         scope.launch {
                             viewModel.updateMemory(id, correctedSource, correctedTranslation)
@@ -235,6 +275,10 @@ fun GlossaryScreen(
                 )
             }
         }
+    }
+
+    if (showHelp) {
+        TranslationLibraryHelpDialog(onDismiss = { showHelp = false })
     }
 
     if (showEditor) {
@@ -277,6 +321,18 @@ fun GlossaryScreen(
             onApply = {
                 listFilter = it
                 showFilter = false
+            },
+        )
+    }
+
+    if (showMemoryFilter) {
+        TranslationMemoryFilterDialog(
+            entries = memories,
+            initialQuery = memoryQuery,
+            onDismiss = { showMemoryFilter = false },
+            onApply = {
+                memoryQuery = it
+                showMemoryFilter = false
             },
         )
     }
@@ -324,6 +380,250 @@ fun GlossaryScreen(
                 }
             },
         )
+    }
+}
+
+@Composable
+private fun TranslationLibraryHelpDialog(
+    onDismiss: () -> Unit,
+) {
+    val baseColors = MaterialTheme.colorScheme
+    val zinc = glossaryEditorZincPalette(baseColors.background.luminance() < 0.5f)
+    val dialogColors = baseColors.copy(
+        background = zinc.surface,
+        surface = zinc.surface,
+        surfaceVariant = zinc.mutedSurface,
+        surfaceContainer = zinc.surface,
+        surfaceContainerHigh = zinc.mutedSurface,
+        surfaceContainerHighest = zinc.border,
+        outline = zinc.outline,
+        outlineVariant = zinc.border,
+    )
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        MaterialTheme(colorScheme = dialogColors) {
+            Surface(
+                modifier = Modifier.fillMaxWidth().widthIn(max = 560.dp).padding(16.dp),
+                shape = RoundedCornerShape(8.dp),
+                color = zinc.surface,
+                border = BorderStroke(1.dp, zinc.border),
+                shadowElevation = 8.dp,
+            ) {
+                Column(modifier = Modifier.heightIn(max = 640.dp)) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 20.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.translation_library_help_title),
+                            style = MaterialTheme.typography.titleLarge,
+                            modifier = Modifier.weight(1f),
+                        )
+                        IconButton(onClick = onDismiss) {
+                            Icon(Icons.Default.Close, stringResource(R.string.settings_color_cancel))
+                        }
+                    }
+                    HorizontalDivider(color = zinc.border)
+                    Column(
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .verticalScroll(rememberScrollState())
+                            .padding(20.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp),
+                    ) {
+                        TranslationLibraryHelpSection(
+                            title = stringResource(R.string.translation_library_help_terms_title),
+                            body = stringResource(R.string.translation_library_help_terms_body),
+                        )
+                        TranslationLibraryHelpSection(
+                            title = stringResource(R.string.translation_library_help_memory_title),
+                            body = stringResource(R.string.translation_library_help_memory_body),
+                        )
+                        TranslationLibraryHelpSection(
+                            title = stringResource(R.string.translation_library_help_priority_title),
+                            body = stringResource(R.string.translation_library_help_priority_body),
+                        )
+                        TranslationLibraryHelpSection(
+                            title = stringResource(R.string.translation_library_help_add_title),
+                            body = stringResource(R.string.translation_library_help_add_body),
+                            imageRes = R.drawable.translation_correction_help,
+                            imageContentDescription = stringResource(
+                                R.string.translation_library_help_add_image_description
+                            ),
+                        )
+                        TranslationLibraryHelpSection(
+                            title = stringResource(R.string.translation_library_help_manage_title),
+                            body = stringResource(R.string.translation_library_help_manage_body),
+                        )
+                    }
+                    HorizontalDivider(color = zinc.border)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.End,
+                    ) {
+                        Button(onClick = onDismiss) {
+                            Text(stringResource(R.string.translation_library_help_close))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TranslationLibraryHelpSection(
+    title: String,
+    body: String,
+    imageRes: Int? = null,
+    imageContentDescription: String? = null,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(text = title, style = MaterialTheme.typography.titleSmall)
+        Text(
+            text = body,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (imageRes != null) {
+            Image(
+                painter = painterResource(imageRes),
+                contentDescription = imageContentDescription,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1117f / 633f)
+                    .clip(RoundedCornerShape(8.dp))
+                    .border(
+                        1.dp,
+                        MaterialTheme.colorScheme.outlineVariant,
+                        RoundedCornerShape(8.dp),
+                    ),
+                contentScale = ContentScale.Fit,
+            )
+        }
+    }
+}
+
+@Composable
+private fun TranslationMemoryFilterDialog(
+    entries: List<TranslationMemoryEntity>,
+    initialQuery: String,
+    onDismiss: () -> Unit,
+    onApply: (String) -> Unit,
+) {
+    var query by remember(initialQuery) { mutableStateOf(initialQuery) }
+    val resultCount = remember(entries, query) {
+        TranslationMemoryListFilterPolicy.filter(entries, query).size
+    }
+    val baseColors = MaterialTheme.colorScheme
+    val zinc = glossaryEditorZincPalette(baseColors.background.luminance() < 0.5f)
+    val dialogColors = baseColors.copy(
+        background = zinc.surface,
+        surface = zinc.surface,
+        surfaceVariant = zinc.mutedSurface,
+        surfaceContainer = zinc.surface,
+        surfaceContainerHigh = zinc.mutedSurface,
+        surfaceContainerHighest = zinc.border,
+        outline = zinc.outline,
+        outlineVariant = zinc.border,
+    )
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        MaterialTheme(colorScheme = dialogColors) {
+            Surface(
+                modifier = Modifier.fillMaxWidth().widthIn(max = 560.dp).padding(16.dp),
+                shape = RoundedCornerShape(8.dp),
+                color = zinc.surface,
+                border = BorderStroke(1.dp, zinc.border),
+                shadowElevation = 8.dp,
+            ) {
+                Column {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 20.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.translation_memory_filter_title),
+                            style = MaterialTheme.typography.titleLarge,
+                            modifier = Modifier.weight(1f),
+                        )
+                        IconButton(onClick = onDismiss) {
+                            Icon(Icons.Default.Close, stringResource(R.string.settings_color_cancel))
+                        }
+                    }
+                    HorizontalDivider(color = zinc.border)
+                    Column(
+                        modifier = Modifier.padding(20.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        OutlinedTextField(
+                            value = query,
+                            onValueChange = { query = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            placeholder = {
+                                Text(stringResource(R.string.translation_memory_search_hint))
+                            },
+                            leadingIcon = {
+                                Icon(Icons.Default.Search, contentDescription = null)
+                            },
+                            trailingIcon = if (query.isNotEmpty()) {
+                                {
+                                    IconButton(onClick = { query = "" }) {
+                                        Icon(
+                                            Icons.Default.Close,
+                                            stringResource(
+                                                R.string.translation_memory_clear_search
+                                            ),
+                                        )
+                                    }
+                                }
+                            } else {
+                                null
+                            },
+                            singleLine = true,
+                        )
+                        Text(
+                            text = stringResource(
+                                R.string.translation_memory_filter_result_count,
+                                resultCount,
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    HorizontalDivider(color = zinc.border)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TextButton(onClick = { query = "" }) {
+                            Text(stringResource(R.string.glossary_filter_reset))
+                        }
+                        TextButton(onClick = onDismiss) {
+                            Text(stringResource(R.string.settings_color_cancel))
+                        }
+                        Button(onClick = { onApply(query) }) {
+                            Text(stringResource(R.string.glossary_filter_apply))
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -586,9 +886,18 @@ private fun GlossaryTermCard(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
-                    text = "${term.sourceTerm} -> ${term.targetTerm}",
+                    text = term.sourceTerm,
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = term.targetTerm,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(

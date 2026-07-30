@@ -1,6 +1,7 @@
 package com.gameocr.app.ui
 
 import android.net.Uri
+import android.text.format.DateUtils
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -9,6 +10,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
@@ -16,7 +18,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -38,6 +43,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.Close
@@ -56,6 +62,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SecondaryTabRow
 import androidx.compose.material3.SnackbarHost
@@ -67,6 +74,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -75,18 +83,27 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntSize
@@ -97,7 +114,10 @@ import androidx.lifecycle.ViewModel
 import com.gameocr.app.R
 import com.gameocr.app.data.Languages
 import com.gameocr.app.data.OcrEngineKind
+import com.gameocr.app.data.Settings
 import com.gameocr.app.data.SettingsRepository
+import com.gameocr.app.data.TranslationPreset
+import com.gameocr.app.data.TranslationPresetCatalog
 import com.gameocr.app.data.TranslatorEngine
 import com.gameocr.app.gallery.GalleryImageDecoder
 import com.gameocr.app.gallery.GalleryExportProgress
@@ -110,6 +130,7 @@ import com.gameocr.app.gallery.GalleryTranslationManager
 import com.gameocr.app.gallery.GalleryTranslationRepository
 import com.gameocr.app.gallery.GalleryTranslationTaskEntity
 import com.gameocr.app.gallery.GalleryTranslationWorkPolicy
+import com.gameocr.app.gallery.GalleryTranslatedPreviewStore
 import com.gameocr.app.gallery.galleryCanExport
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.text.DateFormat
@@ -117,10 +138,13 @@ import java.util.Date
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.floor
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun GalleryTranslationConfirmScreen(
     selectedUris: List<String>,
@@ -128,6 +152,7 @@ fun GalleryTranslationConfirmScreen(
     onBack: () -> Unit,
     onCreated: (String) -> Unit,
     viewModel: GalleryTranslationViewModel = hiltViewModel(),
+    presetViewModel: MainViewModel = hiltViewModel(),
 ) {
     val settings by viewModel.settings.collectAsState(initial = null)
     val context = LocalContext.current
@@ -135,6 +160,9 @@ fun GalleryTranslationConfirmScreen(
     var creating by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf("") }
     var previewIndex by remember { mutableStateOf<Int?>(null) }
+    var showCreateDialog by remember { mutableStateOf(false) }
+    var showPresetSwitcher by rememberSaveable { mutableStateOf(true) }
+    val snackbarHostState = remember { SnackbarHostState() }
     val picker = rememberLauncherForActivityResult(
         ActivityResultContracts.PickMultipleVisualMedia(
             GalleryTranslationWorkPolicy.MAX_IMAGES_PER_TASK
@@ -167,8 +195,49 @@ fun GalleryTranslationConfirmScreen(
             onDismiss = { previewIndex = null },
         )
     }
+    if (showCreateDialog) {
+        CatalystAlertDialog(
+            onDismissRequest = { showCreateDialog = false },
+            title = {
+                Text(stringResource(R.string.gallery_confirm_create_dialog_title))
+            },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.gallery_confirm_create_dialog_message,
+                        selectedUris.size,
+                    )
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showCreateDialog = false
+                        creating = true
+                        errorMessage = ""
+                        scope.launch {
+                            runCatching { viewModel.createAndEnqueue(selectedUris) }
+                                .onSuccess(onCreated)
+                                .onFailure {
+                                    errorMessage = it.message ?: it.javaClass.simpleName
+                                    creating = false
+                                }
+                        }
+                    }
+                ) {
+                    Text(stringResource(R.string.gallery_confirm_create_dialog_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCreateDialog = false }) {
+                    Text(stringResource(android.R.string.cancel))
+                }
+            },
+        )
+    }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.gallery_confirm_title)) },
@@ -234,33 +303,38 @@ fun GalleryTranslationConfirmScreen(
                                         ),
                                     )
                                 )
-                                Text(stringResource(R.string.gallery_confirm_scope))
                             } ?: CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                        }
-                    }
-                }
-                item {
-                    OutlinedButton(
-                        enabled = !creating &&
-                            selectedUris.size < GalleryTranslationWorkPolicy.MAX_IMAGES_PER_TASK,
-                        onClick = {
-                            picker.launch(
-                                PickVisualMediaRequest(
-                                    ActivityResultContracts.PickVisualMedia.ImageOnly
-                                )
+                            Text(
+                                text = stringResource(
+                                    if (showPresetSwitcher) {
+                                        R.string.gallery_confirm_hide_presets
+                                    } else {
+                                        R.string.gallery_confirm_show_presets
+                                    }
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(
+                                        enabled = !creating,
+                                        role = Role.Button,
+                                        onClick = {
+                                            showPresetSwitcher = !showPresetSwitcher
+                                        },
+                                    )
+                                    .padding(vertical = 2.dp),
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.primary,
+                                textAlign = TextAlign.Center,
                             )
-                        },
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            containerColor = MaterialTheme.colorScheme.surface,
-                            contentColor = MaterialTheme.colorScheme.primary,
-                        ),
-                    ) {
-                        Icon(Icons.Default.AddPhotoAlternate, contentDescription = null)
-                        Text(
-                            stringResource(R.string.gallery_confirm_add_photos),
-                            modifier = Modifier.padding(start = 6.dp),
-                        )
+                            if (showPresetSwitcher) {
+                                HorizontalDivider()
+                                GalleryPresetSwitcher(
+                                    settings = settings,
+                                    viewModel = presetViewModel,
+                                    snackbarHostState = snackbarHostState,
+                                )
+                            }
+                        }
                     }
                 }
                 item {
@@ -271,48 +345,66 @@ fun GalleryTranslationConfirmScreen(
                     )
                 }
                 item {
-                    if (selectedUris.isEmpty()) {
-                        Text(
-                            stringResource(R.string.gallery_confirm_empty_selection),
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                    } else {
-                        LazyRow(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(96.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            itemsIndexed(
-                                items = selectedUris,
-                                key = { _, uri -> uri },
-                            ) { index, uri ->
-                                GallerySelectedThumbnail(
-                                    uriString = uri,
-                                    index = index,
-                                    enabled = !creating,
-                                    imageDecoder = viewModel.imageDecoder,
-                                    onPreview = { previewIndex = index },
-                                    onRemove = {
-                                        onSelectionChanged(
-                                            GalleryTranslationWorkPolicy.removeSelection(
-                                                current = selectedUris,
-                                                uriString = uri,
-                                            )
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (selectedUris.isEmpty()) {
+                            Text(
+                                stringResource(R.string.gallery_confirm_empty_selection),
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                            val spacing = 8.dp
+                            val columnCount = galleryThumbnailColumnCount(maxWidth.value)
+                            val itemWidth = galleryThumbnailWidthDp(
+                                availableWidthDp = maxWidth.value,
+                                columnCount = columnCount,
+                            ).dp
+                            FlowRow(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(spacing),
+                                verticalArrangement = Arrangement.spacedBy(spacing),
+                                maxItemsInEachRow = columnCount,
+                            ) {
+                                selectedUris.forEachIndexed { index, uri ->
+                                    key(uri) {
+                                        GallerySelectedThumbnail(
+                                            uriString = uri,
+                                            index = index,
+                                            enabled = !creating,
+                                            imageDecoder = viewModel.imageDecoder,
+                                            modifier = Modifier.width(itemWidth),
+                                            onPreview = { previewIndex = index },
+                                            onRemove = {
+                                                onSelectionChanged(
+                                                    GalleryTranslationWorkPolicy.removeSelection(
+                                                        current = selectedUris,
+                                                        uriString = uri,
+                                                    )
+                                                )
+                                            },
                                         )
-                                    },
-                                )
+                                    }
+                                }
+                                if (
+                                    selectedUris.size <
+                                    GalleryTranslationWorkPolicy.MAX_IMAGES_PER_TASK
+                                ) {
+                                    GalleryAddImageTile(
+                                        modifier = Modifier.width(itemWidth),
+                                        enabled = !creating,
+                                        onClick = {
+                                            picker.launch(
+                                                PickVisualMediaRequest(
+                                                    ActivityResultContracts.PickVisualMedia.ImageOnly
+                                                )
+                                            )
+                                        },
+                                    )
+                                }
                             }
                         }
                     }
-                }
-                item {
-                    Text(
-                        stringResource(R.string.gallery_confirm_output),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
                 }
                 if (errorMessage.isNotBlank()) {
                     item {
@@ -329,18 +421,7 @@ fun GalleryTranslationConfirmScreen(
                     .fillMaxWidth()
                     .height(56.dp),
                 enabled = selectedUris.isNotEmpty() && settings != null && !creating,
-                onClick = {
-                    creating = true
-                    errorMessage = ""
-                    scope.launch {
-                        runCatching { viewModel.createAndEnqueue(selectedUris) }
-                            .onSuccess(onCreated)
-                            .onFailure {
-                                errorMessage = it.message ?: it.javaClass.simpleName
-                                creating = false
-                            }
-                    }
-                },
+                onClick = { showCreateDialog = true },
             ) {
                 if (creating) {
                     CircularProgressIndicator(
@@ -360,11 +441,218 @@ fun GalleryTranslationConfirmScreen(
 }
 
 @Composable
+private fun GalleryPresetSwitcher(
+    settings: Settings?,
+    viewModel: MainViewModel,
+    snackbarHostState: SnackbarHostState,
+) {
+    val scope = rememberCoroutineScope()
+    val unsavedPresetName = stringResource(R.string.settings_translation_preset_unsaved_name)
+    val plans = remember(settings, unsavedPresetName) {
+        settings?.let { presetCarouselPlans(it, unsavedPresetName) }
+    }
+    val presets = plans?.presets.orEmpty()
+    var modelIssues by remember {
+        mutableStateOf<Map<String, List<TranslationPresetModelIssue>>?>(null)
+    }
+    var pendingPresetSwitch by remember { mutableStateOf<TranslationPreset?>(null) }
+    var pendingSaveBeforePresetSwitch by remember { mutableStateOf<TranslationPreset?>(null) }
+    var pendingPresetSaveName by rememberSaveable { mutableStateOf("") }
+    val presetNotReadyMessage =
+        stringResource(R.string.main_preset_models_not_ready_message)
+
+    LaunchedEffect(presets) {
+        modelIssues = viewModel.presetModelIssues(presets)
+    }
+
+    val applyPresetNow: (TranslationPreset) -> Unit = { preset ->
+        scope.launch {
+            if (!viewModel.applyTranslationPreset(preset.id)) {
+                modelIssues = viewModel.presetModelIssues(presets)
+                snackbarHostState.showSnackbar(presetNotReadyMessage)
+            }
+        }
+    }
+
+    pendingPresetSwitch?.let { target ->
+        CatalystAlertDialog(
+            onDismissRequest = { pendingPresetSwitch = null },
+            title = { Text(stringResource(R.string.main_preset_unsaved_switch_title)) },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.main_preset_unsaved_switch_message,
+                        translationPresetDisplayName(target),
+                    )
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingPresetSwitch = null
+                        pendingPresetSaveName = ""
+                        pendingSaveBeforePresetSwitch = target
+                    }
+                ) {
+                    Text(stringResource(R.string.main_preset_save_then_apply))
+                }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(
+                        onClick = {
+                            pendingPresetSwitch = null
+                            applyPresetNow(target)
+                        }
+                    ) {
+                        Text(stringResource(R.string.main_preset_discard_then_apply))
+                    }
+                    TextButton(onClick = { pendingPresetSwitch = null }) {
+                        Text(stringResource(R.string.main_preset_switch_cancel))
+                    }
+                }
+            },
+        )
+    }
+
+    pendingSaveBeforePresetSwitch?.let { target ->
+        val draft = presets.firstOrNull {
+            it.id == TranslationPresetCatalog.UNSAVED_DRAFT_ID
+        }
+        val existingPresetNames = presets
+            .filterNot { it.id == TranslationPresetCatalog.UNSAVED_DRAFT_ID }
+            .map { translationPresetDisplayName(it) }
+        val duplicateName = translationPresetNameExists(
+            pendingPresetSaveName,
+            existingPresetNames,
+        )
+        val saveNameValid =
+            normalizedTranslationPresetName(pendingPresetSaveName) != null && !duplicateName
+        CatalystAlertDialog(
+            onDismissRequest = {
+                pendingSaveBeforePresetSwitch = null
+                pendingPresetSaveName = ""
+            },
+            title = {
+                Text(stringResource(R.string.settings_translation_preset_save_dialog_title))
+            },
+            text = {
+                OutlinedTextField(
+                    value = pendingPresetSaveName,
+                    onValueChange = { pendingPresetSaveName = it },
+                    label = { Text(stringResource(R.string.settings_translation_preset_name)) },
+                    placeholder = {
+                        Text(stringResource(R.string.settings_translation_preset_name_placeholder))
+                    },
+                    isError = duplicateName,
+                    supportingText = if (duplicateName) {
+                        {
+                            Text(
+                                stringResource(
+                                    R.string.settings_translation_preset_name_duplicate
+                                )
+                            )
+                        }
+                    } else {
+                        null
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = saveNameValid && draft != null,
+                    onClick = {
+                        val presetToSave = draft?.let {
+                            namedTranslationPresetOrNull(
+                                preset = it,
+                                nameInput = pendingPresetSaveName,
+                                id = newCustomPresetId(),
+                            )
+                        } ?: return@TextButton
+                        pendingSaveBeforePresetSwitch = null
+                        pendingPresetSaveName = ""
+                        scope.launch {
+                            if (!viewModel.saveTranslationPresetAndApply(
+                                    presetToSave = presetToSave,
+                                    targetId = target.id,
+                                )
+                            ) {
+                                modelIssues = viewModel.presetModelIssues(presets)
+                                snackbarHostState.showSnackbar(presetNotReadyMessage)
+                            }
+                        }
+                    },
+                ) {
+                    Text(stringResource(R.string.main_preset_save_then_apply))
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        pendingSaveBeforePresetSwitch = null
+                        pendingPresetSaveName = ""
+                    }
+                ) {
+                    Text(stringResource(R.string.main_preset_switch_cancel))
+                }
+            },
+        )
+    }
+
+    PresetCarousel(
+        presets = presets,
+        activePresetId = plans?.currentPresetId.orEmpty(),
+        modelIssuesByPreset = modelIssues,
+        onPresetSelected = { preset ->
+            if (shouldConfirmUnsavedPresetSwitch(
+                    currentPresetId = plans?.currentPresetId.orEmpty(),
+                    targetPresetId = preset.id,
+                )
+            ) {
+                pendingPresetSwitch = preset
+            } else {
+                applyPresetNow(preset)
+            }
+        },
+        onPresetBlocked = {
+            scope.launch { snackbarHostState.showSnackbar(presetNotReadyMessage) }
+        },
+    )
+}
+
+internal fun galleryThumbnailColumnCount(
+    availableWidthDp: Float,
+    minThumbnailWidthDp: Float = 96f,
+    spacingDp: Float = 8f,
+): Int {
+    if (!availableWidthDp.isFinite() || availableWidthDp <= 0f) return 1
+    val minimum = minThumbnailWidthDp.takeIf { it.isFinite() && it > 0f } ?: 96f
+    val spacing = spacingDp.takeIf { it.isFinite() && it >= 0f } ?: 8f
+    return floor((availableWidthDp + spacing) / (minimum + spacing))
+        .toInt()
+        .coerceAtLeast(1)
+}
+
+internal fun galleryThumbnailWidthDp(
+    availableWidthDp: Float,
+    columnCount: Int,
+    spacingDp: Float = 8f,
+): Float {
+    if (!availableWidthDp.isFinite() || availableWidthDp <= 0f) return 0f
+    val columns = columnCount.coerceAtLeast(1)
+    val spacing = spacingDp.takeIf { it.isFinite() && it >= 0f } ?: 8f
+    return ((availableWidthDp - spacing * (columns - 1)) / columns).coerceAtLeast(0f)
+}
+
+@Composable
 private fun GallerySelectedThumbnail(
     uriString: String,
     index: Int,
     enabled: Boolean,
     imageDecoder: GalleryImageDecoder,
+    modifier: Modifier = Modifier,
     onPreview: () -> Unit,
     onRemove: () -> Unit,
 ) {
@@ -378,11 +666,12 @@ private fun GallerySelectedThumbnail(
     }
     Card(
         onClick = onPreview,
-        modifier = Modifier.size(96.dp),
+        modifier = modifier.aspectRatio(1f),
         shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Box(Modifier.fillMaxSize()) {
             bitmap?.let {
@@ -409,6 +698,55 @@ private fun GallerySelectedThumbnail(
                     tint = MaterialTheme.colorScheme.error,
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun GalleryAddImageTile(
+    modifier: Modifier,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    val borderColor = MaterialTheme.colorScheme.outlineVariant
+    val shape = RoundedCornerShape(8.dp)
+    Surface(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier.aspectRatio(1f),
+        shape = shape,
+        color = MaterialTheme.colorScheme.surface,
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .drawBehind {
+                    val strokeWidth = 1.dp.toPx()
+                    val inset = strokeWidth / 2f
+                    drawRoundRect(
+                        color = borderColor,
+                        topLeft = Offset(inset, inset),
+                        size = Size(
+                            width = size.width - strokeWidth,
+                            height = size.height - strokeWidth,
+                        ),
+                        cornerRadius = CornerRadius(8.dp.toPx()),
+                        style = Stroke(
+                            width = strokeWidth,
+                            pathEffect = PathEffect.dashPathEffect(
+                                intervals = floatArrayOf(6.dp.toPx(), 4.dp.toPx()),
+                            ),
+                        ),
+                    )
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Default.Add,
+                contentDescription = stringResource(R.string.gallery_confirm_add_photos),
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(28.dp),
+            )
         }
     }
 }
@@ -502,6 +840,7 @@ fun GalleryTranslationTaskDetailScreen(
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     var showDeleteDialog by remember { mutableStateOf(false) }
+    var showCancelDialog by remember { mutableStateOf(false) }
     var previewSource by remember { mutableStateOf<GalleryPreviewSource?>(null) }
     var exportProgress by remember { mutableStateOf<GalleryExportProgress?>(null) }
     var resultFilterIndex by rememberSaveable(taskId) { mutableIntStateOf(0) }
@@ -555,6 +894,7 @@ fun GalleryTranslationTaskDetailScreen(
             sources = listOf(source),
             initialPage = 0,
             imageDecoder = viewModel.imageDecoder,
+            resultPreviewLoader = viewModel::loadResultPreview,
             onDismiss = { previewSource = null },
         )
     }
@@ -582,6 +922,31 @@ fun GalleryTranslationTaskDetailScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showDeleteDialog = false }) {
+                    Text(stringResource(android.R.string.cancel))
+                }
+            },
+        )
+    }
+    if (showCancelDialog) {
+        CatalystAlertDialog(
+            onDismissRequest = { showCancelDialog = false },
+            title = { Text(stringResource(R.string.gallery_task_cancel_title)) },
+            text = { Text(stringResource(R.string.gallery_task_cancel_message)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showCancelDialog = false
+                        scope.launch { viewModel.cancel(taskId) }
+                    }
+                ) {
+                    Text(
+                        stringResource(R.string.gallery_task_cancel),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCancelDialog = false }) {
                     Text(stringResource(android.R.string.cancel))
                 }
             },
@@ -648,9 +1013,7 @@ fun GalleryTranslationTaskDetailScreen(
                 ) {
                     GalleryTaskSummary(
                         task = currentTask,
-                        onCancel = {
-                            scope.launch { viewModel.cancel(currentTask.id) }
-                        },
+                        onCancel = { showCancelDialog = true },
                         onRetry = {
                             scope.launch { viewModel.retryFailed(currentTask.id) }
                         },
@@ -677,12 +1040,13 @@ fun GalleryTranslationTaskDetailScreen(
                 ) {
                     GalleryResultItem(
                         item = item,
-                        imageDecoder = viewModel.imageDecoder,
+                        thumbnailLoader = viewModel::loadResultThumbnail,
                         onPreview = {
                             previewSource = GalleryPreviewSource(
                                 sourceUri = item.sourceUri,
                                 localPath = item.localPath,
                                 displayName = item.displayName,
+                                resultItem = item,
                             )
                         },
                     )
@@ -697,18 +1061,6 @@ private fun GalleryTaskCard(
     task: GalleryTranslationTaskEntity,
     onOpen: () -> Unit,
 ) {
-    val context = LocalContext.current
-    val ocrEngine = remember(task.ocrEngine) {
-        runCatching { OcrEngineKind.valueOf(task.ocrEngine) }.getOrNull()
-    }
-    val translatorEngine = remember(task.translatorEngine) {
-        runCatching { TranslatorEngine.valueOf(task.translatorEngine) }.getOrNull()
-    }
-    val ocrLabel = ocrEngine?.let { stringResource(ocrEngineLabelRes(it)) }
-        ?: task.ocrEngine
-    val translatorLabel = translatorEngine?.let {
-        stringResource(translatorEngineLabelRes(it))
-    } ?: task.translatorEngine
     Card(
         onClick = onOpen,
         modifier = Modifier.fillMaxWidth(),
@@ -739,22 +1091,41 @@ private fun GalleryTaskCard(
                 )
                 GalleryStatusText(task.status)
             }
-            Text(
-                stringResource(
-                    R.string.gallery_task_settings_summary,
-                    ocrLabel,
-                    translatorLabel,
-                    Languages.nameOf(context, task.sourceLang),
-                    Languages.nameOf(context, task.targetLang),
-                ),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
-            )
+            GalleryTaskSettingsSummary(task)
             GalleryTaskProgressSummary(task)
         }
     }
+}
+
+@Composable
+private fun GalleryTaskSettingsSummary(
+    task: GalleryTranslationTaskEntity,
+) {
+    val context = LocalContext.current
+    val ocrEngine = remember(task.ocrEngine) {
+        runCatching { OcrEngineKind.valueOf(task.ocrEngine) }.getOrNull()
+    }
+    val translatorEngine = remember(task.translatorEngine) {
+        runCatching { TranslatorEngine.valueOf(task.translatorEngine) }.getOrNull()
+    }
+    val ocrLabel = ocrEngine?.let { stringResource(ocrEngineLabelRes(it)) }
+        ?: task.ocrEngine
+    val translatorLabel = translatorEngine?.let {
+        stringResource(translatorEngineLabelRes(it))
+    } ?: task.translatorEngine
+    Text(
+        stringResource(
+            R.string.gallery_task_settings_summary,
+            ocrLabel,
+            translatorLabel,
+            Languages.nameOf(context, task.sourceLang),
+            Languages.nameOf(context, task.targetLang),
+        ),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 3,
+        overflow = TextOverflow.Ellipsis,
+    )
 }
 
 @Composable
@@ -770,6 +1141,22 @@ private fun GalleryTaskSummary(
     val canRetry = task.failedCount > 0 && !active
     val hasExportableResults = galleryCanExport(task.status, task.successCount)
     val canExport = galleryCanExport(task.status, task.successCount, exportRenderMode)
+    val nowMs by produceState(
+        initialValue = System.currentTimeMillis(),
+        key1 = task.id,
+        key2 = task.startedAtMs,
+        key3 = task.finishedAtMs,
+    ) {
+        while (task.startedAtMs != null && task.finishedAtMs == null) {
+            delay(1_000)
+            value = System.currentTimeMillis()
+        }
+    }
+    val elapsedSeconds = galleryTaskElapsedSeconds(
+        startedAtMs = task.startedAtMs,
+        finishedAtMs = task.finishedAtMs,
+        nowMs = nowMs,
+    )
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
@@ -793,8 +1180,21 @@ private fun GalleryTaskSummary(
                     stringResource(R.string.gallery_task_images, task.totalCount),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                GalleryStatusText(task.status)
+                Column(horizontalAlignment = Alignment.End) {
+                    GalleryStatusText(task.status)
+                    elapsedSeconds?.let { seconds ->
+                        Text(
+                            stringResource(
+                                R.string.gallery_task_duration,
+                                DateUtils.formatElapsedTime(seconds),
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
             }
+            GalleryTaskSettingsSummary(task)
             GalleryTaskProgressSummary(task, showOutcomes = false)
             if (active && task.totalCount > 0) {
                 if (task.currentItemName.isNotBlank()) {
@@ -993,14 +1393,14 @@ internal fun galleryResultFilterMatches(
 @Composable
 private fun GalleryResultItem(
     item: GalleryTranslationItemEntity,
-    imageDecoder: GalleryImageDecoder,
+    thumbnailLoader: suspend (GalleryTranslationItemEntity) -> android.graphics.Bitmap?,
     onPreview: () -> Unit,
 ) {
     val thumbnailRatio = galleryResultThumbnailRatio(
         processedWidth = item.processedWidth,
         processedHeight = item.processedHeight,
     )
-    val textPaneHeight = (112.dp / thumbnailRatio).coerceIn(112.dp, 220.dp)
+    val textPaneHeight = galleryResultTextPaneHeightDp(thumbnailRatio).dp
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
@@ -1023,7 +1423,7 @@ private fun GalleryResultItem(
                 GalleryResultThumbnail(
                     item = item,
                     aspectRatio = thumbnailRatio,
-                    imageDecoder = imageDecoder,
+                    thumbnailLoader = thumbnailLoader,
                     onPreview = onPreview,
                 )
                 Column(
@@ -1050,7 +1450,7 @@ private fun GalleryResultItem(
                                 .padding(end = 8.dp),
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.SemiBold,
-                            maxLines = 2,
+                            maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
                         GalleryItemStatusText(item.status)
@@ -1065,12 +1465,15 @@ private fun GalleryResultItem(
                     if (item.status == GalleryItemStatus.SUCCEEDED) {
                         Column(
                             modifier = Modifier.weight(1f),
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
                             GalleryResultTextSection(
                                 title = stringResource(R.string.gallery_item_source),
                                 text = item.sourceText,
                                 modifier = Modifier.weight(1f),
+                            )
+                            HorizontalDivider(
+                                modifier = Modifier.padding(horizontal = 8.dp),
+                                color = MaterialTheme.colorScheme.outlineVariant,
                             )
                             GalleryResultTextSection(
                                 title = stringResource(R.string.gallery_item_translation),
@@ -1094,73 +1497,115 @@ private fun GalleryResultTextSection(
     modifier: Modifier = Modifier,
 ) {
     val scrollState = rememberScrollState()
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(6.dp),
-        color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 4.dp),
     ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+        Text(
+            title,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(scrollState),
         ) {
-            Text(
-                title,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .verticalScroll(scrollState),
-            ) {
-                SelectionContainer {
-                    Text(
-                        text,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
+            SelectionContainer {
+                Text(
+                    text,
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
         }
     }
+}
+
+internal fun galleryTaskElapsedSeconds(
+    startedAtMs: Long?,
+    finishedAtMs: Long?,
+    nowMs: Long,
+): Long? {
+    val started = startedAtMs ?: return null
+    val ended = finishedAtMs ?: nowMs
+    return (ended - started).coerceAtLeast(0L) / 1_000L
 }
 
 @Composable
 private fun GalleryResultThumbnail(
     item: GalleryTranslationItemEntity,
     aspectRatio: Float,
-    imageDecoder: GalleryImageDecoder,
+    thumbnailLoader: suspend (GalleryTranslationItemEntity) -> android.graphics.Bitmap?,
     onPreview: () -> Unit,
 ) {
+    val showProcessingPlaceholder = galleryResultThumbnailShowsProcessing(item.status)
+    val thumbnailShape = RoundedCornerShape(4.dp)
     val bitmap by produceState<android.graphics.Bitmap?>(
         initialValue = null,
-        key1 = item.sourceUri,
-        key2 = item.localPath,
+        key1 = item.id,
+        key2 = item.updatedAtMs,
     ) {
-        value = withContext(Dispatchers.IO) {
-            imageDecoder.decodeThumbnail(item.sourceUri, item.localPath)
+        if (!showProcessingPlaceholder) {
+            value = withContext(Dispatchers.IO) {
+                thumbnailLoader(item)
+            }
         }
     }
     Box(
         modifier = Modifier
             .width(112.dp)
             .aspectRatio(aspectRatio)
-            .clickable(onClick = onPreview),
-    ) {
-        bitmap?.let {
-            Image(
-                bitmap = it.asImageBitmap(),
-                contentDescription = null,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.FillBounds,
+            .clip(thumbnailShape)
+            .border(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.outlineVariant,
+                shape = thumbnailShape,
             )
+            .clickable(
+                enabled = !showProcessingPlaceholder,
+                onClick = onPreview,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (showProcessingPlaceholder) {
+            Text(
+                stringResource(R.string.gallery_item_processing),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+        } else {
+            bitmap?.let {
+                Image(
+                    bitmap = it.asImageBitmap(),
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.FillBounds,
+                )
+            }
         }
     }
+}
+
+internal fun galleryResultThumbnailShowsProcessing(
+    status: GalleryItemStatus,
+): Boolean = when (status) {
+    GalleryItemStatus.QUEUED,
+    GalleryItemStatus.RUNNING,
+    -> true
+
+    GalleryItemStatus.SUCCEEDED,
+    GalleryItemStatus.FAILED,
+    GalleryItemStatus.CANCELED,
+    -> false
 }
 
 private data class GalleryPreviewSource(
     val sourceUri: String,
     val localPath: String,
     val displayName: String,
+    val resultItem: GalleryTranslationItemEntity? = null,
 )
 
 private data class GalleryPreviewLoadState(
@@ -1173,6 +1618,7 @@ private fun GalleryImagePreviewDialog(
     sources: List<GalleryPreviewSource>,
     initialPage: Int,
     imageDecoder: GalleryImageDecoder,
+    resultPreviewLoader: (suspend (GalleryTranslationItemEntity) -> android.graphics.Bitmap?)? = null,
     onDismiss: () -> Unit,
 ) {
     if (sources.isEmpty()) return
@@ -1202,6 +1648,7 @@ private fun GalleryImagePreviewDialog(
                 GalleryImagePreviewPage(
                     source = sources[page],
                     imageDecoder = imageDecoder,
+                    resultPreviewLoader = resultPreviewLoader,
                 )
             }
             Text(
@@ -1237,19 +1684,25 @@ private fun GalleryImagePreviewDialog(
 private fun GalleryImagePreviewPage(
     source: GalleryPreviewSource,
     imageDecoder: GalleryImageDecoder,
+    resultPreviewLoader: (suspend (GalleryTranslationItemEntity) -> android.graphics.Bitmap?)?,
 ) {
     val previewState by produceState(
         initialValue = GalleryPreviewLoadState(),
-        key1 = source.sourceUri,
-        key2 = source.localPath,
+        key1 = source,
     ) {
         value = withContext(Dispatchers.IO) {
+            val resultItem = source.resultItem
+            val resultLoader = resultPreviewLoader
             GalleryPreviewLoadState(
                 loading = false,
-                bitmap = imageDecoder.decodePreview(
-                    sourceUri = source.sourceUri,
-                    localPath = source.localPath,
-                ),
+                bitmap = if (resultItem != null && resultLoader != null) {
+                    resultLoader(resultItem)
+                } else {
+                    imageDecoder.decodePreview(
+                        sourceUri = source.sourceUri,
+                        localPath = source.localPath,
+                    )
+                },
             )
         }
     }
@@ -1420,6 +1873,7 @@ class GalleryTranslationViewModel @Inject constructor(
     private val repository: GalleryTranslationRepository,
     private val manager: GalleryTranslationManager,
     private val exporter: GalleryTranslationExporter,
+    private val translatedPreviewStore: GalleryTranslatedPreviewStore,
     settingsRepository: SettingsRepository,
     val imageDecoder: GalleryImageDecoder,
 ) : ViewModel() {
@@ -1453,6 +1907,28 @@ class GalleryTranslationViewModel @Inject constructor(
     internal fun exportRenderModeForTask(task: GalleryTranslationTaskEntity): GalleryExportRenderMode =
         repository.exportRenderModeForTask(task)
 
+    suspend fun loadResultThumbnail(item: GalleryTranslationItemEntity): android.graphics.Bitmap? {
+        val task = repository.getTask(item.taskId)
+        val translated = task?.let {
+            translatedPreviewStore.loadTranslatedThumbnail(
+                item = item,
+                settings = repository.settingsForTask(it),
+            )
+        }
+        return translated ?: imageDecoder.decodeThumbnail(item.sourceUri, item.localPath)
+    }
+
+    suspend fun loadResultPreview(item: GalleryTranslationItemEntity): android.graphics.Bitmap? {
+        val task = repository.getTask(item.taskId)
+        val translated = task?.let {
+            translatedPreviewStore.loadTranslatedPreview(
+                item = item,
+                settings = repository.settingsForTask(it),
+            )
+        }
+        return translated ?: imageDecoder.decodePreview(item.sourceUri, item.localPath)
+    }
+
 }
 
 internal fun galleryResultThumbnailRatio(
@@ -1463,3 +1939,6 @@ internal fun galleryResultThumbnailRatio(
 } else {
     1f
 }
+
+internal fun galleryResultTextPaneHeightDp(thumbnailRatio: Float): Float =
+    (112f / thumbnailRatio).coerceAtLeast(112f)

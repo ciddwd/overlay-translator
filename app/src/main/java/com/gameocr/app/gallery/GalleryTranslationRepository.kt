@@ -40,6 +40,7 @@ class GalleryTranslationRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val dao: GalleryTranslationDao,
     private val settingsRepository: SettingsRepository,
+    private val translatedPreviewStore: GalleryTranslatedPreviewStore,
     private val json: Json,
 ) {
     fun observeTasks(): Flow<List<GalleryTranslationTaskEntity>> = dao.observeTasks()
@@ -250,8 +251,9 @@ class GalleryTranslationRepository @Inject constructor(
                         )
                     }
                 }
-            }
+        }
         File(context.filesDir, "$TASK_FILES_DIR/$taskId").deleteRecursively()
+        translatedPreviewStore.deleteTask(taskId)
     }
 
     private fun prepareItem(

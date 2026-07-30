@@ -1399,6 +1399,83 @@ class SettingsScreenModelStatusTest {
     }
 
     @Test
+    fun translationPresetDownloadRequiresAndroidUpgrade_isTableDriven() {
+        data class Case(
+            val name: String,
+            val issues: List<TranslationPresetModelIssue>,
+            val expected: Boolean,
+        )
+
+        listOf(
+            Case("no missing models", emptyList(), false),
+            Case(
+                "ordinary local model download on a capable device",
+                listOf(
+                    TranslationPresetModelIssue(
+                        kind = TranslationPresetModelIssueKind.LOCAL_LLM_MISSING,
+                        llmModelKind = LlmModelKind.SAKURA_1_5B_Q4,
+                    )
+                ),
+                false,
+            ),
+            Case(
+                "OCR-only preset download",
+                listOf(TranslationPresetModelIssue(TranslationPresetModelIssueKind.PADDLE_MISSING)),
+                false,
+            ),
+            Case(
+                "unsupported local model alone",
+                listOf(
+                    TranslationPresetModelIssue(
+                        TranslationPresetModelIssueKind.LOCAL_LLM_UNSUPPORTED
+                    )
+                ),
+                true,
+            ),
+            Case(
+                "unsupported local model blocks the entire mixed preset download",
+                listOf(
+                    TranslationPresetModelIssue(
+                        TranslationPresetModelIssueKind.LOCAL_LLM_UNSUPPORTED
+                    ),
+                    TranslationPresetModelIssue(TranslationPresetModelIssueKind.MANGA_OCR_MISSING),
+                    TranslationPresetModelIssue(TranslationPresetModelIssueKind.PADDLE_MISSING),
+                ),
+                true,
+            ),
+        ).forEach { case ->
+            assertEquals(
+                case.name,
+                case.expected,
+                translationPresetDownloadRequiresAndroidUpgrade(case.issues),
+            )
+        }
+    }
+
+    @Test
+    fun translationPresetDownloadRequest_checksAndroidBeforeAnyDownloadFlow() {
+        val source = File("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
+        val handler = source.substring(
+            source.indexOf("onDownloadModels = { preset, issues ->"),
+            source.indexOf("onDelete = { preset ->"),
+        )
+
+        assertTrue(
+            handler.indexOf("translationPresetDownloadRequiresAndroidUpgrade(issues)") <
+                handler.indexOf("modelDownloadBusy")
+        )
+        assertTrue(
+            handler.indexOf("translationPresetDownloadRequiresAndroidUpgrade(issues)") <
+                handler.indexOf("requestModelDownload(downloadModelLabel)")
+        )
+        assertTrue(source.contains("showUnsupportedPresetDownloadDialog = true"))
+        assertTrue(source.contains("R.string.settings_translation_preset_android_unsupported_title"))
+        assertTrue(source.contains("R.string.settings_translation_preset_android_unsupported_message"))
+        assertTrue(source.contains("R.string.settings_translation_preset_android_unsupported_confirm"))
+        assertTrue(source.contains("Build.VERSION.RELEASE"))
+    }
+
+    @Test
     fun translationPresetModelDownloadState_isRowScoped() {
         data class Case(
             val name: String,

@@ -5,8 +5,10 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
 import android.provider.DocumentsContract
+import androidx.exifinterface.media.ExifInterface
 import com.gameocr.app.data.Settings
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
@@ -128,6 +130,7 @@ class GalleryTranslationExporter @Inject constructor(
 
         var decoded: GalleryDecodedImage? = null
         var rendered: Bitmap? = null
+        var encodedFile: File? = null
         var outputUri: Uri? = null
         try {
             decoded = imageDecoder.decode(item)
@@ -138,6 +141,7 @@ class GalleryTranslationExporter @Inject constructor(
                 segments = segments,
                 settings = settings,
             )
+            encodedFile = encodeTranslatedPng(rendered)
             outputUri = requireNotNull(
                 DocumentsContract.createDocument(
                     context.contentResolver,
@@ -148,10 +152,10 @@ class GalleryTranslationExporter @Inject constructor(
             ) {
                 "The selected folder could not create an output image."
             }
-            context.contentResolver.openOutputStream(outputUri, "w").use { output ->
-                requireNotNull(output) { "The output image could not be opened." }
-                check(rendered.compress(Bitmap.CompressFormat.PNG, 100, output)) {
-                    "The translated image could not be encoded."
+            encodedFile.inputStream().use { input ->
+                context.contentResolver.openOutputStream(outputUri, "w").use { output ->
+                    requireNotNull(output) { "The output image could not be opened." }
+                    input.copyTo(output)
                 }
             }
         } catch (error: Throwable) {
@@ -162,6 +166,11 @@ class GalleryTranslationExporter @Inject constructor(
             }
             throw error
         } finally {
+            encodedFile?.let { file ->
+                if (file.exists() && !file.delete()) {
+                    Timber.w("Gallery export temporary file could not be deleted: %s", file.name)
+                }
+            }
             rendered
                 ?.takeIf { it !== decoded?.bitmap && !it.isRecycled }
                 ?.recycle()
@@ -169,10 +178,48 @@ class GalleryTranslationExporter @Inject constructor(
         }
     }
 
+    private fun encodeTranslatedPng(rendered: Bitmap): File {
+        val outputFile = File.createTempFile(
+            TEMP_FILE_PREFIX,
+            ".png",
+            context.cacheDir,
+        )
+        try {
+            outputFile.outputStream().buffered().use { output ->
+                check(rendered.compress(Bitmap.CompressFormat.PNG, 100, output)) {
+                    "The translated image could not be encoded."
+                }
+            }
+            val metadata = galleryExportMetadata()
+            ExifInterface(outputFile).apply {
+                setAttribute(ExifInterface.TAG_ARTIST, metadata.artist)
+                setAttribute(ExifInterface.TAG_SOFTWARE, metadata.software)
+                saveAttributes()
+            }
+            return outputFile
+        } catch (error: Throwable) {
+            outputFile.delete()
+            throw error
+        }
+    }
+
     private companion object {
         const val PNG_MIME_TYPE = "image/png"
+        const val TEMP_FILE_PREFIX = "gallery_translated_"
     }
 }
+
+internal data class GalleryExportMetadata(
+    val artist: String,
+    val software: String,
+)
+
+internal fun galleryExportMetadata(): GalleryExportMetadata = GalleryExportMetadata(
+    artist = GALLERY_EXPORT_CREATOR,
+    software = GALLERY_EXPORT_CREATOR,
+)
+
+internal const val GALLERY_EXPORT_CREATOR = "屏译 · Screen Translator"
 
 internal fun galleryCanExport(
     status: GalleryTaskStatus,
