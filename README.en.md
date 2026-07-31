@@ -32,6 +32,12 @@ No ROOT, with on-device options available, designed for visual novels, manga, ga
 
 Game / manga / visual novel on screen → tap the floating ball → the translation appears over the original when recognition and translation finish, with optional read-aloud controls.
 
+### 🖼️ Translate a group of saved images
+
+- Tap **New task** on the home screen to choose several images at once, or share images and screenshots to **Screen Translator** to open a new task directly
+- Choose a preset and start the task; processing continues after you leave the task page. The home screen shows the latest or active task, and **Task list** keeps the rest
+- The result page shows the source and translation and lets you swipe between images. With **Source-aligned** or **Adapt to screen**, you can also save translated copies that keep the task's font, colors, layout, and text direction
+
 ### 🖱️ How to trigger
 
 - **Tap the floating ball**: defaults to translating the whole screen; in **Word-pick mode**, draw around a word or phrase, then fine-tune the selection and tap **Translate** by default. Disable **Precise adjustment** in Settings to recognize and translate immediately on release
@@ -55,7 +61,8 @@ Game / manga / visual novel on screen → tap the floating ball → the translat
 - **LLMs**: DeepSeek / ChatGPT / Claude / Zhipu / self-hosted services using OpenAI- or Anthropic-compatible connections, with results shown as they arrive
 - **On-device translation**: Google ML Kit works offline after downloading its language packs; Sakura is tuned for Japanese manga and visual novels translated into Simplified Chinese, while Hy-MT2 supports more languages
 - **Language-direction guard**: source and target cannot be set to the same language; conflicting choices are disabled with an explanation in Settings and the floating quick-switch menu
-- **Consistent terminology**: save names, places, organizations, and domain terms globally or per app so LLM and on-device model translations keep preferred wording across scenes
+- **Consistent terminology**: save names, places, organizations, and domain terms globally or per app. Long-press an existing translation to correct the source or translation and keep the correction
+- **More consistent over time**: when the same or a similar sentence appears later, the app can reuse a saved translation. Review, search, and manage these entries in the **Translation library**
 - **DeepL**: free / Pro plan auto-detected, **supports self-hosted [deeplx](https://github.com/OwO-Network/DeepLX)** (open-source proxy, run on your own server, no key needed); pick between Official / deeplx / Auto-fallback
 - **Youdao Pic-Trans**: skips the OCR step entirely — send the screenshot, get back boxes with translations. Great for comics.
 - **Google**: no key, free (proxy required inside mainland China)
@@ -127,6 +134,12 @@ Screen Translator treats **capture, text recognition, translation, display, and 
 It is intended for users who want to choose their own recognition, translation, and speech methods while keeping offline use, vertical manga, and self-hosted services available.
 
 ## 📸 Screenshots
+
+**Home screen** — Swipe vertically between **Presets / Current status** in the upper section, and horizontally between **Capture service / Batch translation** in the lower section.
+
+| Presets and batch translation | Status and capture service |
+|---|---|
+| <img src="docs/screenshots/home-batch-translation.png" width="320" alt="Home presets, batch translation, and latest task" /> | <img src="docs/screenshots/home-capture-service.png" width="320" alt="Home status and capture service" /> |
 
 **Live overlay** — Discord rules page, OCR boxes glued to the source text:
 
