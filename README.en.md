@@ -127,6 +127,7 @@ Screen Translator treats **capture, text recognition, translation, display, and 
 |---|---|
 | **Mix and match recognition and translation** | Read text on the phone or through your own computer or a cloud service, then choose translation separately. One unavailable provider does not disable the whole workflow |
 | **Speech is independent from translation** | Any translation method can be paired with a phone voice, your own voice service, or an online voice without reconfiguring recognition and translation |
+| **Live screens and saved images** | Use the floating ball to translate what is on screen immediately, or send a group of saved images to the background; both workflows can use your saved presets |
 | **Fully offline or fully self-hosted** | On-device recognition and translation plus an installed offline phone voice can keep screenshots and text on the phone; recognition, translation, and speech services can also run on your own computer or server |
 | **Built for games, manga, and visual novels** | Wait for dialogue to finish typing, skip unchanged scenes, prioritize dialogue regions, handle vertical manga, preserve source position and reading direction, and keep per-game names and terms consistent |
 | **Open source without configuration lock-in** | Apache-2.0 source; settings, presets, terminology, and fonts can be exported for migration, while API keys stay out of the export |
@@ -468,6 +469,7 @@ To hear translations aloud, enable TTS in Settings and choose a voice option:
 | Feature | What users can do |
 |---|---|
 | **Floating translation** | Tap the floating ball over a game, manga, or visual novel and show translations beside the source or in a separate floating window |
+| **Batch image translation** | Select multiple saved images and let the task continue after leaving the page; review progress, source text, and translations, then save translated images with the task's text style |
 | **Adapt to screen** | Choose colors, background, and text size automatically; comic scenes use bundled bubble detection, source-text erasure, local repair, and shape-aware layout with a safe fallback |
 | **Automatic loop** | Translate at a fixed interval or wait for dialogue to finish typing; skip unchanged screens and optionally prioritize lower-screen dialogue boxes |
 | **Multiple OCR choices** | Use on-device ML Kit / PaddleOCR / manga OCR, connect to OCR on your LAN, or use Baidu, Tencent, Youdao, and PP-OCRv6 Online |
@@ -488,7 +490,7 @@ These are user-facing improvements we want to continue working on, not a fixed r
 
 | Direction | Intended experience |
 |---|---|
-| **Translation history** | Revisit previously translated screens and dialogue instead of losing the last line after switching scenes |
+| **Floating translation history** | Revisit screens and dialogue translated with the floating ball instead of losing the last line after switching scenes |
 | **Offline dictionary** | Show basic definitions and examples without a network connection or an LLM translator |
 | **Long-term on-device model improvements** | Keep improving downloads, startup time, memory use, heat, battery life, and device compatibility across all on-device models, while exploring speech and more features that can run locally on phones |
 | **System assistant and agent integration** | Track [Android AppFunctions](https://developer.android.com/ai/appfunctions) and [A2A](https://a2a-protocol.org/latest/), then explore starting translation, speech, and common actions through system assistants or other agents as platform support matures |
