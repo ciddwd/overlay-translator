@@ -33,7 +33,7 @@ class GalleryTranslationExportContractTest {
             Case(
                 "export action is terminal-result gated",
                 screen.contains(
-                    "galleryCanExport(task.status, task.successCount, exportRenderMode)"
+                    "galleryCanExport(currentTask.status, currentTask.successCount, exportRenderMode)"
                 ),
             ),
             Case(
@@ -42,35 +42,23 @@ class GalleryTranslationExportContractTest {
                     screen.contains("R.string.gallery_export_floating_unavailable"),
             ),
             Case(
-                "export action lives inside the task summary card",
+                "export action lives in the top app bar actions menu",
                 screen.substring(
-                    screen.indexOf("private fun GalleryTaskSummary("),
-                    screen.indexOf("private fun GalleryTaskProgressSummary("),
-                ).contains("R.string.gallery_export_action"),
-            ),
-            Case(
-                "export action uses primary outline and surface background",
-                screen.substring(
-                    screen.indexOf("private fun GalleryTaskSummary("),
-                    screen.indexOf("private fun GalleryTaskProgressSummary("),
-                ).let { summary ->
-                    summary.contains(
-                        "border = BorderStroke(\n                        1.dp,\n" +
-                            "                        MaterialTheme.colorScheme.primary"
-                    ) &&
-                        summary.contains(
-                            "containerColor = MaterialTheme.colorScheme.surface"
-                        ) &&
-                        summary.contains(
-                            "contentColor = MaterialTheme.colorScheme.primary"
-                        )
+                    screen.indexOf("fun GalleryTranslationTaskDetailScreen("),
+                    screen.indexOf("private fun GalleryTaskCard("),
+                ).let { detail ->
+                    detail.contains("DropdownMenu(") &&
+                        detail.contains("Icons.Default.MoreVert") &&
+                        detail.contains("R.string.gallery_task_more_actions") &&
+                        detail.contains("R.string.gallery_export_action") &&
+                        detail.contains("R.string.gallery_task_delete")
                 },
             ),
             Case(
-                "button reports per-image progress",
+                "actions menu reports per-image export progress",
                 screen.contains("R.string.gallery_exporting") &&
-                    screen.contains("exportProgress.completed") &&
-                    screen.contains("exportProgress.total"),
+                    screen.contains("currentExportProgress.completed") &&
+                    screen.contains("currentExportProgress.total"),
             ),
             Case(
                 "result feedback uses the screen snackbar",
@@ -175,6 +163,7 @@ class GalleryTranslationExportContractTest {
                     "gallery_export_partial",
                     "gallery_export_empty",
                     "gallery_export_failed",
+                    "gallery_task_more_actions",
                 ).all { name ->
                     """<string name="$name">""" in english &&
                         """<string name="$name">""" in chinese

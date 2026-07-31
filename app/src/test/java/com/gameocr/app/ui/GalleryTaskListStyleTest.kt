@@ -60,7 +60,7 @@ class GalleryTaskListStyleTest {
     }
 
     @Test
-    fun `task result summary is outlined and owns its actions`() {
+    fun `task result summary is outlined and navigation owns terminal actions`() {
         val source = sourceFile(
             "src/main/java/com/gameocr/app/ui/GalleryTranslationScreens.kt"
         ).readText()
@@ -102,8 +102,23 @@ class GalleryTaskListStyleTest {
                 false,
             ),
             Case(
-                "export is inside the summary",
+                "export is not inside the summary",
                 "R.string.gallery_export_action",
+                false,
+            ),
+            Case(
+                "summary uses the same date time title as the task list",
+                "DateFormat.getDateTimeInstance(",
+                true,
+            ),
+            Case(
+                "summary no longer titles itself with an image count",
+                "R.string.gallery_task_images",
+                false,
+            ),
+            Case(
+                "summary title aligns with the top status line",
+                "verticalAlignment = Alignment.Top",
                 true,
             ),
             Case(
@@ -121,9 +136,9 @@ class GalleryTaskListStyleTest {
         }
 
         assertTrue(
-            "status follows the image count in the top right group",
+            "status follows the date time title in the top right group",
             summary.indexOf("GalleryStatusText(task.status)") >
-                summary.indexOf("R.string.gallery_task_images"),
+                summary.indexOf("DateFormat.getDateTimeInstance("),
         )
         val settingsSummary = source.substring(
             source.indexOf("private fun GalleryTaskSettingsSummary("),
@@ -142,9 +157,17 @@ class GalleryTaskListStyleTest {
             source.indexOf("private fun GalleryTaskCard("),
         )
         assertTrue(
-            "delete is a top app bar action after the task result title",
-            detailScreen.indexOf("TextButton(onClick = { showDeleteDialog = true })") >
-                detailScreen.indexOf("R.string.gallery_task_detail_title"),
+            "save as and delete share the top app bar actions dropdown",
+            detailScreen.contains("Icons.Default.MoreVert") &&
+                detailScreen.contains("R.string.gallery_task_more_actions") &&
+                detailScreen.contains("DropdownMenu(") &&
+                detailScreen.indexOf("R.string.gallery_export_action") >
+                    detailScreen.indexOf("DropdownMenu(") &&
+                detailScreen.indexOf(
+                    "R.string.gallery_task_delete",
+                    detailScreen.indexOf("DropdownMenu("),
+                ) >
+                    detailScreen.indexOf("DropdownMenu("),
         )
     }
 

@@ -13,6 +13,9 @@ class MangaBubbleTextAssignmentRefinerTest {
         val assignments: List<Int?>,
         val expected: List<Int?>,
         val expectedExcluded: Set<Int> = emptySet(),
+        val expectedFreeExcluded: Set<Int> = emptySet(),
+        val expectedAmbiguousFree: Set<Int> = emptySet(),
+        val expectedKindConflicts: Set<Int> = emptySet(),
     )
 
     @Test
@@ -122,6 +125,65 @@ class MangaBubbleTextAssignmentRefinerTest {
                 assignments = listOf(null, 4),
                 expected = listOf(null, null),
             ),
+            Case(
+                name = "unassigned free-only member outside bubbles is excluded",
+                members = listOf(IntRect(120, 15, 150, 75)),
+                bubbles = listOf(leftBubble),
+                text = listOf(
+                    detection(
+                        kind = MangaBubbleDetectionPostprocessor.Kind.TEXT_FREE,
+                        left = 115f,
+                        top = 10f,
+                        right = 155f,
+                        bottom = 80f,
+                    ),
+                ),
+                assignments = listOf(null),
+                expected = listOf(null),
+                expectedExcluded = setOf(0),
+                expectedFreeExcluded = setOf(0),
+            ),
+            Case(
+                name = "free-only member inside bubble remains ambiguous fallback",
+                members = listOf(IntRect(20, 15, 50, 75)),
+                bubbles = listOf(leftBubble),
+                text = listOf(
+                    detection(
+                        kind = MangaBubbleDetectionPostprocessor.Kind.TEXT_FREE,
+                        left = 15f,
+                        top = 10f,
+                        right = 55f,
+                        bottom = 80f,
+                    ),
+                ),
+                assignments = listOf(null),
+                expected = listOf(null),
+                expectedAmbiguousFree = setOf(0),
+            ),
+            Case(
+                name = "conflicting free and bubble text evidence keeps member",
+                members = listOf(IntRect(120, 15, 150, 75)),
+                bubbles = listOf(leftBubble),
+                text = listOf(
+                    detection(
+                        kind = MangaBubbleDetectionPostprocessor.Kind.TEXT_FREE,
+                        left = 115f,
+                        top = 10f,
+                        right = 155f,
+                        bottom = 80f,
+                    ),
+                    detection(
+                        kind = MangaBubbleDetectionPostprocessor.Kind.TEXT_BUBBLE,
+                        left = 118f,
+                        top = 12f,
+                        right = 152f,
+                        bottom = 78f,
+                    ),
+                ),
+                assignments = listOf(null),
+                expected = listOf(null),
+                expectedKindConflicts = setOf(0),
+            ),
         )
 
         cases.forEach { case ->
@@ -134,6 +196,21 @@ class MangaBubbleTextAssignmentRefinerTest {
 
             assertEquals(case.name, case.expected, result.assignments)
             assertEquals(case.name, case.expectedExcluded, result.excludedMemberIndices)
+            assertEquals(
+                case.name,
+                case.expectedFreeExcluded,
+                result.freeTextExcludedMemberIndices,
+            )
+            assertEquals(
+                case.name,
+                case.expectedAmbiguousFree,
+                result.ambiguousFreeTextMemberIndices,
+            )
+            assertEquals(
+                case.name,
+                case.expectedKindConflicts,
+                result.conflictingTextKindMemberIndices,
+            )
         }
     }
 

@@ -698,6 +698,14 @@ class MangaOcrEngine @Inject constructor(
             splitByTextBandBubbleIndices,
         )
         Timber.i(
+            "MangaOcr evidence assignments=%s unassignedTextBubble=%s duplicateCrops=%s",
+            textEvidenceResult.assignments.map { assignment ->
+                "${assignment.detectionIndex}->${assignment.entryIndex}"
+            },
+            textEvidenceResult.unassignedTextBubbleDetectionIndices,
+            textEvidenceResult.duplicateCropEntryIndices,
+        )
+        Timber.i(
             "MangaOcr: %d quads -> %d bubbles (profile=%s maxSide=%d tiling=%s gap=%d cropPad=%d dbnet=%.2f/%.2f×%.2f)",
             quads.size,
             bubbles.size,

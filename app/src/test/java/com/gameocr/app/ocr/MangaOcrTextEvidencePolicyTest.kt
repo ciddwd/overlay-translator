@@ -31,7 +31,7 @@ class MangaOcrTextEvidencePolicyTest {
                 expectedDroppedIndices = listOf(0),
             ),
             Case(
-                name = "overlapping free-text evidence preserves wide caption",
+                name = "overlapping free-text evidence no longer rescues wide fallback",
                 entries = listOf(wideFallback),
                 textDetections = listOf(
                     textDetection(
@@ -42,9 +42,8 @@ class MangaOcrTextEvidencePolicyTest {
                         bottom = 160f,
                     ),
                 ),
-                expectedKeptMembers = listOf(listOf(4)),
-                expectedDroppedIndices = emptyList(),
-                expectedTextSupportedIndices = setOf(0),
+                expectedKeptMembers = emptyList(),
+                expectedDroppedIndices = listOf(0),
             ),
             Case(
                 name = "unavailable model evidence preserves legacy behavior",
@@ -143,7 +142,7 @@ class MangaOcrTextEvidencePolicyTest {
     }
 
     @Test
-    fun filter_freeTextEvidence_expandsRecognitionCropWithoutChangingContentBounds() {
+    fun filter_freeTextEvidence_doesNotExpandRecognitionCrop() {
         val originalBounds = IntRect(196, 817, 784, 1095)
         val result = MangaOcrTextEvidencePolicy.filter(
             entries = listOf(
@@ -165,9 +164,9 @@ class MangaOcrTextEvidencePolicyTest {
             evidenceAvailable = true,
         )
 
-        assertEquals(IntRect(196, 747, 792, 1099), result.entries.single().bubble.rect)
+        assertEquals(originalBounds, result.entries.single().bubble.rect)
         assertEquals(originalBounds, result.entries.single().bubble.contentRect)
-        assertEquals(setOf(0), result.textSupportedEntryIndices)
+        assertEquals(emptySet<Int>(), result.textSupportedEntryIndices)
     }
 
     @Test
@@ -204,6 +203,124 @@ class MangaOcrTextEvidencePolicyTest {
         assertEquals(IntRect(40, 40, 110, 160), result.entries.single().bubble.rect)
         assertEquals(contentBounds, result.entries.single().bubble.contentRect)
         assertEquals(setOf(0), result.textSupportedEntryIndices)
+    }
+
+    @Test
+    fun filter_modelBubbleWithoutAssignedEvidenceUsesOwnContentBounds() {
+        val contentBounds = IntRect(40, 50, 100, 150)
+        val result = MangaOcrTextEvidencePolicy.filter(
+            entries = listOf(
+                entry(
+                    source = BubbleModelRegrouper.Source.MODEL,
+                    bounds = IntRect(0, 0, 200, 200),
+                    contentBounds = contentBounds,
+                    members = listOf(0),
+                ),
+            ),
+            textDetections = emptyList(),
+            evidenceAvailable = true,
+        )
+
+        assertEquals(contentBounds, result.entries.single().bubble.rect)
+        assertEquals(contentBounds, result.entries.single().bubble.contentRect)
+        assertEquals(emptySet<Int>(), result.textSupportedEntryIndices)
+    }
+
+    @Test
+    fun filter_assignsAdjacentBubbleTextToOnlyOneModelEntry() {
+        val result = MangaOcrTextEvidencePolicy.filter(
+            entries = listOf(
+                entry(
+                    source = BubbleModelRegrouper.Source.MODEL,
+                    bounds = IntRect(0, 0, 100, 200),
+                    members = listOf(0),
+                ),
+                entry(
+                    source = BubbleModelRegrouper.Source.MODEL,
+                    bounds = IntRect(100, 0, 200, 200),
+                    members = listOf(1),
+                ),
+            ),
+            textDetections = listOf(
+                textDetection(
+                    kind = MangaBubbleDetectionPostprocessor.Kind.TEXT_BUBBLE,
+                    left = 10f,
+                    top = 10f,
+                    right = 105f,
+                    bottom = 190f,
+                ),
+                textDetection(
+                    kind = MangaBubbleDetectionPostprocessor.Kind.TEXT_BUBBLE,
+                    left = 95f,
+                    top = 10f,
+                    right = 190f,
+                    bottom = 190f,
+                ),
+            ),
+            evidenceAvailable = true,
+        )
+
+        assertEquals(
+            listOf(0 to 0, 1 to 1),
+            result.assignments.map { assignment ->
+                assignment.detectionIndex to assignment.entryIndex
+            },
+        )
+        assertEquals(IntRect(0, 0, 105, 200), result.entries[0].bubble.rect)
+        assertEquals(IntRect(95, 0, 200, 200), result.entries[1].bubble.rect)
+        assertEquals(emptySet<Int>(), result.unassignedTextBubbleDetectionIndices)
+    }
+
+    @Test
+    fun filter_modelCropTighteningPreventsSharedRecognitionBounds() {
+        val sharedCrop = IntRect(0, 0, 200, 200)
+        val result = MangaOcrTextEvidencePolicy.filter(
+            entries = listOf(
+                entry(
+                    source = BubbleModelRegrouper.Source.MODEL,
+                    bounds = sharedCrop,
+                    contentBounds = IntRect(10, 10, 80, 190),
+                    members = listOf(0),
+                ),
+                entry(
+                    source = BubbleModelRegrouper.Source.MODEL,
+                    bounds = sharedCrop,
+                    contentBounds = IntRect(120, 10, 190, 190),
+                    members = listOf(1),
+                ),
+            ),
+            textDetections = emptyList(),
+            evidenceAvailable = true,
+        )
+
+        assertEquals(
+            listOf(IntRect(10, 10, 80, 190), IntRect(120, 10, 190, 190)),
+            result.entries.map { entry -> entry.bubble.rect },
+        )
+        assertEquals(emptySet<Int>(), result.duplicateCropEntryIndices)
+    }
+
+    @Test
+    fun filter_reportsRemainingDuplicateContentGeometry() {
+        val sharedBounds = IntRect(10, 10, 80, 190)
+        val result = MangaOcrTextEvidencePolicy.filter(
+            entries = listOf(
+                entry(
+                    source = BubbleModelRegrouper.Source.MODEL,
+                    bounds = sharedBounds,
+                    members = listOf(0),
+                ),
+                entry(
+                    source = BubbleModelRegrouper.Source.MODEL,
+                    bounds = sharedBounds,
+                    members = listOf(1),
+                ),
+            ),
+            textDetections = emptyList(),
+            evidenceAvailable = true,
+        )
+
+        assertEquals(setOf(0, 1), result.duplicateCropEntryIndices)
     }
 
     private fun entry(

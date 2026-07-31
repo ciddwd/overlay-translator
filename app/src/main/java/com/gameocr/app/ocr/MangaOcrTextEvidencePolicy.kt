@@ -5,14 +5,17 @@ import kotlin.math.ceil
 import kotlin.math.floor
 
 /**
- * Removes only single-member, ultra-wide fallback groups that look like panel borders and have no
- * supporting RT-DETR text detection. Ordinary text and model bubble groups remain untouched.
+ * Gives each RT-DETR text-in-bubble detection to one OCR group and keeps TEXT_FREE from expanding
+ * recognition crops. Single-member, ultra-wide fallback artifacts remain filtered.
  */
 internal object MangaOcrTextEvidencePolicy {
     data class Result(
         val entries: List<MangaOcrBubbleGroupingPolicy.Entry>,
         val droppedIndices: List<Int>,
         val textSupportedEntryIndices: Set<Int>,
+        val assignments: List<MangaTextEvidenceMatcher.EntryAssignment>,
+        val unassignedTextBubbleDetectionIndices: Set<Int>,
+        val duplicateCropEntryIndices: Set<Int>,
     )
 
     fun filter(
@@ -21,28 +24,38 @@ internal object MangaOcrTextEvidencePolicy {
         evidenceAvailable: Boolean,
     ): Result {
         if (!evidenceAvailable) {
-            return Result(entries, emptyList(), emptySet())
+            return Result(
+                entries = entries,
+                droppedIndices = emptyList(),
+                textSupportedEntryIndices = emptySet(),
+                assignments = emptyList(),
+                unassignedTextBubbleDetectionIndices = emptySet(),
+                duplicateCropEntryIndices = emptySet(),
+            )
         }
 
+        val assignments = MangaTextEvidenceMatcher.assignTextBubbleDetections(
+            entries = entries,
+            textDetections = textDetections,
+        )
+        val assignmentsByEntry = assignments.groupBy(
+            MangaTextEvidenceMatcher.EntryAssignment::entryIndex,
+        )
+        val assignedDetectionIndices = assignments
+            .mapTo(mutableSetOf(), MangaTextEvidenceMatcher.EntryAssignment::detectionIndex)
+        val unassignedTextBubbleDetectionIndices = textDetections.indices
+            .filterTo(mutableSetOf()) { index ->
+                textDetections[index].kind ==
+                    MangaBubbleDetectionPostprocessor.Kind.TEXT_BUBBLE &&
+                    index !in assignedDetectionIndices
+            }
         val kept = mutableListOf<MangaOcrBubbleGroupingPolicy.Entry>()
+        val keptIndexByOriginalIndex = mutableMapOf<Int, Int>()
         val dropped = mutableListOf<Int>()
         val textSupported = mutableSetOf<Int>()
         entries.forEachIndexed { index, entry ->
-            val expectedKind = when (entry.guidedSource) {
-                BubbleModelRegrouper.Source.MODEL ->
-                    MangaBubbleDetectionPostprocessor.Kind.TEXT_BUBBLE
-                BubbleModelRegrouper.Source.LEGACY_FALLBACK ->
-                    MangaBubbleDetectionPostprocessor.Kind.TEXT_FREE
-                null -> null
-            }
-            val supportingDetections = if (expectedKind == null) {
-                emptyList()
-            } else {
-                textDetections.filter { detection ->
-                    detection.kind == expectedKind &&
-                        overlaps(entry.bubble.contentRect, detection)
-                }
-            }
+            val supportingDetections = assignmentsByEntry[index].orEmpty()
+                .map { assignment -> textDetections[assignment.detectionIndex] }
             val isUnsupportedLineArtifact =
                 entry.guidedSource == BubbleModelRegrouper.Source.LEGACY_FALLBACK &&
                     entry.bubble.memberIndices.size == 1 &&
@@ -52,31 +65,53 @@ internal object MangaOcrTextEvidencePolicy {
                 dropped += index
             } else {
                 val keptIndex = kept.size
+                keptIndexByOriginalIndex[index] = keptIndex
+                val recognitionBase = if (
+                    entry.guidedSource == BubbleModelRegrouper.Source.MODEL
+                ) {
+                    entry.bubble.contentRect
+                } else {
+                    entry.bubble.rect
+                }
                 kept += if (supportingDetections.isNotEmpty()) {
                     textSupported += keptIndex
                     val evidenceBounds = supportingDetections
                         .map { detection -> detection.toIntRect() }
                         .reduce(::union)
-                    val recognitionBounds = when (entry.guidedSource) {
-                        // The bubble box remains available to the mask/rendering path. OCR should
-                        // see only DBNet content plus RT-DETR's text-in-bubble evidence.
-                        BubbleModelRegrouper.Source.MODEL ->
-                            union(entry.bubble.contentRect, evidenceBounds)
-                        BubbleModelRegrouper.Source.LEGACY_FALLBACK ->
-                            union(entry.bubble.rect, evidenceBounds)
-                        null -> entry.bubble.rect
-                    }
+                    val recognitionBounds = union(recognitionBase, evidenceBounds)
                     entry.copy(
                         bubble = entry.bubble.copy(
                             rect = recognitionBounds,
                         ),
                     )
                 } else {
-                    entry
+                    entry.copy(
+                        bubble = entry.bubble.copy(
+                            rect = recognitionBase,
+                        ),
+                    )
                 }
             }
         }
-        return Result(kept, dropped, textSupported)
+        val remappedAssignments = assignments.mapNotNull { assignment ->
+            keptIndexByOriginalIndex[assignment.entryIndex]?.let { keptIndex ->
+                assignment.copy(entryIndex = keptIndex)
+            }
+        }
+        val duplicateCropEntryIndices = kept.indices
+            .groupBy { index -> kept[index].bubble.rect }
+            .values
+            .filter { indices -> indices.size > 1 }
+            .flatten()
+            .toSet()
+        return Result(
+            entries = kept,
+            droppedIndices = dropped,
+            textSupportedEntryIndices = textSupported,
+            assignments = remappedAssignments,
+            unassignedTextBubbleDetectionIndices = unassignedTextBubbleDetectionIndices,
+            duplicateCropEntryIndices = duplicateCropEntryIndices,
+        )
     }
 
     private fun aspectRatio(bounds: IntRect): Float {
@@ -84,15 +119,6 @@ internal object MangaOcrTextEvidencePolicy {
         val longer = maxOf(bounds.width, bounds.height)
         return longer.toFloat() / shorter
     }
-
-    private fun overlaps(
-        bounds: IntRect,
-        detection: MangaBubbleDetectionPostprocessor.Detection,
-    ): Boolean =
-        minOf(bounds.right.toFloat(), detection.right) >
-            maxOf(bounds.left.toFloat(), detection.left) &&
-            minOf(bounds.bottom.toFloat(), detection.bottom) >
-            maxOf(bounds.top.toFloat(), detection.top)
 
     private fun MangaBubbleDetectionPostprocessor.Detection.toIntRect(): IntRect = IntRect(
         left = floor(left).toInt().coerceAtLeast(0),

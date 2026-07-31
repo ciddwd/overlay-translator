@@ -126,6 +126,7 @@
     <string name="gallery_task_cancel_message">Processing will stop. Results already completed will be kept.</string>
     <string name="gallery_task_retry">Retry failed images</string>
     <string name="gallery_task_delete">Delete task</string>
+    <string name="gallery_task_more_actions">More actions</string>
     <string name="gallery_task_delete_title">Delete this task?</string>
     <string name="gallery_task_delete_message">Task results and private image copies will be removed. Original gallery images are not deleted.</string>
     <string name="gallery_task_detail_title">Task results</string>

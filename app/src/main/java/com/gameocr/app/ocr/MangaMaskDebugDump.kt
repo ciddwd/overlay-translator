@@ -306,6 +306,14 @@ internal suspend fun dumpMangaMaskDebugSet(
         refinedGuidedMemberAssignmentResult?.assignments.orEmpty()
     val excludedGuidedMemberIndices =
         refinedGuidedMemberAssignmentResult?.excludedMemberIndices.orEmpty()
+    refinedGuidedMemberAssignmentResult?.let { result ->
+        timber.log.Timber.i(
+            "Manga text guard freeExcluded=%s freeAmbiguous=%s kindConflicts=%s",
+            result.freeTextExcludedMemberIndices,
+            result.ambiguousFreeTextMemberIndices,
+            result.conflictingTextKindMemberIndices,
+        )
+    }
     val guidedRegroupedGroups = detectorGuidedMasks?.let { guided ->
         BubbleModelRegrouper.regroupByModelAssignments(
             width = width,

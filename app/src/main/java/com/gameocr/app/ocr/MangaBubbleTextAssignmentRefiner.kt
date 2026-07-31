@@ -10,6 +10,9 @@ internal object MangaBubbleTextAssignmentRefiner {
     data class Result(
         val assignments: List<Int?>,
         val excludedMemberIndices: Set<Int>,
+        val freeTextExcludedMemberIndices: Set<Int>,
+        val ambiguousFreeTextMemberIndices: Set<Int>,
+        val conflictingTextKindMemberIndices: Set<Int>,
     )
 
     fun refine(
@@ -19,6 +22,28 @@ internal object MangaBubbleTextAssignmentRefiner {
         modelByMember: List<Int?>,
     ): Result {
         require(memberBounds.size == modelByMember.size)
+        val memberDecisions = MangaTextEvidenceMatcher.classifyMembers(
+            memberBounds = memberBounds,
+            bubbleDetections = bubbleDetections,
+            textDetections = textDetections,
+            modelByMember = modelByMember,
+        )
+        val freeTextExcludedMemberIndices = memberDecisions
+            .filter { decision ->
+                decision.action == MangaTextEvidenceMatcher.MemberAction.EXCLUDE_FREE_ONLY
+            }
+            .mapTo(mutableSetOf(), MangaTextEvidenceMatcher.MemberDecision::memberIndex)
+        val ambiguousFreeTextMemberIndices = memberDecisions
+            .filter { decision ->
+                decision.action ==
+                    MangaTextEvidenceMatcher.MemberAction.KEEP_AMBIGUOUS_INSIDE_BUBBLE
+            }
+            .mapTo(mutableSetOf(), MangaTextEvidenceMatcher.MemberDecision::memberIndex)
+        val conflictingTextKindMemberIndices = memberDecisions
+            .filter { decision ->
+                decision.action == MangaTextEvidenceMatcher.MemberAction.KEEP_KIND_CONFLICT
+            }
+            .mapTo(mutableSetOf(), MangaTextEvidenceMatcher.MemberDecision::memberIndex)
         val evidenceByBubble = bubbleDetections.indices.associateWith { bubbleIndex ->
             val bubble = bubbleDetections[bubbleIndex]
             textDetections.filter { text ->
@@ -26,15 +51,21 @@ internal object MangaBubbleTextAssignmentRefiner {
                     overlaps(bubble, text)
             }
         }
-        val excludedMemberIndices = mutableSetOf<Int>()
+        val excludedMemberIndices = freeTextExcludedMemberIndices.toMutableSet()
         val assignments = modelByMember.mapIndexed { memberIndex, modelIndex ->
+            if (memberIndex in freeTextExcludedMemberIndices) {
+                return@mapIndexed null
+            }
             val usableModelIndex = modelIndex?.takeIf(bubbleDetections.indices::contains)
                 ?: return@mapIndexed null
             val evidence = evidenceByBubble[usableModelIndex].orEmpty()
             if (evidence.isEmpty()) {
                 usableModelIndex
             } else {
-                if (evidence.any { text -> supports(memberBounds[memberIndex], text) }) {
+                if (evidence.any { text ->
+                        MangaTextEvidenceMatcher.supports(memberBounds[memberIndex], text)
+                    }
+                ) {
                     usableModelIndex
                 } else {
                     // This member was captured only by a broad bubble shape. Treating it as
@@ -48,27 +79,10 @@ internal object MangaBubbleTextAssignmentRefiner {
         return Result(
             assignments = assignments,
             excludedMemberIndices = excludedMemberIndices,
+            freeTextExcludedMemberIndices = freeTextExcludedMemberIndices,
+            ambiguousFreeTextMemberIndices = ambiguousFreeTextMemberIndices,
+            conflictingTextKindMemberIndices = conflictingTextKindMemberIndices,
         )
-    }
-
-    private fun supports(
-        member: IntRect,
-        text: MangaBubbleDetectionPostprocessor.Detection,
-    ): Boolean {
-        val centerX = (member.left + member.right) / 2f
-        val centerY = (member.top + member.bottom) / 2f
-        val centerInside =
-            centerX >= text.left && centerX < text.right &&
-                centerY >= text.top && centerY < text.bottom
-        val intersectionWidth =
-            (minOf(member.right.toFloat(), text.right) - maxOf(member.left.toFloat(), text.left))
-                .coerceAtLeast(0f)
-        val intersectionHeight =
-            (minOf(member.bottom.toFloat(), text.bottom) - maxOf(member.top.toFloat(), text.top))
-                .coerceAtLeast(0f)
-        val memberArea = (member.width.toFloat() * member.height).coerceAtLeast(1f)
-        val coverage = intersectionWidth * intersectionHeight / memberArea
-        return centerInside || coverage >= MIN_MEMBER_TEXT_COVERAGE
     }
 
     private fun overlaps(
@@ -77,6 +91,4 @@ internal object MangaBubbleTextAssignmentRefiner {
     ): Boolean =
         minOf(first.right, second.right) > maxOf(first.left, second.left) &&
             minOf(first.bottom, second.bottom) > maxOf(first.top, second.top)
-
-    private const val MIN_MEMBER_TEXT_COVERAGE: Float = 0.35f
 }

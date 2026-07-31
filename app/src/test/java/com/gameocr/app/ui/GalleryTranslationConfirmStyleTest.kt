@@ -113,8 +113,8 @@ class GalleryTranslationConfirmStyleTest {
                 "showPresetSwitcher = !showPresetSwitcher",
             ),
             PresetToggleCase(
-                "preset switcher is conditionally composed",
-                "if (showPresetSwitcher)",
+                "preset switcher uses drawer-like animated visibility",
+                "AnimatedVisibility(",
             ),
             PresetToggleCase(
                 "collapsed state uses the show preset label",
@@ -125,30 +125,62 @@ class GalleryTranslationConfirmStyleTest {
                 "R.string.gallery_confirm_hide_presets",
             ),
             PresetToggleCase(
-                "preset expander text is geometrically centered",
-                "textAlign = TextAlign.Center",
+                "preset drawer handle is geometrically centered",
+                "horizontalArrangement = Arrangement.Center",
             ),
             PresetToggleCase(
                 "preset expander uses a compact visual padding",
                 ".padding(vertical = 2.dp)",
             ),
             PresetToggleCase(
-                "expanded carousel stays inside task settings",
-                "HorizontalDivider()",
+                "preset drawer handle suppresses ripple indication",
+                "indication = null",
+            ),
+            PresetToggleCase(
+                "preset drawer handle keeps click interaction semantics",
+                "MutableInteractionSource()",
+            ),
+            PresetToggleCase(
+                "expanded carousel sits above the drawer handle",
+                "GalleryPresetSwitcher(",
+            ),
+            PresetToggleCase(
+                "expanded state points upward before the label",
+                "Icons.Default.KeyboardArrowUp",
+            ),
+            PresetToggleCase(
+                "collapsed state points downward before the label",
+                "Icons.Default.KeyboardArrowDown",
+            ),
+            PresetToggleCase(
+                "drawer expands downward from its top edge",
+                "expandFrom = Alignment.Top",
+            ),
+            PresetToggleCase(
+                "drawer collapses upward toward its top edge",
+                "shrinkTowards = Alignment.Top",
+            ),
+            PresetToggleCase(
+                "drawer uses a bounded tween instead of a trailing spring",
+                "durationMillis = 220",
+            ),
+            PresetToggleCase(
+                "drawer uses material fast out slow in easing",
+                "easing = FastOutSlowInEasing",
+            ),
+            PresetToggleCase(
+                "drawer owns stable spacing outside animated visibility",
+                "Spacer(modifier = Modifier.height(10.dp))",
             ),
         ).forEach { case ->
             assertTrue(case.name, screen.contains(case.marker))
         }
 
-        listOf(
-            "Icons.Default.ExpandLess",
-            "Icons.Default.ExpandMore",
-        ).forEach { marker ->
-            assertTrue(
-                "no asymmetric arrow may shift the preset label from center: $marker",
-                !screen.contains(marker),
-            )
-        }
+        assertTrue(
+            "drawer handle follows the preset content",
+            screen.indexOf("GalleryPresetSwitcher(") <
+                screen.indexOf("showPresetSwitcher = !showPresetSwitcher"),
+        )
     }
 
     @Test

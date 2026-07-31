@@ -58,6 +58,24 @@ class MangaOcrBubbleGroupingPolicyTest {
                 expectedSource = MangaOcrBubbleGroupingPolicy.Source.LEGACY,
             ),
             Case(
+                name = "free-text exclusion enables a complete fallback-only partition",
+                groups = listOf(
+                    group(
+                        source = BubbleModelRegrouper.Source.LEGACY_FALLBACK,
+                        bounds = IntRect(0, 0, 70, 40),
+                        members = listOf(0, 1),
+                    ),
+                ),
+                excludedMemberIndices = setOf(2),
+                expectedSource = MangaOcrBubbleGroupingPolicy.Source.DETECTOR_GUIDED,
+            ),
+            Case(
+                name = "all members may be intentionally excluded as free text",
+                groups = emptyList(),
+                excludedMemberIndices = setOf(0, 1, 2),
+                expectedSource = MangaOcrBubbleGroupingPolicy.Source.DETECTOR_GUIDED,
+            ),
+            Case(
                 name = "missing member keeps legacy groups",
                 groups = validGroups.dropLast(1),
                 expectedSource = MangaOcrBubbleGroupingPolicy.Source.LEGACY,

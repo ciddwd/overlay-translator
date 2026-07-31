@@ -34,9 +34,12 @@ internal object MangaOcrBubbleGroupingPolicy {
         enabled: Boolean,
         excludedMemberIndices: Set<Int> = emptySet(),
     ): Selection {
+        val hasDetectorGuidance =
+            guidedGroups.any { it.source == BubbleModelRegrouper.Source.MODEL } ||
+                excludedMemberIndices.isNotEmpty()
         if (
             !enabled ||
-            guidedGroups.none { it.source == BubbleModelRegrouper.Source.MODEL } ||
+            !hasDetectorGuidance ||
             !isCompletePartition(guidedGroups, memberCount, excludedMemberIndices)
         ) {
             return Selection(
@@ -71,8 +74,9 @@ internal object MangaOcrBubbleGroupingPolicy {
         memberCount: Int,
         excludedMemberIndices: Set<Int>,
     ): Boolean {
-        if (memberCount <= 0 || groups.isEmpty()) return false
+        if (memberCount <= 0) return false
         if (excludedMemberIndices.any { it !in 0 until memberCount }) return false
+        if (groups.isEmpty()) return excludedMemberIndices.size == memberCount
         if (groups.any { group ->
                 group.memberIndices.isEmpty() ||
                     group.cropBounds.width <= 0 ||

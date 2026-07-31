@@ -6,6 +6,11 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
@@ -14,6 +19,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.Arrangement
@@ -49,12 +55,16 @@ import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -304,35 +314,76 @@ fun GalleryTranslationConfirmScreen(
                                     )
                                 )
                             } ?: CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                            Text(
-                                text = stringResource(
-                                    if (showPresetSwitcher) {
-                                        R.string.gallery_confirm_hide_presets
-                                    } else {
-                                        R.string.gallery_confirm_show_presets
-                                    }
-                                ),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable(
-                                        enabled = !creating,
-                                        role = Role.Button,
-                                        onClick = {
-                                            showPresetSwitcher = !showPresetSwitcher
-                                        },
-                                    )
-                                    .padding(vertical = 2.dp),
-                                style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.primary,
-                                textAlign = TextAlign.Center,
-                            )
-                            if (showPresetSwitcher) {
+                            Column {
                                 HorizontalDivider()
-                                GalleryPresetSwitcher(
-                                    settings = settings,
-                                    viewModel = presetViewModel,
-                                    snackbarHostState = snackbarHostState,
-                                )
+                                AnimatedVisibility(
+                                    visible = showPresetSwitcher,
+                                    enter = expandVertically(
+                                        animationSpec = tween(
+                                            durationMillis = 220,
+                                            easing = FastOutSlowInEasing,
+                                        ),
+                                        expandFrom = Alignment.Top,
+                                    ),
+                                    exit = shrinkVertically(
+                                        animationSpec = tween(
+                                            durationMillis = 220,
+                                            easing = FastOutSlowInEasing,
+                                        ),
+                                        shrinkTowards = Alignment.Top,
+                                    ),
+                                ) {
+                                    Column {
+                                        Spacer(modifier = Modifier.height(10.dp))
+                                        GalleryPresetSwitcher(
+                                            settings = settings,
+                                            viewModel = presetViewModel,
+                                            snackbarHostState = snackbarHostState,
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable(
+                                            interactionSource = remember {
+                                                MutableInteractionSource()
+                                            },
+                                            indication = null,
+                                            enabled = !creating,
+                                            role = Role.Button,
+                                            onClick = {
+                                                showPresetSwitcher = !showPresetSwitcher
+                                            },
+                                        )
+                                        .padding(vertical = 2.dp),
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Icon(
+                                        imageVector = if (showPresetSwitcher) {
+                                            Icons.Default.KeyboardArrowUp
+                                        } else {
+                                            Icons.Default.KeyboardArrowDown
+                                        },
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(20.dp),
+                                    )
+                                    Text(
+                                        text = stringResource(
+                                            if (showPresetSwitcher) {
+                                                R.string.gallery_confirm_hide_presets
+                                            } else {
+                                                R.string.gallery_confirm_show_presets
+                                            }
+                                        ),
+                                        modifier = Modifier.padding(start = 2.dp),
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
+                                }
                             }
                         }
                     }
@@ -841,9 +892,18 @@ fun GalleryTranslationTaskDetailScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showCancelDialog by remember { mutableStateOf(false) }
-    var previewSource by remember { mutableStateOf<GalleryPreviewSource?>(null) }
+    var actionsExpanded by remember { mutableStateOf(false) }
+    var previewItemId by remember { mutableStateOf<String?>(null) }
     var exportProgress by remember { mutableStateOf<GalleryExportProgress?>(null) }
     var resultFilterIndex by rememberSaveable(taskId) { mutableIntStateOf(0) }
+    val resultFilter = GalleryResultFilter.entries
+        .getOrElse(resultFilterIndex) { GalleryResultFilter.ALL }
+    val filteredItems = items.filter { item ->
+        galleryResultFilterMatches(resultFilter, item.status)
+    }
+    val previewItems = filteredItems.filterNot { item ->
+        galleryResultThumbnailShowsProcessing(item.status)
+    }
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { treeUri ->
@@ -889,14 +949,24 @@ fun GalleryTranslationTaskDetailScreen(
         }
     }
     BackHandler(onBack = onBack)
-    previewSource?.let { source ->
-        GalleryImagePreviewDialog(
-            sources = listOf(source),
-            initialPage = 0,
-            imageDecoder = viewModel.imageDecoder,
-            resultPreviewLoader = viewModel::loadResultPreview,
-            onDismiss = { previewSource = null },
-        )
+    previewItemId?.let { selectedId ->
+        val initialPage = previewItems.indexOfFirst { item -> item.id == selectedId }
+        if (initialPage >= 0) {
+            GalleryImagePreviewDialog(
+                sources = previewItems.map { item ->
+                    GalleryPreviewSource(
+                        sourceUri = item.sourceUri,
+                        localPath = item.localPath,
+                        displayName = item.displayName,
+                        resultItem = item,
+                    )
+                },
+                initialPage = initialPage,
+                imageDecoder = viewModel.imageDecoder,
+                resultPreviewLoader = viewModel::loadResultPreview,
+                onDismiss = { previewItemId = null },
+            )
+        }
     }
 
     if (showDeleteDialog) {
@@ -953,6 +1023,13 @@ fun GalleryTranslationTaskDetailScreen(
         )
     }
 
+    val currentTask = task
+    val exportRenderMode = currentTask?.let(viewModel::exportRenderModeForTask)
+    val currentExportProgress = exportProgress
+    val canExport = currentTask != null &&
+        exportRenderMode != null &&
+        galleryCanExport(currentTask.status, currentTask.successCount, exportRenderMode)
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
@@ -964,23 +1041,78 @@ fun GalleryTranslationTaskDetailScreen(
                     }
                 },
                 actions = {
-                    TextButton(onClick = { showDeleteDialog = true }) {
-                        Icon(
-                            Icons.Default.Delete,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.error,
-                        )
-                        Text(
-                            stringResource(R.string.gallery_task_delete),
-                            modifier = Modifier.padding(start = 4.dp),
-                            color = MaterialTheme.colorScheme.error,
-                        )
+                    Box {
+                        IconButton(onClick = { actionsExpanded = true }) {
+                            Icon(
+                                Icons.Default.MoreVert,
+                                contentDescription = stringResource(
+                                    R.string.gallery_task_more_actions
+                                ),
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = actionsExpanded,
+                            onDismissRequest = { actionsExpanded = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = {
+                                    when {
+                                        exportRenderMode ==
+                                            GalleryExportRenderMode.UNSUPPORTED_FLOATING -> {
+                                            Text(
+                                                stringResource(
+                                                    R.string.gallery_export_floating_unavailable
+                                                )
+                                            )
+                                        }
+                                        currentExportProgress != null -> {
+                                            Text(
+                                                stringResource(
+                                                    R.string.gallery_exporting,
+                                                    currentExportProgress.completed,
+                                                    currentExportProgress.total,
+                                                )
+                                            )
+                                        }
+                                        else -> {
+                                            Text(stringResource(R.string.gallery_export_action))
+                                        }
+                                    }
+                                },
+                                onClick = {
+                                    actionsExpanded = false
+                                    exportLauncher.launch(null)
+                                },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Download, contentDescription = null)
+                                },
+                                enabled = canExport && currentExportProgress == null,
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        stringResource(R.string.gallery_task_delete),
+                                        color = MaterialTheme.colorScheme.error,
+                                    )
+                                },
+                                onClick = {
+                                    actionsExpanded = false
+                                    showDeleteDialog = true
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.Delete,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.error,
+                                    )
+                                },
+                            )
+                        }
                     }
                 },
             )
         },
     ) { innerPadding ->
-        val currentTask = task
         if (currentTask == null) {
             Box(
                 modifier = Modifier
@@ -992,12 +1124,6 @@ fun GalleryTranslationTaskDetailScreen(
             }
             return@Scaffold
         }
-        val resultFilter = GalleryResultFilter.entries
-            .getOrElse(resultFilterIndex) { GalleryResultFilter.ALL }
-        val filteredItems = items.filter { item ->
-            galleryResultFilterMatches(resultFilter, item.status)
-        }
-
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
@@ -1017,9 +1143,6 @@ fun GalleryTranslationTaskDetailScreen(
                         onRetry = {
                             scope.launch { viewModel.retryFailed(currentTask.id) }
                         },
-                        exportProgress = exportProgress,
-                        exportRenderMode = viewModel.exportRenderModeForTask(currentTask),
-                        onExport = { exportLauncher.launch(null) },
                     )
                 }
             }
@@ -1041,14 +1164,7 @@ fun GalleryTranslationTaskDetailScreen(
                     GalleryResultItem(
                         item = item,
                         thumbnailLoader = viewModel::loadResultThumbnail,
-                        onPreview = {
-                            previewSource = GalleryPreviewSource(
-                                sourceUri = item.sourceUri,
-                                localPath = item.localPath,
-                                displayName = item.displayName,
-                                resultItem = item,
-                            )
-                        },
+                        onPreview = { previewItemId = item.id },
                     )
                 }
             }
@@ -1133,14 +1249,9 @@ private fun GalleryTaskSummary(
     task: GalleryTranslationTaskEntity,
     onCancel: () -> Unit,
     onRetry: () -> Unit,
-    exportProgress: GalleryExportProgress?,
-    exportRenderMode: GalleryExportRenderMode,
-    onExport: () -> Unit,
 ) {
     val active = task.status in activeTaskStatuses
     val canRetry = task.failedCount > 0 && !active
-    val hasExportableResults = galleryCanExport(task.status, task.successCount)
-    val canExport = galleryCanExport(task.status, task.successCount, exportRenderMode)
     val nowMs by produceState(
         initialValue = System.currentTimeMillis(),
         key1 = task.id,
@@ -1174,11 +1285,15 @@ private fun GalleryTaskSummary(
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
+                verticalAlignment = Alignment.Top,
             ) {
                 Text(
-                    stringResource(R.string.gallery_task_images, task.totalCount),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    DateFormat.getDateTimeInstance(
+                        DateFormat.SHORT,
+                        DateFormat.SHORT,
+                    ).format(Date(task.createdAtMs)),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
                 )
                 Column(horizontalAlignment = Alignment.End) {
                     GalleryStatusText(task.status)
@@ -1227,48 +1342,6 @@ private fun GalleryTaskSummary(
                                 modifier = Modifier.padding(start = 4.dp),
                             )
                         }
-                    }
-                }
-            }
-            if (hasExportableResults) {
-                OutlinedButton(
-                    onClick = onExport,
-                    enabled = canExport && exportProgress == null,
-                    modifier = Modifier.fillMaxWidth(),
-                    border = BorderStroke(
-                        1.dp,
-                        MaterialTheme.colorScheme.primary,
-                    ),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = MaterialTheme.colorScheme.surface,
-                        contentColor = MaterialTheme.colorScheme.primary,
-                    ),
-                ) {
-                    if (exportRenderMode == GalleryExportRenderMode.UNSUPPORTED_FLOATING) {
-                        Icon(Icons.Default.Download, contentDescription = null)
-                        Text(
-                            stringResource(R.string.gallery_export_floating_unavailable),
-                            modifier = Modifier.padding(start = 6.dp),
-                        )
-                    } else if (exportProgress == null) {
-                        Icon(Icons.Default.Download, contentDescription = null)
-                        Text(
-                            stringResource(R.string.gallery_export_action),
-                            modifier = Modifier.padding(start = 6.dp),
-                        )
-                    } else {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            strokeWidth = 2.dp,
-                        )
-                        Text(
-                            stringResource(
-                                R.string.gallery_exporting,
-                                exportProgress.completed,
-                                exportProgress.total,
-                            ),
-                            modifier = Modifier.padding(start = 8.dp),
-                        )
                     }
                 }
             }

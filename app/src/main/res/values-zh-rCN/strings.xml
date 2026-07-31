@@ -126,6 +126,7 @@
     <string name="gallery_task_cancel_message">任务将停止处理，已经完成的结果会保留。</string>
     <string name="gallery_task_retry">重试失败图片</string>
     <string name="gallery_task_delete">删除任务</string>
+    <string name="gallery_task_more_actions">更多操作</string>
     <string name="gallery_task_delete_title">删除这个任务？</string>
     <string name="gallery_task_delete_message">任务结果和应用内图片副本将被移除，不会删除相册原图。</string>
     <string name="gallery_task_detail_title">任务结果</string>

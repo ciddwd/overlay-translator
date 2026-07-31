@@ -106,12 +106,26 @@ class GalleryImagePreviewContractTest {
                 ),
             ),
             Case(
-                "result preview remains a single translated result image",
-                screen.contains("sources = listOf(source)") &&
+                "result preview receives every previewable item in the selected tab",
+                screen.contains("val previewItems = filteredItems.filterNot") &&
+                    screen.contains("sources = previewItems.map") &&
                     screen.contains("resultPreviewLoader = viewModel::loadResultPreview"),
             ),
             Case(
-                "result preview source carries its completed item",
+                "result preview opens at the tapped item",
+                screen.contains(
+                    "previewItems.indexOfFirst { item -> item.id == selectedId }"
+                ) &&
+                    screen.contains("onPreview = { previewItemId = item.id }"),
+            ),
+            Case(
+                "processing placeholders are excluded from result preview paging",
+                screen.contains(
+                    "galleryResultThumbnailShowsProcessing(item.status)"
+                ),
+            ),
+            Case(
+                "each result preview source carries its result item",
                 screen.contains("resultItem = item"),
             ),
             Case(
