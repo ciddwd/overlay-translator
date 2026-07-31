@@ -1,5 +1,6 @@
 package com.gameocr.app.ui
 
+import android.annotation.SuppressLint
 import android.net.Uri
 import android.text.format.DateUtils
 import androidx.activity.compose.BackHandler
@@ -697,6 +698,7 @@ internal fun galleryThumbnailWidthDp(
     return ((availableWidthDp - spacing * (columns - 1)) / columns).coerceAtLeast(0f)
 }
 
+@SuppressLint("ProduceStateDoesNotAssignValue")
 @Composable
 private fun GallerySelectedThumbnail(
     uriString: String,
@@ -1244,6 +1246,7 @@ private fun GalleryTaskSettingsSummary(
     )
 }
 
+@SuppressLint("ProduceStateDoesNotAssignValue")
 @Composable
 private fun GalleryTaskSummary(
     task: GalleryTranslationTaskEntity,
@@ -1605,6 +1608,7 @@ internal fun galleryTaskElapsedSeconds(
     return (ended - started).coerceAtLeast(0L) / 1_000L
 }
 
+@SuppressLint("ProduceStateDoesNotAssignValue")
 @Composable
 private fun GalleryResultThumbnail(
     item: GalleryTranslationItemEntity,
@@ -1752,6 +1756,7 @@ private fun GalleryImagePreviewDialog(
     }
 }
 
+@SuppressLint("ProduceStateDoesNotAssignValue")
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun GalleryImagePreviewPage(

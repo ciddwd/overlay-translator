@@ -1,5 +1,6 @@
 package com.gameocr.app.ui
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -148,6 +149,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
 
+@SuppressLint("ProduceStateDoesNotAssignValue")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
