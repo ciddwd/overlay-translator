@@ -2,6 +2,7 @@ package com.gameocr.app.translate
 
 import android.graphics.Rect
 import com.gameocr.app.ocr.TextBlock
+import com.gameocr.app.ocr.TextRegionGranularity
 import java.text.BreakIterator
 import java.util.Locale
 import kotlin.math.abs
@@ -24,6 +25,9 @@ internal data class CrossLineSourceBlock(
     val top: Int,
     val right: Int,
     val bottom: Int,
+    val regionId: Int? = null,
+    val parentRegionId: Int? = null,
+    val regionGranularity: TextRegionGranularity = TextRegionGranularity.UNKNOWN,
 )
 
 internal fun shouldUseCrossLineContextTranslation(
@@ -41,7 +45,16 @@ internal fun planCrossLineTranslationUnits(
 ): List<CrossLineTranslationUnit> = planCrossLineSourceUnits(
     blocks = blocks.map { block ->
         val box = block.boundingBox
-        CrossLineSourceBlock(block.text, box.left, box.top, box.right, box.bottom)
+        CrossLineSourceBlock(
+            text = block.text,
+            left = box.left,
+            top = box.top,
+            right = box.right,
+            bottom = box.bottom,
+            regionId = block.regionId,
+            parentRegionId = block.parentRegionId,
+            regionGranularity = block.regionGranularity,
+        )
     },
     sourceLanguageTag = sourceLanguageTag,
 )
@@ -67,6 +80,9 @@ internal fun planCrossLineSourceUnits(
             blockIndexes = listOf(index),
             text = block.text,
             bounds = ContextRect(block.left, block.top, block.right, block.bottom),
+            regionId = block.regionId,
+            parentRegionId = block.parentRegionId,
+            regionGranularity = block.regionGranularity,
         )
     }
 
@@ -100,6 +116,9 @@ private fun groupGeometry(lines: List<VisualLine>): VisualLine = VisualLine(
         right = lines.maxOf { it.bounds.right },
         bottom = lines.maxOf { it.bounds.bottom },
     ),
+    regionId = lines.first().regionId,
+    parentRegionId = lines.first().parentRegionId,
+    regionGranularity = lines.first().regionGranularity,
 )
 
 internal fun individualTranslationUnits(blocks: List<TextBlock>): List<CrossLineTranslationUnit> =
@@ -135,6 +154,9 @@ private data class VisualLine(
     val blockIndexes: List<Int>,
     val text: String,
     val bounds: ContextRect,
+    val regionId: Int?,
+    val parentRegionId: Int?,
+    val regionGranularity: TextRegionGranularity,
 )
 
 private data class ContextRect(
@@ -186,6 +208,7 @@ private fun shouldJoinVisualLines(
     next: VisualLine,
     flow: CrossLineTextFlow,
 ): Boolean {
+    if (!canJoinAcrossRegionBoundary(current, next)) return false
     if (sameVisualAxisLine(current.bounds, next.bounds, flow)) return true
     if (startsStructuredItem(next.text)) return false
     if (endsSemanticUnit(current.text)) return false
@@ -220,6 +243,23 @@ private fun shouldJoinVisualLines(
                 overlap.toFloat() / minHeight >= 0.3f
         }
     }
+}
+
+private fun canJoinAcrossRegionBoundary(current: VisualLine, next: VisualLine): Boolean {
+    if (
+        current.regionGranularity == TextRegionGranularity.UNKNOWN &&
+        next.regionGranularity == TextRegionGranularity.UNKNOWN
+    ) {
+        return true
+    }
+    if (
+        current.regionGranularity != TextRegionGranularity.LINE ||
+        next.regionGranularity != TextRegionGranularity.LINE
+    ) {
+        return false
+    }
+    val parentRegionId = current.parentRegionId ?: return false
+    return parentRegionId == next.parentRegionId
 }
 
 private fun sameVisualAxisLine(

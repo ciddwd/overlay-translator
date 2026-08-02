@@ -409,7 +409,7 @@ class OverlayManager(
      * 批模式翻译（如 DeepL）走这条；流模式走 [prepareFloatingWindow] + [updateFloatingWindowText]。
      */
     fun showFullScreen(pairs: List<Pair<String, String>>) {
-        clearBlocksAndLoading()
+        clearBlockResults()
         if (pairs.isEmpty()) {
             clearFloatingWindow()
             return
@@ -438,7 +438,7 @@ class OverlayManager(
      * 逐段填入。等价于 [showBlocks] 之于 BLOCKS 模式，但内容渲染在悬浮窗里。
      */
     fun prepareFloatingWindow(sources: List<String>) {
-        clearBlocksAndLoading()
+        clearBlockResults()
         if (sources.isEmpty()) {
             clearFloatingWindow()
             return
@@ -667,9 +667,10 @@ class OverlayManager(
         diagnosticId: Long? = null,
         adaptiveStyles: List<AdaptiveOverlayStyle> = emptyList(),
         followBlockOrientations: Boolean = false,
+        pixelMaskPatchPipelineEnabled: Boolean = false,
     ) {
-        clearLoading()
-        clear()
+        clearBlockResults()
+        clearFloatingWindow()
         if (blocks.isEmpty()) return
         blocksDiagnosticId = diagnosticId
         if (ocrDebugRedBoxActive) {
@@ -740,9 +741,27 @@ class OverlayManager(
                 null
             }
             val blockTextSizeSp = adaptiveStyle?.maxTextSizeSp ?: textSizeSp.toFloat()
-            val blockTextStyle = if (adaptiveStyle != null) OverlayTextStyle() else overlayTextStyle
-            val blockBackground = adaptiveStyle?.let { adaptiveBg(it, block) } ?: themeBg()
             val blockForeground = adaptiveStyle?.foregroundColor ?: themeFgColor()
+            val adaptiveRenderPlan = when {
+                overlayStyleMode == OverlayStyleMode.ADAPTIVE && pixelMaskPatchPipelineEnabled ->
+                    AdaptiveRegionRenderPolicy.resolve(
+                        granularity = block.regionGranularity,
+                        foregroundColor = blockForeground,
+                        pixelMaskPatchPipelineEnabled = true,
+                    )
+                adaptiveStyle != null -> AdaptiveRegionRenderPolicy.resolve(
+                    granularity = block.regionGranularity,
+                    foregroundColor = blockForeground,
+                    pixelMaskPatchPipelineEnabled = false,
+                )
+                else -> null
+            }
+            val blockTextStyle = adaptiveRenderPlan?.textStyle ?: overlayTextStyle
+            val blockBackground: Drawable? = when (adaptiveRenderPlan?.backgroundMode) {
+                AdaptiveRegionBackgroundMode.ERASE_SOURCE -> adaptiveBg(requireNotNull(adaptiveStyle), block)
+                AdaptiveRegionBackgroundMode.TRANSPARENT -> null
+                null -> themeBg()
+            }
             blockContents[idx] = TranslationBlockContent(block.text, dst)
             val baseLeft = (b.left + regionOffset.x + offsetX).coerceAtLeast(0)
             val overlayRect = allOverlayRects[idx]
@@ -766,7 +785,13 @@ class OverlayManager(
                             "glyphs=${estimate.sourceGlyphCount} " +
                             "scaledDensity=${String.format(java.util.Locale.US, "%.2f", estimate.scaledDensity)} " +
                             "sourceBoxes=${block.sourceBoxes.size} " +
-                            "eraseMode=${if (block.sourceBoxes.isEmpty()) "full" else "source_boxes"} " +
+                            "regionGranularity=${block.regionGranularity.name} " +
+                            "pixelMaskPipeline=$pixelMaskPatchPipelineEnabled " +
+                            "renderBackground=${adaptiveRenderPlan?.backgroundMode?.name} " +
+                            "eraseMode=${when (adaptiveRenderPlan?.backgroundMode) {
+                                AdaptiveRegionBackgroundMode.TRANSPARENT -> "none"
+                                else -> if (block.sourceBoxes.isEmpty()) "full" else "source_boxes"
+                            }} " +
                             "exactSize=${adaptiveSize?.width}x${adaptiveSize?.height} " +
                             "confidence=${String.format(java.util.Locale.US, "%.2f", it.confidence)} " +
                             "fallback=${it.fallbackReason.name}"
@@ -1609,7 +1634,11 @@ class OverlayManager(
                 topMargin = displayBounds.top + regionOffset.y
             }
             val added = runCatching {
-                root.addView(view, layoutParams)
+                if (patch.replacesBlockViews) {
+                    root.addView(view, layoutParams)
+                } else {
+                    root.addView(view, 0, layoutParams)
+                }
             }.onFailure { error ->
                 view.setImageDrawable(null)
                 displayBitmap.recycle()
@@ -1622,10 +1651,13 @@ class OverlayManager(
 
             bubblePatchViews += view
             bubblePatchBitmaps += displayBitmap
-            bubblePatchHiddenBlockIndices += patch.blockIndices
+            if (patch.replacesBlockViews) {
+                bubblePatchHiddenBlockIndices += patch.blockIndices
+            }
             displayed += 1
             VerticalDiagnosticLog.i(
-                "${diagPrefix}shape patch displayed model=${patch.modelBubbleIndex} " +
+                "${diagPrefix}adaptive patch displayed role=${patch.role.name} " +
+                    "model=${patch.modelBubbleIndex ?: "none"} " +
                     "source=${patch.bounds.width}x${patch.bounds.height} " +
                     "display=${displayWidth}x${displayHeight} " +
                     "screen=(${layoutParams.leftMargin},${layoutParams.topMargin}) " +
@@ -1634,6 +1666,9 @@ class OverlayManager(
         }
         bubblePatchHiddenBlockIndices.forEach { index ->
             blockViews[index]?.visibility = View.INVISIBLE
+        }
+        blockViews.forEach { (index, view) ->
+            if (index !in bubblePatchHiddenBlockIndices) view.bringToFront()
         }
         return displayed
     }
@@ -1695,6 +1730,10 @@ class OverlayManager(
 
     private fun clearBlocksAndLoading() {
         clearLoading()
+        clearBlockResults()
+    }
+
+    private fun clearBlockResults() {
         dismissError()
         clearBubblePatches(restoreFallback = false)
         val dialog = blocksDialog

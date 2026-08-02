@@ -8,7 +8,7 @@ plugins {
 }
 
 hilt {
-    enableAggregatingTask = true
+    enableAggregatingTask = false
 }
 
 val localLlmGenerationThreads = providers
@@ -29,6 +29,15 @@ require(localLlmBatchSize in setOf(1, 2, 4, 8)) {
     "localLlmBatchSize must be one of 1, 2, 4, or 8"
 }
 
+val mangaOcrBatchSize = providers
+    .gradleProperty("mangaOcrBatchSize")
+    .orElse("4")
+    .get()
+    .toInt()
+require(mangaOcrBatchSize in setOf(1, 2, 4)) {
+    "mangaOcrBatchSize must be one of 1, 2, or 4"
+}
+
 android {
     namespace = "com.gameocr.app"
     compileSdk = 35
@@ -45,6 +54,8 @@ android {
         buildConfigField("int", "LOCAL_LLM_GENERATION_THREADS", localLlmGenerationThreads.toString())
         // Independent llama.cpp sequences decoded together. B1 remains the serial baseline.
         buildConfigField("int", "LOCAL_LLM_BATCH_SIZE", localLlmBatchSize.toString())
+        // Controlled Manga OCR ONNX batch A/B switch; batch=1 preserves the serial baseline.
+        buildConfigField("int", "MANGA_OCR_BATCH_SIZE", mangaOcrBatchSize.toString())
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true

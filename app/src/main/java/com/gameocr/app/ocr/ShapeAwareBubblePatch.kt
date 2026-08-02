@@ -7,22 +7,32 @@ import kotlin.math.floor
 /**
  * A local, transparent overlay patch in the segmentation image coordinate system.
  *
- * Only repaired background pixels and rendered translation glyphs are non-transparent. Keeping the
- * rest transparent avoids freezing unrelated screen content while loop translation is active.
+ * Depending on [role], non-transparent pixels contain either a complete translated bubble or only
+ * confirmed background repairs. The rest stays transparent so unrelated screen content is live.
  */
 internal data class ShapeAwareBubblePatch(
-    val modelBubbleIndex: Int,
+    val modelBubbleIndex: Int?,
     val bounds: IntRect,
     val pixels: IntArray,
     val coordinateScale: Float,
     val blockIndices: List<Int>,
+    val role: Role = Role.SHAPE_TRANSLATION,
 ) {
+    enum class Role {
+        SHAPE_TRANSLATION,
+        TEXT_BACKGROUND,
+    }
+
     init {
         require(bounds.width > 0 && bounds.height > 0)
         require(pixels.size == bounds.width * bounds.height)
         require(coordinateScale > 0f)
         require(blockIndices.isNotEmpty())
+        if (role == Role.SHAPE_TRANSLATION) requireNotNull(modelBubbleIndex)
     }
+
+    val replacesBlockViews: Boolean
+        get() = role == Role.SHAPE_TRANSLATION
 
     fun displayBounds(): IntRect = scaledPatchBounds(
         bounds = bounds,

@@ -1,11 +1,11 @@
 package com.gameocr.app.ocr
 
 import com.gameocr.app.ocr.BubbleClusterer.IntRect
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.roundToInt
-import kotlin.math.sqrt
 
 /**
  * Pure Kotlin analysis used by the manga mask prototype.
@@ -68,6 +68,17 @@ internal object MangaMaskDebugAnalyzer {
         val regionPixels: Int,
         val reason: String,
     )
+
+    internal class BubbleTiming {
+        var backgroundNs: Long = 0L
+        var luminanceNs: Long = 0L
+        var candidateBuildNs: Long = 0L
+        var seedNs: Long = 0L
+        var floodNs: Long = 0L
+        var edgeNs: Long = 0L
+        var fillNs: Long = 0L
+        var coverageAndCopyNs: Long = 0L
+    }
 
     fun analyze(
         width: Int,
@@ -143,6 +154,7 @@ internal object MangaMaskDebugAnalyzer {
         polygons: List<Polygon>,
         bubble: BubbleInput,
         output: BooleanArray,
+        timing: BubbleTiming? = null,
     ): BubbleDiagnostic {
         require(width > 0 && height > 0)
         require(argb.size == width * height)
@@ -154,6 +166,7 @@ internal object MangaMaskDebugAnalyzer {
             polygons = polygons,
             bubble = bubble,
             output = output,
+            timing = timing,
         )
     }
 
@@ -199,7 +212,14 @@ internal object MangaMaskDebugAnalyzer {
                     }
                 }
             }
-            val selection = foregroundSelection(samples)
+            val surroundingSamples = surroundingLuminanceSamples(
+                width = width,
+                height = height,
+                argb = argb,
+                probabilityTextMask = probabilityTextMask,
+                polygon = polygon,
+            )
+            val selection = foregroundSelection(samples, surroundingSamples)
             for (y in bounds.top until bounds.bottom) {
                 for (x in bounds.left until bounds.right) {
                     val index = y * width + x
@@ -246,7 +266,10 @@ internal object MangaMaskDebugAnalyzer {
      * histogram and keep the smaller side, which is normally dark ink on a light balloon (or light
      * ink on a dark balloon). Low-contrast regions keep the DBNet mask as a conservative fallback.
      */
-    private fun foregroundSelection(samples: List<Int>): ForegroundSelection? {
+    private fun foregroundSelection(
+        samples: List<Int>,
+        surroundingSamples: List<Int>,
+    ): ForegroundSelection? {
         if (samples.size < MIN_TEXT_LUMINANCE_SAMPLES) return null
         val sorted = samples.sorted()
         val low = sorted[(sorted.lastIndex * 0.1f).roundToInt()]
@@ -280,10 +303,67 @@ internal object MangaMaskDebugAnalyzer {
         }
         val darkCount = samples.count { it <= bestThreshold }
         val lightCount = total - darkCount
+        val surroundingBackground = surroundingSamples
+            .takeIf { it.size >= MIN_SURROUNDING_LUMINANCE_SAMPLES }
+            ?.sorted()
+            ?.let { it[it.size / 2] }
+        val darkForeground = if (
+            surroundingBackground != null &&
+            darkCount > 0 &&
+            lightCount > 0
+        ) {
+            val darkWeighted = samples.sumOf { value ->
+                if (value <= bestThreshold) value.toLong() else 0L
+            }
+            val darkMean = darkWeighted.toDouble() / darkCount
+            val lightMean = (totalWeighted - darkWeighted).toDouble() / lightCount
+            val darkDistance = abs(darkMean - surroundingBackground)
+            val lightDistance = abs(lightMean - surroundingBackground)
+            when {
+                darkDistance > lightDistance -> true
+                lightDistance > darkDistance -> false
+                else -> darkCount <= lightCount
+            }
+        } else {
+            darkCount <= lightCount
+        }
         return ForegroundSelection(
             threshold = bestThreshold,
-            darkForeground = darkCount <= lightCount,
+            darkForeground = darkForeground,
         )
+    }
+
+    private fun surroundingLuminanceSamples(
+        width: Int,
+        height: Int,
+        argb: IntArray,
+        probabilityTextMask: BooleanArray,
+        polygon: Polygon,
+    ): List<Int> {
+        val bounds = clamp(polygon.bounds, width, height)
+        val margin = (minOf(bounds.width, bounds.height) * SURROUNDING_SAMPLE_MARGIN_RATIO)
+            .roundToInt()
+            .coerceIn(MIN_SURROUNDING_SAMPLE_MARGIN_PX, MAX_SURROUNDING_SAMPLE_MARGIN_PX)
+        val expanded = clamp(
+            IntRect(
+                left = bounds.left - margin,
+                top = bounds.top - margin,
+                right = bounds.right + margin,
+                bottom = bounds.bottom + margin,
+            ),
+            width,
+            height,
+        )
+        val samples = mutableListOf<Int>()
+        for (y in expanded.top until expanded.bottom) {
+            for (x in expanded.left until expanded.right) {
+                val index = y * width + x
+                if (probabilityTextMask[index]) continue
+                if (pointInPolygon(x + 0.5f, y + 0.5f, polygon.points)) continue
+                samples += luminance(argb[index])
+            }
+        }
+        return samples
     }
 
     private fun estimateBubble(
@@ -293,6 +373,7 @@ internal object MangaMaskDebugAnalyzer {
         polygons: List<Polygon>,
         bubble: BubbleInput,
         output: BooleanArray,
+        timing: BubbleTiming? = null,
     ): BubbleDiagnostic {
         val members = bubble.memberIndices.mapNotNull(polygons::getOrNull)
         if (members.isEmpty()) {
@@ -339,33 +420,62 @@ internal object MangaMaskDebugAnalyzer {
                 return rejected(roi, "roi_too_small", attempts = attempts)
             }
 
+            val backgroundStartedAtNs = System.nanoTime()
             val background = estimateBackgroundAroundText(
                 argb = argb,
                 width = width,
                 roi = roi,
                 members = members,
             )
-                ?: return rejected(roi, "no_light_background", attempts = attempts)
+            timing?.let { it.backgroundNs += System.nanoTime() - backgroundStartedAtNs }
+            if (background == null) {
+                return rejected(roi, "no_light_background", attempts = attempts)
+            }
             if (background.luminance < MIN_BACKGROUND_LUMINANCE) {
                 return rejected(roi, "background_too_dark", attempts = attempts)
             }
 
+            val luminanceStartedAtNs = System.nanoTime()
+            val roiLuminances = extractLuminances(
+                argb = argb,
+                imageWidth = width,
+                roi = roi,
+            )
+            timing?.let { it.luminanceNs += System.nanoTime() - luminanceStartedAtNs }
+            val candidate = BooleanArray(roi.width * roi.height)
+            val workQueue = IntArray(candidate.size)
             var bestRegion: BooleanArray? = null
             var bestRegionPixels = 0
             var bestProfileIndex = 0
             var retryWithExpandedRoi = false
             var invalidatedByLeak = false
             for ((profileIndex, profile) in CANDIDATE_PROFILES.withIndex()) {
-                val candidate = BooleanArray(roi.width * roi.height)
-                for (y in roi.top until roi.bottom) {
-                    for (x in roi.left until roi.right) {
-                        val color = argb[y * width + x]
-                        if (isBackgroundCandidate(color, background, profile)) {
-                            candidate[(y - roi.top) * roi.width + (x - roi.left)] = true
+                val candidateStartedAtNs = System.nanoTime()
+                candidate.fill(false)
+                val maximumColorDistanceSquared =
+                    profile.maxColorDistance * profile.maxColorDistance
+                val minimumLuminance = minimumCandidateLuminance(background, profile)
+                for (localY in 0 until roi.height) {
+                    val globalOffset = (roi.top + localY) * width + roi.left
+                    val localOffset = localY * roi.width
+                    for (localX in 0 until roi.width) {
+                        val localIndex = localOffset + localX
+                        if (
+                            isBackgroundCandidate(
+                                color = argb[globalOffset + localX],
+                                luminance = roiLuminances[localIndex],
+                                background = background,
+                                maximumColorDistanceSquared = maximumColorDistanceSquared,
+                                minimumLuminance = minimumLuminance,
+                            )
+                        ) {
+                            candidate[localIndex] = true
                         }
                     }
                 }
+                timing?.let { it.candidateBuildNs += System.nanoTime() - candidateStartedAtNs }
 
+                val seedStartedAtNs = System.nanoTime()
                 val seeds = members.mapNotNull { polygon ->
                     findSeedNearPolygonCenter(
                         polygon = polygon,
@@ -373,20 +483,30 @@ internal object MangaMaskDebugAnalyzer {
                         candidate = candidate,
                     )
                 }.distinct()
+                timing?.let { it.seedNs += System.nanoTime() - seedStartedAtNs }
                 if (seeds.isEmpty()) {
                     lastReason = "no_background_seed"
                     continue
                 }
 
-                val region = floodCandidateRegion(candidate, roi.width, roi.height, seeds)
-                val rawRegionPixels = region.count { it }
+                val floodStartedAtNs = System.nanoTime()
+                val flood = floodCandidateRegion(
+                    candidate = candidate,
+                    width = roi.width,
+                    height = roi.height,
+                    seeds = seeds,
+                    queue = workQueue,
+                )
+                timing?.let { it.floodNs += System.nanoTime() - floodStartedAtNs }
+                val region = flood.mask
+                val rawRegionPixels = flood.pixelCount
                 lastPixels = rawRegionPixels
                 if (rawRegionPixels < max(MIN_REGION_PIXELS, content.width * content.height / 5)) {
                     lastReason = "region_too_small"
                     continue
                 }
 
-                val leaked = touchesBoundary(region, roi.width, roi.height)
+                val leaked = flood.touchesBoundary
                 val tooLarge = rawRegionPixels >=
                     (roi.width * roi.height * MAX_REGION_ROI_RATIO).roundToInt()
                 if (leaked || tooLarge) {
@@ -402,13 +522,17 @@ internal object MangaMaskDebugAnalyzer {
                 }
             }
 
+            val edgeStartedAtNs = System.nanoTime()
             val edgeAttempt = findEdgeBoundedRegion(
                 argb = argb,
                 imageWidth = width,
                 roi = roi,
                 members = members,
                 background = background,
+                luminances = roiLuminances,
+                queue = workQueue,
             )
+            timing?.let { it.edgeNs += System.nanoTime() - edgeStartedAtNs }
             if (edgeAttempt.regionPixels > lastPixels) {
                 lastPixels = edgeAttempt.regionPixels
                 lastReason = edgeAttempt.reason
@@ -430,14 +554,26 @@ internal object MangaMaskDebugAnalyzer {
                 return rejected(roi, lastReason, lastPixels, attempts)
             }
 
-            val filled = fillEnclosedHoles(selectedRegion, roi.width, roi.height)
-            val regionPixels = filled.count { it }
+            val fillStartedAtNs = System.nanoTime()
+            val filledRegion = fillEnclosedHoles(
+                region = selectedRegion,
+                width = roi.width,
+                height = roi.height,
+                queue = workQueue,
+            )
+            timing?.let { it.fillNs += System.nanoTime() - fillStartedAtNs }
+            val filled = filledRegion.mask
+            val regionPixels = filledRegion.pixelCount
+            val coverageStartedAtNs = System.nanoTime()
             val memberCoverage = memberRegionCoverage(
                 region = filled,
                 roi = roi,
                 members = members,
             )
             if (memberCoverage < MIN_MEMBER_REGION_COVERAGE) {
+                timing?.let {
+                    it.coverageAndCopyNs += System.nanoTime() - coverageStartedAtNs
+                }
                 return BubbleDiagnostic(
                     roi = roi,
                     accepted = false,
@@ -465,6 +601,7 @@ internal object MangaMaskDebugAnalyzer {
                     }
                 }
             }
+            timing?.let { it.coverageAndCopyNs += System.nanoTime() - coverageStartedAtNs }
             return BubbleDiagnostic(
                 roi = roi,
                 accepted = true,
@@ -540,6 +677,17 @@ internal object MangaMaskDebugAnalyzer {
         val canRetryWithExpandedRoi: Boolean,
     )
 
+    private data class FloodRegion(
+        val mask: BooleanArray,
+        val pixelCount: Int,
+        val touchesBoundary: Boolean,
+    )
+
+    private data class FilledRegion(
+        val mask: BooleanArray,
+        val pixelCount: Int,
+    )
+
     private fun estimateBackgroundAroundText(
         argb: IntArray,
         width: Int,
@@ -588,10 +736,27 @@ internal object MangaMaskDebugAnalyzer {
         )
     }
 
-    private fun isBackgroundCandidate(
-        color: Int,
+    private fun minimumCandidateLuminance(
         background: BackgroundColor,
         profile: CandidateProfile,
+    ): Int = if (profile.useSampledLuminanceFloor) {
+        max(
+            MIN_CANDIDATE_LUMINANCE,
+            background.lowLuminance - SAMPLED_LUMINANCE_FLOOR_TOLERANCE,
+        )
+    } else {
+        max(
+            MIN_CANDIDATE_LUMINANCE,
+            background.luminance - profile.maxLuminanceDrop,
+        )
+    }
+
+    private fun isBackgroundCandidate(
+        color: Int,
+        luminance: Int,
+        background: BackgroundColor,
+        maximumColorDistanceSquared: Float,
+        minimumLuminance: Int,
     ): Boolean {
         val red = (color ushr 16) and 0xFF
         val green = (color ushr 8) and 0xFF
@@ -599,20 +764,8 @@ internal object MangaMaskDebugAnalyzer {
         val dr = red - background.red
         val dg = green - background.green
         val db = blue - background.blue
-        val distance = sqrt((dr * dr + dg * dg + db * db).toFloat())
-        val minimumLuminance = if (profile.useSampledLuminanceFloor) {
-            max(
-                MIN_CANDIDATE_LUMINANCE,
-                background.lowLuminance - SAMPLED_LUMINANCE_FLOOR_TOLERANCE,
-            )
-        } else {
-            max(
-                MIN_CANDIDATE_LUMINANCE,
-                background.luminance - profile.maxLuminanceDrop,
-            )
-        }
-        return distance <= profile.maxColorDistance &&
-            luminance(red, green, blue) >= minimumLuminance
+        val distanceSquared = (dr * dr + dg * dg + db * db).toFloat()
+        return distanceSquared <= maximumColorDistanceSquared && luminance >= minimumLuminance
     }
 
     private fun acceptedReason(attempts: Int, profileIndex: Int): String = when {
@@ -634,28 +787,24 @@ internal object MangaMaskDebugAnalyzer {
         roi: IntRect,
         members: List<Polygon>,
         background: BackgroundColor,
+        luminances: IntArray? = null,
+        queue: IntArray? = null,
     ): EdgeRegionAttempt {
-        val luminances = IntArray(roi.width * roi.height)
-        for (localY in 0 until roi.height) {
-            val globalOffset = (roi.top + localY) * imageWidth + roi.left
-            val localOffset = localY * roi.width
-            for (localX in 0 until roi.width) {
-                luminances[localOffset + localX] = luminance(argb[globalOffset + localX])
-            }
-        }
+        val localLuminances = luminances ?: extractLuminances(argb, imageWidth, roi)
+        require(localLuminances.size == roi.width * roi.height)
         val darkBarrierThreshold = (
             background.lowLuminance - EDGE_DARK_BACKGROUND_GAP
             ).coerceIn(EDGE_MIN_DARK_THRESHOLD, EDGE_MAX_DARK_THRESHOLD)
-        val barrier = BooleanArray(luminances.size)
+        val barrier = BooleanArray(localLuminances.size)
         for (y in 0 until roi.height) {
             for (x in 0 until roi.width) {
                 val index = y * roi.width + x
-                val left = luminances[y * roi.width + (x - 1).coerceAtLeast(0)]
-                val right = luminances[y * roi.width + (x + 1).coerceAtMost(roi.width - 1)]
-                val top = luminances[(y - 1).coerceAtLeast(0) * roi.width + x]
-                val bottom = luminances[(y + 1).coerceAtMost(roi.height - 1) * roi.width + x]
+                val left = localLuminances[y * roi.width + (x - 1).coerceAtLeast(0)]
+                val right = localLuminances[y * roi.width + (x + 1).coerceAtMost(roi.width - 1)]
+                val top = localLuminances[(y - 1).coerceAtLeast(0) * roi.width + x]
+                val bottom = localLuminances[(y + 1).coerceAtMost(roi.height - 1) * roi.width + x]
                 val gradient = kotlin.math.abs(right - left) + kotlin.math.abs(bottom - top)
-                barrier[index] = luminances[index] <= darkBarrierThreshold ||
+                barrier[index] = localLuminances[index] <= darkBarrierThreshold ||
                     gradient >= EDGE_GRADIENT_THRESHOLD
             }
         }
@@ -671,18 +820,41 @@ internal object MangaMaskDebugAnalyzer {
         if (seeds.isEmpty()) {
             return EdgeRegionAttempt(null, 0, "edge_no_seed", false)
         }
-        val region = floodCandidateRegion(walkable, roi.width, roi.height, seeds)
-        val regionPixels = region.count { it }
+        val flood = floodCandidateRegion(
+            candidate = walkable,
+            width = roi.width,
+            height = roi.height,
+            seeds = seeds,
+            queue = queue,
+        )
+        val region = flood.mask
+        val regionPixels = flood.pixelCount
         if (regionPixels < MIN_REGION_PIXELS) {
             return EdgeRegionAttempt(null, regionPixels, "edge_region_too_small", false)
         }
-        if (touchesBoundary(region, roi.width, roi.height)) {
+        if (flood.touchesBoundary) {
             return EdgeRegionAttempt(null, regionPixels, "edge_region_leaked", true)
         }
         if (regionPixels >= (roi.width * roi.height * MAX_REGION_ROI_RATIO).roundToInt()) {
             return EdgeRegionAttempt(null, regionPixels, "edge_region_too_large", true)
         }
         return EdgeRegionAttempt(region, regionPixels, "accepted_edge", false)
+    }
+
+    private fun extractLuminances(
+        argb: IntArray,
+        imageWidth: Int,
+        roi: IntRect,
+    ): IntArray {
+        val luminances = IntArray(roi.width * roi.height)
+        for (localY in 0 until roi.height) {
+            val globalOffset = (roi.top + localY) * imageWidth + roi.left
+            val localOffset = localY * roi.width
+            for (localX in 0 until roi.width) {
+                luminances[localOffset + localX] = luminance(argb[globalOffset + localX])
+            }
+        }
+        return luminances
     }
 
     private fun dilateMask(
@@ -771,27 +943,37 @@ internal object MangaMaskDebugAnalyzer {
         width: Int,
         height: Int,
         seeds: List<Int>,
-    ): BooleanArray {
+        queue: IntArray? = null,
+    ): FloodRegion {
         val region = BooleanArray(candidate.size)
-        val queue = IntArray(candidate.size)
+        val workQueue = queue ?: IntArray(candidate.size)
+        require(workQueue.size >= candidate.size)
         var head = 0
         var tail = 0
+        var reachedBoundary = false
         seeds.forEach { seed ->
             if (seed in candidate.indices && candidate[seed] && !region[seed]) {
                 region[seed] = true
-                queue[tail++] = seed
+                workQueue[tail++] = seed
             }
         }
         while (head < tail) {
-            val index = queue[head++]
+            val index = workQueue[head++]
             val x = index % width
             val y = index / width
-            if (x > 0) tail = enqueue(index - 1, candidate, region, queue, tail)
-            if (x + 1 < width) tail = enqueue(index + 1, candidate, region, queue, tail)
-            if (y > 0) tail = enqueue(index - width, candidate, region, queue, tail)
-            if (y + 1 < height) tail = enqueue(index + width, candidate, region, queue, tail)
+            if (x == 0 || x + 1 == width || y == 0 || y + 1 == height) {
+                reachedBoundary = true
+            }
+            if (x > 0) tail = enqueue(index - 1, candidate, region, workQueue, tail)
+            if (x + 1 < width) tail = enqueue(index + 1, candidate, region, workQueue, tail)
+            if (y > 0) tail = enqueue(index - width, candidate, region, workQueue, tail)
+            if (y + 1 < height) tail = enqueue(index + width, candidate, region, workQueue, tail)
         }
-        return region
+        return FloodRegion(
+            mask = region,
+            pixelCount = tail,
+            touchesBoundary = reachedBoundary,
+        )
     }
 
     private fun enqueue(
@@ -807,16 +989,22 @@ internal object MangaMaskDebugAnalyzer {
         return tail + 1
     }
 
-    private fun fillEnclosedHoles(region: BooleanArray, width: Int, height: Int): BooleanArray {
+    private fun fillEnclosedHoles(
+        region: BooleanArray,
+        width: Int,
+        height: Int,
+        queue: IntArray? = null,
+    ): FilledRegion {
         val exterior = BooleanArray(region.size)
-        val queue = IntArray(region.size)
+        val workQueue = queue ?: IntArray(region.size)
+        require(workQueue.size >= region.size)
         var head = 0
         var tail = 0
 
         fun seed(index: Int) {
             if (!region[index] && !exterior[index]) {
                 exterior[index] = true
-                queue[tail++] = index
+                workQueue[tail++] = index
             }
         }
         for (x in 0 until width) {
@@ -828,15 +1016,25 @@ internal object MangaMaskDebugAnalyzer {
             seed(y * width + width - 1)
         }
         while (head < tail) {
-            val index = queue[head++]
+            val index = workQueue[head++]
             val x = index % width
             val y = index / width
-            if (x > 0) tail = enqueueComplement(index - 1, region, exterior, queue, tail)
-            if (x + 1 < width) tail = enqueueComplement(index + 1, region, exterior, queue, tail)
-            if (y > 0) tail = enqueueComplement(index - width, region, exterior, queue, tail)
-            if (y + 1 < height) tail = enqueueComplement(index + width, region, exterior, queue, tail)
+            if (x > 0) tail = enqueueComplement(index - 1, region, exterior, workQueue, tail)
+            if (x + 1 < width) {
+                tail = enqueueComplement(index + 1, region, exterior, workQueue, tail)
+            }
+            if (y > 0) tail = enqueueComplement(index - width, region, exterior, workQueue, tail)
+            if (y + 1 < height) {
+                tail = enqueueComplement(index + width, region, exterior, workQueue, tail)
+            }
         }
-        return BooleanArray(region.size) { index -> region[index] || !exterior[index] }
+        var pixelCount = 0
+        val filled = BooleanArray(region.size) { index ->
+            (region[index] || !exterior[index]).also { included ->
+                if (included) pixelCount++
+            }
+        }
+        return FilledRegion(filled, pixelCount)
     }
 
     private fun enqueueComplement(
@@ -921,6 +1119,10 @@ internal object MangaMaskDebugAnalyzer {
     private const val MIN_CONTENT_AREA_SCREEN_DIVISOR = 4_000L
     private const val MIN_TEXT_LUMINANCE_SAMPLES = 16
     private const val MIN_TEXT_LUMINANCE_CONTRAST = 24
+    private const val SURROUNDING_SAMPLE_MARGIN_RATIO = 0.25f
+    private const val MIN_SURROUNDING_SAMPLE_MARGIN_PX = 2
+    private const val MAX_SURROUNDING_SAMPLE_MARGIN_PX = 24
+    private const val MIN_SURROUNDING_LUMINANCE_SAMPLES = 16
     private const val SAMPLE_STRIDE_PX = 3
     private const val MIN_BACKGROUND_SAMPLES = 12
     private const val BRIGHT_SAMPLE_START_RATIO = 0.45f

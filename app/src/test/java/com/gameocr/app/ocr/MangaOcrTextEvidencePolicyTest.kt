@@ -46,6 +46,23 @@ class MangaOcrTextEvidencePolicyTest {
                 expectedDroppedIndices = listOf(0),
             ),
             Case(
+                name = "explicit standalone free-text region preserves wide text",
+                entries = listOf(
+                    wideFallback.copy(regionGranularity = TextRegionGranularity.FREE_TEXT),
+                ),
+                textDetections = listOf(
+                    textDetection(
+                        kind = MangaBubbleDetectionPostprocessor.Kind.TEXT_FREE,
+                        left = 20f,
+                        top = 110f,
+                        right = 1020f,
+                        bottom = 160f,
+                    ),
+                ),
+                expectedKeptMembers = listOf(listOf(4)),
+                expectedDroppedIndices = emptyList(),
+            ),
+            Case(
                 name = "unavailable model evidence preserves legacy behavior",
                 entries = listOf(wideFallback),
                 evidenceAvailable = false,

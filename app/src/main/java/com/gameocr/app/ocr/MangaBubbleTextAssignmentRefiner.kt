@@ -10,7 +10,7 @@ internal object MangaBubbleTextAssignmentRefiner {
     data class Result(
         val assignments: List<Int?>,
         val excludedMemberIndices: Set<Int>,
-        val freeTextExcludedMemberIndices: Set<Int>,
+        val freeTextMemberIndices: Set<Int>,
         val ambiguousFreeTextMemberIndices: Set<Int>,
         val conflictingTextKindMemberIndices: Set<Int>,
     )
@@ -28,9 +28,9 @@ internal object MangaBubbleTextAssignmentRefiner {
             textDetections = textDetections,
             modelByMember = modelByMember,
         )
-        val freeTextExcludedMemberIndices = memberDecisions
+        val freeTextMemberIndices = memberDecisions
             .filter { decision ->
-                decision.action == MangaTextEvidenceMatcher.MemberAction.EXCLUDE_FREE_ONLY
+                decision.action == MangaTextEvidenceMatcher.MemberAction.KEEP_FREE_TEXT
             }
             .mapTo(mutableSetOf(), MangaTextEvidenceMatcher.MemberDecision::memberIndex)
         val ambiguousFreeTextMemberIndices = memberDecisions
@@ -51,9 +51,12 @@ internal object MangaBubbleTextAssignmentRefiner {
                     overlaps(bubble, text)
             }
         }
-        val excludedMemberIndices = freeTextExcludedMemberIndices.toMutableSet()
+        val excludedMemberIndices = mutableSetOf<Int>()
         val assignments = modelByMember.mapIndexed { memberIndex, modelIndex ->
-            if (memberIndex in freeTextExcludedMemberIndices) {
+            if (memberIndex in freeTextMemberIndices) {
+                // A positive TEXT_FREE classification removes bubble ownership, not OCR content.
+                // Leaving the assignment null sends the member through the standalone fallback
+                // grouping path while keeping it in the complete member partition.
                 return@mapIndexed null
             }
             val usableModelIndex = modelIndex?.takeIf(bubbleDetections.indices::contains)
@@ -79,7 +82,7 @@ internal object MangaBubbleTextAssignmentRefiner {
         return Result(
             assignments = assignments,
             excludedMemberIndices = excludedMemberIndices,
-            freeTextExcludedMemberIndices = freeTextExcludedMemberIndices,
+            freeTextMemberIndices = freeTextMemberIndices,
             ambiguousFreeTextMemberIndices = ambiguousFreeTextMemberIndices,
             conflictingTextKindMemberIndices = conflictingTextKindMemberIndices,
         )

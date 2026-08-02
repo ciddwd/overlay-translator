@@ -12,7 +12,9 @@ class MangaOcrBubbleGroupingPolicyTest {
         val groups: List<BubbleModelRegrouper.Group>,
         val memberCount: Int = 3,
         val excludedMemberIndices: Set<Int> = emptySet(),
+        val freeTextMemberIndices: Set<Int> = emptySet(),
         val expectedSource: MangaOcrBubbleGroupingPolicy.Source,
+        val expectedGranularities: List<TextRegionGranularity>? = null,
     )
 
     @Test
@@ -34,6 +36,16 @@ class MangaOcrBubbleGroupingPolicyTest {
                 name = "valid model and fallback partition uses detector guidance",
                 groups = validGroups,
                 expectedSource = MangaOcrBubbleGroupingPolicy.Source.DETECTOR_GUIDED,
+            ),
+            Case(
+                name = "explicit free text fallback remains in the guided partition",
+                groups = validGroups,
+                freeTextMemberIndices = setOf(2),
+                expectedSource = MangaOcrBubbleGroupingPolicy.Source.DETECTOR_GUIDED,
+                expectedGranularities = listOf(
+                    TextRegionGranularity.BUBBLE,
+                    TextRegionGranularity.FREE_TEXT,
+                ),
             ),
             Case(
                 name = "disabled feature keeps legacy groups",
@@ -58,7 +70,20 @@ class MangaOcrBubbleGroupingPolicyTest {
                 expectedSource = MangaOcrBubbleGroupingPolicy.Source.LEGACY,
             ),
             Case(
-                name = "free-text exclusion enables a complete fallback-only partition",
+                name = "all-standalone-text page uses detector guidance without a bubble",
+                groups = listOf(
+                    group(
+                        source = BubbleModelRegrouper.Source.LEGACY_FALLBACK,
+                        bounds = IntRect(0, 0, 70, 40),
+                        members = listOf(0, 1, 2),
+                    ),
+                ),
+                freeTextMemberIndices = setOf(0, 1, 2),
+                expectedSource = MangaOcrBubbleGroupingPolicy.Source.DETECTOR_GUIDED,
+                expectedGranularities = listOf(TextRegionGranularity.FREE_TEXT),
+            ),
+            Case(
+                name = "explicit rejection enables a complete fallback-only partition",
                 groups = listOf(
                     group(
                         source = BubbleModelRegrouper.Source.LEGACY_FALLBACK,
@@ -70,7 +95,7 @@ class MangaOcrBubbleGroupingPolicyTest {
                 expectedSource = MangaOcrBubbleGroupingPolicy.Source.DETECTOR_GUIDED,
             ),
             Case(
-                name = "all members may be intentionally excluded as free text",
+                name = "all members may be intentionally rejected by text refinement",
                 groups = emptyList(),
                 excludedMemberIndices = setOf(0, 1, 2),
                 expectedSource = MangaOcrBubbleGroupingPolicy.Source.DETECTOR_GUIDED,
@@ -140,6 +165,12 @@ class MangaOcrBubbleGroupingPolicyTest {
                 excludedMemberIndices = setOf(3),
                 expectedSource = MangaOcrBubbleGroupingPolicy.Source.LEGACY,
             ),
+            Case(
+                name = "out-of-range standalone fragment keeps legacy groups",
+                groups = validGroups,
+                freeTextMemberIndices = setOf(3),
+                expectedSource = MangaOcrBubbleGroupingPolicy.Source.LEGACY,
+            ),
         )
         val legacy = listOf(
             Bubble(
@@ -156,6 +187,7 @@ class MangaOcrBubbleGroupingPolicyTest {
                 memberCount = case.memberCount,
                 enabled = case.enabled,
                 excludedMemberIndices = case.excludedMemberIndices,
+                freeTextMemberIndices = case.freeTextMemberIndices,
             )
 
             assertEquals(case.name, case.expectedSource, result.source)
@@ -167,6 +199,13 @@ class MangaOcrBubbleGroupingPolicyTest {
                     case.groups.map(BubbleModelRegrouper.Group::memberIndices),
                     result.bubbles.map(Bubble::memberIndices),
                 )
+                case.expectedGranularities?.let { expected ->
+                    assertEquals(
+                        case.name,
+                        expected,
+                        result.entries.map(MangaOcrBubbleGroupingPolicy.Entry::regionGranularity),
+                    )
+                }
             }
         }
     }

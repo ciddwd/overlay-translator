@@ -78,6 +78,7 @@ import com.gameocr.app.ocr.MangaOcrEngine
 import com.gameocr.app.ocr.MangaDelayedMaskDebugSessionManager
 import com.gameocr.app.ocr.MangaOcrModelInstaller
 import com.gameocr.app.ocr.MangaOcrStartupPolicy
+import com.gameocr.app.ocr.LocalTextBackgroundRepairer
 import com.gameocr.app.ocr.OcrEngine
 import com.gameocr.app.ocr.OrientationCoordinator
 import com.gameocr.app.ocr.OrientationResult
@@ -136,8 +137,10 @@ import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -1334,8 +1337,28 @@ class CaptureService : Service() {
     ) {
         if (!translationBatchGate.accepts(batchId)) return
         translationRenderJob?.cancel()
-        translationRenderJob = scope.launch(block = block)
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            try {
+                block()
+            } finally {
+                withContext(NonCancellable + Dispatchers.Main.immediate) {
+                    if (translationBatchGate.accepts(batchId)) {
+                        overlay?.dismissLoading()
+                    }
+                }
+            }
+        }
+        translationRenderJob = job
+        job.invokeOnCompletion {
+            if (translationRenderJob === job) {
+                translationRenderJob = null
+            }
+        }
+        job.start()
     }
+
+    private fun translationJobOwnsLoading(batchId: Long): Boolean =
+        translationBatchGate.accepts(batchId) && translationRenderJob?.isActive == true
 
     private fun beginLoopTranslation(diagId: Long?): Long? {
         if (!loopMode) return null
@@ -2661,9 +2684,14 @@ class CaptureService : Service() {
             if (captureAttemptStarted) {
                 restoreCaptureChromeOnce(showLoading = false)
                 logVerticalDiag(diagId, "finish")
-                // 兜底：所有提前 return / 异常路径下都要把 loading 圈关掉，避免"一直转圈"。
-                // 正常完成时 showBlocks/showFullScreen 内部已经 dismiss 过；幂等调用没害。
-                mainScope.launch { overlay?.dismissLoading() }
+                // Async block/stream rendering owns loading until every translation (and any
+                // delayed text repair) reaches its terminal path. Capture cleanup only handles
+                // failures and synchronous rendering paths that did not transfer that ownership.
+                if (!translationJobOwnsLoading(diagId)) {
+                    mainScope.launch { overlay?.dismissLoading() }
+                } else {
+                    logVerticalDiag(diagId, "loading retained until translation batch finishes")
+                }
             }
             captureLock.unlock()
         }
@@ -2832,6 +2860,7 @@ class CaptureService : Service() {
                 diagnosticId = diagId,
                 adaptiveStyles = adaptiveStyles,
                 followBlockOrientations = followBlockOrientations,
+                pixelMaskPatchPipelineEnabled = delayedMaskDebugBatch != null,
             )
         }
         // 引擎支持批处理（如 DeepL）→ 一次 HTTP 译多段，避免限频。否则保留逐段流式
@@ -3013,7 +3042,18 @@ class CaptureService : Service() {
                 "shapeLayouts=${dump.shapeLayoutDecisions.count { it.accepted }}/" +
                 "${dump.shapeLayoutDecisions.size} " +
                 "shapeMs=${dump.shapeLayoutDurationMs} " +
-                "shapePatches=${dump.displayedPatchCount}/${dump.shapeAwarePatches.size}"
+                "shapePatches=${dump.shapeAwarePatches.size} " +
+                "textMasks=${dump.textMaskResult.acceptedBlockCount}/" +
+                "${dump.textMaskResult.decisions.size} " +
+                "textRepairs=${dump.textRepairResult.fullyRepairedBlockCount}/" +
+                "${dump.textRepairResult.blocks.size} " +
+                "textPublished=${dump.textRepairResult.publishableBlockCount}/" +
+                "${dump.textRepairResult.blocks.size} " +
+                "textRepairPixels=${dump.textRepairResult.repairedPixelCount} " +
+                "textRepairWorkingPx=${dump.textRepairResult.totalWorkingPixels} " +
+                "textRepairMs=${dump.textRepairDurationMs} " +
+                "textBackgroundPatches=${dump.textBackgroundPatches.size} " +
+                "displayedPatches=${dump.displayedPatchCount}"
             if (diagId != null) logVerticalDiag(diagId, summary) else Timber.i(summary)
             dump.result.decisions.forEach { decision ->
                 val detail = "delayed mask block=${decision.blockIndex + 1} " +
@@ -3030,6 +3070,34 @@ class CaptureService : Service() {
                     "patchEligible=${crop.fullyRepaired}"
                 if (diagId != null) logVerticalDiag(diagId, detail) else Timber.i(detail)
             }
+            dump.textMaskResult.decisions.forEach { decision ->
+                val detail = "text pixel mask block=${decision.blockIndex + 1} " +
+                    "accepted=${decision.accepted} reason=${decision.reason.name} " +
+                    "core=${decision.selectedCorePixels} output=${decision.outputPixels}"
+                if (diagId != null) logVerticalDiag(diagId, detail) else Timber.i(detail)
+            }
+            dump.textRepairResult.blocks.forEach { repair ->
+                val detail = "text background repair block=${repair.blockIndex + 1} " +
+                    "components=${repair.acceptedComponentCount}/${repair.componentCount} " +
+                    "repairedPixels=${repair.repairedPixels} " +
+                    "hardExpansion=${repair.feathering.hardExpansionPx} " +
+                    "featherWidth=${repair.feathering.featherWidthPx} " +
+                    "opaquePixels=${repair.feathering.opaquePixelCount} " +
+                    "featherPixels=${repair.feathering.featherPixelCount} " +
+                    "patchPublished=${repair.publishable} fullyRepaired=${repair.fullyRepaired}"
+                if (diagId != null) logVerticalDiag(diagId, detail) else Timber.i(detail)
+            }
+            LocalTextBackgroundRepairer.rejectionDiagnostics(dump.textRepairResult)
+                .forEach { rejection ->
+                    val detail = "text background rejection block=${rejection.blockIndex + 1} " +
+                        "component=${rejection.componentIndex + 1} " +
+                        "reason=${rejection.reason.name} erasePixels=${rejection.erasePixels} " +
+                        "boundarySamples=${rejection.boundarySamples} " +
+                        "inlierFraction=" +
+                        String.format(Locale.US, "%.3f", rejection.dominantInlierFraction) + " " +
+                        "colorSpread=" + String.format(Locale.US, "%.3f", rejection.colorSpread)
+                    if (diagId != null) logVerticalDiag(diagId, detail) else Timber.i(detail)
+                }
             dump.repairResult.decisions
                 .filterNot { it.accepted }
                 .groupingBy { it.reason }

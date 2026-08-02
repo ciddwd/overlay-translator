@@ -110,13 +110,172 @@ class TextBlockReadingOrderTest {
         }
     }
 
+    @Test
+    fun sort_verticalRtlManga_tableDriven_prioritizesPageRowsWithoutChangingLegacyOcr() {
+        data class Box(
+            val text: String,
+            val left: Int,
+            val top: Int,
+            val right: Int,
+            val bottom: Int,
+            val granularity: TextRegionGranularity = TextRegionGranularity.BUBBLE,
+        )
+
+        data class Case(
+            val name: String,
+            val boxes: List<Box>,
+            val expectedBands: List<Set<String>>,
+            val expectedOrder: List<String>,
+        )
+
+        val separatedRows = listOf(
+            Box("top-left", 20, 10, 50, 80),
+            Box("bottom-right", 120, 140, 150, 210),
+            Box("top-right", 120, 10, 150, 80),
+            Box("bottom-left", 20, 140, 50, 210),
+        )
+        val closeColumns = listOf(
+            Box("right-top", 120, 10, 150, 80),
+            Box("left-top", 20, 10, 50, 80),
+            Box("right-next", 120, 90, 150, 160),
+            Box("left-next", 20, 90, 50, 160),
+        )
+        val cases = listOf(
+            Case(
+                name = "two panel rows read the full upper row before lower-right content",
+                boxes = separatedRows,
+                expectedBands = listOf(
+                    setOf("top-left", "top-right"),
+                    setOf("bottom-right", "bottom-left"),
+                ),
+                expectedOrder = listOf("top-right", "top-left", "bottom-right", "bottom-left"),
+            ),
+            Case(
+                name = "small inter-line gap stays one row and preserves vertical columns",
+                boxes = closeColumns,
+                expectedBands = listOf(
+                    setOf("right-top", "left-top", "right-next", "left-next"),
+                ),
+                expectedOrder = listOf("right-top", "right-next", "left-top", "left-next"),
+            ),
+            Case(
+                name = "a tall bridging region prevents speculative row splitting",
+                boxes = listOf(
+                    Box("right-bridge", 120, 0, 150, 220),
+                    Box("left-top", 20, 10, 50, 80),
+                    Box("left-bottom", 20, 140, 50, 210),
+                ),
+                expectedBands = listOf(setOf("right-bridge", "left-top", "left-bottom")),
+                expectedOrder = listOf("right-bridge", "left-top", "left-bottom"),
+            ),
+            Case(
+                name = "free text semantic also enables manga row ordering",
+                boxes = separatedRows.map { it.copy(granularity = TextRegionGranularity.FREE_TEXT) },
+                expectedBands = listOf(
+                    setOf("top-left", "top-right"),
+                    setOf("bottom-right", "bottom-left"),
+                ),
+                expectedOrder = listOf("top-right", "top-left", "bottom-right", "bottom-left"),
+            ),
+            Case(
+                name = "unknown OCR regions keep the legacy global column order",
+                boxes = separatedRows.map { it.copy(granularity = TextRegionGranularity.UNKNOWN) },
+                expectedBands = listOf(
+                    setOf("top-left", "top-right"),
+                    setOf("bottom-right", "bottom-left"),
+                ),
+                expectedOrder = listOf("top-right", "bottom-right", "top-left", "bottom-left"),
+            ),
+        )
+
+        cases.forEach { case ->
+            val blocks = case.boxes.map { box ->
+                block(
+                    text = box.text,
+                    left = box.left,
+                    top = box.top,
+                    right = box.right,
+                    bottom = box.bottom,
+                    orientation = TextOrientation.VERTICAL_RTL,
+                    granularity = box.granularity,
+                )
+            }
+            assertEquals(
+                "${case.name} bands",
+                case.expectedBands,
+                splitMangaHorizontalBands(blocks).map { band -> band.map { it.text }.toSet() },
+            )
+            assertEquals(
+                case.name,
+                case.expectedOrder,
+                sortTextBlocksForReading(blocks).map { it.text },
+            )
+        }
+    }
+
+    @Test
+    fun mangaHorizontalBandGapThreshold_tableDriven_scalesWithSourceTextThickness() {
+        data class Case(
+            val name: String,
+            val sourceThicknesses: List<Int>,
+            val expectedThreshold: Int,
+        )
+
+        val cases = listOf(
+            Case(
+                name = "device page uses half of a seventy eight pixel median text line",
+                sourceThicknesses = listOf(78, 78, 78),
+                expectedThreshold = 39,
+            ),
+            Case(
+                name = "even sample count uses the numeric median",
+                sourceThicknesses = listOf(20, 40),
+                expectedThreshold = 15,
+            ),
+            Case(
+                name = "tiny geometry still requires a positive gap",
+                sourceThicknesses = listOf(1),
+                expectedThreshold = 1,
+            ),
+        )
+
+        cases.forEach { case ->
+            val blocks = case.sourceThicknesses.mapIndexed { index, thickness ->
+                block(
+                    text = "block-$index",
+                    left = index * 100,
+                    top = 0,
+                    right = index * 100 + thickness,
+                    bottom = thickness * 3,
+                    orientation = TextOrientation.VERTICAL_RTL,
+                    granularity = TextRegionGranularity.BUBBLE,
+                ).copy(
+                    sourceBoxes = listOf(
+                        Rect().apply {
+                            left = index * 100
+                            top = 0
+                            right = index * 100 + thickness
+                            bottom = thickness * 3
+                        }
+                    )
+                )
+            }
+            assertEquals(
+                case.name,
+                case.expectedThreshold,
+                mangaHorizontalBandGapThresholdPx(blocks),
+            )
+        }
+    }
+
     private fun block(
         text: String,
         left: Int,
         top: Int,
         right: Int,
         bottom: Int,
-        orientation: TextOrientation? = null
+        orientation: TextOrientation? = null,
+        granularity: TextRegionGranularity = TextRegionGranularity.UNKNOWN,
     ): TextBlock =
         TextBlock(
             text = text,
@@ -126,6 +285,7 @@ class TextBlockReadingOrderTest {
                 this.right = right
                 this.bottom = bottom
             },
-            layoutOrientation = orientation
+            layoutOrientation = orientation,
+            regionGranularity = granularity,
         )
 }

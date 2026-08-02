@@ -16,13 +16,13 @@ class MangaTextEvidenceMatcherTest {
     )
 
     @Test
-    fun classifyMembers_tableDriven_excludesOnlyUnambiguousFreeText() {
+    fun classifyMembers_tableDriven_keepsUnambiguousFreeTextStandalone() {
         val cases = listOf(
             ClassificationCase(
-                name = "free-only member outside bubbles is excluded",
+                name = "free-only member outside bubbles becomes standalone text",
                 member = IntRect(120, 20, 160, 80),
                 text = listOf(detection(TEXT_FREE, 115f, 10f, 165f, 90f)),
-                expected = MangaTextEvidenceMatcher.MemberAction.EXCLUDE_FREE_ONLY,
+                expected = MangaTextEvidenceMatcher.MemberAction.KEEP_FREE_TEXT,
             ),
             ClassificationCase(
                 name = "same member supported by both text kinds is kept",

@@ -6,7 +6,8 @@ import kotlin.math.floor
 
 /**
  * Gives each RT-DETR text-in-bubble detection to one OCR group and keeps TEXT_FREE from expanding
- * recognition crops. Single-member, ultra-wide fallback artifacts remain filtered.
+ * recognition crops. Single-member, ultra-wide fallback artifacts remain filtered unless the
+ * detector explicitly classified their complete region as standalone text.
  */
 internal object MangaOcrTextEvidencePolicy {
     data class Result(
@@ -58,6 +59,7 @@ internal object MangaOcrTextEvidencePolicy {
                 .map { assignment -> textDetections[assignment.detectionIndex] }
             val isUnsupportedLineArtifact =
                 entry.guidedSource == BubbleModelRegrouper.Source.LEGACY_FALLBACK &&
+                    entry.regionGranularity != TextRegionGranularity.FREE_TEXT &&
                     entry.bubble.memberIndices.size == 1 &&
                     aspectRatio(entry.bubble.contentRect) >= MIN_LINE_ARTIFACT_ASPECT_RATIO &&
                     supportingDetections.isEmpty()

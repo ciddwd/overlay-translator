@@ -67,10 +67,13 @@ internal object BubbleModelRegrouper {
         fallbackPadding: Int,
         fallbackGap: Int,
         excludedMemberIndices: Set<Int> = emptySet(),
+        standaloneMemberIndices: Set<Int> = emptySet(),
     ): List<Group> {
         require(width > 0 && height > 0)
         require(modelByMember.size == memberBounds.size)
         require(excludedMemberIndices.all(memberBounds.indices::contains))
+        require(standaloneMemberIndices.all(memberBounds.indices::contains))
+        require(excludedMemberIndices.intersect(standaloneMemberIndices).isEmpty())
 
         val membersByModel = linkedMapOf<Int, MutableList<Int>>()
         val fallbackMemberIndices = mutableListOf<Int>()
@@ -98,11 +101,10 @@ internal object BubbleModelRegrouper {
                 memberIndices = memberIndices.sorted(),
             )
         }
-        val fallbackGroups = if (fallbackMemberIndices.isEmpty()) {
-            emptyList()
-        } else {
-            BubbleClusterer.cluster(
-                rects = fallbackMemberIndices.map { memberBounds[it] },
+        fun clusterFallback(memberIndices: List<Int>): List<Group> {
+            if (memberIndices.isEmpty()) return emptyList()
+            return BubbleClusterer.cluster(
+                rects = memberIndices.map { memberBounds[it] },
                 imgW = width,
                 imgH = height,
                 pad = fallbackPadding,
@@ -113,10 +115,14 @@ internal object BubbleModelRegrouper {
                     modelBubbleIndex = null,
                     cropBounds = bubble.rect,
                     contentBounds = bubble.contentRect,
-                    memberIndices = bubble.memberIndices.map { fallbackMemberIndices[it] }.sorted(),
+                    memberIndices = bubble.memberIndices.map { memberIndices[it] }.sorted(),
                 )
             }
         }
+        val standaloneFallbackIndices = fallbackMemberIndices.filter(standaloneMemberIndices::contains)
+        val ordinaryFallbackIndices = fallbackMemberIndices.filterNot(standaloneMemberIndices::contains)
+        val fallbackGroups =
+            clusterFallback(ordinaryFallbackIndices) + clusterFallback(standaloneFallbackIndices)
         return (modelGroups + fallbackGroups).sortedWith(
             compareBy<Group>(
                 { it.contentBounds.top },

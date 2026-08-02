@@ -13,6 +13,7 @@ class BubbleModelRegrouperTest {
         val modelBounds: List<IntRect>,
         val modelByMember: List<Int?>,
         val excludedMemberIndices: Set<Int> = emptySet(),
+        val standaloneMemberIndices: Set<Int> = emptySet(),
         val expected: List<ExpectedGroup>,
     )
 
@@ -69,6 +70,25 @@ class BubbleModelRegrouperTest {
                 ),
             ),
             RegroupCase(
+                name = "standalone text does not merge with neighboring unknown fallback",
+                members = listOf(
+                    IntRect(10, 70, 20, 80),
+                    IntRect(22, 70, 32, 80),
+                    IntRect(34, 70, 44, 80),
+                ),
+                modelBounds = emptyList(),
+                modelByMember = listOf(null, null, null),
+                standaloneMemberIndices = setOf(1, 2),
+                expected = listOf(
+                    ExpectedGroup(BubbleModelRegrouper.Source.LEGACY_FALLBACK, null, listOf(0)),
+                    ExpectedGroup(
+                        BubbleModelRegrouper.Source.LEGACY_FALLBACK,
+                        null,
+                        listOf(1, 2),
+                    ),
+                ),
+            ),
+            RegroupCase(
                 name = "unused model and invalid model assignment do not lose members",
                 members = listOf(
                     IntRect(10, 10, 20, 20),
@@ -112,6 +132,7 @@ class BubbleModelRegrouperTest {
                 fallbackPadding = 0,
                 fallbackGap = 3,
                 excludedMemberIndices = case.excludedMemberIndices,
+                standaloneMemberIndices = case.standaloneMemberIndices,
             )
             assertEquals(
                 case.name,

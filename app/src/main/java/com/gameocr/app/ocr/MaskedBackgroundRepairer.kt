@@ -5,12 +5,12 @@ import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 /**
- * Produces a conservative background-repair preview for an already validated erase mask.
+ * Produces a background-repair preview for an already validated erase mask.
  *
- * The repair is deliberately local and dependency-free: it estimates the dominant clean color
- * around each connected erase component, rejects complex/undersampled backgrounds, then
- * interpolates from nearby clean pixels. Rejected components keep their original pixels so this
- * prototype cannot make an unsafe region look successful.
+ * The repair is local and dependency-free: it estimates the dominant clean color around each
+ * connected erase component, then fills flat regions or interpolates from nearby clean pixels.
+ * Callers remain conservative by default, while an explicit capability can prefer complete text
+ * removal on complex backgrounds.
  */
 internal object MaskedBackgroundRepairer {
 
@@ -63,12 +63,16 @@ internal object MaskedBackgroundRepairer {
         eraseMask: BooleanArray,
         allowedSampleMask: BooleanArray,
         flatCompletionMask: BooleanArray = eraseMask,
+        allowDirectionalInterpolation: Boolean = false,
+        allowComplexBackgroundInterpolation: Boolean = false,
+        foregroundReferenceMask: BooleanArray? = null,
     ): Result {
         require(width > 0 && height > 0)
         require(sourceArgb.size == width * height)
         require(eraseMask.size == sourceArgb.size)
         require(allowedSampleMask.size == sourceArgb.size)
         require(flatCompletionMask.size == sourceArgb.size)
+        require(foregroundReferenceMask == null || foregroundReferenceMask.size == sourceArgb.size)
 
         val output = sourceArgb.copyOf()
         val repairedMask = BooleanArray(eraseMask.size)
@@ -100,25 +104,41 @@ internal object MaskedBackgroundRepairer {
                 )
             }
 
-            val estimate = estimateDominantBackground(sourceArgb, samples)
-            if (
-                estimate.inlierFraction < MIN_DOMINANT_INLIER_FRACTION ||
-                estimate.colorSpread > MAX_DOMINANT_COLOR_SPREAD
-            ) {
+            val dominantEstimate = estimateDominantBackground(sourceArgb, samples)
+            val backgroundTooComplex =
+                dominantEstimate.inlierFraction < MIN_DOMINANT_INLIER_FRACTION ||
+                dominantEstimate.colorSpread > MAX_DOMINANT_COLOR_SPREAD
+            if (backgroundTooComplex && !allowComplexBackgroundInterpolation) {
                 return@mapIndexed RepairPlan(
                     component = component,
-                    estimate = estimate,
+                    estimate = dominantEstimate,
                     decision = rejected(
                         componentIndex = componentIndex,
                         reason = Reason.BACKGROUND_TOO_COMPLEX,
                         erasePixels = component.size,
                         boundarySamples = samples.size,
-                        dominantInlierFraction = estimate.inlierFraction,
-                        colorSpread = estimate.colorSpread,
+                        dominantInlierFraction = dominantEstimate.inlierFraction,
+                        colorSpread = dominantEstimate.colorSpread,
                     ),
                 )
             }
-            if (estimate.colorSpread > MAX_FLAT_BACKGROUND_SPREAD) {
+            val estimate = if (backgroundTooComplex && allowComplexBackgroundInterpolation) {
+                foregroundReferenceMask
+                    ?.let { referenceMask ->
+                        estimateContrastingBackground(
+                            sourceArgb = sourceArgb,
+                            backgroundSamples = samples,
+                            foregroundSamples = component.filter { referenceMask[it] }.toIntArray(),
+                        )
+                    }
+                    ?: dominantEstimate
+            } else {
+                dominantEstimate
+            }
+            if (
+                estimate.colorSpread > MAX_FLAT_BACKGROUND_SPREAD &&
+                !allowDirectionalInterpolation
+            ) {
                 return@mapIndexed RepairPlan(
                     component = component,
                     estimate = estimate,
@@ -132,8 +152,14 @@ internal object MaskedBackgroundRepairer {
                     ),
                 )
             }
-
-            val mode = Mode.DOMINANT_FILL
+            val mode = if (
+                backgroundTooComplex ||
+                estimate.colorSpread > MAX_FLAT_BACKGROUND_SPREAD
+            ) {
+                Mode.DIRECTIONAL_INTERPOLATION
+            } else {
+                Mode.DOMINANT_FILL
+            }
             RepairPlan(
                 component = component,
                 estimate = estimate,
@@ -394,6 +420,55 @@ internal object MaskedBackgroundRepairer {
         return BackgroundEstimate(
             color = representative,
             inlierFraction = inliers.size.toFloat() / samples.size,
+            colorSpread = spread,
+        )
+    }
+
+    private fun estimateContrastingBackground(
+        sourceArgb: IntArray,
+        backgroundSamples: IntArray,
+        foregroundSamples: IntArray,
+    ): BackgroundEstimate? {
+        if (backgroundSamples.isEmpty() || foregroundSamples.isEmpty()) return null
+        val foreground = estimateDominantBackground(sourceArgb, foregroundSamples).color
+        val histogram = IntArray(COLOR_BIN_COUNT)
+        backgroundSamples.forEach { index ->
+            histogram[colorBin(sourceArgb[index])]++
+        }
+        var selectedBin = -1
+        var selectedScore = Long.MIN_VALUE
+        var selectedSupport = -1
+        histogram.forEachIndexed { bin, support ->
+            if (support == 0) return@forEachIndexed
+            val contrast = colorDistanceSquared(binCenterColor(bin), foreground)
+            val score = support.toLong() * contrast
+            if (
+                score > selectedScore ||
+                (score == selectedScore && support > selectedSupport)
+            ) {
+                selectedBin = bin
+                selectedScore = score
+                selectedSupport = support
+            }
+        }
+        if (selectedBin < 0) return null
+        val selectedCenter = binCenterColor(selectedBin)
+        val selectedCluster = backgroundSamples.filter { index ->
+            colorDistanceSquared(sourceArgb[index], selectedCenter) <=
+                DOMINANT_COLOR_RADIUS_SQUARED
+        }
+        if (selectedCluster.isEmpty()) return null
+        val representative = medianColor(sourceArgb, selectedCluster)
+        val inliers = backgroundSamples.filter { index ->
+            colorDistanceSquared(sourceArgb[index], representative) <=
+                DOMINANT_COLOR_RADIUS_SQUARED
+        }
+        val spread = inliers.sumOf { index ->
+            sqrt(colorDistanceSquared(sourceArgb[index], representative).toDouble())
+        }.toFloat() / inliers.size
+        return BackgroundEstimate(
+            color = representative,
+            inlierFraction = inliers.size.toFloat() / backgroundSamples.size,
             colorSpread = spread,
         )
     }

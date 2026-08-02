@@ -9,6 +9,120 @@ import kotlin.math.pow
 
 class DetectorGuidedBubbleMaskExtractorTest {
     @Test
+    fun extract_tableDriven_preservesExactDecisionAndMaskSignatures() {
+        data class Case(
+            val name: String,
+            val detection: MangaBubbleDetectionPostprocessor.Detection,
+            val polygon: MangaMaskDebugAnalyzer.Polygon,
+            val draw: (IntArray, Int, Int) -> Unit,
+        )
+
+        val cases = listOf(
+            Case(
+                name = "closed ellipse",
+                detection = detection(20f, 18f, 100f, 82f),
+                polygon = rectanglePolygon(48f, 38f, 72f, 62f),
+                draw = { pixels, width, height ->
+                    drawEllipse(pixels, width, height, 60, 50, 34, 24)
+                },
+            ),
+            Case(
+                name = "tight detector retry",
+                detection = detection(32f, 28f, 88f, 72f),
+                polygon = rectanglePolygon(48f, 38f, 72f, 62f),
+                draw = { pixels, width, height ->
+                    drawEllipse(pixels, width, height, 60, 50, 34, 24)
+                },
+            ),
+            Case(
+                name = "open ellipse fallback",
+                detection = detection(20f, 18f, 100f, 82f),
+                polygon = rectanglePolygon(48f, 38f, 72f, 62f),
+                draw = { pixels, width, height ->
+                    drawEllipse(
+                        pixels,
+                        width,
+                        height,
+                        60,
+                        50,
+                        34,
+                        24,
+                        gapFromY = 38,
+                        gapToY = 62,
+                    )
+                },
+            ),
+            Case(
+                name = "dark reject",
+                detection = detection(20f, 18f, 100f, 82f),
+                polygon = rectanglePolygon(48f, 38f, 72f, 62f),
+                draw = { pixels, _, _ -> pixels.fill(DARK) },
+            ),
+            Case(
+                name = "no member",
+                detection = detection(80f, 60f, 115f, 95f),
+                polygon = rectanglePolygon(48f, 38f, 72f, 62f),
+                draw = { _, _, _ -> },
+            ),
+        )
+
+        val actual = cases.map { case ->
+            val width = 120
+            val height = 100
+            val pixels = IntArray(width * height) { WHITE }
+            case.draw(pixels, width, height)
+            val result = DetectorGuidedBubbleMaskExtractor.extract(
+                width = width,
+                height = height,
+                argb = pixels,
+                polygons = listOf(case.polygon),
+                boxDetections = listOf(case.detection),
+            )
+            listOf(
+                result.timing.totalUs,
+                result.timing.assignmentUs,
+                result.timing.estimateTotalUs,
+                result.timing.backgroundUs,
+                result.timing.luminanceUs,
+                result.timing.candidateBuildUs,
+                result.timing.seedUs,
+                result.timing.floodUs,
+                result.timing.edgeUs,
+                result.timing.fillUs,
+                result.timing.coverageAndCopyUs,
+                result.timing.ellipseFallbackUs,
+                result.timing.maskIoUs,
+                result.timing.otherUs,
+            ).forEach { durationUs ->
+                assertTrue("${case.name}: timing must be non-negative", durationUs >= 0L)
+            }
+            val decision = result.decisions.single()
+            listOf(
+                case.name,
+                decision.accepted,
+                decision.diagnostic.reason,
+                decision.diagnostic.attempts,
+                decision.diagnostic.regionPixels,
+                result.instanceMasks.single().pixels.count { it },
+                result.unionMask.count { it },
+                result.timing.estimateCalls,
+                result.timing.ellipseFallbackCalls,
+            ).joinToString("|")
+        }
+
+        assertEquals(
+            listOf(
+                "closed ellipse|true|accepted|1|2325|2325|2325|1|0",
+                "tight detector retry|true|accepted_after_roi_expand|2|2325|2325|2325|1|0",
+                "open ellipse fallback|true|accepted_ellipse_fallback|2|2600|2600|2600|1|1",
+                "dark reject|false|background_too_dark|1|0|0|0|1|1",
+                "no member|false|detector_no_ocr_members|1|0|0|0|0|0",
+            ),
+            actual,
+        )
+    }
+
+    @Test
     fun extract_tableDriven_acceptsClosedShapesAndRejectsUnsafeCandidates() {
         data class Case(
             val name: String,

@@ -392,6 +392,29 @@ abstract class LocalLlamaTranslator(
         }
     }
 
+    protected suspend fun generateUncached(
+        userPrompt: String,
+        sourceForLog: String,
+        settings: Settings,
+        mode: String,
+    ): String? {
+        val modelReadyStartedAt = SystemClock.elapsedRealtime()
+        val engine = holder.ensureLoaded(modelKind, systemPrompt)
+        val modelReadyMs = InferenceTiming.elapsedMs(modelReadyStartedAt, SystemClock.elapsedRealtime())
+        val queuedAt = SystemClock.elapsedRealtime()
+        return holder.inferenceMutex.withLock {
+            generateLocked(
+                engine = engine,
+                userPrompt = runtimePrompt(userPrompt, settings),
+                predictLength = settings.localLlmMaxNewTokens,
+                mode = mode,
+                sourceForLog = sourceForLog,
+                modelReadyMs = modelReadyMs,
+                queuedAt = queuedAt,
+            ).also { holder.touch() }
+        }
+    }
+
     private suspend fun generateLocked(
         engine: InferenceEngine,
         userPrompt: String,

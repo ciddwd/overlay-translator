@@ -48,6 +48,30 @@ class MaskedBackgroundRepairerTest {
     }
 
     @Test
+    fun repair_gradientBackground_keepsLegacyStrictFallbackUnlessCapabilityIsEnabled() {
+        val source = IntArray(SIZE) { index ->
+            val level = 80 + (index % WIDTH) * 3
+            argb(255, level, level, level)
+        }
+        val erase = centeredEraseMask()
+        erase.indices.filter { erase[it] }.forEach { source[it] = argb(255, 0, 0, 0) }
+        val before = source.copyOf()
+
+        val result = MaskedBackgroundRepairer.repair(
+            width = WIDTH,
+            height = HEIGHT,
+            sourceArgb = source,
+            eraseMask = erase,
+            allowedSampleMask = BooleanArray(SIZE) { true },
+        )
+
+        assertEquals(0, result.acceptedComponentCount)
+        assertEquals(MaskedBackgroundRepairer.Reason.BACKGROUND_NOT_FLAT, result.decisions.single().reason)
+        assertTrue(before.contentEquals(result.pixels))
+        assertFalse(result.repairedMask.any { it })
+    }
+
+    @Test
     fun repair_tableDriven_rejectsUnsafeBackgroundsWithoutChangingSource() {
         data class Case(
             val name: String,
@@ -145,30 +169,136 @@ class MaskedBackgroundRepairerTest {
     }
 
     @Test
-    fun repair_gradientBackground_rejectsInsteadOfCreatingVisiblePatch() {
-        val source = IntArray(SIZE) { index ->
-            val x = index % WIDTH
-            val level = 80 + x * 3
-            argb(255, level, level, level)
-        }
-        val erase = centeredEraseMask()
-        erase.indices.filter { erase[it] }.forEach { source[it] = argb(255, 0, 0, 0) }
-        val before = source.copyOf()
-        val result = MaskedBackgroundRepairer.repair(
-            width = WIDTH,
-            height = HEIGHT,
-            sourceArgb = source,
-            eraseMask = erase,
-            allowedSampleMask = BooleanArray(SIZE) { true },
+    fun repair_tableDriven_usesDirectionalInterpolationForCoherentGradients() {
+        data class Case(
+            val name: String,
+            val levelAt: (x: Int, y: Int) -> Int,
+        )
+        val cases = listOf(
+            Case("horizontal gradient") { x, _ -> 80 + x * 3 },
+            Case("vertical gradient") { _, y -> 80 + y * 3 },
         )
 
-        assertEquals(0, result.acceptedComponentCount)
-        assertEquals(
-            MaskedBackgroundRepairer.Reason.BACKGROUND_NOT_FLAT,
-            result.decisions.single().reason,
+        cases.forEach { case ->
+            val expected = IntArray(SIZE) { index ->
+                val level = case.levelAt(index % WIDTH, index / WIDTH)
+                argb(255, level, level, level)
+            }
+            val source = expected.copyOf()
+            val erase = centeredEraseMask()
+            erase.indices.filter { erase[it] }.forEach { source[it] = argb(255, 0, 0, 0) }
+            val before = source.copyOf()
+            val result = MaskedBackgroundRepairer.repair(
+                width = WIDTH,
+                height = HEIGHT,
+                sourceArgb = source,
+                eraseMask = erase,
+                allowedSampleMask = BooleanArray(SIZE) { true },
+                allowDirectionalInterpolation = true,
+            )
+
+            assertEquals(case.name, 1, result.acceptedComponentCount)
+            assertEquals(
+                case.name,
+                MaskedBackgroundRepairer.Mode.DIRECTIONAL_INTERPOLATION,
+                result.decisions.single().mode,
+            )
+            erase.indices.filter { erase[it] }.forEach { index ->
+                val expectedLevel = expected[index] and 0xff
+                val actualLevel = result.pixels[index] and 0xff
+                assertTrue(case.name, kotlin.math.abs(expectedLevel - actualLevel) <= 12)
+                assertTrue(case.name, result.repairedMask[index])
+            }
+            erase.indices.filterNot { erase[it] }.forEach { index ->
+                assertEquals("${case.name}: outside mask is immutable", before[index], result.pixels[index])
+            }
+        }
+    }
+
+    @Test
+    fun repair_tableDriven_complexBackgroundInterpolationRequiresExplicitCapability() {
+        data class Case(
+            val name: String,
+            val foreground: Int,
+            val expectedLightBackground: Boolean,
         )
-        assertTrue("gradient pixels stay untouched for legacy fallback", before.contentEquals(result.pixels))
-        assertFalse(result.repairedMask.any { it })
+        val cases = listOf(
+            Case(
+                name = "dark glyph rejects black line-art contamination",
+                foreground = argb(255, 8, 8, 8),
+                expectedLightBackground = true,
+            ),
+            Case(
+                name = "light glyph rejects white highlight contamination",
+                foreground = argb(255, 248, 248, 248),
+                expectedLightBackground = false,
+            ),
+        )
+
+        cases.forEach { case ->
+            val erase = centeredEraseMask()
+            val source = IntArray(SIZE) { index ->
+                val x = index % WIDTH
+                val y = index / WIDTH
+                if ((x + y) % 2 == 0) argb(255, 12, 12, 12) else argb(255, 242, 242, 242)
+            }
+            val foregroundCore = BooleanArray(SIZE)
+            for (y in HEIGHT / 2 - 1..HEIGHT / 2 + 1) {
+                for (x in WIDTH / 2 - 1..WIDTH / 2 + 1) {
+                    val index = y * WIDTH + x
+                    foregroundCore[index] = true
+                    source[index] = case.foreground
+                }
+            }
+            val before = source.copyOf()
+
+            val strict = MaskedBackgroundRepairer.repair(
+                width = WIDTH,
+                height = HEIGHT,
+                sourceArgb = source,
+                eraseMask = erase,
+                allowedSampleMask = BooleanArray(SIZE) { true },
+                allowDirectionalInterpolation = true,
+                foregroundReferenceMask = foregroundCore,
+            )
+            val coverageFirst = MaskedBackgroundRepairer.repair(
+                width = WIDTH,
+                height = HEIGHT,
+                sourceArgb = source,
+                eraseMask = erase,
+                allowedSampleMask = BooleanArray(SIZE) { true },
+                allowDirectionalInterpolation = true,
+                allowComplexBackgroundInterpolation = true,
+                foregroundReferenceMask = foregroundCore,
+            )
+
+            assertEquals(case.name, 0, strict.acceptedComponentCount)
+            assertEquals(
+                case.name,
+                MaskedBackgroundRepairer.Reason.BACKGROUND_TOO_COMPLEX,
+                strict.decisions.single().reason,
+            )
+            assertEquals(case.name, 1, coverageFirst.acceptedComponentCount)
+            assertEquals(
+                case.name,
+                MaskedBackgroundRepairer.Mode.DIRECTIONAL_INTERPOLATION,
+                coverageFirst.decisions.single().mode,
+            )
+            erase.indices.filter { erase[it] }.forEach { index ->
+                assertTrue("${case.name}: every glyph pixel is repaired", coverageFirst.repairedMask[index])
+            }
+            foregroundCore.indices.filter { foregroundCore[it] }.forEach { index ->
+                val luminance = coverageFirst.pixels[index] and 0xff
+                if (case.expectedLightBackground) {
+                    assertTrue("${case.name}: dark ink is not painted back", luminance >= 200)
+                } else {
+                    assertTrue("${case.name}: light ink is not painted back", luminance <= 48)
+                }
+            }
+            erase.indices.filterNot { erase[it] }.forEach { index ->
+                assertEquals("${case.name}: outside mask is immutable", before[index], coverageFirst.pixels[index])
+            }
+        }
     }
 
     @Test

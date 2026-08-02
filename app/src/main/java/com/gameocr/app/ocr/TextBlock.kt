@@ -15,7 +15,18 @@ data class TextBlock(
     val layoutOrientation: TextOrientation? = null,
     val sourceBoxes: List<Rect> = emptyList(),
     val bubbleGroupId: Int? = null,
+    val regionId: Int? = null,
+    val parentRegionId: Int? = null,
+    val regionGranularity: TextRegionGranularity = TextRegionGranularity.UNKNOWN,
 )
+
+enum class TextRegionGranularity {
+    UNKNOWN,
+    LINE,
+    PARAGRAPH,
+    BUBBLE,
+    FREE_TEXT,
+}
 
 internal fun TextBlock.sourceBoxesOrBoundingBox(): List<Rect> =
     sourceBoxes.takeIf { it.isNotEmpty() }?.map(::Rect) ?: listOf(Rect(boundingBox))

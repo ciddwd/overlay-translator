@@ -13,7 +13,7 @@ class MangaBubbleTextAssignmentRefinerTest {
         val assignments: List<Int?>,
         val expected: List<Int?>,
         val expectedExcluded: Set<Int> = emptySet(),
-        val expectedFreeExcluded: Set<Int> = emptySet(),
+        val expectedFreeText: Set<Int> = emptySet(),
         val expectedAmbiguousFree: Set<Int> = emptySet(),
         val expectedKindConflicts: Set<Int> = emptySet(),
     )
@@ -126,7 +126,7 @@ class MangaBubbleTextAssignmentRefinerTest {
                 expected = listOf(null, null),
             ),
             Case(
-                name = "unassigned free-only member outside bubbles is excluded",
+                name = "unassigned free-only member outside bubbles stays standalone",
                 members = listOf(IntRect(120, 15, 150, 75)),
                 bubbles = listOf(leftBubble),
                 text = listOf(
@@ -140,8 +140,7 @@ class MangaBubbleTextAssignmentRefinerTest {
                 ),
                 assignments = listOf(null),
                 expected = listOf(null),
-                expectedExcluded = setOf(0),
-                expectedFreeExcluded = setOf(0),
+                expectedFreeText = setOf(0),
             ),
             Case(
                 name = "free-only member inside bubble remains ambiguous fallback",
@@ -198,8 +197,8 @@ class MangaBubbleTextAssignmentRefinerTest {
             assertEquals(case.name, case.expectedExcluded, result.excludedMemberIndices)
             assertEquals(
                 case.name,
-                case.expectedFreeExcluded,
-                result.freeTextExcludedMemberIndices,
+                case.expectedFreeText,
+                result.freeTextMemberIndices,
             )
             assertEquals(
                 case.name,

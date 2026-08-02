@@ -25,6 +25,7 @@ internal object MangaOcrBubbleGroupingPolicy {
         val bubble: Bubble,
         val guidedSource: BubbleModelRegrouper.Source?,
         val modelBubbleIndex: Int?,
+        val regionGranularity: TextRegionGranularity = TextRegionGranularity.BUBBLE,
     )
 
     fun select(
@@ -33,13 +34,16 @@ internal object MangaOcrBubbleGroupingPolicy {
         memberCount: Int,
         enabled: Boolean,
         excludedMemberIndices: Set<Int> = emptySet(),
+        freeTextMemberIndices: Set<Int> = emptySet(),
     ): Selection {
         val hasDetectorGuidance =
             guidedGroups.any { it.source == BubbleModelRegrouper.Source.MODEL } ||
-                excludedMemberIndices.isNotEmpty()
+                excludedMemberIndices.isNotEmpty() ||
+                freeTextMemberIndices.isNotEmpty()
         if (
             !enabled ||
             !hasDetectorGuidance ||
+            freeTextMemberIndices.any { it !in 0 until memberCount } ||
             !isCompletePartition(guidedGroups, memberCount, excludedMemberIndices)
         ) {
             return Selection(
@@ -48,6 +52,7 @@ internal object MangaOcrBubbleGroupingPolicy {
                         bubble = bubble,
                         guidedSource = null,
                         modelBubbleIndex = null,
+                        regionGranularity = TextRegionGranularity.BUBBLE,
                     )
                 },
                 source = Source.LEGACY,
@@ -63,6 +68,15 @@ internal object MangaOcrBubbleGroupingPolicy {
                     ),
                     guidedSource = group.source,
                     modelBubbleIndex = group.modelBubbleIndex,
+                    regionGranularity = if (
+                        group.source == BubbleModelRegrouper.Source.LEGACY_FALLBACK &&
+                        group.memberIndices.isNotEmpty() &&
+                        group.memberIndices.all(freeTextMemberIndices::contains)
+                    ) {
+                        TextRegionGranularity.FREE_TEXT
+                    } else {
+                        TextRegionGranularity.BUBBLE
+                    },
                 )
             },
             source = Source.DETECTOR_GUIDED,

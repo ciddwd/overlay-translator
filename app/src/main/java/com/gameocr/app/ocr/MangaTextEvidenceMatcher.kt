@@ -5,16 +5,16 @@ import com.gameocr.app.ocr.BubbleClusterer.IntRect
 /**
  * Matches RT-DETR text evidence to DBNet members and final OCR groups.
  *
- * TEXT_FREE is excluded only when it has no competing bubble-text evidence and the member is not
- * plausibly inside a detected bubble. TEXT_BUBBLE evidence is assigned to one OCR group so a
- * slight overlap cannot expand multiple neighboring recognition crops.
+ * TEXT_FREE is kept as a standalone OCR region when it has no competing bubble-text evidence and
+ * is not plausibly inside a detected bubble. TEXT_BUBBLE evidence is assigned to one OCR group so
+ * a slight overlap cannot expand multiple neighboring recognition crops.
  */
 internal object MangaTextEvidenceMatcher {
     enum class MemberAction {
         KEEP,
         KEEP_KIND_CONFLICT,
         KEEP_AMBIGUOUS_INSIDE_BUBBLE,
-        EXCLUDE_FREE_ONLY,
+        KEEP_FREE_TEXT,
     }
 
     data class MemberDecision(
@@ -60,7 +60,7 @@ internal object MangaTextEvidenceMatcher {
                 textFreeIndices.isEmpty() -> MemberAction.KEEP
                 textBubbleIndices.isNotEmpty() -> MemberAction.KEEP_KIND_CONFLICT
                 insideBubble -> MemberAction.KEEP_AMBIGUOUS_INSIDE_BUBBLE
-                else -> MemberAction.EXCLUDE_FREE_ONLY
+                else -> MemberAction.KEEP_FREE_TEXT
             }
             MemberDecision(
                 memberIndex = memberIndex,

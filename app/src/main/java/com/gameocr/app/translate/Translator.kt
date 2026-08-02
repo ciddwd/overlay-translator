@@ -48,6 +48,12 @@ interface Translator {
     val prefersBatch: Boolean get() = false
 
     /**
+     * true 表示批译必须看到完整输入列表，即使命中翻译记忆或数字直通也不能先从上下文移除。
+     * 输出仍严格按原始索引一一对应；命中项只覆盖最终结果。
+     */
+    val requiresFullBatchContext: Boolean get() = false
+
+    /**
      * 批量翻译。默认实现是并发调单条 [translate]；引擎若支持原生批 API 应 override 用单
      * 次 HTTP 处理多段（DeepL 的 v2/translate 支持 form 里多个 `text` 参数即此目的）。
      *

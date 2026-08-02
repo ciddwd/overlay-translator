@@ -124,6 +124,77 @@ class CaptureChromeOrderingTest {
     }
 
     @Test
+    fun translationResultRendering_tableDriven_preservesTaskLoading() {
+        data class Case(
+            val name: String,
+            val signature: String,
+            val expectedResultClear: String,
+        )
+
+        val source = File("src/main/java/com/gameocr/app/overlay/OverlayManager.kt").readText()
+        val cases = listOf(
+            Case("block placeholders", "fun showBlocks(", "clearBlockResults()"),
+            Case("floating batch results", "fun showFullScreen(", "clearBlockResults()"),
+            Case("floating streaming placeholders", "fun prepareFloatingWindow(", "clearBlockResults()"),
+        )
+
+        cases.forEach { case ->
+            val snippet = functionSnippet(source, case.signature)
+
+            assertTrue(
+                "${case.name} should clear stale translation results",
+                case.expectedResultClear in snippet,
+            )
+            assertFalse(
+                "${case.name} must not dismiss the task-owned loading indicator",
+                "clearLoading()" in snippet || "clearBlocksAndLoading()" in snippet,
+            )
+            assertFalse(
+                "${case.name} must not use the full clear path while translation is active",
+                "\n        clear()\n" in snippet,
+            )
+        }
+    }
+
+    @Test
+    fun translationProgress_tableDriven_hasOneTerminalOwnerForAsyncRendering() {
+        data class Case(
+            val name: String,
+            val signature: String,
+        )
+
+        val source = captureServiceSource()
+        val cases = listOf(
+            Case("block batch and streaming translation", "private suspend fun renderBlocks("),
+            Case("floating streaming translation", "private suspend fun renderFloatingWindow("),
+        )
+
+        cases.forEach { case ->
+            val snippet = functionSnippet(source, case.signature)
+            assertTrue(
+                "${case.name} should delegate asynchronous work to the task progress owner",
+                "launchTranslationBatch(diagId)" in snippet,
+            )
+        }
+
+        val ownerSnippet = functionSnippet(source, "private fun launchTranslationBatch(")
+        assertTrue(
+            "the asynchronous translation owner should dismiss loading in its terminal path",
+            "finally" in ownerSnippet && "overlay?.dismissLoading()" in ownerSnippet,
+        )
+        assertTrue(
+            "cancellation should still run terminal loading cleanup",
+            "NonCancellable + Dispatchers.Main.immediate" in ownerSnippet,
+        )
+
+        val captureSnippet = functionSnippet(source, "private suspend fun captureOnce(")
+        assertTrue(
+            "capture cleanup should leave loading to an active translation owner",
+            "if (!translationJobOwnsLoading(diagId))" in captureSnippet,
+        )
+    }
+
+    @Test
     fun fullScreenCapture_tableDriven_restoresChromeForSuccessFailureAndCancellation() {
         data class Case(
             val name: String,

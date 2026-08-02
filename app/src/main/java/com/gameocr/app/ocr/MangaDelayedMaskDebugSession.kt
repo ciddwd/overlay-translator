@@ -60,9 +60,13 @@ internal class MangaDelayedMaskDebugSessionManager {
         val repairResult: MaskedBackgroundRepairer.Result,
         val localRepairResult: LocalBubbleBackgroundRepairer.Result,
         val repairDurationMs: Long,
+        val textMaskResult: TextPixelMaskBuilder.Result,
+        val textRepairResult: LocalTextBackgroundRepairer.Result,
+        val textRepairDurationMs: Long,
         val shapeLayoutDecisions: List<ShapeLayoutDecision>,
         val shapeLayoutDurationMs: Long,
         val shapeAwarePatches: List<ShapeAwareBubblePatch>,
+        val textBackgroundPatches: List<ShapeAwareBubblePatch>,
         val displayedPatchCount: Int,
         val translatedBlockCount: Int,
     )
@@ -171,17 +175,60 @@ internal class MangaDelayedMaskDebugSessionManager {
         )
         val shapeLayoutDurationMs =
             (System.nanoTime() - shapeLayoutStartedNs) / 1_000_000L
-        val displayedPatchCount = displayPatches(shapeLayoutPreview.patches)
+        val shapeCoveredBlockIndices = shapeLayoutPreview.patches
+            .flatMapTo(linkedSetOf()) { it.blockIndices }
+        val textRepairStartedNs = System.nanoTime()
+        val textMaskResult = TextPixelMaskBuilder.build(
+            width = input.width,
+            height = input.height,
+            candidateTextMask = input.candidateTextMask,
+            confirmedBlocks = confirmed.filter { it.blockIndex !in shapeCoveredBlockIndices },
+        )
+        val textRepairResult = LocalTextBackgroundRepairer.repair(
+            imageWidth = input.width,
+            imageHeight = input.height,
+            sourceArgb = input.sourceArgb,
+            masks = textMaskResult.masks,
+            coordinateScale = batch.coordinateScale,
+        )
+        val textRepairDurationMs =
+            (System.nanoTime() - textRepairStartedNs) / 1_000_000L
+        val textBackgroundPatches = buildTextBackgroundPatches(
+            repairResult = textRepairResult,
+            coordinateScale = batch.coordinateScale,
+        )
+        val displayedPatchCount = displayPatches(
+            shapeLayoutPreview.patches + textBackgroundPatches,
+        )
         Dump(
             result = result,
             repairResult = repairResult,
             localRepairResult = localRepairResult,
             repairDurationMs = repairDurationMs,
+            textMaskResult = textMaskResult,
+            textRepairResult = textRepairResult,
+            textRepairDurationMs = textRepairDurationMs,
             shapeLayoutDecisions = shapeLayoutPreview.decisions,
             shapeLayoutDurationMs = shapeLayoutDurationMs,
             shapeAwarePatches = shapeLayoutPreview.patches,
+            textBackgroundPatches = textBackgroundPatches,
             displayedPatchCount = displayedPatchCount,
             translatedBlockCount = confirmed.size,
+        )
+    }
+
+    private fun buildTextBackgroundPatches(
+        repairResult: LocalTextBackgroundRepairer.Result,
+        coordinateScale: Float,
+    ): List<ShapeAwareBubblePatch> = repairResult.blocks.mapNotNull { block ->
+        val pixels = block.patchPixels ?: return@mapNotNull null
+        ShapeAwareBubblePatch(
+            modelBubbleIndex = null,
+            bounds = block.mask.bounds,
+            pixels = pixels,
+            coordinateScale = coordinateScale,
+            blockIndices = listOf(block.blockIndex),
+            role = ShapeAwareBubblePatch.Role.TEXT_BACKGROUND,
         )
     }
 

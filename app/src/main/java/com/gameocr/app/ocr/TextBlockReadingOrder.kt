@@ -1,5 +1,8 @@
 package com.gameocr.app.ocr
 
+import kotlin.math.min
+import kotlin.math.roundToInt
+
 internal fun sortTextBlocksForReading(
     blocks: List<TextBlock>,
     orientationHint: TextOrientation? = null
@@ -7,11 +10,73 @@ internal fun sortTextBlocksForReading(
     if (blocks.size <= 1) return blocks
     val orientation = resolveTextBlockReadingOrientation(blocks, orientationHint)
     return when (orientation) {
-        TextOrientation.VERTICAL_RTL -> sortVertical(blocks, leftToRight = false)
+        TextOrientation.VERTICAL_RTL -> if (blocks.hasMangaRegionSemantics()) {
+            sortMangaVerticalRtl(blocks)
+        } else {
+            sortVertical(blocks, leftToRight = false)
+        }
         TextOrientation.VERTICAL_LTR -> sortVertical(blocks, leftToRight = true)
         TextOrientation.HORIZONTAL_RTL -> sortHorizontal(blocks, leftToRight = false)
         else -> sortHorizontal(blocks, leftToRight = true)
     }
+}
+
+/**
+ * Manga pages commonly place right-to-left panels in horizontal tiers. A global X sort can
+ * therefore consume a lower-right panel before the upper-left panel. Infer only unambiguous
+ * horizontal whitespace tiers, then preserve the existing vertical RTL order inside each tier.
+ * If a tall region bridges the whitespace, the page remains one tier and keeps the legacy order.
+ */
+private fun sortMangaVerticalRtl(blocks: List<TextBlock>): List<TextBlock> =
+    splitMangaHorizontalBands(blocks).flatMap { band ->
+        sortVertical(band, leftToRight = false)
+    }
+
+internal fun splitMangaHorizontalBands(blocks: List<TextBlock>): List<List<TextBlock>> {
+    if (blocks.size <= 1) return listOf(blocks)
+    val gapThreshold = mangaHorizontalBandGapThresholdPx(blocks)
+    val sorted = blocks.sortedWith(
+        compareBy<TextBlock>({ it.boundingBox.top }, { it.boundingBox.left })
+    )
+    val bands = mutableListOf<MutableList<TextBlock>>()
+    var current = mutableListOf(sorted.first())
+    var currentBottom = sorted.first().boundingBox.bottom
+    sorted.drop(1).forEach { block ->
+        val gap = block.boundingBox.top - currentBottom
+        if (gap >= gapThreshold) {
+            bands += current
+            current = mutableListOf(block)
+            currentBottom = block.boundingBox.bottom
+        } else {
+            current += block
+            currentBottom = maxOf(currentBottom, block.boundingBox.bottom)
+        }
+    }
+    bands += current
+    return bands
+}
+
+internal fun mangaHorizontalBandGapThresholdPx(blocks: List<TextBlock>): Int {
+    val sourceThicknesses = blocks.flatMap { block ->
+        val sources = block.sourceBoxes.takeIf { it.isNotEmpty() }
+            ?: listOf(block.boundingBox)
+        sources.map { source ->
+            min(source.rectWidth(), source.rectHeight()).coerceAtLeast(1)
+        }
+    }.sorted()
+    if (sourceThicknesses.isEmpty()) return 1
+    val middle = sourceThicknesses.size / 2
+    val median = if (sourceThicknesses.size % 2 == 0) {
+        (sourceThicknesses[middle - 1] + sourceThicknesses[middle]) / 2f
+    } else {
+        sourceThicknesses[middle].toFloat()
+    }
+    return (median * 0.5f).roundToInt().coerceAtLeast(1)
+}
+
+private fun List<TextBlock>.hasMangaRegionSemantics(): Boolean = any { block ->
+    block.regionGranularity == TextRegionGranularity.BUBBLE ||
+        block.regionGranularity == TextRegionGranularity.FREE_TEXT
 }
 
 internal fun resolveTextBlockReadingOrientation(

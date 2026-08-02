@@ -3,12 +3,125 @@ package com.gameocr.app.translate
 import android.graphics.Rect
 import com.gameocr.app.data.Settings
 import com.gameocr.app.ocr.TextBlock
+import com.gameocr.app.ocr.TextRegionGranularity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CrossLineContextTranslationTest {
+    @Test
+    fun planner_regionBoundaryPolicy_isTableDriven() {
+        data class Case(
+            val name: String,
+            val firstGranularity: TextRegionGranularity,
+            val secondGranularity: TextRegionGranularity,
+            val firstParentId: Int?,
+            val secondParentId: Int?,
+            val expectedUnitCount: Int,
+        )
+
+        listOf(
+            Case(
+                name = "legacy unknown blocks keep geometry behavior",
+                firstGranularity = TextRegionGranularity.UNKNOWN,
+                secondGranularity = TextRegionGranularity.UNKNOWN,
+                firstParentId = null,
+                secondParentId = null,
+                expectedUnitCount = 1,
+            ),
+            Case(
+                name = "separate bubbles never merge",
+                firstGranularity = TextRegionGranularity.BUBBLE,
+                secondGranularity = TextRegionGranularity.BUBBLE,
+                firstParentId = 10,
+                secondParentId = 10,
+                expectedUnitCount = 2,
+            ),
+            Case(
+                name = "lines in the same explicit parent may merge",
+                firstGranularity = TextRegionGranularity.LINE,
+                secondGranularity = TextRegionGranularity.LINE,
+                firstParentId = 10,
+                secondParentId = 10,
+                expectedUnitCount = 1,
+            ),
+            Case(
+                name = "lines in different parents stay separate",
+                firstGranularity = TextRegionGranularity.LINE,
+                secondGranularity = TextRegionGranularity.LINE,
+                firstParentId = 10,
+                secondParentId = 11,
+                expectedUnitCount = 2,
+            ),
+            Case(
+                name = "lines without a known parent stay separate",
+                firstGranularity = TextRegionGranularity.LINE,
+                secondGranularity = TextRegionGranularity.LINE,
+                firstParentId = null,
+                secondParentId = null,
+                expectedUnitCount = 2,
+            ),
+            Case(
+                name = "known and unknown semantics do not cross",
+                firstGranularity = TextRegionGranularity.LINE,
+                secondGranularity = TextRegionGranularity.UNKNOWN,
+                firstParentId = 10,
+                secondParentId = null,
+                expectedUnitCount = 2,
+            ),
+        ).forEach { case ->
+            val units = planCrossLineSourceUnits(
+                blocks = listOf(
+                    sourceBlock(
+                        text = "first",
+                        left = 10,
+                        top = 10,
+                        right = 200,
+                        bottom = 30,
+                        regionGranularity = case.firstGranularity,
+                        parentRegionId = case.firstParentId,
+                    ),
+                    sourceBlock(
+                        text = "second",
+                        left = 10,
+                        top = 31,
+                        right = 200,
+                        bottom = 51,
+                        regionGranularity = case.secondGranularity,
+                        parentRegionId = case.secondParentId,
+                    ),
+                ),
+                sourceLanguageTag = "en",
+            )
+
+            assertEquals(case.name, case.expectedUnitCount, units.size)
+        }
+    }
+
+    @Test
+    fun planner_textBlockBoundaryMetadata_reachesSourcePlanner() {
+        val blocks = listOf(
+            TextBlock(
+                text = "first bubble",
+                boundingBox = Rect(10, 10, 200, 30),
+                regionId = 1,
+                regionGranularity = TextRegionGranularity.BUBBLE,
+            ),
+            TextBlock(
+                text = "second bubble",
+                boundingBox = Rect(10, 31, 200, 51),
+                regionId = 2,
+                regionGranularity = TextRegionGranularity.BUBBLE,
+            ),
+        )
+
+        val units = planCrossLineTranslationUnits(blocks, sourceLanguageTag = "en")
+
+        assertEquals(2, units.size)
+        assertEquals(listOf(listOf(0), listOf(1)), units.map { it.blockIndexes })
+    }
+
     @Test
     fun planner_joinsJapaneseHardWrapsButKeepsSentenceAndListBoundaries() {
         val blocks = listOf(
@@ -150,11 +263,15 @@ class CrossLineContextTranslationTest {
         top: Int,
         right: Int,
         bottom: Int,
+        regionGranularity: TextRegionGranularity = TextRegionGranularity.UNKNOWN,
+        parentRegionId: Int? = null,
     ) = CrossLineSourceBlock(
         text = text,
         left = left,
         top = top,
         right = right,
         bottom = bottom,
+        parentRegionId = parentRegionId,
+        regionGranularity = regionGranularity,
     )
 }

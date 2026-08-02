@@ -13,6 +13,25 @@ import kotlin.math.roundToInt
  * instance mask so dark backgrounds and unrelated detector boxes cannot become replacement shapes.
  */
 internal object DetectorGuidedBubbleMaskExtractor {
+    data class Timing(
+        val totalUs: Long = 0L,
+        val assignmentUs: Long = 0L,
+        val estimateTotalUs: Long = 0L,
+        val backgroundUs: Long = 0L,
+        val luminanceUs: Long = 0L,
+        val candidateBuildUs: Long = 0L,
+        val seedUs: Long = 0L,
+        val floodUs: Long = 0L,
+        val edgeUs: Long = 0L,
+        val fillUs: Long = 0L,
+        val coverageAndCopyUs: Long = 0L,
+        val ellipseFallbackUs: Long = 0L,
+        val maskIoUs: Long = 0L,
+        val otherUs: Long = 0L,
+        val estimateCalls: Int = 0,
+        val ellipseFallbackCalls: Int = 0,
+    )
+
     data class Decision(
         val detectionIndex: Int,
         val memberIndices: List<Int>,
@@ -29,6 +48,7 @@ internal object DetectorGuidedBubbleMaskExtractor {
         val unionMask: BooleanArray,
         val decisions: List<Decision>,
         val durationMs: Long,
+        val timing: Timing = Timing(),
     ) {
         val acceptedCount: Int
             get() = decisions.count(Decision::accepted)
@@ -54,12 +74,14 @@ internal object DetectorGuidedBubbleMaskExtractor {
                 maskCoefficients = FloatArray(0),
             )
         }
+        val assignmentStartedAtNs = System.nanoTime()
         val membersByDetection = assignMembers(
             width = width,
             height = height,
             polygons = polygons,
             detections = boxDetections,
         )
+        val assignmentNs = System.nanoTime() - assignmentStartedAtNs
         val memberDetectionIndices = MutableList<Int?>(polygons.size) { null }
         membersByDetection.forEach { (detectionIndex, memberIndices) ->
             memberIndices.forEach { memberIndex ->
@@ -69,6 +91,12 @@ internal object DetectorGuidedBubbleMaskExtractor {
         val scratch = BooleanArray(width * height)
         val unionMask = BooleanArray(width * height)
         val decisions = ArrayList<Decision>(boxDetections.size)
+        val bubbleTiming = MangaMaskDebugAnalyzer.BubbleTiming()
+        var estimateNs = 0L
+        var ellipseFallbackNs = 0L
+        var maskIoNs = 0L
+        var estimateCalls = 0
+        var ellipseFallbackCalls = 0
         val instanceMasks = boxDetections.mapIndexed { detectionIndex, detection ->
             val members = membersByDetection[detectionIndex].orEmpty()
             val detectorBounds = detection.toIntRect(width, height)
@@ -85,6 +113,8 @@ internal object DetectorGuidedBubbleMaskExtractor {
             }
             val memberBounds = members.map { polygons[it].bounds }
             val contentBounds = union(memberBounds)
+            val estimateStartedAtNs = System.nanoTime()
+            estimateCalls++
             val diagnostic = MangaMaskDebugAnalyzer.estimateBubbleInterior(
                 width = width,
                 height = height,
@@ -107,20 +137,29 @@ internal object DetectorGuidedBubbleMaskExtractor {
                     useExactSearchBounds = true,
                 ),
                 output = scratch,
+                timing = bubbleTiming,
             )
+            estimateNs += System.nanoTime() - estimateStartedAtNs
             if (!diagnostic.accepted) {
+                val clearStartedAtNs = System.nanoTime()
                 clear(scratch, width, diagnostic.roi)
+                maskIoNs += System.nanoTime() - clearStartedAtNs
+                val ellipseStartedAtNs = System.nanoTime()
+                ellipseFallbackCalls++
                 val ellipseFallback = buildEllipseFallback(
                     detectorBounds = detectorBounds,
                     polygons = members.map(polygons::get),
                     failedDiagnostic = diagnostic,
                 )
+                ellipseFallbackNs += System.nanoTime() - ellipseStartedAtNs
                 if (ellipseFallback != null) {
+                    val mergeStartedAtNs = System.nanoTime()
                     mergeIntoUnion(
                         instanceMask = ellipseFallback.instanceMask,
                         unionMask = unionMask,
                         unionWidth = width,
                     )
+                    maskIoNs += System.nanoTime() - mergeStartedAtNs
                     decisions += Decision(
                         detectionIndex = detectionIndex,
                         memberIndices = members,
@@ -129,7 +168,7 @@ internal object DetectorGuidedBubbleMaskExtractor {
                             accepted = true,
                             confidence = detection.confidence * ellipseFallback.memberCoverage,
                             reason = "accepted_ellipse_fallback",
-                            regionPixels = ellipseFallback.instanceMask.pixels.count { it },
+                            regionPixels = ellipseFallback.pixelCount,
                             memberCoverage = ellipseFallback.memberCoverage,
                         ),
                     )
@@ -139,6 +178,7 @@ internal object DetectorGuidedBubbleMaskExtractor {
                 return@mapIndexed emptyInstanceMask(detectorBounds)
             }
             decisions += Decision(detectionIndex, members, diagnostic)
+            val materializeStartedAtNs = System.nanoTime()
             val crop = cropMask(
                 source = scratch,
                 sourceWidth = width,
@@ -147,15 +187,38 @@ internal object DetectorGuidedBubbleMaskExtractor {
             )
             mergeIntoUnion(crop, unionMask, width)
             clear(scratch, width, diagnostic.roi)
+            maskIoNs += System.nanoTime() - materializeStartedAtNs
             crop
         }
+        val totalNs = System.nanoTime() - startedAtNs
+        val otherNs = (
+            totalNs - assignmentNs - estimateNs - ellipseFallbackNs - maskIoNs
+            ).coerceAtLeast(0L)
         return Result(
             detections = modelDetections,
             instanceMasks = instanceMasks,
             memberDetectionIndices = memberDetectionIndices,
             unionMask = unionMask,
             decisions = decisions,
-            durationMs = (System.nanoTime() - startedAtNs) / 1_000_000L,
+            durationMs = totalNs / 1_000_000L,
+            timing = Timing(
+                totalUs = totalNs / 1_000L,
+                assignmentUs = assignmentNs / 1_000L,
+                estimateTotalUs = estimateNs / 1_000L,
+                backgroundUs = bubbleTiming.backgroundNs / 1_000L,
+                luminanceUs = bubbleTiming.luminanceNs / 1_000L,
+                candidateBuildUs = bubbleTiming.candidateBuildNs / 1_000L,
+                seedUs = bubbleTiming.seedNs / 1_000L,
+                floodUs = bubbleTiming.floodNs / 1_000L,
+                edgeUs = bubbleTiming.edgeNs / 1_000L,
+                fillUs = bubbleTiming.fillNs / 1_000L,
+                coverageAndCopyUs = bubbleTiming.coverageAndCopyNs / 1_000L,
+                ellipseFallbackUs = ellipseFallbackNs / 1_000L,
+                maskIoUs = maskIoNs / 1_000L,
+                otherUs = otherNs / 1_000L,
+                estimateCalls = estimateCalls,
+                ellipseFallbackCalls = ellipseFallbackCalls,
+            ),
         )
     }
 
@@ -214,14 +277,16 @@ internal object DetectorGuidedBubbleMaskExtractor {
         val radiusX = ((detectorBounds.width - inset * 2) / 2f).coerceAtLeast(1f)
         val radiusY = ((detectorBounds.height - inset * 2) / 2f).coerceAtLeast(1f)
         val pixels = BooleanArray(detectorBounds.width * detectorBounds.height)
+        var pixelCount = 0
         for (localY in 0 until detectorBounds.height) {
             val normalizedY =
                 (detectorBounds.top + localY + PIXEL_CENTER_OFFSET - centerY) / radiusY
             for (localX in 0 until detectorBounds.width) {
                 val normalizedX =
                     (detectorBounds.left + localX + PIXEL_CENTER_OFFSET - centerX) / radiusX
-                pixels[localY * detectorBounds.width + localX] =
-                    normalizedX * normalizedX + normalizedY * normalizedY <= 1f
+                val inside = normalizedX * normalizedX + normalizedY * normalizedY <= 1f
+                pixels[localY * detectorBounds.width + localX] = inside
+                if (inside) pixelCount++
             }
         }
         val instanceMask = BubbleSegmentationPostprocessor.InstanceMask(
@@ -233,7 +298,7 @@ internal object DetectorGuidedBubbleMaskExtractor {
         )
         val memberCoverage = memberMaskCoverage(instanceMask, polygons)
         if (memberCoverage < MIN_ELLIPSE_MEMBER_COVERAGE) return null
-        return EllipseFallback(instanceMask, memberCoverage)
+        return EllipseFallback(instanceMask, memberCoverage, pixelCount)
     }
 
     private fun memberMaskCoverage(
@@ -419,6 +484,7 @@ internal object DetectorGuidedBubbleMaskExtractor {
     private data class EllipseFallback(
         val instanceMask: BubbleSegmentationPostprocessor.InstanceMask,
         val memberCoverage: Float,
+        val pixelCount: Int,
     )
 
     private val ELLIPSE_FALLBACK_REASONS = setOf(

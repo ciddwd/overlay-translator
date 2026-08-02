@@ -8,6 +8,32 @@ import org.junit.Test
 class ShapeAwareBubblePatchTest {
 
     @Test
+    fun `patch role table controls whether existing block views are replaced`() {
+        data class Case(
+            val name: String,
+            val modelIndex: Int?,
+            val role: ShapeAwareBubblePatch.Role,
+            val expectedReplacement: Boolean,
+        )
+        val cases = listOf(
+            Case("shape translation", 2, ShapeAwareBubblePatch.Role.SHAPE_TRANSLATION, true),
+            Case("glyph background repair", null, ShapeAwareBubblePatch.Role.TEXT_BACKGROUND, false),
+        )
+
+        cases.forEach { case ->
+            val patch = ShapeAwareBubblePatch(
+                modelBubbleIndex = case.modelIndex,
+                bounds = IntRect(0, 0, 2, 2),
+                pixels = IntArray(4),
+                coordinateScale = 1f,
+                blockIndices = listOf(0),
+                role = case.role,
+            )
+            assertEquals(case.name, case.expectedReplacement, patch.replacesBlockViews)
+        }
+    }
+
+    @Test
     fun `display bounds use floor for origin and ceil for far edge`() {
         data class Case(
             val name: String,

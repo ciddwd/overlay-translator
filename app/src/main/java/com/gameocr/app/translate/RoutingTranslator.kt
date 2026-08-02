@@ -115,6 +115,9 @@ class RoutingTranslator @Inject constructor(
         onUpdate: (BatchTranslationUpdate) -> Unit,
     ): List<String?> {
         if (sources.isEmpty()) return emptyList()
+        if (engineFor(settings).requiresFullBatchContext) {
+            return translateFullContextBatch(sources, settings, onUpdate)
+        }
         val memoryMatches = translationMemory.recallBatch(sources, settings)
         val mergedResults = MutableList<String?>(sources.size) { null }
         val pendingIndexes = mutableListOf<Int>()
@@ -179,6 +182,70 @@ class RoutingTranslator @Inject constructor(
             }
         }
         return mergedResults
+    }
+
+    private suspend fun translateFullContextBatch(
+        sources: List<String>,
+        settings: Settings,
+        onUpdate: (BatchTranslationUpdate) -> Unit,
+    ): List<String?> {
+        val memoryMatches = translationMemory.recallBatch(sources, settings)
+        val overrides = MutableList<String?>(sources.size) { null }
+        memoryMatches.forEachIndexed { index, memory ->
+            if (memory != null) {
+                overrides[index] = normalizePlain(memory.correctedTranslation, settings)
+            }
+        }
+
+        var passthroughCount = 0
+        sources.forEachIndexed { index, source ->
+            if (overrides[index] == null && shouldPassthroughNumericTranslation(source)) {
+                overrides[index] = source
+                passthroughCount += 1
+            }
+        }
+        if (passthroughCount > 0) {
+            logNumericPassthrough(
+                stage = "full-context-batch",
+                count = passthroughCount,
+                total = sources.size,
+            )
+        }
+
+        val results = MutableList<String?>(sources.size) { null }
+        val progress = BatchTranslationProgressState(sources.size)
+        overrides.forEachIndexed { index, text ->
+            if (text != null && progress.accept(index)) {
+                results[index] = text
+                onUpdate(BatchTranslationUpdate(index = index, text = text, elapsedMs = 0L))
+            }
+        }
+        if (overrides.all { it != null }) return results
+
+        val enriched = translationContextResolver.enrich(sources.joinToString("\n"), settings)
+        val rawResults = engineFor(enriched).translateBatchIncremental(
+            sources = sources,
+            settings = enriched,
+        ) { update ->
+            val index = update.index
+            if (index !in sources.indices || !progress.accept(index)) return@translateBatchIncremental
+            val text = overrides[index] ?: update.text?.let { normalizePlain(it, enriched) }
+            results[index] = text
+            onUpdate(update.copy(text = text))
+        }
+        val normalizedResults = normalizeBatch(
+            texts = rawResults,
+            settings = enriched,
+            stage = "full-context-batch",
+        )
+        sources.indices.forEach { index ->
+            val text = overrides[index] ?: normalizedResults.getOrNull(index)
+            results[index] = text
+            if (progress.accept(index)) {
+                onUpdate(BatchTranslationUpdate(index = index, text = text))
+            }
+        }
+        return results
     }
 
     override suspend fun testConnection(settings: Settings): TestResult =

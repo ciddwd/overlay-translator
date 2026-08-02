@@ -7,7 +7,7 @@ import org.junit.Test
 class MangaOcrNoiseFilterTest {
 
     @Test
-    fun edge_noise_filter_is_conservative_for_table_driven_cases() {
+    fun noise_filter_is_conservative_for_table_driven_cases() {
         data class Case(
             val name: String,
             val text: String,
@@ -51,6 +51,24 @@ class MangaOcrNoiseFilterTest {
                 text = "\u304F",
                 rect = IntRect(31, 2488, 122, 2546),
                 expected = false
+            ),
+            Case(
+                name = "drops tiny punctuation-only interior artifact",
+                text = "...",
+                rect = IntRect(347, 229, 368, 250),
+                expected = true
+            ),
+            Case(
+                name = "keeps larger intentional ellipsis region",
+                text = "...",
+                rect = IntRect(300, 1000, 390, 1080),
+                expected = false
+            ),
+            Case(
+                name = "keeps punctuation attached to real text",
+                text = "\u306F\u3041...",
+                rect = IntRect(347, 229, 390, 280),
+                expected = false
             )
         )
 
@@ -58,7 +76,7 @@ class MangaOcrNoiseFilterTest {
             assertEquals(
                 case.name,
                 case.expected,
-                shouldDropMangaOcrEdgeNoise(case.text, case.rect, imgW = 1440, imgH = 2546)
+                shouldDropMangaOcrNoise(case.text, case.rect, imgW = 1440, imgH = 2546)
             )
         }
     }

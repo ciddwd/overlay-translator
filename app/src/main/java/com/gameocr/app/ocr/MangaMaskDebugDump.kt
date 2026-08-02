@@ -144,6 +144,7 @@ internal data class MangaMaskDebugReport(
     val detectorGuidedMemberAssociations: List<BubbleMaskAssociator.Association> =
         emptyList(),
     val detectorGuidedExcludedMemberIndices: Set<Int> = emptySet(),
+    val detectorGuidedFreeTextMemberIndices: Set<Int> = emptySet(),
     val detectorGuidedRegroupedGroups: List<BubbleModelRegrouper.Group> = emptyList(),
     val modelSegmentation: MangaBubbleSegmentationDebugEngine.Output? = null,
     val modelAssociations: List<BubbleMaskAssociator.Association> = emptyList(),
@@ -267,6 +268,27 @@ internal suspend fun dumpMangaMaskDebugSet(
             result.decisions.size,
             result.durationMs,
         )
+        result.timing.let { timing ->
+            timber.log.Timber.i(
+                "Manga detector-guided timingUs total=%d assign=%d estimate(calls=%d,total=%d,background=%d,luminance=%d,candidate=%d,seed=%d,flood=%d,edge=%d,fill=%d,coverageCopy=%d) ellipse(calls=%d,total=%d) maskIo=%d other=%d",
+                timing.totalUs,
+                timing.assignmentUs,
+                timing.estimateCalls,
+                timing.estimateTotalUs,
+                timing.backgroundUs,
+                timing.luminanceUs,
+                timing.candidateBuildUs,
+                timing.seedUs,
+                timing.floodUs,
+                timing.edgeUs,
+                timing.fillUs,
+                timing.coverageAndCopyUs,
+                timing.ellipseFallbackCalls,
+                timing.ellipseFallbackUs,
+                timing.maskIoUs,
+                timing.otherUs,
+            )
+        }
         result.decisions.forEach { decision ->
             timber.log.Timber.i(
                 "Manga detector-guided mask[%d] accepted=%s reason=%s confidence=%.3f members=%s roi=%s pixels=%d",
@@ -308,8 +330,8 @@ internal suspend fun dumpMangaMaskDebugSet(
         refinedGuidedMemberAssignmentResult?.excludedMemberIndices.orEmpty()
     refinedGuidedMemberAssignmentResult?.let { result ->
         timber.log.Timber.i(
-            "Manga text guard freeExcluded=%s freeAmbiguous=%s kindConflicts=%s",
-            result.freeTextExcludedMemberIndices,
+            "Manga text guard freeStandalone=%s freeAmbiguous=%s kindConflicts=%s",
+            result.freeTextMemberIndices,
             result.ambiguousFreeTextMemberIndices,
             result.conflictingTextKindMemberIndices,
         )
@@ -331,6 +353,8 @@ internal suspend fun dumpMangaMaskDebugSet(
             fallbackPadding = cropPaddingPx,
             fallbackGap = bubbleClusterGap,
             excludedMemberIndices = excludedGuidedMemberIndices,
+            standaloneMemberIndices =
+                refinedGuidedMemberAssignmentResult?.freeTextMemberIndices.orEmpty(),
         )
     }.orEmpty()
     detectorGuidedMasks?.let { guided ->
@@ -535,6 +559,8 @@ internal suspend fun dumpMangaMaskDebugSet(
         detectorGuidedMasks = detectorGuidedMasks,
         detectorGuidedMemberAssociations = guidedMemberAssociations,
         detectorGuidedExcludedMemberIndices = excludedGuidedMemberIndices,
+        detectorGuidedFreeTextMemberIndices =
+            refinedGuidedMemberAssignmentResult?.freeTextMemberIndices.orEmpty(),
         detectorGuidedRegroupedGroups = guidedRegroupedGroups,
         modelSegmentation = modelSegmentation,
         modelAssociations = modelAssociations,
