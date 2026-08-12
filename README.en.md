@@ -492,6 +492,8 @@ These are user-facing improvements we want to continue working on, not a fixed r
 |---|---|
 | **Floating translation history** | Revisit screens and dialogue translated with the floating ball instead of losing the last line after switching scenes |
 | **Offline dictionary** | Show basic definitions and examples without a network connection or an LLM translator |
+| **Character and speaker recognition** | Better identify who is speaking, reduce mistakes in names, relationships, and pronouns, and make ongoing dialogue sound more natural |
+| **Broader Shizuku compatibility** | Support authorization and screen capture with more Shizuku versions, while keeping standard screen capture available when Shizuku cannot be used |
 | **Long-term on-device model improvements** | Keep improving downloads, startup time, memory use, heat, battery life, and device compatibility across all on-device models, while exploring speech and more features that can run locally on phones |
 | **System assistant and agent integration** | Track [Android AppFunctions](https://developer.android.com/ai/appfunctions) and [A2A](https://a2a-protocol.org/latest/), then explore starting translation, speech, and common actions through system assistants or other agents as platform support matures |
 | **Deeper accessibility** | Make full-screen OCR text and dynamic translations individually navigable with a screen reader |

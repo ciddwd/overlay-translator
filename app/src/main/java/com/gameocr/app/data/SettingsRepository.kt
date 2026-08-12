@@ -43,6 +43,7 @@ class SettingsRepository @Inject constructor(
         val SourceLang = stringPreferencesKey("source_lang")
         val TargetLang = stringPreferencesKey("target_lang")
         val Prompt = stringPreferencesKey("prompt")
+        val OpenAiRequestOptions = stringPreferencesKey("openai_request_options_json")
         val OcrEngine = stringPreferencesKey("ocr_engine")
         val LoopInterval = longPreferencesKey("loop_interval_ms")
         val LoopTriggerMode = stringPreferencesKey("loop_trigger_mode")
@@ -56,8 +57,7 @@ class SettingsRepository @Inject constructor(
         val DisableTranslationCache = booleanPreferencesKey("disable_translation_cache")
         val BatchCumulativeCompletionTimeEnabled =
             booleanPreferencesKey("batch_cumulative_completion_time_enabled")
-        val DisableCrossLineContextTranslation =
-            booleanPreferencesKey("disable_cross_line_context_translation")
+        val TranslationContextMode = stringPreferencesKey("translation_context_mode")
         val OcrRedBoxModeEnabled = booleanPreferencesKey("ocr_red_box_mode_enabled")
         val OcrRedBoxShowSourceText = booleanPreferencesKey("ocr_red_box_show_source_text")
         val OcrRedBoxShowTranslation = booleanPreferencesKey("ocr_red_box_show_translation")
@@ -72,7 +72,8 @@ class SettingsRepository @Inject constructor(
         val RegionSavedW = intPreferencesKey("capture_region_saved_screen_w")
         val RegionSavedH = intPreferencesKey("capture_region_saved_screen_h")
         val Streaming = booleanPreferencesKey("streaming_translate")
-        val RetryEmptyTranslation = booleanPreferencesKey("retry_empty_translation")
+        val RetryFailedTranslation = booleanPreferencesKey("retry_failed_translation")
+        val LegacyRetryEmptyTranslation = booleanPreferencesKey("retry_empty_translation")
         val TtsEnabled = booleanPreferencesKey("tts_enabled")
         val TtsProvider = stringPreferencesKey("tts_provider")
         val TtsVoice = stringPreferencesKey("tts_voice")
@@ -152,6 +153,8 @@ class SettingsRepository @Inject constructor(
         val FloatingWindowH = intPreferencesKey("floating_window_height_dp")
         val FloatingWindowContentMode = stringPreferencesKey("floating_window_content_mode")
         val FloatingWindowLocked = booleanPreferencesKey("floating_window_locked")
+        val FloatingWindowAutoHideWhenObstructing =
+            booleanPreferencesKey("floating_window_auto_hide_when_obstructing")
         val CustomBorderStyle = stringPreferencesKey("custom_border_style")
         /** 0.3.x 旧 key，silent migrate 到 CustomBorderStyle。 */
         val LegacyFloatingWindowBorderStyle = stringPreferencesKey("floating_window_border_style")
@@ -178,6 +181,7 @@ class SettingsRepository @Inject constructor(
         val TranslationOutputLayout = stringPreferencesKey("translation_output_layout")
         val TranslationOutputDirection = stringPreferencesKey("translation_output_direction")
         val TranslationGlossaryEnabled = booleanPreferencesKey("translation_glossary_enabled")
+        val SourcePreservationEnabled = booleanPreferencesKey("source_preservation_enabled")
         val ForegroundAppDetectionMode = stringPreferencesKey("foreground_app_detection_mode")
         val SendAppNameToTranslator = booleanPreferencesKey("send_app_name_to_translator")
         val YoudaoAppKey = stringPreferencesKey("youdao_app_key")
@@ -220,6 +224,8 @@ class SettingsRepository @Inject constructor(
         val SharePromptMainEntryCount = intPreferencesKey("share_prompt_main_entry_count")
         val SharePromptShown = booleanPreferencesKey("share_prompt_shown")
         val MainStatusPresetSeen = booleanPreferencesKey("main_status_preset_seen")
+        val MainPresetCarouselSeen = booleanPreferencesKey("main_preset_carousel_seen")
+        val MainCaptureGallerySeen = booleanPreferencesKey("main_capture_gallery_seen")
     }
 
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
@@ -232,6 +238,7 @@ class SettingsRepository @Inject constructor(
         Keys.BaseUrl,
         Keys.ApiKey,
         Keys.Prompt,
+        Keys.OpenAiRequestOptions,
         Keys.BaiduKey,
         Keys.BaiduSecret,
         Keys.TencentId,
@@ -297,6 +304,24 @@ class SettingsRepository @Inject constructor(
         }
     }
 
+    suspend fun hasSeenMainPresetCarousel(): Boolean =
+        context.dataStore.data.first()[Keys.MainPresetCarouselSeen] ?: false
+
+    suspend fun markMainPresetCarouselSeen() {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.MainPresetCarouselSeen] = true
+        }
+    }
+
+    suspend fun hasSeenMainCaptureGallery(): Boolean =
+        context.dataStore.data.first()[Keys.MainCaptureGallerySeen] ?: false
+
+    suspend fun markMainCaptureGallerySeen() {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.MainCaptureGallerySeen] = true
+        }
+    }
+
     internal fun setDefaultPromptProvidersForTest(
         prompt: () -> String,
         dictionaryPrompt: () -> String,
@@ -358,6 +383,40 @@ class SettingsRepository @Inject constructor(
                         .getOrNull()
                 }
             val normalizedPresets = storedPresets?.map(MangaOcrAdvancedSettingsPolicy::normalize)
+            if (storedPresets != null && normalizedPresets != storedPresets) {
+                prefs.putSecure(Keys.TranslationPresets, json.encodeToString(normalizedPresets))
+                changed = true
+            }
+        }
+        return changed
+    }
+
+    suspend fun migrateMangaOcrDetectorToV6SmallIfNeeded(): Boolean {
+        var changed = false
+        context.dataStore.edit { prefs ->
+            val engine = runCatching {
+                OcrEngineKind.valueOf(prefs[Keys.OcrEngine].orEmpty())
+            }.getOrDefault(Settings().ocrEngine)
+            val storedVersion = runCatching {
+                PaddleModelVersion.valueOf(prefs[Keys.PaddleVersion].orEmpty())
+            }.getOrDefault(Settings().paddleModelVersion)
+            val migratedVersion = MangaOcrModelPolicy.effectiveDetectorVersion(
+                ocrEngine = engine,
+                requestedVersion = storedVersion,
+            )
+            if (migratedVersion != storedVersion) {
+                prefs[Keys.PaddleVersion] = migratedVersion.name
+                changed = true
+            }
+
+            val storedPresets = prefs[Keys.TranslationPresets]
+                ?.let(secretCodec::decodeStored)
+                ?.takeIf(String::isNotBlank)
+                ?.let { raw ->
+                    runCatching { json.decodeFromString<List<TranslationPreset>>(raw) }
+                        .getOrNull()
+                }
+            val normalizedPresets = storedPresets?.map(MangaOcrSettingsPolicy::normalize)
             if (storedPresets != null && normalizedPresets != storedPresets) {
                 prefs.putSecure(Keys.TranslationPresets, json.encodeToString(normalizedPresets))
                 changed = true
@@ -455,7 +514,7 @@ class SettingsRepository @Inject constructor(
             } else {
                 requested
             }
-            val next = MangaOcrAdvancedSettingsPolicy.normalize(languageSafe)
+            val next = MangaOcrSettingsPolicy.normalize(languageSafe)
             prefs.putSecure(Keys.BaseUrl, next.baseUrl)
             prefs.putSecure(Keys.ApiKey, next.apiKey)
             prefs[Keys.Model] = next.model
@@ -465,6 +524,10 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.SourceLang] = next.sourceLang
             prefs[Keys.TargetLang] = next.targetLang
             prefs.putSecure(Keys.Prompt, next.promptTemplate)
+            prefs.putSecure(
+                Keys.OpenAiRequestOptions,
+                json.encodeToString(next.openAiRequestOptions.normalized()),
+            )
             prefs[Keys.OcrEngine] = next.ocrEngine.name
             prefs[Keys.LoopInterval] = next.captureLoopIntervalMs
             prefs[Keys.LoopTriggerMode] = next.loopTriggerMode.name
@@ -480,7 +543,7 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.DisableTranslationCache] = next.disableTranslationCache
             prefs[Keys.BatchCumulativeCompletionTimeEnabled] =
                 next.batchCumulativeCompletionTimeEnabled
-            prefs[Keys.DisableCrossLineContextTranslation] = next.disableCrossLineContextTranslation
+            prefs[Keys.TranslationContextMode] = next.translationContextMode.name
             prefs[Keys.OcrRedBoxModeEnabled] = next.ocrRedBoxModeEnabled
             prefs[Keys.OcrRedBoxShowSourceText] = next.ocrRedBoxShowSourceText
             prefs[Keys.OcrRedBoxShowTranslation] = next.ocrRedBoxShowTranslation
@@ -497,7 +560,8 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.RegionSavedW] = next.captureRegionSavedScreenW
             prefs[Keys.RegionSavedH] = next.captureRegionSavedScreenH
             prefs[Keys.Streaming] = next.streamingTranslate
-            prefs[Keys.RetryEmptyTranslation] = next.retryEmptyTranslation
+            prefs[Keys.RetryFailedTranslation] = next.retryFailedTranslation
+            prefs.remove(Keys.LegacyRetryEmptyTranslation)
             prefs[Keys.TtsEnabled] = next.ttsEnabled
             prefs[Keys.TtsProvider] = next.ttsProvider.name
             prefs[Keys.TtsVoice] = next.ttsVoice
@@ -562,6 +626,7 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.CustomBorderW] = next.customBorderWidth
             prefs[Keys.TranslatorEng] = next.translatorEngine.name
             prefs[Keys.TranslationGlossaryEnabled] = next.translationGlossaryEnabled
+            prefs[Keys.SourcePreservationEnabled] = next.sourcePreservationEnabled
             prefs[Keys.ForegroundAppDetectionMode] = next.foregroundAppDetectionMode.name
             prefs[Keys.SendAppNameToTranslator] = next.sendAppNameToTranslator
             prefs.putSecure(Keys.DeeplKey, next.deeplApiKey)
@@ -582,6 +647,8 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.FloatingWindowH] = next.floatingWindowHeightDp
             prefs[Keys.FloatingWindowContentMode] = next.floatingWindowContentMode.name
             prefs[Keys.FloatingWindowLocked] = next.floatingWindowLocked
+            prefs[Keys.FloatingWindowAutoHideWhenObstructing] =
+                next.floatingWindowAutoHideWhenObstructing
             prefs[Keys.CustomBorderStyle] = next.customBorderStyle.name
             prefs[Keys.PinnedLangs] = next.pinnedLanguages.joinToString(",")
             prefs[Keys.MlKitRecentSourceLanguages] = next.mlKitRecentSourceLanguages.joinToString(",")
@@ -673,7 +740,7 @@ class SettingsRepository @Inject constructor(
             voiceDesign = this[Keys.TtsMimoVoiceDesignPrompt],
             voiceClone = this[Keys.TtsMimoVoiceCloneInstruction],
         )
-        return MangaOcrAdvancedSettingsPolicy.normalize(Settings(
+        return MangaOcrSettingsPolicy.normalize(Settings(
             baseUrl = secureString(Keys.BaseUrl, default.baseUrl),
             apiKey = secureString(Keys.ApiKey, default.apiKey),
             model = this[Keys.Model] ?: default.model,
@@ -693,6 +760,13 @@ class SettingsRepository @Inject constructor(
             // 首次启动（Keys.Prompt 不存在）使用资源里的本地化默认 prompt（中文系统给中文，英文给英文）。
             // 用户保存过自己的 prompt 后这里读到自己的，不会被覆盖。
             promptTemplate = secureString(Keys.Prompt, defaultPromptProvider()),
+            openAiRequestOptions = secureString(Keys.OpenAiRequestOptions, "")
+                .takeIf(String::isNotBlank)
+                ?.let { raw ->
+                    runCatching { json.decodeFromString<OpenAiRequestOptions>(raw).normalized() }
+                        .getOrNull()
+                }
+                ?: default.openAiRequestOptions,
             ocrEngine = runCatching { OcrEngineKind.valueOf(this[Keys.OcrEngine] ?: "") }
                 .getOrDefault(default.ocrEngine),
             captureLoopIntervalMs = this[Keys.LoopInterval] ?: default.captureLoopIntervalMs,
@@ -720,8 +794,9 @@ class SettingsRepository @Inject constructor(
             batchCumulativeCompletionTimeEnabled =
                 this[Keys.BatchCumulativeCompletionTimeEnabled]
                     ?: default.batchCumulativeCompletionTimeEnabled,
-            disableCrossLineContextTranslation = this[Keys.DisableCrossLineContextTranslation]
-                ?: default.disableCrossLineContextTranslation,
+            translationContextMode = runCatching {
+                TranslationContextMode.valueOf(this[Keys.TranslationContextMode].orEmpty())
+            }.getOrDefault(default.translationContextMode),
             ocrRedBoxModeEnabled = this[Keys.OcrRedBoxModeEnabled]
                 ?: default.ocrRedBoxModeEnabled,
             ocrRedBoxShowSourceText = this[Keys.OcrRedBoxShowSourceText]
@@ -757,7 +832,9 @@ class SettingsRepository @Inject constructor(
             captureRegionSavedScreenW = this[Keys.RegionSavedW] ?: default.captureRegionSavedScreenW,
             captureRegionSavedScreenH = this[Keys.RegionSavedH] ?: default.captureRegionSavedScreenH,
             streamingTranslate = this[Keys.Streaming] ?: default.streamingTranslate,
-            retryEmptyTranslation = this[Keys.RetryEmptyTranslation] ?: default.retryEmptyTranslation,
+            retryFailedTranslation = this[Keys.RetryFailedTranslation]
+                ?: this[Keys.LegacyRetryEmptyTranslation]
+                ?: default.retryFailedTranslation,
             ttsEnabled = this[Keys.TtsEnabled] ?: default.ttsEnabled,
             ttsProvider = parseTtsProvider(this[Keys.TtsProvider].orEmpty(), default.ttsProvider),
             ttsVoice = this[Keys.TtsVoice] ?: default.ttsVoice,
@@ -862,6 +939,8 @@ class SettingsRepository @Inject constructor(
                 .getOrDefault(default.translatorEngine),
             translationGlossaryEnabled = this[Keys.TranslationGlossaryEnabled]
                 ?: default.translationGlossaryEnabled,
+            sourcePreservationEnabled = this[Keys.SourcePreservationEnabled]
+                ?: default.sourcePreservationEnabled,
             foregroundAppDetectionMode = runCatching {
                 ForegroundAppDetectionMode.valueOf(this[Keys.ForegroundAppDetectionMode] ?: "")
             }.getOrDefault(default.foregroundAppDetectionMode),
@@ -888,6 +967,9 @@ class SettingsRepository @Inject constructor(
                 FloatingWindowContentMode.valueOf(this[Keys.FloatingWindowContentMode] ?: "")
             }.getOrDefault(default.floatingWindowContentMode),
             floatingWindowLocked = this[Keys.FloatingWindowLocked] ?: default.floatingWindowLocked,
+            floatingWindowAutoHideWhenObstructing =
+                this[Keys.FloatingWindowAutoHideWhenObstructing]
+                    ?: default.floatingWindowAutoHideWhenObstructing,
             customBorderStyle = runCatching {
                 BorderStyle.valueOf(this[Keys.CustomBorderStyle] ?: this[Keys.LegacyFloatingWindowBorderStyle] ?: "")
             }.getOrDefault(default.customBorderStyle),
@@ -1003,8 +1085,9 @@ class SettingsRepository @Inject constructor(
                 ?: default.mangaOcrDbnetUnclipRatio,
             bubbleClusterGap = MangaOcrAdvancedSettingsPolicy.BUBBLE_CLUSTER_GAP,
             mangaOcrCropPaddingPx = MangaOcrAdvancedSettingsPolicy.CROP_PADDING_PX
-            // runtimeTranslationContext, runtimeTranslationScopePackage, and
-            // runtimeTranslationScopeLabel are request-scoped and deliberately never persisted.
+            // runtimeTranslationContext, runtimeTranslationPromptContext,
+            // runtimeTranslationScopePackage, and runtimeTranslationScopeLabel are request-scoped
+            // and deliberately never persisted.
         ))
     }
 }

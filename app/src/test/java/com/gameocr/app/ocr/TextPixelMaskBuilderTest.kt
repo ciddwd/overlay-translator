@@ -114,6 +114,16 @@ class TextPixelMaskBuilderTest {
             assertFalse("${case.name}: local mask is not a filled rectangle", mask.pixels.all { it })
             assertTrue("${case.name}: crop contains source left", mask.bounds.left <= source.left)
             assertTrue("${case.name}: crop contains source right", mask.bounds.right >= source.right)
+            val sourceCenterX = (source.left + source.right) / 2 - mask.bounds.left
+            val sourceCenterY = (source.top + source.bottom) / 2 - mask.bounds.top
+            assertTrue(
+                "${case.name}: OCR geometry is retained for residual checks",
+                mask.supportPixels[sourceCenterY * mask.bounds.width + sourceCenterX],
+            )
+            assertFalse(
+                "${case.name}: crop sampling margin is not text support",
+                mask.supportPixels.first(),
+            )
         }
     }
 

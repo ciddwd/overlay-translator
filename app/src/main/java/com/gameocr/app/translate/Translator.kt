@@ -14,6 +14,15 @@ data class BatchTranslationUpdate(
     val elapsedMs: Long? = null,
 )
 
+/** Whether items submitted through a batch call can observe one another's source text. */
+enum class BatchPromptScope {
+    /** Items may share transport or a native decode loop, but each item owns an isolated prompt. */
+    ISOLATED_ITEMS,
+
+    /** Every source must remain available because the engine translates them through a shared page prompt. */
+    SHARED_PAGE,
+}
+
 internal class BatchTranslationProgressState(size: Int) {
     private val emitted = BooleanArray(size.coerceAtLeast(0))
 
@@ -48,10 +57,23 @@ interface Translator {
     val prefersBatch: Boolean get() = false
 
     /**
-     * true 表示批译必须看到完整输入列表，即使命中翻译记忆或数字直通也不能先从上下文移除。
-     * 输出仍严格按原始索引一一对应；命中项只覆盖最终结果。
+     * 描述批量项目之间的 Prompt 可见性，而不是传输或执行形态。即使多个独立序列共用一次
+     * decode loop，只要彼此不可见，仍属于 [BatchPromptScope.ISOLATED_ITEMS]。
      */
-    val requiresFullBatchContext: Boolean get() = false
+    fun batchPromptScope(settings: Settings): BatchPromptScope = BatchPromptScope.ISOLATED_ITEMS
+
+    /**
+     * true means the engine can translate a whole contextual page in one structured request while
+     * preserving a stable source-to-result mapping. CaptureService only enables this capability for
+     * PAGE_CONTEXT / CONTINUOUS_CONTEXT; FAST_PER_SEGMENT keeps the existing streaming behavior.
+     */
+    val supportsStructuredContextBatch: Boolean get() = false
+
+    /**
+     * True when this engine applies the user-controlled translation failure retry internally.
+     * Callers must not add another retry after a null result from such an engine.
+     */
+    fun handlesTranslationFailureRetry(settings: Settings): Boolean = false
 
     /**
      * 批量翻译。默认实现是并发调单条 [translate]；引擎若支持原生批 API 应 override 用单

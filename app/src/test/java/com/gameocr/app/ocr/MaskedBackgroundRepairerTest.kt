@@ -8,6 +8,60 @@ import org.junit.Test
 class MaskedBackgroundRepairerTest {
 
     @Test
+    fun repair_tableDriven_reusedCompletionLabelsMatchIndependentLabelingPixelForPixel() {
+        data class Case(
+            val name: String,
+            val source: IntArray,
+            val allowDirectional: Boolean,
+            val allowComplex: Boolean,
+            val useForegroundReference: Boolean,
+        )
+
+        val erase = centeredEraseMask()
+        val flat = IntArray(SIZE) { argb(255, 248, 248, 248) }.apply {
+            erase.indices.filter { erase[it] }.forEach { this[it] = argb(255, 8, 8, 8) }
+        }
+        val gradient = IntArray(SIZE) { index ->
+            val level = 72 + (index % WIDTH) * 4
+            argb(255, level, level, level)
+        }.apply {
+            erase.indices.filter { erase[it] }.forEach { this[it] = argb(255, 8, 8, 8) }
+        }
+        val complex = IntArray(SIZE) { index ->
+            val x = index % WIDTH
+            val y = index / WIDTH
+            if ((x + y) % 2 == 0) argb(255, 12, 12, 12) else argb(255, 242, 242, 242)
+        }.apply {
+            erase.indices.filter { erase[it] }.forEach { this[it] = argb(255, 8, 8, 8) }
+        }
+
+        listOf(
+            Case("dominant fill", flat, false, false, false),
+            Case("directional interpolation", gradient, true, false, false),
+            Case("spatial interpolation", complex, true, true, true),
+        ).forEach { case ->
+            fun repair(flatCompletionMask: BooleanArray) = MaskedBackgroundRepairer.repair(
+                width = WIDTH,
+                height = HEIGHT,
+                sourceArgb = case.source,
+                eraseMask = erase,
+                allowedSampleMask = BooleanArray(SIZE) { true },
+                flatCompletionMask = flatCompletionMask,
+                allowDirectionalInterpolation = case.allowDirectional,
+                allowComplexBackgroundInterpolation = case.allowComplex,
+                foregroundReferenceMask = erase.takeIf { case.useForegroundReference },
+            )
+
+            val reused = repair(erase)
+            val independentlyLabeled = repair(erase.copyOf())
+
+            assertTrue(case.name, reused.pixels.contentEquals(independentlyLabeled.pixels))
+            assertTrue(case.name, reused.repairedMask.contentEquals(independentlyLabeled.repairedMask))
+            assertEquals(case.name, reused.decisions, independentlyLabeled.decisions)
+        }
+    }
+
+    @Test
     fun repair_tableDriven_restoresFlatLightDarkAndColoredBackgrounds() {
         data class Case(
             val name: String,
@@ -281,7 +335,7 @@ class MaskedBackgroundRepairerTest {
             assertEquals(case.name, 1, coverageFirst.acceptedComponentCount)
             assertEquals(
                 case.name,
-                MaskedBackgroundRepairer.Mode.DIRECTIONAL_INTERPOLATION,
+                MaskedBackgroundRepairer.Mode.SPATIAL_INTERPOLATION,
                 coverageFirst.decisions.single().mode,
             )
             erase.indices.filter { erase[it] }.forEach { index ->
@@ -297,6 +351,105 @@ class MaskedBackgroundRepairerTest {
             }
             erase.indices.filterNot { erase[it] }.forEach { index ->
                 assertEquals("${case.name}: outside mask is immutable", before[index], coverageFirst.pixels[index])
+            }
+        }
+    }
+
+    @Test
+    fun repair_tableDriven_spatialInterpolationDoesNotSpreadForegroundExtremesAcrossTexture() {
+        data class Case(
+            val name: String,
+            val foreground: Int,
+        )
+        listOf(
+            Case("black text beside black line art", argb(255, 8, 8, 8)),
+            Case("white text beside white highlight", argb(255, 248, 248, 248)),
+        ).forEach { case ->
+            val expectedBackground = IntArray(SIZE) { index ->
+                val x = index % WIDTH
+                val y = index / WIDTH
+                val level = if ((x + y) % 2 == 0) 112 else 176
+                argb(255, level, level, level)
+            }
+            val source = expectedBackground.copyOf()
+            val erase = centeredEraseMask()
+            erase.indices.filter { erase[it] }.forEach { source[it] = case.foreground }
+            val foregroundCore = BooleanArray(SIZE)
+            for (y in HEIGHT / 2 - 1..HEIGHT / 2 + 1) {
+                for (x in WIDTH / 2 - 1..WIDTH / 2 + 1) {
+                    foregroundCore[y * WIDTH + x] = true
+                }
+            }
+            val contaminatingLineX = WIDTH / 2 + 4
+            for (y in 5 until HEIGHT - 5) {
+                source[y * WIDTH + contaminatingLineX] = case.foreground
+            }
+            val before = source.copyOf()
+
+            val result = MaskedBackgroundRepairer.repair(
+                width = WIDTH,
+                height = HEIGHT,
+                sourceArgb = source,
+                eraseMask = erase,
+                allowedSampleMask = BooleanArray(SIZE) { true },
+                allowDirectionalInterpolation = true,
+                allowComplexBackgroundInterpolation = true,
+                foregroundReferenceMask = foregroundCore,
+            )
+
+            val decision = result.decisions.single()
+            assertEquals(case.name, MaskedBackgroundRepairer.Mode.SPATIAL_INTERPOLATION, decision.mode)
+            assertTrue("${case.name}: reference color is logged", decision.referenceColor != null)
+            assertTrue("${case.name}: boundary range is logged", decision.boundaryLuminanceMax > decision.boundaryLuminanceMin)
+            assertTrue("${case.name}: output range is logged", decision.outputLuminanceMax >= decision.outputLuminanceMin)
+            erase.indices.filter { erase[it] }.forEach { index ->
+                val luminance = result.pixels[index] and 0xff
+                assertTrue("${case.name}: repair stays in textured midtones", luminance in 96..192)
+                assertTrue("${case.name}: every text pixel is repaired", result.repairedMask[index])
+            }
+            erase.indices.filterNot { erase[it] }.forEach { index ->
+                assertEquals("${case.name}: pixels outside repair are immutable", before[index], result.pixels[index])
+            }
+        }
+    }
+
+    @Test
+    fun repair_tableDriven_spatialInterpolationClipsAtImageEdges() {
+        data class Case(val name: String, val left: Int, val top: Int)
+        listOf(
+            Case("top left", 0, 0),
+            Case("bottom right", WIDTH - 4, HEIGHT - 4),
+        ).forEach { case ->
+            val source = IntArray(SIZE) { index ->
+                val level = if (((index % WIDTH) + (index / WIDTH)) % 2 == 0) 112 else 176
+                argb(255, level, level, level)
+            }
+            val erase = BooleanArray(SIZE)
+            val foreground = BooleanArray(SIZE)
+            for (y in case.top until minOf(case.top + 4, HEIGHT)) {
+                for (x in case.left until minOf(case.left + 4, WIDTH)) {
+                    val index = y * WIDTH + x
+                    erase[index] = true
+                    foreground[index] = true
+                    source[index] = argb(255, 8, 8, 8)
+                }
+            }
+
+            val result = MaskedBackgroundRepairer.repair(
+                width = WIDTH,
+                height = HEIGHT,
+                sourceArgb = source,
+                eraseMask = erase,
+                allowedSampleMask = BooleanArray(SIZE) { true },
+                allowDirectionalInterpolation = true,
+                allowComplexBackgroundInterpolation = true,
+                foregroundReferenceMask = foreground,
+            )
+
+            assertEquals(case.name, 1, result.acceptedComponentCount)
+            assertEquals(case.name, MaskedBackgroundRepairer.Mode.SPATIAL_INTERPOLATION, result.decisions.single().mode)
+            erase.indices.filter { erase[it] }.forEach { index ->
+                assertTrue("${case.name}: edge pixel is repaired", result.repairedMask[index])
             }
         }
     }

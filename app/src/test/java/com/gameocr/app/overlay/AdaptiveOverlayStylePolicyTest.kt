@@ -25,6 +25,40 @@ class AdaptiveOverlayStylePolicyTest {
     }
 
     @Test
+    fun initialAdaptiveTextLayoutPhase_tableDriven_allowsRecognizedSourceToStayPending() {
+        data class Case(
+            val name: String,
+            val text: String,
+            val requested: AdaptiveTextLayoutPhase?,
+            val expected: AdaptiveTextLayoutPhase,
+        )
+        val cases = listOf(
+            Case("default ellipsis", "…", null, AdaptiveTextLayoutPhase.PLACEHOLDER),
+            Case("default translated text", "translated", null, AdaptiveTextLayoutPhase.FINAL),
+            Case(
+                "recognized source explicitly pending",
+                "原文",
+                AdaptiveTextLayoutPhase.PLACEHOLDER,
+                AdaptiveTextLayoutPhase.PLACEHOLDER,
+            ),
+            Case(
+                "explicit final wins",
+                "…",
+                AdaptiveTextLayoutPhase.FINAL,
+                AdaptiveTextLayoutPhase.FINAL,
+            ),
+        )
+
+        cases.forEach { case ->
+            assertEquals(
+                case.name,
+                case.expected,
+                resolveInitialAdaptiveTextLayoutPhase(case.text, case.requested),
+            )
+        }
+    }
+
+    @Test
     fun adaptiveTextLayoutPhasePolicy_tableDriven_fitsStreamingButReportsOnlyStableStates() {
         data class Case(
             val phase: AdaptiveTextLayoutPhase,

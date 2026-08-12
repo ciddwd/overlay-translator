@@ -61,6 +61,11 @@ internal enum class AdaptiveTextLayoutPhase {
 internal fun resolveAdaptiveTextLayoutPhase(text: CharSequence): AdaptiveTextLayoutPhase =
     if (text == "…") AdaptiveTextLayoutPhase.PLACEHOLDER else AdaptiveTextLayoutPhase.FINAL
 
+internal fun resolveInitialAdaptiveTextLayoutPhase(
+    text: CharSequence,
+    requestedPhase: AdaptiveTextLayoutPhase?,
+): AdaptiveTextLayoutPhase = requestedPhase ?: resolveAdaptiveTextLayoutPhase(text)
+
 internal fun shouldFitAdaptiveFinalBounds(phase: AdaptiveTextLayoutPhase): Boolean =
     phase != AdaptiveTextLayoutPhase.PLACEHOLDER
 

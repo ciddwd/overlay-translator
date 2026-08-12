@@ -24,11 +24,13 @@ internal object TextPixelMaskBuilder {
         val pixels: BooleanArray,
         val selectedCorePixels: Int,
         val corePixels: BooleanArray = pixels,
+        val supportPixels: BooleanArray = pixels,
     ) {
         init {
             require(bounds.width > 0 && bounds.height > 0)
             require(pixels.size == bounds.width * bounds.height)
             require(corePixels.size == pixels.size)
+            require(supportPixels.size == pixels.size)
             require(selectedCorePixels > 0)
             require(corePixels.count { it } == selectedCorePixels)
         }
@@ -106,6 +108,19 @@ internal object TextPixelMaskBuilder {
             )
             val localCoreMask = BooleanArray(cropBounds.width * cropBounds.height)
             val localMask = BooleanArray(cropBounds.width * cropBounds.height)
+            val localSupportMask = BooleanArray(cropBounds.width * cropBounds.height)
+            sourceBoxes.forEach { source ->
+                val support = expand(source, componentSearchRadius(source), width, height)
+                for (y in support.top until support.bottom) {
+                    val localY = y - cropBounds.top
+                    if (localY !in 0 until cropBounds.height) continue
+                    for (x in support.left until support.right) {
+                        val localX = x - cropBounds.left
+                        if (localX !in 0 until cropBounds.width) continue
+                        localSupportMask[localY * cropBounds.width + localX] = true
+                    }
+                }
+            }
             selected.forEach { (label, radius) ->
                 dilateComponentInto(
                     output = localCoreMask,
@@ -143,6 +158,7 @@ internal object TextPixelMaskBuilder {
                 pixels = localMask,
                 selectedCorePixels = corePixels,
                 corePixels = localCoreMask,
+                supportPixels = localSupportMask,
             )
             Decision(
                 blockIndex = block.blockIndex,

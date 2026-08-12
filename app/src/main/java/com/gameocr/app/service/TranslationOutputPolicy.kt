@@ -5,21 +5,26 @@ internal data class TranslationOutputDecision(
     val failed: Boolean,
 )
 
-internal enum class EmptyTranslationAction {
+internal enum class TranslationRetryAction {
     ACCEPT,
     RETRY,
     FAIL,
 }
 
 internal object TranslationOutputPolicy {
+    fun shouldRetryInCaller(
+        settingEnabled: Boolean,
+        translatorHandlesRetry: Boolean,
+    ): Boolean = settingEnabled && !translatorHandlesRetry
+
     fun action(
         output: String?,
         retryEnabled: Boolean,
         attempt: Int,
-    ): EmptyTranslationAction = when {
-        !output.isNullOrBlank() -> EmptyTranslationAction.ACCEPT
-        retryEnabled && attempt == 0 -> EmptyTranslationAction.RETRY
-        else -> EmptyTranslationAction.FAIL
+    ): TranslationRetryAction = when {
+        !output.isNullOrBlank() -> TranslationRetryAction.ACCEPT
+        retryEnabled && attempt == 0 -> TranslationRetryAction.RETRY
+        else -> TranslationRetryAction.FAIL
     }
 
     fun resolve(output: String?, failureText: String): TranslationOutputDecision =

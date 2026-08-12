@@ -42,6 +42,7 @@ class ModelDownloadNotificationPermissionPolicyTest {
             val name: String,
             val sourcePath: String,
             val expectedMarker: String,
+            val scopeStart: String? = null,
         )
 
         val cases = listOf(
@@ -51,22 +52,30 @@ class ModelDownloadNotificationPermissionPolicyTest {
                 "rememberModelDownloadNotificationPermissionGate()",
             ),
             Case(
-                "onboarding PaddleOCR download",
+                "onboarding recommended OCR and translation models download",
                 "src/main/java/com/gameocr/app/onboarding/OnboardingScreen.kt",
-                "continueModelDownloadAfterNotificationPermission(::downloadPaddleOcrModel)",
+                "continueModelDownloadAfterNotificationPermission(::downloadRecommendedModels)",
+                "fun requestRecommendedModelsDownload()",
             ),
             Case(
                 "onboarding manga offline download",
                 "src/main/java/com/gameocr/app/onboarding/OnboardingScreen.kt",
                 "continueModelDownloadAfterNotificationPermission(::downloadMangaOfflineModels)",
+                "fun requestMangaOfflineModelsDownload()",
             ),
         )
 
         cases.forEach { case ->
             val source = File(case.sourcePath).readText()
+            val scopedSource = case.scopeStart?.let { scopeStart ->
+                val start = source.indexOf(scopeStart)
+                assertTrue("${case.name} entry point should exist", start >= 0)
+                val nextFunction = source.indexOf("\n    fun ", start + scopeStart.length)
+                source.substring(start, nextFunction.takeIf { it > start } ?: source.length)
+            } ?: source
             assertTrue(
                 "${case.name} should use the shared notification permission gate",
-                case.expectedMarker in source,
+                case.expectedMarker in scopedSource,
             )
         }
     }

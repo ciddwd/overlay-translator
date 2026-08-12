@@ -8,9 +8,9 @@ import kotlin.math.roundToInt
 /**
  * Converts permissively licensed detector boxes into local bubble masks using image edges/colors.
  *
- * Boundary leaks can fall back to a conservative ellipse inside a detector box, matching the
- * detector author's reference pipeline. All other failed extractions still produce an empty
- * instance mask so dark backgrounds and unrelated detector boxes cannot become replacement shapes.
+ * Boundary leaks can fall back to a conservative ellipse inside a detector box for association and
+ * text-repair routing. That synthetic mask is explicitly marked approximate and cannot define a
+ * final shape patch. All other failed extractions still produce an empty instance mask.
  */
 internal object DetectorGuidedBubbleMaskExtractor {
     data class Timing(
@@ -39,6 +39,12 @@ internal object DetectorGuidedBubbleMaskExtractor {
     ) {
         val accepted: Boolean
             get() = diagnostic.accepted
+
+        val shapeMaskQuality: BubbleShapeMaskQuality
+            get() = BubbleShapeMaskQuality.fromDetectorDecision(
+                accepted = accepted,
+                reason = diagnostic.reason,
+            )
     }
 
     data class Result(
@@ -92,6 +98,7 @@ internal object DetectorGuidedBubbleMaskExtractor {
         val unionMask = BooleanArray(width * height)
         val decisions = ArrayList<Decision>(boxDetections.size)
         val bubbleTiming = MangaMaskDebugAnalyzer.BubbleTiming()
+        val analyzerWorkspace = MangaMaskDebugAnalyzer.Workspace()
         var estimateNs = 0L
         var ellipseFallbackNs = 0L
         var maskIoNs = 0L
@@ -138,6 +145,7 @@ internal object DetectorGuidedBubbleMaskExtractor {
                 ),
                 output = scratch,
                 timing = bubbleTiming,
+                workspace = analyzerWorkspace,
             )
             estimateNs += System.nanoTime() - estimateStartedAtNs
             if (!diagnostic.accepted) {

@@ -71,7 +71,7 @@ class TranslationPresetNameOverflowTest {
             Case(
                 name = "main preset carousel",
                 sourcePath = "src/main/java/com/gameocr/app/ui/MainScreen.kt",
-                blockStart = "private fun PresetCarousel(",
+                blockStart = "internal fun PresetCarousel(",
                 blockEnd = "internal data class PresetCarouselPlans(",
                 maxLinesMarker = "maxLines = mainTranslationPresetNameMaxLines(preset.id)",
             ),

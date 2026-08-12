@@ -172,10 +172,17 @@ class CaptureChromeOrderingTest {
         cases.forEach { case ->
             val snippet = functionSnippet(source, case.signature)
             assertTrue(
-                "${case.name} should delegate asynchronous work to the task progress owner",
-                "launchTranslationBatch(diagId)" in snippet,
+                "${case.name} should delegate asynchronous work to the shared page executor",
+                "launchPageTranslationExecution(" in snippet,
             )
         }
+
+        val pageExecutorSnippet =
+            functionSnippet(source, "private suspend fun launchPageTranslationExecution(")
+        assertTrue(
+            "the shared page executor should delegate progress ownership exactly once",
+            "launchTranslationBatch(diagId)" in pageExecutorSnippet,
+        )
 
         val ownerSnippet = functionSnippet(source, "private fun launchTranslationBatch(")
         assertTrue(
@@ -235,31 +242,31 @@ class CaptureChromeOrderingTest {
     }
 
     @Test
-    fun loopCapture_preservesFloatingWindowAndMasksItsCapturedBounds() {
+    fun everyCapture_usesFloatingWindowPolicyAndRestoresBeforeProcessing() {
         val snippet = functionSnippet(captureServiceSource(), "private suspend fun captureOnce(")
+        val policySnippet = functionSnippet(
+            captureServiceSource(),
+            "private suspend fun prepareFloatingWindowForCapture(",
+        )
         val blockingResultIndex = snippet.indexOf("overlay?.hasBlockingLoopResult()")
-        val policyIndex = snippet.indexOf("floatingWindowCaptureAction(")
-        val preserveIndex = snippet.indexOf(
-            "FloatingWindowCaptureAction.PRESERVE_AND_MASK",
-            policyIndex,
+        val preparationIndex = snippet.indexOf("prepareFloatingWindowForCapture(")
+        val captureIndex = snippet.indexOf("var full = shotter.capture()", preparationIndex)
+        val restoreIndex = snippet.indexOf(
+            "restoreFloatingWindowAfterCapture(floatingWindowPreparation)",
+            captureIndex,
         )
-        val boundsIndex = snippet.indexOf(
-            "floatingWindowBoundsForCapture = floatingWindowState.second",
-            preserveIndex,
-        )
-        val captureIndex = snippet.indexOf("var full = shotter.capture()", boundsIndex)
         val maskIndex = snippet.indexOf("maskFloatingWindowFromCapture(full, captureMask)", captureIndex)
 
         assertTrue("loop should only wait for blocking overlay results", blockingResultIndex >= 0)
-        assertTrue("loop capture should choose a render-mode-aware window policy", policyIndex >= 0)
-        assertTrue("floating mode should preserve the visible window", preserveIndex > policyIndex)
-        assertTrue("preserved window bounds should be recorded before capture", boundsIndex > preserveIndex)
-        assertTrue("screenshot should happen after recording the window bounds", captureIndex > boundsIndex)
+        assertTrue("every capture should prepare the visible floating window", preparationIndex >= 0)
+        assertTrue("screenshot should happen after the floating window decision", captureIndex > preparationIndex)
+        assertTrue("temporarily hidden window should be restored immediately", restoreIndex > captureIndex)
         assertTrue("captured overlay pixels should be masked before OCR", maskIndex > captureIndex)
         assertTrue(
-            "blocks mode should retain the temporary-hide fallback",
-            "FloatingWindowCaptureAction.HIDE_TEMPORARILY" in snippet &&
-                "setFloatingWindowHiddenForCapture(hidden = true)" in snippet,
+            "capture policy must support both hide and preserve paths",
+            "floatingWindowCaptureAction(" in policySnippet &&
+                "FloatingWindowCaptureAction.HIDE_TEMPORARILY" in policySnippet &&
+                "FloatingWindowCaptureAction.PRESERVE_AND_MASK" in policySnippet,
         )
     }
 
@@ -316,7 +323,7 @@ class CaptureChromeOrderingTest {
             Case(
                 "floating window partial update",
                 "private suspend fun renderFloatingWindow(",
-                "overlay?.updateFloatingWindowText(idx, partial, phase)"
+                "overlay?.updateFloatingWindowText(update.blockIndex, update.text, phase)"
             )
         )
 
@@ -347,32 +354,47 @@ class CaptureChromeOrderingTest {
         }
         val blockUpdateSnippet = functionSnippet(source, "private fun updateTranslationUnit(")
         assertTrue(
-            "cross-line reflow should still update each original overlay block with its layout phase",
-            "overlay?.updateBlockText(blockIndex, chunk, phase)" in blockUpdateSnippet,
+            "canonical unit updates should preserve their OCR block and layout phase",
+            "overlay?.updateBlockText(update.blockIndex, update.text, phase)" in blockUpdateSnippet,
         )
     }
 
     @Test
-    fun floatingWindowTranslation_usesCrossLineUnitsForBatchAndStreaming() {
+    fun renderers_useCanonicalOcrUnitsForBatchAndStreaming() {
         val source = captureServiceSource()
         val renderSnippet = functionSnippet(source, "private suspend fun renderFloatingWindow(")
-        val batchSnippet = functionSnippet(source, "private suspend fun batchTranslateFloatingWindow(")
+        val planSnippet = functionSnippet(source, "private fun preparePageTranslationPlan(")
+        val executorSnippet =
+            functionSnippet(source, "private suspend fun launchPageTranslationExecution(")
+        val individualSnippet = functionSnippet(source, "private suspend fun translatePageIndividually(")
 
         assertTrue(
-            "floating window should plan context units from OCR blocks",
-            "planCrossLineTranslationUnits(blocks, settings.sourceLang)" in renderSnippet,
+            "both renderers should plan final translation units from OCR blocks in one place",
+            "val units = planPageTranslationUnits(blocks)" in planSnippet,
+        )
+        assertFalse(
+            "translation planning must not run a second geometry merger",
+            "planCrossLine" in planSnippet || "mergeDisablesCrossLine" in planSnippet,
         )
         assertTrue(
-            "floating window placeholders should use complete context-unit sources",
-            "overlay?.prepareFloatingWindow(translationUnits.map { it.sourceText })" in renderSnippet,
+            "floating window placeholders should preserve the exact OCR-block row count used by Blocks",
+            "overlay?.prepareFloatingWindow(blocks.map(TextBlock::text))" in renderSnippet,
         )
         assertTrue(
-            "streaming translation should translate each complete context unit",
-            "translateOne(unit.sourceText, settings, diagId, idx)" in renderSnippet,
+            "floating rendering should use the shared page executor",
+            "launchPageTranslationExecution(" in renderSnippet,
+        )
+        assertTrue(
+            "the shared page executor should own individual translation",
+            "translatePageIndividually(" in executorSnippet,
+        )
+        assertTrue(
+            "individual translation should submit each complete context-unit source",
+            "unit.sourceText" in individualSnippet,
         )
         assertTrue(
             "batch translation should submit the same complete context-unit sources",
-            "val sources = translationUnits.map { it.sourceText }" in batchSnippet,
+            "val sources = translationUnits.map { it.sourceText }" in source,
         )
     }
 
@@ -382,7 +404,24 @@ class CaptureChromeOrderingTest {
     private fun functionSnippet(source: String, signature: String): String {
         val start = source.indexOf(signature)
         require(start >= 0) { "Missing signature: $signature" }
-        val firstBrace = source.indexOf('{', start)
+        val parameterStart = source.indexOf('(', start)
+        require(parameterStart >= 0) { "Missing parameter list: $signature" }
+        var parameterDepth = 0
+        var parameterEnd = -1
+        for (index in parameterStart until source.length) {
+            when (source[index]) {
+                '(' -> parameterDepth += 1
+                ')' -> {
+                    parameterDepth -= 1
+                    if (parameterDepth == 0) {
+                        parameterEnd = index
+                        break
+                    }
+                }
+            }
+        }
+        require(parameterEnd >= 0) { "Unclosed parameter list: $signature" }
+        val firstBrace = source.indexOf('{', parameterEnd + 1)
         require(firstBrace >= 0) { "Missing function body: $signature" }
 
         var depth = 0

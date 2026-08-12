@@ -78,8 +78,8 @@ internal object GalleryTranslationWorkPolicy {
         return retryableMarkers.any(message::contains)
     }
 
-    fun shouldRetryEmptyTranslation(enabled: Boolean, attemptCount: Int): Boolean =
-        enabled && attemptCount < MAX_RETRY_ATTEMPTS
+    fun shouldRetryFailedTranslation(enabled: Boolean, attemptCount: Int): Boolean =
+        enabled && attemptCount == FIRST_RETRY_ATTEMPT
 
     private val networkOcrEngines = setOf(
         OcrEngineKind.UMI_OCR,
@@ -116,4 +116,6 @@ internal object GalleryTranslationWorkPolicy {
         "connection reset",
         "connection refused",
     )
+
+    private const val FIRST_RETRY_ATTEMPT = 1
 }

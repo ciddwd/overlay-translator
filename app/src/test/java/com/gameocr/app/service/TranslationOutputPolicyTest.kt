@@ -5,25 +5,51 @@ import org.junit.Test
 
 class TranslationOutputPolicyTest {
     @Test
+    fun shouldRetryInCaller_tableDriven_avoidsDoubleRetry() {
+        data class Case(
+            val name: String,
+            val settingEnabled: Boolean,
+            val translatorHandlesRetry: Boolean,
+            val expected: Boolean,
+        )
+
+        listOf(
+            Case("disabled setting", false, false, false),
+            Case("disabled setting and internal engine", false, true, false),
+            Case("caller owns retry", true, false, true),
+            Case("engine owns retry", true, true, false),
+        ).forEach { case ->
+            assertEquals(
+                case.name,
+                case.expected,
+                TranslationOutputPolicy.shouldRetryInCaller(
+                    settingEnabled = case.settingEnabled,
+                    translatorHandlesRetry = case.translatorHandlesRetry,
+                ),
+            )
+        }
+    }
+
+    @Test
     fun action_retriesOnlyTheFirstBlankResultWhenEnabled() {
         data class Case(
             val name: String,
             val output: String?,
             val retryEnabled: Boolean,
             val attempt: Int,
-            val expected: EmptyTranslationAction,
+            val expected: TranslationRetryAction,
         )
 
         listOf(
-            Case("valid first result", "translated", true, 0, EmptyTranslationAction.ACCEPT),
-            Case("valid retry result", "translated", true, 1, EmptyTranslationAction.ACCEPT),
-            Case("null first result with retry", null, true, 0, EmptyTranslationAction.RETRY),
-            Case("empty first result with retry", "", true, 0, EmptyTranslationAction.RETRY),
-            Case("whitespace first result with retry", " \n\t", true, 0, EmptyTranslationAction.RETRY),
-            Case("blank first result without retry", "", false, 0, EmptyTranslationAction.FAIL),
-            Case("blank retry result", "", true, 1, EmptyTranslationAction.FAIL),
-            Case("blank later result never retries", null, true, 2, EmptyTranslationAction.FAIL),
-            Case("invalid negative attempt never retries", null, true, -1, EmptyTranslationAction.FAIL),
+            Case("valid first result", "translated", true, 0, TranslationRetryAction.ACCEPT),
+            Case("valid retry result", "translated", true, 1, TranslationRetryAction.ACCEPT),
+            Case("null first result with retry", null, true, 0, TranslationRetryAction.RETRY),
+            Case("empty first result with retry", "", true, 0, TranslationRetryAction.RETRY),
+            Case("whitespace first result with retry", " \n\t", true, 0, TranslationRetryAction.RETRY),
+            Case("blank first result without retry", "", false, 0, TranslationRetryAction.FAIL),
+            Case("blank retry result", "", true, 1, TranslationRetryAction.FAIL),
+            Case("blank later result never retries", null, true, 2, TranslationRetryAction.FAIL),
+            Case("invalid negative attempt never retries", null, true, -1, TranslationRetryAction.FAIL),
         ).forEach { case ->
             assertEquals(
                 case.name,

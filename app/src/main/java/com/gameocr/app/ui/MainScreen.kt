@@ -70,6 +70,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -133,6 +134,7 @@ import com.gameocr.app.ocr.MangaOcrModelInstaller
 import com.gameocr.app.ocr.OrientationModelInstaller
 import com.gameocr.app.ocr.PaddleModelInstaller
 import com.gameocr.app.overlay.FloatingMenuTourPalette
+import com.gameocr.app.overlay.FloatingMenuTourPrefs
 import com.gameocr.app.rom.RomHelper
 import com.gameocr.app.service.CaptureService
 import com.gameocr.app.service.CaptureServiceState
@@ -206,6 +208,11 @@ fun MainScreen(
     var showClearRegionDialog by remember { mutableStateOf(false) }
     var showSharePrompt by rememberSaveable { mutableStateOf(false) }
     var presetPageSeen by rememberSaveable { mutableStateOf<Boolean?>(null) }
+    var presetCarouselSeen by rememberSaveable { mutableStateOf<Boolean?>(null) }
+    var captureGallerySeen by rememberSaveable { mutableStateOf<Boolean?>(null) }
+    var floatingTourCompleted by remember(context) {
+        mutableStateOf(FloatingMenuTourPrefs.isCompleted(context))
+    }
     var pendingPresetSwitch by remember { mutableStateOf<TranslationPreset?>(null) }
     var pendingSaveBeforePresetSwitch by remember { mutableStateOf<TranslationPreset?>(null) }
     var pendingPresetSaveName by rememberSaveable { mutableStateOf("") }
@@ -230,8 +237,18 @@ fun MainScreen(
         presetModelIssues = viewModel.presetModelIssues(presets)
     }
     LaunchedEffect(viewModel) {
-        val storedValue = viewModel.hasSeenMainStatusPreset()
-        if (presetPageSeen != true) presetPageSeen = storedValue
+        val storedPresetPageSeen = viewModel.hasSeenMainStatusPreset()
+        val storedPresetCarouselSeen = viewModel.hasSeenMainPresetCarousel()
+        val storedCaptureGallerySeen = viewModel.hasSeenMainCaptureGallery()
+        if (presetPageSeen != true) presetPageSeen = storedPresetPageSeen
+        if (presetCarouselSeen != true) presetCarouselSeen = storedPresetCarouselSeen
+        if (captureGallerySeen != true) captureGallerySeen = storedCaptureGallerySeen
+    }
+    DisposableEffect(context) {
+        val stopObserving = FloatingMenuTourPrefs.observeCompletion(context) { completed ->
+            scope.launch { floatingTourCompleted = completed }
+        }
+        onDispose(stopObserving)
     }
 
     // 主屏一进就触发自动检查更新。autoCheckIfDue 内部 1h 节流，频繁进出主屏不会浪费 API
@@ -240,6 +257,13 @@ fun MainScreen(
     val updateVm: com.gameocr.app.update.UpdateViewModel = hiltViewModel()
     val topUpdateState by updateVm.state.collectAsState()
     val autoChecking by updateVm.autoChecking.collectAsState()
+    val mainGestureGuidesEnabled = shouldEnableMainGestureGuides(
+        floatingTourCompleted = floatingTourCompleted,
+        autoChecking = autoChecking,
+        sharePromptVisible = showSharePrompt,
+        updateDialogVisible =
+            topUpdateState !is com.gameocr.app.update.UpdateViewModel.State.Idle,
+    )
     LaunchedEffect(Unit) {
         updateVm.autoCheckIfDue()
         if (!viewModel.recordMainScreenEntryForSharePrompt()) return@LaunchedEffect
@@ -553,13 +577,20 @@ fun MainScreen(
                 },
                 showPresetDiscoveryHint =
                     presetPageSeen == false &&
-                        !autoChecking &&
-                        !showSharePrompt &&
-                        topUpdateState is com.gameocr.app.update.UpdateViewModel.State.Idle,
+                        mainGestureGuidesEnabled,
                 onPresetPageSeen = {
                     if (presetPageSeen != true) {
                         presetPageSeen = true
                         scope.launch { viewModel.markMainStatusPresetSeen() }
+                    }
+                },
+                showPresetCarouselDiscoveryHint =
+                    presetCarouselSeen == false &&
+                        mainGestureGuidesEnabled,
+                onPresetCarouselSeen = {
+                    if (presetCarouselSeen != true) {
+                        presetCarouselSeen = true
+                        scope.launch { viewModel.markMainPresetCarouselSeen() }
                     }
                 },
             )
@@ -567,6 +598,17 @@ fun MainScreen(
             CaptureGalleryCarousel(
                 initialPageIndex = initialCarouselPageIndex,
                 onPageChanged = onCarouselPageChanged,
+                showDiscoveryHint =
+                        captureGallerySeen == false &&
+                        presetPageSeen == true &&
+                        presetCarouselSeen == true &&
+                        mainGestureGuidesEnabled,
+                onCarouselSeen = {
+                    if (captureGallerySeen != true) {
+                        captureGallerySeen = true
+                        scope.launch { viewModel.markMainCaptureGallerySeen() }
+                    }
+                },
                 captureMeasurementKey = listOf(
                     canDrawOverlay,
                     serviceRunning,
@@ -1224,6 +1266,8 @@ internal const val UPDATE_DIALOG_RELEASE_NOTES_TAG = "update_dialog_release_note
 private fun CaptureGalleryCarousel(
     initialPageIndex: Int,
     onPageChanged: (Int) -> Unit,
+    showDiscoveryHint: Boolean,
+    onCarouselSeen: () -> Unit,
     captureMeasurementKey: Any?,
     galleryMeasurementKey: Any?,
     capturePage: @Composable (Modifier) -> Unit,
@@ -1232,15 +1276,61 @@ private fun CaptureGalleryCarousel(
     val initialPage = remember { captureGalleryCarouselInitialPage(initialPageIndex) }
     val pagerState = rememberPagerState(initialPage = initialPage) { Int.MAX_VALUE }
     val currentOnPageChanged by rememberUpdatedState(onPageChanged)
+    val currentOnCarouselSeen by rememberUpdatedState(onCarouselSeen)
     val density = LocalDensity.current
     var captureHeightPx by remember { mutableIntStateOf(0) }
     var galleryHeightPx by remember { mutableIntStateOf(0) }
+    var discoveryHintPlayed by rememberSaveable { mutableStateOf(false) }
+    var discoveryGuideVisible by remember { mutableStateOf(false) }
+    var discoveryScrollObserved by remember(pagerState) { mutableStateOf(false) }
+    var discoveryScrollStartPage by remember(pagerState) {
+        mutableIntStateOf(pagerState.settledPage)
+    }
     LaunchedEffect(pagerState) {
-        snapshotFlow { pagerState.settledPage }
+        snapshotFlow { pagerState.isScrollInProgress to pagerState.settledPage }
             .distinctUntilChanged()
-            .collect { page ->
-                currentOnPageChanged(captureGalleryCarouselPageIndex(page))
+            .collect { (scrolling, settledPage) ->
+                if (scrolling) {
+                    if (!discoveryScrollObserved) {
+                        discoveryScrollStartPage = settledPage
+                    }
+                    discoveryScrollObserved = true
+                    discoveryGuideVisible = false
+                } else {
+                    currentOnPageChanged(captureGalleryCarouselPageIndex(settledPage))
+                    if (
+                        discoveryScrollObserved &&
+                        settledPage != discoveryScrollStartPage
+                    ) {
+                        currentOnCarouselSeen()
+                    }
+                    discoveryScrollObserved = false
+                }
             }
+    }
+    LaunchedEffect(pagerState, showDiscoveryHint) {
+        discoveryGuideVisible = false
+        if (!showDiscoveryHint) return@LaunchedEffect
+        delay(HORIZONTAL_DISCOVERY_HINT_DELAY_MS)
+        if (
+            !shouldRunHorizontalDiscoveryHint(
+                hintEnabled = showDiscoveryHint,
+                hintAlreadyPlayed = discoveryHintPlayed,
+                hostVisible = captureGalleryCarouselPageIndex(pagerState.settledPage) ==
+                    CAPTURE_CAROUSEL_PAGE,
+                isScrollInProgress = pagerState.isScrollInProgress,
+                itemCount = CAPTURE_GALLERY_PAGE_COUNT,
+            )
+        ) {
+            return@LaunchedEffect
+        }
+        discoveryHintPlayed = true
+        discoveryGuideVisible = true
+        try {
+            delay(HORIZONTAL_DISCOVERY_HINT_VISIBLE_MS)
+        } finally {
+            discoveryGuideVisible = false
+        }
     }
     LaunchedEffect(captureMeasurementKey) {
         captureHeightPx = 0
@@ -1309,6 +1399,18 @@ private fun CaptureGalleryCarousel(
                             )
                     )
                 }
+                if (discoveryGuideVisible && page == pagerState.currentPage) {
+                    SwipeHorizontalGuide(
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .offset(
+                                y = horizontalDiscoveryGuideYOffsetDp(
+                                    HorizontalDiscoveryGuideHost.CAPTURE_SERVICE,
+                                ).dp,
+                            )
+                            .size(width = 200.dp, height = 84.dp),
+                    )
+                }
             }
         }
         Row(
@@ -1342,6 +1444,8 @@ private fun CaptureGalleryCarousel(
 private const val CAPTURE_GALLERY_PAGE_COUNT = 2
 private const val CAPTURE_CAROUSEL_PAGE = 0
 private const val GALLERY_CAROUSEL_PAGE = 1
+private const val HORIZONTAL_DISCOVERY_HINT_DELAY_MS = 1_000L
+private const val HORIZONTAL_DISCOVERY_HINT_VISIBLE_MS = 3_000L
 
 internal fun captureGalleryCarouselPageIndex(page: Int): Int =
     Math.floorMod(page, CAPTURE_GALLERY_PAGE_COUNT)
@@ -1362,6 +1466,42 @@ internal fun captureGalleryCarouselCommonHeightPx(
     maxOf(captureHeightPx, galleryHeightPx)
 } else {
     null
+}
+
+internal fun shouldRunHorizontalDiscoveryHint(
+    hintEnabled: Boolean,
+    hintAlreadyPlayed: Boolean,
+    hostVisible: Boolean,
+    isScrollInProgress: Boolean,
+    itemCount: Int,
+): Boolean =
+    hintEnabled &&
+        !hintAlreadyPlayed &&
+        hostVisible &&
+        !isScrollInProgress &&
+        itemCount > 1
+
+internal fun shouldEnableMainGestureGuides(
+    floatingTourCompleted: Boolean,
+    autoChecking: Boolean,
+    sharePromptVisible: Boolean,
+    updateDialogVisible: Boolean,
+): Boolean =
+    floatingTourCompleted &&
+        !autoChecking &&
+        !sharePromptVisible &&
+        !updateDialogVisible
+
+internal enum class HorizontalDiscoveryGuideHost {
+    PRESET,
+    CAPTURE_SERVICE,
+}
+
+internal fun horizontalDiscoveryGuideYOffsetDp(
+    host: HorizontalDiscoveryGuideHost,
+): Int = when (host) {
+    HorizontalDiscoveryGuideHost.PRESET -> 0
+    HorizontalDiscoveryGuideHost.CAPTURE_SERVICE -> 24
 }
 
 @Composable
@@ -1591,6 +1731,8 @@ private fun StatusPresetCarousel(
     onPresetBlocked: () -> Unit,
     showPresetDiscoveryHint: Boolean,
     onPresetPageSeen: () -> Unit,
+    showPresetCarouselDiscoveryHint: Boolean,
+    onPresetCarouselSeen: () -> Unit,
 ) {
     val initialPage = remember {
         mainStatusPresetInitialPage(initialPageIndex)
@@ -1602,6 +1744,7 @@ private fun StatusPresetCarousel(
     val currentOnPageChanged by rememberUpdatedState(onPageChanged)
     val currentOnPresetPageSeen by rememberUpdatedState(onPresetPageSeen)
     var discoveryHintPlayed by rememberSaveable { mutableStateOf(false) }
+    var discoveryGuideVisible by remember { mutableStateOf(false) }
 
     LaunchedEffect(pagerState) {
         snapshotFlow { pagerState.settledPage }
@@ -1630,22 +1773,27 @@ private fun StatusPresetCarousel(
         }
 
         discoveryHintPlayed = true
-        pagerState.animateScrollToPage(
-            page = STATUS_PAGE,
-            pageOffsetFraction = STATUS_PRESET_DISCOVERY_HINT_OFFSET_FRACTION,
-            animationSpec = tween(
-                durationMillis = STATUS_PRESET_DISCOVERY_HINT_REVEAL_MS,
-                easing = FastOutSlowInEasing,
-            ),
-        )
-        delay(STATUS_PRESET_DISCOVERY_HINT_HOLD_MS)
-        pagerState.animateScrollToPage(
-            page = STATUS_PAGE,
-            animationSpec = spring(
-                dampingRatio = Spring.DampingRatioMediumBouncy,
-                stiffness = Spring.StiffnessVeryLow,
-            ),
-        )
+        discoveryGuideVisible = true
+        try {
+            pagerState.animateScrollToPage(
+                page = STATUS_PAGE,
+                pageOffsetFraction = STATUS_PRESET_DISCOVERY_HINT_OFFSET_FRACTION,
+                animationSpec = tween(
+                    durationMillis = STATUS_PRESET_DISCOVERY_HINT_REVEAL_MS,
+                    easing = FastOutSlowInEasing,
+                ),
+            )
+            delay(STATUS_PRESET_DISCOVERY_HINT_HOLD_MS)
+            pagerState.animateScrollToPage(
+                page = STATUS_PAGE,
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                    stiffness = Spring.StiffnessVeryLow,
+                ),
+            )
+        } finally {
+            discoveryGuideVisible = false
+        }
     }
 
     Box(
@@ -1675,6 +1823,10 @@ private fun StatusPresetCarousel(
                     modelIssuesByPreset = modelIssuesByPreset,
                     onPresetSelected = onPresetSelected,
                     onPresetBlocked = onPresetBlocked,
+                    showHorizontalDiscoveryHint =
+                        showPresetCarouselDiscoveryHint &&
+                            pagerState.settledPage == PRESET_PAGE,
+                    onHorizontalCarouselSeen = onPresetCarouselSeen,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -1700,6 +1852,13 @@ private fun StatusPresetCarousel(
                     },
                 ) {}
             }
+        }
+        if (discoveryGuideVisible) {
+            SwipeUpGuide(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .size(width = 64.dp, height = 148.dp),
+            )
         }
     }
 }
@@ -1796,6 +1955,8 @@ internal fun PresetCarouselCard(
     modelIssuesByPreset: Map<String, List<TranslationPresetModelIssue>>?,
     onPresetSelected: (TranslationPreset) -> Unit,
     onPresetBlocked: () -> Unit,
+    showHorizontalDiscoveryHint: Boolean = false,
+    onHorizontalCarouselSeen: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Card(
@@ -1837,6 +1998,8 @@ internal fun PresetCarouselCard(
                     modelIssuesByPreset = modelIssuesByPreset,
                     onPresetSelected = onPresetSelected,
                     onPresetBlocked = onPresetBlocked,
+                    showHorizontalDiscoveryHint = showHorizontalDiscoveryHint,
+                    onHorizontalCarouselSeen = onHorizontalCarouselSeen,
                 )
             }
         }
@@ -1850,6 +2013,8 @@ internal fun PresetCarousel(
     modelIssuesByPreset: Map<String, List<TranslationPresetModelIssue>>?,
     onPresetSelected: (TranslationPreset) -> Unit,
     onPresetBlocked: () -> Unit,
+    showHorizontalDiscoveryHint: Boolean = false,
+    onHorizontalCarouselSeen: () -> Unit = {},
 ) {
     val presetIds = remember(presets) { presets.map(TranslationPreset::id) }
     val initialIndex = remember(presetIds, activePresetId) {
@@ -1863,18 +2028,38 @@ internal fun PresetCarousel(
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current.density
     val autoApplyProgress = remember(pagerState) { Animatable(0f) }
+    val currentOnHorizontalCarouselSeen by rememberUpdatedState(onHorizontalCarouselSeen)
     var userScrollObserved by remember(pagerState) { mutableStateOf(false) }
     var pendingAutoApplyPage by remember(pagerState) { mutableStateOf<Int?>(null) }
+    var discoveryHintPlayed by rememberSaveable { mutableStateOf(false) }
+    var discoveryGuideVisible by remember { mutableStateOf(false) }
+    var discoveryScrollObserved by remember(pagerState) { mutableStateOf(false) }
+    var discoveryScrollStartPage by remember(pagerState) {
+        mutableIntStateOf(pagerState.settledPage)
+    }
 
     LaunchedEffect(pagerState, presetIds, activePresetId, modelIssuesByPreset) {
         snapshotFlow { pagerState.isScrollInProgress to pagerState.settledPage }
             .distinctUntilChanged()
             .collectLatest { (scrolling, settledPage) ->
                 if (scrolling) {
+                    if (!discoveryScrollObserved) {
+                        discoveryScrollStartPage = settledPage
+                    }
+                    discoveryScrollObserved = true
+                    discoveryGuideVisible = false
                     pendingAutoApplyPage = null
                     autoApplyProgress.snapTo(0f)
                     userScrollObserved = true
-                } else if (userScrollObserved) {
+                } else {
+                    if (
+                        discoveryScrollObserved &&
+                        settledPage != discoveryScrollStartPage
+                    ) {
+                        currentOnHorizontalCarouselSeen()
+                    }
+                    discoveryScrollObserved = false
+                    if (!userScrollObserved) return@collectLatest
                     pendingAutoApplyPage = settledPage
                     try {
                         autoApplyProgress.snapTo(0f)
@@ -1906,6 +2091,30 @@ internal fun PresetCarousel(
             }
     }
 
+    LaunchedEffect(pagerState, showHorizontalDiscoveryHint, presets.size) {
+        discoveryGuideVisible = false
+        if (!showHorizontalDiscoveryHint) return@LaunchedEffect
+        delay(HORIZONTAL_DISCOVERY_HINT_DELAY_MS)
+        if (
+            !shouldRunHorizontalDiscoveryHint(
+                hintEnabled = showHorizontalDiscoveryHint,
+                hintAlreadyPlayed = discoveryHintPlayed,
+                hostVisible = true,
+                isScrollInProgress = pagerState.isScrollInProgress,
+                itemCount = presets.size,
+            )
+        ) {
+            return@LaunchedEffect
+        }
+        discoveryHintPlayed = true
+        discoveryGuideVisible = true
+        try {
+            delay(HORIZONTAL_DISCOVERY_HINT_VISIBLE_MS)
+        } finally {
+            discoveryGuideVisible = false
+        }
+    }
+
     LaunchedEffect(activePresetId, presetIds) {
         val targetIndex = presetIds.indexOf(activePresetId)
         if (targetIndex >= 0) {
@@ -1918,96 +2127,112 @@ internal fun PresetCarousel(
         }
     }
 
-    HorizontalPager(
-        state = pagerState,
+    Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(140.dp),
-        contentPadding = PaddingValues(horizontal = 46.dp),
-        pageSpacing = 12.dp,
-        verticalAlignment = Alignment.CenterVertically,
-    ) { page ->
-        val preset = presets[requireNotNull(presetCarouselItemIndex(page, presets.size))]
-        val pageOffset = (
-            (page - pagerState.currentPage) - pagerState.currentPageOffsetFraction
-        ).coerceIn(-1f, 1f)
-        val centered = page == pagerState.settledPage
-        val waitingForAutoApply = page == pendingAutoApplyPage
-        val selected = presetCarouselIsApplied(
-            presetId = preset.id,
-            activePresetId = activePresetId,
-        )
-        val pivotX = when {
-            pageOffset < 0f -> 1f
-            pageOffset > 0f -> 0f
-            else -> 0.5f
-        }
+    ) {
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = 46.dp),
+            pageSpacing = 12.dp,
+            verticalAlignment = Alignment.CenterVertically,
+        ) { page ->
+            val preset = presets[requireNotNull(presetCarouselItemIndex(page, presets.size))]
+            val pageOffset = (
+                (page - pagerState.currentPage) - pagerState.currentPageOffsetFraction
+            ).coerceIn(-1f, 1f)
+            val centered = page == pagerState.settledPage
+            val waitingForAutoApply = page == pendingAutoApplyPage
+            val selected = presetCarouselIsApplied(
+                presetId = preset.id,
+                activePresetId = activePresetId,
+            )
+            val pivotX = when {
+                pageOffset < 0f -> 1f
+                pageOffset > 0f -> 0f
+                else -> 0.5f
+            }
 
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(132.dp)
-                .presetAutoApplyFlowBorder(
-                    visible = waitingForAutoApply,
-                    progress = autoApplyProgress.value,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-                .graphicsLayer {
-                    rotationY = presetCarouselOutwardRotation(pageOffset)
-                    scaleX = presetCarouselScale(pageOffset)
-                    scaleY = presetCarouselScale(pageOffset)
-                    alpha = 1f - (abs(pageOffset) * 0.22f)
-                    cameraDistance = 14f * density
-                    transformOrigin = TransformOrigin(pivotX, 0.5f)
-                }
-                .clickable(enabled = !centered) {
-                    if (!centered) {
-                        scope.launch { pagerState.animateScrollToPage(page) }
-                    }
-                },
-            colors = CardDefaults.cardColors(
-                containerColor = Color.Transparent,
-                contentColor = MaterialTheme.colorScheme.onSurface,
-            ),
-            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-            border = BorderStroke(
-                width = 1.dp,
-                color = if (selected) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.outlineVariant
-                },
-            ),
-        ) {
-            Column(
+            Card(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                horizontalAlignment = Alignment.Start,
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Text(
-                    text = translationPresetDisplayName(preset),
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
+                    .fillMaxWidth()
+                    .height(132.dp)
+                    .presetAutoApplyFlowBorder(
+                        visible = waitingForAutoApply,
+                        progress = autoApplyProgress.value,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    .graphicsLayer {
+                        rotationY = presetCarouselOutwardRotation(pageOffset)
+                        scaleX = presetCarouselScale(pageOffset)
+                        scaleY = presetCarouselScale(pageOffset)
+                        alpha = 1f - (abs(pageOffset) * 0.22f)
+                        cameraDistance = 14f * density
+                        transformOrigin = TransformOrigin(pivotX, 0.5f)
+                    }
+                    .clickable(enabled = !centered) {
+                        if (!centered) {
+                            scope.launch { pagerState.animateScrollToPage(page) }
+                        }
+                    },
+                colors = CardDefaults.cardColors(
+                    containerColor = Color.Transparent,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                border = BorderStroke(
+                    width = 1.dp,
                     color = if (selected) {
                         MaterialTheme.colorScheme.primary
                     } else {
-                        MaterialTheme.colorScheme.onSurface
+                        MaterialTheme.colorScheme.outlineVariant
                     },
-                    maxLines = mainTranslationPresetNameMaxLines(preset.id),
-                    overflow = TextOverflow.Ellipsis,
-                )
-                mainPresetDetailLines(translationPresetSummary(preset)).forEach { detail ->
+                ),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalAlignment = Alignment.Start,
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
                     Text(
-                        text = detail,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
+                        text = translationPresetDisplayName(preset),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (selected) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
+                        maxLines = mainTranslationPresetNameMaxLines(preset.id),
                         overflow = TextOverflow.Ellipsis,
                     )
+                    mainPresetDetailLines(translationPresetSummary(preset)).forEach { detail ->
+                        Text(
+                            text = detail,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
+        }
+        if (discoveryGuideVisible) {
+            SwipeHorizontalGuide(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .offset(
+                        y = horizontalDiscoveryGuideYOffsetDp(
+                            HorizontalDiscoveryGuideHost.PRESET,
+                        ).dp,
+                    )
+                    .size(width = 200.dp, height = 84.dp),
+            )
         }
     }
 }
@@ -2296,6 +2521,14 @@ class MainViewModel @Inject constructor(
     suspend fun hasSeenMainStatusPreset(): Boolean = repo.hasSeenMainStatusPreset()
     suspend fun markMainStatusPresetSeen() {
         repo.markMainStatusPresetSeen()
+    }
+    suspend fun hasSeenMainPresetCarousel(): Boolean = repo.hasSeenMainPresetCarousel()
+    suspend fun markMainPresetCarouselSeen() {
+        repo.markMainPresetCarouselSeen()
+    }
+    suspend fun hasSeenMainCaptureGallery(): Boolean = repo.hasSeenMainCaptureGallery()
+    suspend fun markMainCaptureGallerySeen() {
+        repo.markMainCaptureGallerySeen()
     }
     fun shizukuAvailability(context: android.content.Context): ShizukuCapabilities.Availability =
         shizukuCapabilities.availability(context)

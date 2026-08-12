@@ -2,7 +2,9 @@ package com.gameocr.app.onboarding
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -103,12 +105,17 @@ private sealed interface MangaOfflineDownloadState {
     ) : MangaOfflineDownloadState
 }
 
-private sealed interface PaddleOcrDownloadState {
-    data object Checking : PaddleOcrDownloadState
-    data object Missing : PaddleOcrDownloadState
-    data object Ready : PaddleOcrDownloadState
-    data class Downloading(val status: String) : PaddleOcrDownloadState
-    data class Error(val detail: String) : PaddleOcrDownloadState
+private sealed interface RecommendedModelsDownloadState {
+    data object Checking : RecommendedModelsDownloadState
+    data class Ready(val readiness: RecommendedModelsReadiness) : RecommendedModelsDownloadState
+    data class Downloading(
+        val readiness: RecommendedModelsReadiness,
+        val status: String,
+    ) : RecommendedModelsDownloadState
+    data class Error(
+        val readiness: RecommendedModelsReadiness,
+        val detail: String,
+    ) : RecommendedModelsDownloadState
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -130,8 +137,10 @@ fun OnboardingScreen(
     var mangaDownloadState by remember {
         mutableStateOf<MangaOfflineDownloadState>(MangaOfflineDownloadState.Checking)
     }
-    var paddleDownloadState by remember {
-        mutableStateOf<PaddleOcrDownloadState>(PaddleOcrDownloadState.Checking)
+    var recommendedModelsDownloadState by remember {
+        mutableStateOf<RecommendedModelsDownloadState>(
+            RecommendedModelsDownloadState.Checking
+        )
     }
     LaunchedEffect(firstRun) {
         draft = viewModel.loadDraft(firstRun)
@@ -170,69 +179,74 @@ fun OnboardingScreen(
         }.getOrElse { MlKitDownloadState.Error(it.message ?: it.javaClass.simpleName) }
     }
 
-    LaunchedEffect(currentStep) {
+    LaunchedEffect(
+        currentStep,
+        currentDraft.sourceLang,
+        currentDraft.targetLang,
+        currentDraft.translationMethod,
+    ) {
         when (currentStep) {
             OnboardingStep.MANGA_OFFLINE_DOWNLOAD -> {
                 mangaDownloadState = MangaOfflineDownloadState.Ready(
-                    viewModel.mangaOfflineModelReadiness()
+                    viewModel.mangaOfflineModelReadiness(
+                        includeSakura = OnboardingPolicy.usesSakuraMangaTranslation(currentDraft)
+                    )
                 )
             }
-            OnboardingStep.PADDLE_OCR_DOWNLOAD -> {
-                paddleDownloadState = if (viewModel.paddleV5ModelReady()) {
-                    PaddleOcrDownloadState.Ready
-                } else {
-                    PaddleOcrDownloadState.Missing
-                }
-            }
+            OnboardingStep.RECOMMENDED_MODELS_DOWNLOAD ->
+                recommendedModelsDownloadState = RecommendedModelsDownloadState.Ready(
+                    viewModel.recommendedModelsReadiness(currentDraft)
+                )
             else -> Unit
         }
     }
 
-    fun downloadPaddleOcrModel() {
-        paddleDownloadState = PaddleOcrDownloadState.Downloading("")
+    fun downloadRecommendedModels() {
+        val readiness = viewModel.recommendedModelsReadiness(currentDraft)
+        recommendedModelsDownloadState =
+            RecommendedModelsDownloadState.Downloading(readiness, "")
         scope.launch {
             runCatching {
-                viewModel.downloadPaddleV5Model { status ->
-                    paddleDownloadState = PaddleOcrDownloadState.Downloading(status)
+                viewModel.downloadMissingRecommendedModels(currentDraft) { status ->
+                    recommendedModelsDownloadState =
+                        RecommendedModelsDownloadState.Downloading(readiness, status)
                 }
-                viewModel.paddleV5ModelReady()
-            }.onSuccess { ready ->
-                paddleDownloadState = if (ready) {
-                    PaddleOcrDownloadState.Ready
-                } else {
-                    PaddleOcrDownloadState.Missing
-                }
-            }.onFailure {
-                paddleDownloadState = PaddleOcrDownloadState.Error(
-                    it.message ?: it.javaClass.simpleName
-                )
-            }
-        }
-    }
-
-    fun downloadMangaOfflineModels() {
-        val readiness = viewModel.mangaOfflineModelReadiness()
-        mangaDownloadState = MangaOfflineDownloadState.Downloading(readiness, "")
-        scope.launch {
-            runCatching {
-                viewModel.downloadMissingMangaOfflineModels { status ->
-                    mangaDownloadState =
-                        MangaOfflineDownloadState.Downloading(readiness, status)
-                }
-                viewModel.mangaOfflineModelReadiness()
+                viewModel.recommendedModelsReadiness(currentDraft)
             }.onSuccess {
-                mangaDownloadState = MangaOfflineDownloadState.Ready(it)
+                recommendedModelsDownloadState = RecommendedModelsDownloadState.Ready(it)
             }.onFailure {
-                mangaDownloadState = MangaOfflineDownloadState.Error(
-                    readiness = viewModel.mangaOfflineModelReadiness(),
+                recommendedModelsDownloadState = RecommendedModelsDownloadState.Error(
+                    readiness = viewModel.recommendedModelsReadiness(currentDraft),
                     detail = it.message ?: it.javaClass.simpleName,
                 )
             }
         }
     }
 
-    fun requestPaddleOcrModelDownload() {
-        continueModelDownloadAfterNotificationPermission(::downloadPaddleOcrModel)
+    fun downloadMangaOfflineModels() {
+        val includeSakura = OnboardingPolicy.usesSakuraMangaTranslation(currentDraft)
+        val readiness = viewModel.mangaOfflineModelReadiness(includeSakura)
+        mangaDownloadState = MangaOfflineDownloadState.Downloading(readiness, "")
+        scope.launch {
+            runCatching {
+                viewModel.downloadMissingMangaOfflineModels(includeSakura) { status ->
+                    mangaDownloadState =
+                        MangaOfflineDownloadState.Downloading(readiness, status)
+                }
+                viewModel.mangaOfflineModelReadiness(includeSakura)
+            }.onSuccess {
+                mangaDownloadState = MangaOfflineDownloadState.Ready(it)
+            }.onFailure {
+                mangaDownloadState = MangaOfflineDownloadState.Error(
+                    readiness = viewModel.mangaOfflineModelReadiness(includeSakura),
+                    detail = it.message ?: it.javaClass.simpleName,
+                )
+            }
+        }
+    }
+
+    fun requestRecommendedModelsDownload() {
+        continueModelDownloadAfterNotificationPermission(::downloadRecommendedModels)
     }
 
     fun requestMangaOfflineModelsDownload() {
@@ -314,7 +328,7 @@ fun OnboardingScreen(
                         draft = currentDraft,
                         downloadState = downloadState,
                         mangaDownloadState = mangaDownloadState,
-                        paddleDownloadState = paddleDownloadState,
+                        recommendedModelsDownloadState = recommendedModelsDownloadState,
                         saving = saving,
                         onDraftChange = { draft = it },
                         onDownload = {
@@ -333,7 +347,7 @@ fun OnboardingScreen(
                                 }
                             }
                         },
-                        onDownloadPaddleModel = ::requestPaddleOcrModelDownload,
+                        onDownloadRecommendedModels = ::requestRecommendedModelsDownload,
                         onDownloadMangaModels = ::requestMangaOfflineModelsDownload,
                         onNext = {
                             if (currentStep == OnboardingStep.SUMMARY) {
@@ -358,7 +372,7 @@ fun OnboardingScreen(
                         draft = currentDraft,
                         downloadState = downloadState,
                         mangaDownloadState = mangaDownloadState,
-                        paddleDownloadState = paddleDownloadState,
+                        recommendedModelsDownloadState = recommendedModelsDownloadState,
                         saving = saving,
                         onDraftChange = { draft = it },
                         onDownload = {
@@ -377,7 +391,7 @@ fun OnboardingScreen(
                                 }
                             }
                         },
-                        onDownloadPaddleModel = ::requestPaddleOcrModelDownload,
+                        onDownloadRecommendedModels = ::requestRecommendedModelsDownload,
                         onDownloadMangaModels = ::requestMangaOfflineModelsDownload,
                         onNext = {
                             if (currentStep == OnboardingStep.SUMMARY) {
@@ -517,11 +531,11 @@ private fun OnboardingPageSurface(
     draft: OnboardingDraft,
     downloadState: MlKitDownloadState,
     mangaDownloadState: MangaOfflineDownloadState,
-    paddleDownloadState: PaddleOcrDownloadState,
+    recommendedModelsDownloadState: RecommendedModelsDownloadState,
     saving: Boolean,
     onDraftChange: (OnboardingDraft) -> Unit,
     onDownload: () -> Unit,
-    onDownloadPaddleModel: () -> Unit,
+    onDownloadRecommendedModels: () -> Unit,
     onDownloadMangaModels: () -> Unit,
     onNext: () -> Unit,
     modifier: Modifier = Modifier,
@@ -587,19 +601,20 @@ private fun OnboardingPageSurface(
                             draft,
                             onDraftChange,
                         )
-                        OnboardingStep.PADDLE_OCR_DOWNLOAD -> PaddleOcrDownloadPage(
-                            draft,
-                            paddleDownloadState,
-                            onDownloadPaddleModel,
-                        )
+                        OnboardingStep.RECOMMENDED_MODELS_DOWNLOAD ->
+                            RecommendedModelsDownloadPage(
+                                recommendedModelsDownloadState,
+                                onDownloadRecommendedModels,
+                            )
                         OnboardingStep.OFFLINE_LANGUAGE_DOWNLOAD -> MlKitDownloadPage(
                             draft,
                             downloadState,
                             onDownload,
                         )
                         OnboardingStep.MANGA_OFFLINE_DOWNLOAD -> MangaOfflineDownloadPage(
-                            mangaDownloadState,
-                            onDownloadMangaModels,
+                            state = mangaDownloadState,
+                            includeSakura = OnboardingPolicy.usesSakuraMangaTranslation(draft),
+                            onDownload = onDownloadMangaModels,
                         )
                         OnboardingStep.CLOUD_CONFIG -> CloudConfigPage(
                             draft,
@@ -611,7 +626,12 @@ private fun OnboardingPageSurface(
                     HorizontalDivider()
                     Button(
                         onClick = onNext,
-                        enabled = canContinue(step, draft, downloadState) && !saving,
+                        enabled = canContinue(
+                            step,
+                            draft,
+                            downloadState,
+                            recommendedModelsDownloadState,
+                        ) && !saving,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(52.dp),
@@ -808,13 +828,6 @@ private fun UsagePage(
         description = stringResource(R.string.onboarding_usage_manga_desc),
         onClick = { onDraftChange(draft.copy(usage = OnboardingUsage.MANGA)) },
     )
-    if (draft.usage == OnboardingUsage.MANGA) {
-        Text(
-            stringResource(R.string.onboarding_usage_manga_applied),
-            color = MaterialTheme.colorScheme.primary,
-            style = MaterialTheme.typography.bodyMedium,
-        )
-    }
 }
 
 @Composable
@@ -883,8 +896,13 @@ private fun TranslationMethodPage(
         selected = draft.translationMethod == OnboardingTranslationMethod.OFFLINE,
         title = stringResource(R.string.onboarding_method_offline),
         description = stringResource(
-            if (draft.usage == OnboardingUsage.MANGA) {
+            if (
+                draft.usage == OnboardingUsage.MANGA &&
+                    OnboardingPolicy.isSakuraPairSupported(draft.sourceLang, draft.targetLang)
+            ) {
                 R.string.onboarding_method_offline_manga_desc
+            } else if (draft.usage == OnboardingUsage.MANGA) {
+                R.string.onboarding_method_offline_manga_multilingual_desc
             } else {
                 R.string.onboarding_method_offline_desc
             }
@@ -908,12 +926,7 @@ private fun TranslationMethodPage(
     if (
         draft.translationMethod == OnboardingTranslationMethod.OFFLINE &&
         (
-            draft.usage == OnboardingUsage.MANGA &&
-                !OnboardingPolicy.isSakuraPairSupported(
-                    draft.sourceLang,
-                    draft.targetLang,
-                ) ||
-                draft.usage == OnboardingUsage.DAILY &&
+            draft.usage == OnboardingUsage.DAILY &&
                 !OnboardingPolicy.isMlKitPairSupported(
                     draft.sourceLang,
                     draft.targetLang,
@@ -922,11 +935,7 @@ private fun TranslationMethodPage(
     ) {
         Text(
             stringResource(
-                if (draft.usage == OnboardingUsage.MANGA) {
-                    R.string.onboarding_manga_offline_pair_unsupported
-                } else {
-                    R.string.onboarding_offline_pair_unsupported
-                }
+                R.string.onboarding_offline_pair_unsupported
             ),
             color = MaterialTheme.colorScheme.error,
             style = MaterialTheme.typography.bodySmall,
@@ -935,65 +944,75 @@ private fun TranslationMethodPage(
 }
 
 @Composable
-private fun PaddleOcrDownloadPage(
-    draft: OnboardingDraft,
-    state: PaddleOcrDownloadState,
+private fun RecommendedModelsDownloadPage(
+    state: RecommendedModelsDownloadState,
     onDownload: () -> Unit,
 ) {
-    val context = androidx.compose.ui.platform.LocalContext.current
     PageHeading(
         icon = Icons.Default.Download,
-        title = stringResource(R.string.onboarding_paddle_ocr_title),
-        body = stringResource(
-            R.string.onboarding_paddle_ocr_body,
-            Languages.nameOf(context, draft.sourceLang),
-        ),
+        title = stringResource(R.string.onboarding_recommended_models_title),
+        body = stringResource(R.string.onboarding_recommended_models_body),
     )
     when (state) {
-        PaddleOcrDownloadState.Checking -> StatusRow(
+        RecommendedModelsDownloadState.Checking -> StatusRow(
             loading = true,
-            text = stringResource(R.string.onboarding_paddle_ocr_checking),
+            text = stringResource(R.string.onboarding_recommended_models_checking),
         )
         else -> {
-            val ready = state == PaddleOcrDownloadState.Ready
-            ModelRecommendationRow(
-                title = stringResource(R.string.paddle_version_v5_mobile),
-                detail = stringResource(R.string.onboarding_paddle_ocr_model_desc),
-                ready = ready,
-            )
+            val readiness = when (state) {
+                is RecommendedModelsDownloadState.Ready -> state.readiness
+                is RecommendedModelsDownloadState.Downloading -> state.readiness
+                is RecommendedModelsDownloadState.Error -> state.readiness
+                RecommendedModelsDownloadState.Checking -> return
+            }
+            readiness.paddleVersion?.let { version ->
+                ModelRecommendationRow(
+                    title = stringResource(version.displayNameRes),
+                    detail = stringResource(R.string.onboarding_recommended_models_ocr_desc),
+                    ready = readiness.paddleReady,
+                )
+            }
+            if (readiness.includeHyMt2) {
+                ModelRecommendationRow(
+                    title = "Hy-MT2",
+                    detail = stringResource(R.string.onboarding_recommended_models_translation_desc),
+                    ready = readiness.hyMt2Ready,
+                )
+            }
             when (state) {
-                is PaddleOcrDownloadState.Downloading -> StatusRow(
+                is RecommendedModelsDownloadState.Downloading -> StatusRow(
                     loading = true,
                     text = state.status.ifBlank {
-                        stringResource(R.string.onboarding_paddle_ocr_downloading)
+                        stringResource(R.string.onboarding_recommended_models_downloading)
                     },
                 )
-                is PaddleOcrDownloadState.Error -> Text(
-                    stringResource(R.string.onboarding_paddle_ocr_error, state.detail),
+                is RecommendedModelsDownloadState.Error -> Text(
+                    stringResource(R.string.onboarding_recommended_models_error, state.detail),
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall,
                 )
-                PaddleOcrDownloadState.Ready -> StatusRow(
-                    loading = false,
-                    text = stringResource(R.string.onboarding_paddle_ocr_ready),
-                )
-                PaddleOcrDownloadState.Checking,
-                PaddleOcrDownloadState.Missing -> Unit
+                is RecommendedModelsDownloadState.Ready -> if (readiness.allReady) {
+                    StatusRow(
+                        loading = false,
+                        text = stringResource(R.string.onboarding_recommended_models_ready),
+                    )
+                }
+                RecommendedModelsDownloadState.Checking -> Unit
             }
-            if (!ready) {
+            if (!readiness.allReady) {
                 OutlinedButton(
                     onClick = onDownload,
-                    enabled = state !is PaddleOcrDownloadState.Downloading,
+                    enabled = state !is RecommendedModelsDownloadState.Downloading,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Icon(Icons.Default.Download, contentDescription = null)
                     Text(
-                        stringResource(R.string.onboarding_paddle_ocr_download),
+                        stringResource(R.string.onboarding_recommended_models_download),
                         modifier = Modifier.padding(start = 8.dp),
                     )
                 }
                 Text(
-                    stringResource(R.string.onboarding_paddle_ocr_optional),
+                    stringResource(R.string.onboarding_recommended_models_optional),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -1068,12 +1087,25 @@ private fun MlKitDownloadPage(
 @Composable
 private fun MangaOfflineDownloadPage(
     state: MangaOfflineDownloadState,
+    includeSakura: Boolean,
     onDownload: () -> Unit,
 ) {
     PageHeading(
         icon = Icons.Default.Download,
-        title = stringResource(R.string.onboarding_manga_offline_title),
-        body = stringResource(R.string.onboarding_manga_offline_body),
+        title = stringResource(
+            if (includeSakura) {
+                R.string.onboarding_manga_offline_title
+            } else {
+                R.string.onboarding_manga_ocr_title
+            }
+        ),
+        body = stringResource(
+            if (includeSakura) {
+                R.string.onboarding_manga_offline_body
+            } else {
+                R.string.onboarding_manga_ocr_body
+            }
+        ),
     )
     when (state) {
         MangaOfflineDownloadState.Checking -> StatusRow(
@@ -1090,13 +1122,15 @@ private fun MangaOfflineDownloadPage(
             ModelRecommendationRow(
                 title = stringResource(R.string.onboarding_manga_offline_ocr),
                 detail = stringResource(R.string.onboarding_manga_offline_ocr_desc),
-                ready = readiness.mangaOcrReady,
+                ready = readiness.ocrReady,
             )
-            ModelRecommendationRow(
-                title = stringResource(R.string.onboarding_manga_offline_sakura),
-                detail = stringResource(R.string.onboarding_manga_offline_sakura_desc),
-                ready = readiness.sakuraReady,
-            )
+            if (includeSakura) {
+                ModelRecommendationRow(
+                    title = stringResource(R.string.onboarding_manga_offline_sakura),
+                    detail = stringResource(R.string.onboarding_manga_offline_sakura_desc),
+                    ready = readiness.sakuraReady,
+                )
+            }
             when (state) {
                 is MangaOfflineDownloadState.Downloading -> StatusRow(
                     loading = true,
@@ -1115,7 +1149,13 @@ private fun MangaOfflineDownloadPage(
                 is MangaOfflineDownloadState.Ready -> if (readiness.allReady) {
                     StatusRow(
                         loading = false,
-                        text = stringResource(R.string.onboarding_manga_offline_ready),
+                        text = stringResource(
+                            if (includeSakura) {
+                                R.string.onboarding_manga_offline_ready
+                            } else {
+                                R.string.onboarding_manga_ocr_ready
+                            }
+                        ),
                     )
                 }
                 MangaOfflineDownloadState.Checking -> Unit
@@ -1296,8 +1336,10 @@ private fun SummaryPage(draft: OnboardingDraft) {
         stringResource(R.string.onboarding_summary_translation),
         if (draft.translationMethod == OnboardingTranslationMethod.OFFLINE) {
             stringResource(
-                if (draft.usage == OnboardingUsage.MANGA) {
+                if (OnboardingPolicy.usesSakuraMangaTranslation(draft)) {
                     R.string.onboarding_summary_manga_offline
+                } else if (draft.usage == OnboardingUsage.MANGA) {
+                    R.string.onboarding_summary_manga_multilingual_offline
                 } else {
                     R.string.onboarding_method_offline
                 }
@@ -1458,6 +1500,7 @@ private fun ChoiceCard(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ChoiceChip(
     label: String,
@@ -1482,7 +1525,11 @@ private fun ChoiceChip(
             )
             Spacer(Modifier.width(6.dp))
         }
-        Text(label, maxLines = 1)
+        Text(
+            text = label,
+            modifier = Modifier.basicMarquee(),
+            maxLines = 1,
+        )
     }
 }
 
@@ -1531,6 +1578,7 @@ private fun canContinue(
     step: OnboardingStep,
     draft: OnboardingDraft,
     downloadState: MlKitDownloadState,
+    recommendedModelsDownloadState: RecommendedModelsDownloadState,
 ): Boolean = when (step) {
     OnboardingStep.SOURCE_LANGUAGE -> draft.sourceLang.isNotBlank() &&
         draft.sourceLang != Languages.AUTO.code
@@ -1539,12 +1587,21 @@ private fun canContinue(
         draft.targetLang != draft.sourceLang
     OnboardingStep.TRANSLATION_METHOD -> when {
         draft.translationMethod != OnboardingTranslationMethod.OFFLINE -> true
-        draft.usage == OnboardingUsage.MANGA ->
-            OnboardingPolicy.isSakuraPairSupported(draft.sourceLang, draft.targetLang)
+        draft.usage == OnboardingUsage.MANGA -> true
         else -> OnboardingPolicy.isMlKitPairSupported(draft.sourceLang, draft.targetLang)
     }
     OnboardingStep.OFFLINE_LANGUAGE_DOWNLOAD ->
         downloadState == MlKitDownloadState.Ready
+    OnboardingStep.RECOMMENDED_MODELS_DOWNLOAD -> when (recommendedModelsDownloadState) {
+        RecommendedModelsDownloadState.Checking ->
+            !OnboardingPolicy.usesHyMt2MangaTranslation(draft)
+        is RecommendedModelsDownloadState.Ready ->
+            recommendedModelsDownloadState.readiness.requiredModelsReady
+        is RecommendedModelsDownloadState.Downloading ->
+            recommendedModelsDownloadState.readiness.requiredModelsReady
+        is RecommendedModelsDownloadState.Error ->
+            recommendedModelsDownloadState.readiness.requiredModelsReady
+    }
     OnboardingStep.CLOUD_CONFIG -> OnboardingPolicy.cloudConfigError(draft) == null
     else -> true
 }

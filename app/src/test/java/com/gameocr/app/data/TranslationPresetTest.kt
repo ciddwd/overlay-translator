@@ -8,6 +8,31 @@ import org.junit.Test
 class TranslationPresetTest {
 
     @Test
+    fun llmOutboundEncoding_tableDriven_roundTripsTranslationPresets() {
+        data class Case(val name: String, val options: OpenAiRequestOptions)
+
+        listOf(
+            Case("disabled", OpenAiRequestOptions()),
+            Case("Base64", OpenAiRequestOptions(encodeUserTextBase64 = true)),
+            Case("Unicode", OpenAiRequestOptions(encodeUserTextUnicode = true)),
+            Case("thinking enabled", OpenAiRequestOptions(thinkingModeEnabled = true)),
+        ).forEachIndexed { index, case ->
+            val source = Settings(openAiRequestOptions = case.options)
+            val preset = TranslationPresetCatalog.fromSettings(
+                id = "llm_encoding_$index",
+                name = case.name,
+                shortName = case.name,
+                settings = source,
+            )
+            val applied = preset.applyTo(Settings())
+
+            assertEquals(case.name, case.options, preset.openAiRequestOptions)
+            assertEquals(case.name, case.options, applied.openAiRequestOptions)
+            assertTrue(case.name, TranslationPresetCatalog.matchesSettings(preset, source))
+        }
+    }
+
+    @Test
     fun mangaBuiltInPresetAppliesOfflineJapaneseMangaModeAndKeepsSecrets() {
         val base = Settings(
             apiKey = "openai-key",
@@ -36,6 +61,7 @@ class TranslationPresetTest {
         assertEquals("ja", applied.sourceLang)
         assertEquals("zh-CN", applied.targetLang)
         assertEquals(OcrEngineKind.MANGA_OCR_JA, applied.ocrEngine)
+        assertEquals(PaddleModelVersion.V6_SMALL, applied.paddleModelVersion)
         assertEquals(TranslatorEngine.LOCAL_SAKURA, applied.translatorEngine)
         assertEquals(MergeStrength.AGGRESSIVE, applied.mergeStrength)
         data class DisplayPolicyCase(
@@ -223,6 +249,14 @@ class TranslationPresetTest {
             Case("translation output direction", base.copy(translationOutputDirection = TranslationOutputDirection.RIGHT_TO_LEFT)),
             Case("translation glossary", base.copy(translationGlossaryEnabled = false)),
             Case("application context", base.copy(sendAppNameToTranslator = true)),
+            Case(
+                "LLM outbound text encoding",
+                base.copy(
+                    openAiRequestOptions = base.openAiRequestOptions.copy(
+                        encodeUserTextBase64 = true,
+                    )
+                ),
+            ),
             Case("DBNet threshold", base.copy(dbnetProbThresh = 0.25f))
         )
 
@@ -411,7 +445,8 @@ class TranslationPresetTest {
             overlayAllowWrap = false,
             overlayAvoidCollision = false,
             streamingTranslate = false,
-            retryEmptyTranslation = true,
+            retryFailedTranslation = true,
+            translationContextMode = TranslationContextMode.CONTINUOUS_CONTEXT,
             translatorEngine = TranslatorEngine.DEEPL,
             deeplPro = true,
             deeplProtocol = DeeplProtocol.DEEPLX,

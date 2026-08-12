@@ -18,17 +18,17 @@ class WordSelectImmediateCardTest {
         val cases = listOf(
             Case(
                 name = "card cannot contaminate the screenshot",
-                before = "val full = shotter.capture()",
+                before = "var full = shotter.capture()",
                 after = "sourceText = \"\"",
             ),
             Case(
                 name = "loading card is visible before OCR starts",
                 before = "sourceText = \"\"",
-                after = "ocrEngine.recognize(cropped, settings.ocrEngine)",
+                after = "ocrEngine.recognize(cropped, settings.ocrEngine, settings)",
             ),
             Case(
                 name = "recognized source replaces the loading placeholder",
-                before = "ocrEngine.recognize(cropped, settings.ocrEngine)",
+                before = "ocrEngine.recognize(cropped, settings.ocrEngine, settings)",
                 after = "card.updateSource(text)",
             ),
             Case(
@@ -46,7 +46,7 @@ class WordSelectImmediateCardTest {
             assertTrue(case.name, beforeIndex < afterIndex)
         }
 
-        val screenshotIndex = pipeline.indexOf("val full = shotter.capture()")
+        val screenshotIndex = pipeline.indexOf("var full = shotter.capture()")
         val loadingCardIndex = pipeline.indexOf("sourceText = \"\"")
         val chromeRestoreIndex = pipeline.lastIndexOf(
             "restoreCaptureChromeOnce(showLoading = false)",

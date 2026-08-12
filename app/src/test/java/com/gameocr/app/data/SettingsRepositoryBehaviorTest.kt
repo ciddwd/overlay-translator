@@ -13,6 +13,41 @@ import org.junit.Test
 class SettingsRepositoryBehaviorTest {
 
     @Test
+    fun llmOutboundEncoding_tableDriven_roundTripsNormalizedState() = runBlocking {
+        data class Case(
+            val name: String,
+            val requested: OpenAiRequestOptions,
+            val expected: OpenAiRequestOptions,
+        )
+
+        listOf(
+            Case("disabled", OpenAiRequestOptions(), OpenAiRequestOptions()),
+            Case(
+                "Base64",
+                OpenAiRequestOptions(encodeUserTextBase64 = true),
+                OpenAiRequestOptions(encodeUserTextBase64 = true),
+            ),
+            Case(
+                "Unicode",
+                OpenAiRequestOptions(encodeUserTextUnicode = true),
+                OpenAiRequestOptions(encodeUserTextUnicode = true),
+            ),
+            Case(
+                "conflict prefers Base64",
+                OpenAiRequestOptions(encodeUserTextBase64 = true, encodeUserTextUnicode = true),
+                OpenAiRequestOptions(encodeUserTextBase64 = true),
+            ),
+        ).forEach { case ->
+            val repository = fileBackedRepository(
+                Files.createTempDirectory("settings-llm-encoding-test").toFile()
+            )
+            repository.update { it.copy(openAiRequestOptions = case.requested) }
+
+            assertEquals(case.name, case.expected, repository.get().openAiRequestOptions)
+        }
+    }
+
+    @Test
     fun mainStatusPresetSeen_tableDriven_persistsDiscoveryState() = runBlocking {
         data class Case(
             val name: String,
@@ -86,6 +121,38 @@ class SettingsRepositoryBehaviorTest {
         ).forEach { case ->
             repository.update { Settings(ttsGainDb = case.requestedDb) }
             assertEquals(case.name, case.expectedDb, repository.get().ttsGainDb)
+        }
+    }
+
+    @Test
+    fun mangaDetectorVersion_tableDriven_isForcedOnlyForMangaOcr() = runBlocking {
+        data class Case(
+            val name: String,
+            val engine: OcrEngineKind,
+            val requestedVersion: PaddleModelVersion,
+            val expectedVersion: PaddleModelVersion,
+        )
+        val cases = listOf(
+            Case("legacy Manga V5 migrates", OcrEngineKind.MANGA_OCR_JA, PaddleModelVersion.V5_MOBILE, PaddleModelVersion.V6_SMALL),
+            Case("Manga tiny migrates", OcrEngineKind.MANGA_OCR_JA, PaddleModelVersion.V6_TINY, PaddleModelVersion.V6_SMALL),
+            Case("Manga medium migrates", OcrEngineKind.MANGA_OCR_JA, PaddleModelVersion.V6_MEDIUM, PaddleModelVersion.V6_SMALL),
+            Case("Manga small remains", OcrEngineKind.MANGA_OCR_JA, PaddleModelVersion.V6_SMALL, PaddleModelVersion.V6_SMALL),
+            Case("general Paddle V5 remains", OcrEngineKind.PADDLE_ONNX, PaddleModelVersion.V5_MOBILE, PaddleModelVersion.V5_MOBILE),
+            Case("general Paddle medium remains", OcrEngineKind.PADDLE_ONNX, PaddleModelVersion.V6_MEDIUM, PaddleModelVersion.V6_MEDIUM),
+            Case("ML Kit keeps stored choice", OcrEngineKind.ML_KIT_JAPANESE, PaddleModelVersion.V6_TINY, PaddleModelVersion.V6_TINY),
+        )
+
+        cases.forEach { case ->
+            val repository = fileBackedRepository(
+                Files.createTempDirectory("settings-manga-detector-test").toFile()
+            )
+            repository.update {
+                it.copy(
+                    ocrEngine = case.engine,
+                    paddleModelVersion = case.requestedVersion,
+                )
+            }
+            assertEquals(case.name, case.expectedVersion, repository.get().paddleModelVersion)
         }
     }
 
@@ -214,7 +281,7 @@ class SettingsRepositoryBehaviorTest {
             overlayFontDisplayName = "Roundtrip.ttf",
             overlayFonts = listOf(OverlayFontEntry(fontName, "Roundtrip.ttf")),
             streamingTranslate = false,
-            retryEmptyTranslation = true,
+                retryFailedTranslation = true,
             ttsGainDb = 7,
             renderMode = RenderMode.FLOATING_WINDOW,
             translationBlockInteractionMode = TranslationBlockInteractionMode.OPEN_COPY_PANEL,
@@ -279,13 +346,13 @@ class SettingsRepositoryBehaviorTest {
             floatingWindowHeightDp = 233,
             floatingWindowContentMode = FloatingWindowContentMode.DST_ONLY,
             floatingWindowLocked = true,
+            floatingWindowAutoHideWhenObstructing = true,
             customBorderStyle = BorderStyle.DOTTED,
             overlayAllowWrap = false,
             overlayAvoidCollision = false,
             apiTimeoutSeconds = 47,
             mergeAdjacentBlocks = true,
             mergeStrength = MergeStrength.CONSERVATIVE,
-            disableCrossLineContextTranslation = true,
             pinnedLanguages = listOf("ja", "zh-TW", "en"),
             mlKitRecentSourceLanguages = listOf("ru", "en", "ja", "ko"),
             cleartextAllowedHosts = listOf("192.168.0.2", "localhost"),
@@ -309,7 +376,7 @@ class SettingsRepositoryBehaviorTest {
 
         repository.update { requested }
 
-        assertEquals(MangaOcrAdvancedSettingsPolicy.normalize(requested), repository.get())
+        assertEquals(MangaOcrSettingsPolicy.normalize(requested), repository.get())
     }
 
     private fun fileBackedRepository(root: File): SettingsRepository =

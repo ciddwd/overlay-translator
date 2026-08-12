@@ -3,7 +3,10 @@ package com.gameocr.app.glossary
 import android.os.SystemClock
 import com.gameocr.app.appcontext.ForegroundAppResolver
 import com.gameocr.app.data.Settings
+import com.gameocr.app.data.RuntimeGlossaryTerm
+import com.gameocr.app.data.RuntimeTranslationPromptContext
 import com.gameocr.app.data.TranslatorEngine
+import com.gameocr.app.translate.TranslationPromptContextPolicy
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.serialization.Serializable
@@ -47,19 +50,8 @@ internal object TranslationPromptContextBuilder {
     }
 }
 
-internal fun supportsTranslationPromptContext(engine: TranslatorEngine): Boolean = when (engine) {
-    TranslatorEngine.OPENAI,
-    TranslatorEngine.ANTHROPIC,
-    TranslatorEngine.LOCAL_SAKURA,
-    TranslatorEngine.LOCAL_HY_MT2 -> true
-    TranslatorEngine.DEEPL,
-    TranslatorEngine.YOUDAO_PICTRANS,
-    TranslatorEngine.GOOGLE,
-    TranslatorEngine.GOOGLE_ML_KIT,
-    TranslatorEngine.VOLC,
-    TranslatorEngine.BAIDU_FANYI,
-    TranslatorEngine.TENCENT -> false
-}
+internal fun supportsTranslationPromptContext(engine: TranslatorEngine): Boolean =
+    TranslationPromptContextPolicy.supportsContext(engine)
 
 @Singleton
 class TranslationContextResolver @Inject constructor(
@@ -69,9 +61,28 @@ class TranslationContextResolver @Inject constructor(
 ) {
     suspend fun enrich(source: String, settings: Settings): Settings {
         if (!supportsTranslationPromptContext(settings.translatorEngine)) {
-            return settings.copy(runtimeTranslationContext = "")
+            return settings.copy(
+                runtimeTranslationContext = "",
+                runtimeTranslationPromptContext = RuntimeTranslationPromptContext(),
+            )
         }
-        if (!settings.translationGlossaryEnabled && !settings.sendAppNameToTranslator) return settings
+        val promptContextWithoutRequestMetadata = settings.runtimeTranslationPromptContext.copy(
+            currentApplication = null,
+            glossary = emptyList(),
+        )
+        val usesGenericRuntimeText =
+            TranslationPromptContextPolicy.usesGenericRuntimeText(settings.translatorEngine)
+        val genericRuntimeContext = if (usesGenericRuntimeText) {
+            settings.runtimeTranslationContext
+        } else {
+            ""
+        }
+        if (!settings.translationGlossaryEnabled && !settings.sendAppNameToTranslator) {
+            return settings.copy(
+                runtimeTranslationContext = genericRuntimeContext,
+                runtimeTranslationPromptContext = promptContextWithoutRequestMetadata,
+            )
+        }
         val startedAt = SystemClock.elapsedRealtime()
         val explicitScope = settings.runtimeTranslationScopePackage
         val app = if (explicitScope == null) {
@@ -95,11 +106,15 @@ class TranslationContextResolver @Inject constructor(
         } else {
             emptyList()
         }
-        val prompt = TranslationPromptContextBuilder.build(
-            appName = appLabel?.takeIf { settings.sendAppNameToTranslator },
-            matches = matches,
-            json = json,
-        )
+        val prompt = if (usesGenericRuntimeText) {
+            TranslationPromptContextBuilder.build(
+                appName = appLabel?.takeIf { settings.sendAppNameToTranslator },
+                matches = matches,
+                json = json,
+            )
+        } else {
+            ""
+        }
         Timber.tag("TranslationPerf").i(
             "stage=context_ready mode=%s appSource=%s glossaryTerms=%d elapsedMs=%d",
             settings.foregroundAppDetectionMode.name,
@@ -107,6 +122,23 @@ class TranslationContextResolver @Inject constructor(
             matches.size,
             SystemClock.elapsedRealtime() - startedAt,
         )
-        return settings.copy(runtimeTranslationContext = prompt)
+        return settings.copy(
+            runtimeTranslationContext = if (usesGenericRuntimeText) {
+                genericRuntimeContext + prompt
+            } else {
+                ""
+            },
+            runtimeTranslationPromptContext = promptContextWithoutRequestMetadata.copy(
+                currentApplication = appLabel?.takeIf {
+                    settings.sendAppNameToTranslator && it.isNotBlank()
+                },
+                glossary = matches.map { match ->
+                    RuntimeGlossaryTerm(
+                        source = match.sourceTerm,
+                        target = match.targetTerm,
+                    )
+                },
+            ),
+        )
     }
 }

@@ -11,16 +11,38 @@ internal enum class FloatingWindowCaptureAction {
 }
 
 internal fun floatingWindowCaptureAction(
-    loopMode: Boolean,
     renderMode: RenderMode,
     isFloatingWindowShown: Boolean,
+    autoHideWhenObstructing: Boolean,
+    windowBounds: OverlayCaptureRect?,
+    captureRegion: CaptureRegion?,
 ): FloatingWindowCaptureAction {
-    if (!loopMode || !isFloatingWindowShown) return FloatingWindowCaptureAction.NONE
-    return if (renderMode == RenderMode.FLOATING_WINDOW) {
-        FloatingWindowCaptureAction.PRESERVE_AND_MASK
-    } else {
-        FloatingWindowCaptureAction.HIDE_TEMPORARILY
+    if (!isFloatingWindowShown) return FloatingWindowCaptureAction.NONE
+    if (!floatingWindowOverlapsCaptureRegion(windowBounds, captureRegion)) {
+        return FloatingWindowCaptureAction.NONE
     }
+    if (windowBounds == null || windowBounds.isEmpty) {
+        return FloatingWindowCaptureAction.HIDE_TEMPORARILY
+    }
+    return if (renderMode != RenderMode.FLOATING_WINDOW || autoHideWhenObstructing) {
+        FloatingWindowCaptureAction.HIDE_TEMPORARILY
+    } else {
+        FloatingWindowCaptureAction.PRESERVE_AND_MASK
+    }
+}
+
+internal fun floatingWindowOverlapsCaptureRegion(
+    windowBounds: OverlayCaptureRect?,
+    captureRegion: CaptureRegion?,
+): Boolean {
+    if (captureRegion == null || !captureRegion.isValid()) return true
+    // A visible window without measurable bounds must be treated as obstructing; otherwise its
+    // contents can leak into OCR with no safe rectangle to mask.
+    if (windowBounds == null || windowBounds.isEmpty) return true
+    return windowBounds.left < captureRegion.right &&
+        windowBounds.right > captureRegion.left &&
+        windowBounds.top < captureRegion.bottom &&
+        windowBounds.bottom > captureRegion.top
 }
 
 internal fun shouldHideFloatingButtonForCapture(

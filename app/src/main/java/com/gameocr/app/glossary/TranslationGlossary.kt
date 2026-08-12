@@ -1,5 +1,6 @@
 package com.gameocr.app.glossary
 
+import android.content.Context
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Entity
@@ -17,11 +18,14 @@ import java.text.Normalizer
 import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.Serializable
 
 @Serializable
-enum class GlossaryTermCategory { PERSON, PLACE, ORGANIZATION, TERM }
+enum class GlossaryTermCategory { PERSON, PLACE, ORGANIZATION, TERM, PRESERVE_SOURCE }
 
 @Serializable
 @Entity(
@@ -177,6 +181,7 @@ internal object GlossaryMatcher {
         if (source.isBlank() || maxTerms <= 0 || maxCharacters <= 0) return emptyList()
         val scoped = terms.asSequence()
             .filter(GlossaryTermEntity::enabled)
+            .filter { it.category != GlossaryTermCategory.PRESERVE_SOURCE }
             .filter { it.scopePackage.isEmpty() || it.scopePackage == packageName }
             .filter { languageMatches(it.sourceLang, sourceLang, allowAuto = true) }
             .filter { languageMatches(it.targetLang, targetLang, allowAuto = false) }
@@ -227,10 +232,38 @@ fun normalizeGlossaryTerm(value: String, caseSensitive: Boolean): String {
 @Singleton
 class TranslationGlossaryRepository @Inject constructor(
     private val dao: TranslationGlossaryDao,
+    @ApplicationContext private val context: Context? = null,
 ) {
+    private val presetSeedMutex = Mutex()
+
     fun observeAll(): Flow<List<GlossaryTermEntity>> = dao.observeAll()
 
     suspend fun listAll(): List<GlossaryTermEntity> = dao.listAll()
+
+    suspend fun listEnabled(): List<GlossaryTermEntity> = dao.listEnabled()
+
+    suspend fun ensureSourcePreservationPresets() = presetSeedMutex.withLock {
+        val appContext = context ?: return@withLock
+        val prefs = appContext.getSharedPreferences(SOURCE_PRESERVATION_PREFS, Context.MODE_PRIVATE)
+        if (prefs.getBoolean(SOURCE_PRESERVATION_SEED_V1, false)) return@withLock
+        val terms = appContext.assets.open(SOURCE_PRESERVATION_ASSET).bufferedReader().useLines { lines ->
+            lines.map(String::trim)
+                .filter { it.isNotEmpty() && !it.startsWith("#") }
+                .distinct()
+                .map { source ->
+                    GlossaryTermEntity(
+                        sourceLang = "ja",
+                        targetLang = SOURCE_PRESERVATION_TARGET,
+                        sourceTerm = source,
+                        targetTerm = source,
+                        category = GlossaryTermCategory.PRESERVE_SOURCE,
+                    )
+                }
+                .toList()
+        }
+        dao.importTermsAtomically(terms)
+        prefs.edit().putBoolean(SOURCE_PRESERVATION_SEED_V1, true).apply()
+    }
 
     suspend fun matchingTerms(
         source: String,
@@ -309,4 +342,11 @@ class TranslationGlossaryRepository @Inject constructor(
         dao.importTermsAtomically(terms.map { it.copy(id = 0) })
 
     suspend fun restoreTerms(terms: List<GlossaryTermEntity>) = dao.replaceAllAtomically(terms)
+
+    private companion object {
+        const val SOURCE_PRESERVATION_PREFS = "source_preservation_presets"
+        const val SOURCE_PRESERVATION_SEED_V1 = "ja_manga_sfx_v1"
+        const val SOURCE_PRESERVATION_ASSET = "source_preservation_ja.txt"
+        const val SOURCE_PRESERVATION_TARGET = "*"
+    }
 }

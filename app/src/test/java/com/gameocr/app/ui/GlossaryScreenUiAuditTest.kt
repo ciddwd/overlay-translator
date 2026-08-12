@@ -21,6 +21,10 @@ class GlossaryScreenUiAuditTest {
     @Test
     fun glossaryScreen_usesSharedPickersAndSettingsStyling() {
         data class Case(val name: String, val marker: String)
+        val editor = source.substring(
+            source.indexOf("private fun GlossaryTermEditor("),
+            source.indexOf("private fun GlossaryAppPickerDialog("),
+        )
 
         listOf(
             Case("system back handling", "BackHandler(onBack = onBack)"),
@@ -58,7 +62,7 @@ class GlossaryScreenUiAuditTest {
         ).forEach { case -> assertTrue(case.name, source.contains(case.marker)) }
 
         assertEquals("editor has exactly two language pickers", 2, source.countOccurrences("LanguagePicker("))
-        assertEquals("editor has exactly two settings switches", 2, source.countOccurrences("SwitchRow("))
+        assertEquals("editor has exactly two settings switches", 2, editor.countOccurrences("SwitchRow("))
         assertFalse("source language is not a free text field", source.contains("onValueChange = { sourceLang = it }"))
         assertFalse("target language is not a free text field", source.contains("onValueChange = { targetLang = it }"))
         assertFalse("list language labels must not expose codes", source.contains("(\${term.sourceLang})"))
@@ -71,6 +75,31 @@ class GlossaryScreenUiAuditTest {
     }
 
     @Test
+    fun sourcePreservationMasterGate_isTheFixedFirstListItem() {
+        val preservationList = source.substring(
+            source.indexOf("TranslationLibraryTab.PRESERVE_SOURCE -> LazyColumn("),
+            source.indexOf("TranslationLibraryTab.MEMORY -> TranslationMemoryPane("),
+        )
+
+        data class Case(val name: String, val marker: String)
+        listOf(
+            Case("stable item key", "item(key = \"source-preservation-master\")"),
+            Case("master card", "SourcePreservationMasterCard("),
+            Case("persisted action", "viewModel.setSourcePreservationEnabled(!disableAll)"),
+        ).forEach { case -> assertTrue(case.name, preservationList.contains(case.marker)) }
+
+        assertTrue(
+            "master gate precedes empty state and database entries",
+            preservationList.indexOf("source-preservation-master") <
+                preservationList.indexOf("visiblePreservationTerms.isEmpty()") &&
+                preservationList.indexOf("source-preservation-master") <
+                preservationList.indexOf("items(visiblePreservationTerms"),
+        )
+        assertTrue("Chinese label", chineseStrings.contains("全部停用原文保留"))
+        assertTrue("English label", englishStrings.contains("Disable all source preservation"))
+    }
+
+    @Test
     fun translationLibrary_tableDriven_exposesBothManagedResourceTypes() {
         data class Case(
             val name: String,
@@ -80,6 +109,7 @@ class GlossaryScreenUiAuditTest {
 
         listOf(
             Case("terms tab", source, "R.string.translation_library_terms_tab"),
+            Case("source preservation tab", source, "R.string.source_preservation_tab"),
             Case("translation memory tab", source, "R.string.translation_library_memory_tab"),
             Case("memory flow is collected", source, "viewModel.memories.collectAsState()"),
             Case("memory search", memorySource, "TranslationMemoryListFilterPolicy.filter"),
@@ -208,8 +238,8 @@ class GlossaryScreenUiAuditTest {
             Case("management help section", helpDialog, "R.string.translation_library_help_manage_body"),
             Case("Chinese copy explains terms", chineseStrings, "术语：统一角色名和专有名词"),
             Case("Chinese copy explains memory", chineseStrings, "翻译记忆：记住你改过的整句话"),
-            Case("Chinese copy explains priority", chineseStrings, "两者谁先使用"),
-            Case("English copy is present", englishStrings, "Which one is used first?"),
+            Case("Chinese copy explains priority", chineseStrings, "优先顺序"),
+            Case("English copy is present", englishStrings, "Priority order"),
         ).forEach { case ->
             assertEquals(case.name, case.expected, case.marker in case.content)
         }

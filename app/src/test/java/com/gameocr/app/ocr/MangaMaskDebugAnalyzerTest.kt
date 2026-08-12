@@ -449,6 +449,44 @@ class MangaMaskDebugAnalyzerTest {
     }
 
     @Test
+    fun textEraseMask_tableDriven_completesDetectorMissedCornersWithoutTakingPanelLines() {
+        data class Case(
+            val name: String,
+            val background: Int,
+            val foreground: Int,
+        )
+        listOf(
+            Case("dark text on white bubble", WHITE, BLACK),
+            Case("white text on black panel", BLACK, WHITE),
+        ).forEach { case ->
+            val width = 48
+            val height = 36
+            val pixels = IntArray(width * height) { case.background }
+            val polygon = rectanglePolygon(8f, 6f, 40f, 30f)
+            val probability = BooleanArray(width * height)
+            for (y in 8 until 28) {
+                for (x in 9 until 19) probability[y * width + x] = true
+            }
+            drawRect(pixels, width, IntRect(13, 11, 18, 25), case.foreground)
+            drawRect(pixels, width, IntRect(20, 15, 22, 18), case.foreground)
+            drawRect(pixels, width, IntRect(37, 7, 38, 29), case.foreground)
+
+            val analysis = MangaMaskDebugAnalyzer.analyze(
+                width = width,
+                height = height,
+                argb = pixels,
+                probabilityTextMask = probability,
+                polygons = listOf(polygon),
+                bubbles = emptyList(),
+            )
+
+            assertTrue("${case.name}: DBNet seed remains", analysis.textEraseMask[16 * width + 15])
+            assertTrue("${case.name}: nearby missed corner is completed", analysis.textEraseMask[16 * width + 20])
+            assertFalse("${case.name}: distant panel line is preserved", analysis.textEraseMask[16 * width + 37])
+        }
+    }
+
+    @Test
     fun probabilityAccumulator_tableDriven_mapsFullAndOffsetTileCoordinates() {
         data class Case(
             val name: String,

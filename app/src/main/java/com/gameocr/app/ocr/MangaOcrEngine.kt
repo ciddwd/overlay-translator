@@ -20,6 +20,7 @@ import com.gameocr.app.R
 import com.gameocr.app.data.LogRepository
 import com.gameocr.app.data.MangaOcrAdvancedSettingsPolicy
 import com.gameocr.app.data.OcrEngineKind
+import com.gameocr.app.data.Settings
 import com.gameocr.app.data.adaptiveOverlayActive
 import com.gameocr.app.data.dbnetUnclipRatioFor
 import com.gameocr.app.util.CpuThreadPolicy
@@ -42,6 +43,7 @@ import kotlinx.coroutines.withContext
 import timber.log.Timber
 import java.io.Closeable
 import java.io.File
+import java.util.Locale
 import kotlin.coroutines.coroutineContext
 
 /**
@@ -101,23 +103,31 @@ class MangaOcrEngine @Inject constructor(
     private val ortThreads by lazy { CpuThreadPolicy.select(availableProcessors) }
 
     override suspend fun recognize(bitmap: Bitmap, kind: OcrEngineKind): List<TextBlock> {
+        return recognize(bitmap, kind, settingsRepository.get())
+    }
+
+    override suspend fun recognize(
+        bitmap: Bitmap,
+        kind: OcrEngineKind,
+        settings: Settings,
+    ): List<TextBlock> {
         val startedAt = SystemClock.elapsedRealtime()
         val mangaReadyStartedAt = SystemClock.elapsedRealtime()
         ensureReady()
         val mangaReadyMs = InferenceTiming.elapsedMs(mangaReadyStartedAt, SystemClock.elapsedRealtime())
         // DBNet 也得就绪。Paddle 和 manga-ocr 都未就绪时分别抛各自的 ModelNotReadyException
         val paddleReadyStartedAt = SystemClock.elapsedRealtime()
-        paddle.ensureReady()
+        paddle.ensureReady(settings.paddleModelVersion)
         val paddleReadyMs = InferenceTiming.elapsedMs(paddleReadyStartedAt, SystemClock.elapsedRealtime())
-        val s = settingsRepository.get()
         val results = withContext(Dispatchers.Default) {
             traceSection(MangaOcrTracePolicy.sectionName(MangaOcrTraceStage.RUN)) {
-                runFull(bitmap, s)
+                runFull(bitmap, settings)
             }
         }
         Timber.tag(PERF_TAG).i(
-            "recognize totalMs=%d mangaReadyMs=%d paddleReadyMs=%d bitmap=%dx%d blocks=%d ortThreads=%d",
+            "recognize totalMs=%d settingsMs=%d mangaReadyMs=%d paddleReadyMs=%d bitmap=%dx%d blocks=%d ortThreads=%d",
             InferenceTiming.elapsedMs(startedAt, SystemClock.elapsedRealtime()),
+            0L,
             mangaReadyMs,
             paddleReadyMs,
             bitmap.width,
@@ -154,6 +164,32 @@ class MangaOcrEngine @Inject constructor(
         localSegmentationModelAvailable =
             MangaBubbleSegmentationDebugEngine.isInstalled(context),
     ).createDelayedSession
+
+    internal suspend fun prepareDelayedMaskDebugBatch(
+        batch: MangaDelayedMaskDebugSessionManager.Batch,
+        blockIndices: Set<Int>,
+    ): MangaDelayedMaskDebugSessionManager.Prepared =
+        shapeAwareSessionStore.manager.prepare(
+            batch = batch,
+            blockIndices = blockIndices,
+        )
+
+    internal suspend fun finishPreparedDelayedMaskDebugBatch(
+        prepared: MangaDelayedMaskDebugSessionManager.Prepared,
+        successfulBlockIndices: Set<Int>,
+        translatedBlockTexts: Map<Int, String>,
+        outputOrientation: TextOrientation,
+        followBlockOrientations: Boolean,
+        displayPatches: suspend (List<ShapeAwareBubblePatch>) -> Int,
+    ): MangaDelayedMaskDebugSessionManager.Dump =
+        shapeAwareSessionStore.manager.finish(
+            prepared = prepared,
+            successfulBlockIndices = successfulBlockIndices,
+            translatedBlockTexts = translatedBlockTexts,
+            outputOrientation = outputOrientation,
+            followBlockOrientations = followBlockOrientations,
+            displayPatches = displayPatches,
+        )
 
     internal suspend fun finishDelayedMaskDebugBatch(
         batch: MangaDelayedMaskDebugSessionManager.Batch,
@@ -236,13 +272,15 @@ class MangaOcrEngine @Inject constructor(
 
     suspend fun prewarm() {
         val startedAt = SystemClock.elapsedRealtime()
+        val settingsStartedAt = SystemClock.elapsedRealtime()
+        val settings = settingsRepository.get()
+        val settingsMs = InferenceTiming.elapsedMs(settingsStartedAt, SystemClock.elapsedRealtime())
         val mangaStartedAt = SystemClock.elapsedRealtime()
         ensureReady()
         val mangaMs = InferenceTiming.elapsedMs(mangaStartedAt, SystemClock.elapsedRealtime())
         val paddleStartedAt = SystemClock.elapsedRealtime()
-        paddle.ensureReady()
+        paddle.ensureReady(settings.paddleModelVersion)
         val paddleMs = InferenceTiming.elapsedMs(paddleStartedAt, SystemClock.elapsedRealtime())
-        val settings = settingsRepository.get()
         val displayMetrics = context.resources.displayMetrics
         val plan = MangaOcrStartupPolicy.inferenceWarmupPlan(
             screenWidth = displayMetrics.widthPixels,
@@ -269,8 +307,9 @@ class MangaOcrEngine @Inject constructor(
             inferenceWarmupCompleted = true
         }
         Timber.tag(PERF_TAG).i(
-            "prewarm totalMs=%d mangaMs=%d paddleMs=%d inferenceMs=%d dbnetMs=%d encoderMs=%d decoderMs=%d encoderRuns=%d decoderSteps=%d skipped=%s completed=%s",
+            "prewarm totalMs=%d settingsMs=%d mangaMs=%d paddleMs=%d inferenceMs=%d dbnetMs=%d encoderMs=%d decoderMs=%d encoderRuns=%d decoderSteps=%d skipped=%s completed=%s",
             InferenceTiming.elapsedMs(startedAt, SystemClock.elapsedRealtime()),
+            settingsMs,
             mangaMs,
             paddleMs,
             inference.totalMs,
@@ -677,8 +716,12 @@ class MangaOcrEngine @Inject constructor(
             freeTextMemberIndices =
                 shapeAwareReport?.detectorGuidedFreeTextMemberIndices.orEmpty(),
         )
-        val textEvidenceResult = MangaOcrTextEvidencePolicy.filter(
+        val freeTextParagraphs = MangaFreeTextParagraphRegrouper.regroup(
             entries = bubbleSelection.entries,
+            memberBounds = rects,
+        )
+        val textEvidenceResult = MangaOcrTextEvidencePolicy.filter(
+            entries = freeTextParagraphs.entries,
             textDetections = shapeAwareReport?.boxDetection?.textDetections.orEmpty(),
             evidenceAvailable = shapeAwareReport?.boxDetection != null,
         )
@@ -687,17 +730,20 @@ class MangaOcrEngine @Inject constructor(
         val splitByTextBandBubbleIndices = selectedEntries.mapIndexedNotNull { index, entry ->
             index.takeIf {
                 entry.guidedSource == BubbleModelRegrouper.Source.LEGACY_FALLBACK &&
+                    !entry.paragraphRegrouped &&
                     index !in textEvidenceResult.textSupportedEntryIndices
             }
         }.toSet()
         Timber.i(
-            "MangaOcr grouping source=%s legacy=%d selected=%d guided=%d excluded=%s freeText=%s droppedUnsupported=%s textSupported=%s splitFallback=%s",
+            "MangaOcr grouping source=%s legacy=%d selected=%d guided=%d excluded=%s freeText=%s " +
+                "paragraphRegrouped=%s droppedUnsupported=%s textSupported=%s splitFallback=%s",
             bubbleSelection.source,
             legacyBubbles.size,
             bubbles.size,
             shapeAwareReport?.detectorGuidedRegroupedGroups?.size ?: 0,
             shapeAwareReport?.detectorGuidedExcludedMemberIndices.orEmpty(),
             shapeAwareReport?.detectorGuidedFreeTextMemberIndices.orEmpty(),
+            freeTextParagraphs.mergedOriginalEntryIndices,
             textEvidenceResult.droppedIndices,
             textEvidenceResult.textSupportedEntryIndices,
             splitByTextBandBubbleIndices,
@@ -747,6 +793,7 @@ class MangaOcrEngine @Inject constructor(
 
         val bubblesStartedAt = SystemClock.elapsedRealtime()
         val recognizedChunks = Array(bubbles.size) { mutableListOf<String>() }
+        val paddleMixedScriptCache = mutableMapOf<Int, PaddleMangaLineRecognition>()
         val ocrBatchSize = MangaOcrBatchPolicy.effectiveBatchSize(
             BuildConfig.MANGA_OCR_BATCH_SIZE,
         )
@@ -808,7 +855,7 @@ class MangaOcrEngine @Inject constructor(
             for ((input, recognition) in croppedPlans.zip(recognitions)) {
                 val plan = input.plan
                 val bubble = plan.bubble
-                val text = recognition.text.trim()
+                val mangaText = recognition.text.trim()
                 val memberRects = bubble.memberIndices.mapNotNull(rects::getOrNull)
                 Timber.tag(PERF_TAG).i(
                     "bubble index=%d crop=%d/%d batch=%d encoderMs=%d decoderMs=%d decoderSteps=%d crop=%dx%d chars=%d",
@@ -821,7 +868,7 @@ class MangaOcrEngine @Inject constructor(
                     recognition.decoder.steps,
                     input.cropWidth,
                     input.cropHeight,
-                    text.length,
+                    mangaText.length,
                 )
                 val detailLabel =
                     "bubble[${plan.sourceBubbleIndex}] crop[${plan.cropIndex + 1}/${plan.cropCount}] batch[${recognition.batchSize}]"
@@ -837,10 +884,28 @@ class MangaOcrEngine @Inject constructor(
                     cropPaddingPx,
                     bubble.memberIndices.size,
                     memberRects,
-                    text,
-                    text.length,
+                    mangaText,
+                    mangaText.length,
                 )
-                if (text.isEmpty()) continue
+                if (mangaText.isEmpty()) continue
+                val text = if (
+                    MangaMixedScriptCorrectionPolicy.requiresPaddleComparison(mangaText)
+                ) {
+                    coroutineContext.ensureActive()
+                    val decision = correctMangaMixedScript(
+                        bitmap = bitmap,
+                        quads = quads,
+                        rects = rects,
+                        entry = selectedEntries.getOrNull(plan.sourceBubbleIndex),
+                        plan = plan,
+                        recognition = recognition,
+                        mangaText = mangaText,
+                        cache = paddleMixedScriptCache,
+                    )
+                    decision.outputText ?: continue
+                } else {
+                    mangaText
+                }
                 if (shouldDropMangaOcrNoise(text, bubble.rect, bitmap.width, bitmap.height)) {
                     Timber.i(
                         "MangaOcr drop edge noise bub[%d] crop=%d/%d %s -> '%s'",
@@ -915,6 +980,84 @@ class MangaOcrEngine @Inject constructor(
         )
         return results
     }
+
+    private fun correctMangaMixedScript(
+        bitmap: Bitmap,
+        quads: List<DBPostprocessor.Quad>,
+        rects: List<BubbleClusterer.IntRect>,
+        entry: MangaOcrBubbleGroupingPolicy.Entry?,
+        plan: MangaOcrCropPlan,
+        recognition: BubbleRecognition,
+        mangaText: String,
+        cache: MutableMap<Int, PaddleMangaLineRecognition>,
+    ): MangaMixedScriptDecision {
+        val missingMembers = plan.bubble.memberIndices.filterNot(cache::containsKey)
+        val startedAt = SystemClock.elapsedRealtime()
+        if (missingMembers.isNotEmpty()) {
+            runCatching {
+                paddle.recognizeMangaMembers(
+                    src = bitmap,
+                    quads = quads,
+                    memberIndices = missingMembers,
+                )
+            }.onFailure { failure ->
+                Timber.tag(MANGA_MIXED_SCRIPT_TAG).w(
+                    failure,
+                    "MangaMixedScript Paddle comparison failed bubble=%d crop=%d/%d members=%s",
+                    plan.sourceBubbleIndex,
+                    plan.cropIndex + 1,
+                    plan.cropCount,
+                    missingMembers,
+                )
+            }.getOrDefault(emptyList()).forEach { line ->
+                cache[line.memberIndex] = line
+            }
+        }
+        val paddleLines = plan.bubble.memberIndices.mapNotNull(cache::get)
+        val decision = MangaMixedScriptCorrectionPolicy.decide(
+            mangaText = mangaText,
+            paddleLines = paddleLines.map { line ->
+                MangaMixedScriptPaddleLine(line.text, line.confidence)
+            },
+        )
+        val memberDetails = plan.bubble.memberIndices.joinToString(
+            prefix = "[",
+            postfix = "]",
+            separator = " || ",
+        ) { memberIndex ->
+            val line = cache[memberIndex]
+            "member=$memberIndex rect=${rects.getOrNull(memberIndex)} " +
+                "paddleConfidence=${confidenceForMangaAbLog(line?.confidence ?: Float.NaN)} " +
+                "paddleText='${line?.text.orEmpty().forMangaAbLog()}'"
+        }
+        Timber.tag(MANGA_MIXED_SCRIPT_TAG).i(
+            "MangaMixedScript bubble=%d crop=%d/%d source=%s granularity=%s " +
+                "members=%s mangaAvgTokenConfidence=%s mangaMinTokenConfidence=%s mangaTokens=%d " +
+                "mangaText='%s' paddleLines=%s outcome=%s reason=%s outputText='%s' paddleElapsedMs=%d",
+            plan.sourceBubbleIndex,
+            plan.cropIndex + 1,
+            plan.cropCount,
+            entry?.guidedSource ?: MangaOcrBubbleGroupingPolicy.Source.LEGACY,
+            entry?.regionGranularity ?: "unknown",
+            plan.bubble.memberIndices,
+            confidenceForMangaAbLog(recognition.averageTokenConfidence),
+            confidenceForMangaAbLog(recognition.minimumTokenConfidence),
+            recognition.confidenceTokenCount,
+            mangaText.forMangaAbLog(),
+            memberDetails,
+            decision.outcome,
+            decision.reason,
+            decision.outputText.orEmpty().forMangaAbLog(),
+            InferenceTiming.elapsedMs(startedAt, SystemClock.elapsedRealtime()),
+        )
+        return decision
+    }
+
+    private fun confidenceForMangaAbLog(value: Float): String =
+        if (value.isFinite()) String.format(Locale.US, "%.4f", value) else "unavailable"
+
+    private fun String.forMangaAbLog(): String =
+        replace("\r", "\\r").replace("\n", "\\n")
 
     private suspend fun detectQuadsForManga(
         bitmap: Bitmap,
@@ -1090,6 +1233,7 @@ class MangaOcrEngine @Inject constructor(
 
     private data class DecoderStepResult(
         val nextId: Int,
+        val confidence: Float,
         val bufferAcquireUs: Long,
         val inputFillUs: Long,
         val tensorCreateUs: Long,
@@ -1103,6 +1247,7 @@ class MangaOcrEngine @Inject constructor(
 
     private data class DecoderBatchStepResult(
         val nextIds: IntArray,
+        val confidences: FloatArray,
         val bufferAcquireUs: Long,
         val inputFillUs: Long,
         val tensorCreateUs: Long,
@@ -1136,6 +1281,9 @@ class MangaOcrEngine @Inject constructor(
 
     private data class BubbleRecognition(
         val text: String,
+        val averageTokenConfidence: Float = Float.NaN,
+        val minimumTokenConfidence: Float = Float.NaN,
+        val confidenceTokenCount: Int = 0,
         val encoder: MangaEncoderTiming = MangaEncoderTiming(),
         val decoder: MangaDecoderTiming = MangaDecoderTiming(),
         val batchSize: Int = 1,
@@ -1170,6 +1318,7 @@ class MangaOcrEngine @Inject constructor(
         var tensorOwnedCopies = 0
         var decodeUs = 0L
         val stepRunSamples = ArrayList<DecoderStepTimingSample>(MAX_TOKENS)
+        val tokenConfidences = ArrayList<Float>(MAX_TOKENS)
 
         val text = traceSection(
             MangaOcrTracePolicy.sectionName(MangaOcrTraceStage.DECODER, bubbleIndex)
@@ -1198,6 +1347,9 @@ class MangaOcrEngine @Inject constructor(
                     if (stepResult.tensorOwnsBuffer) tensorOwnedCopies++
 
                     if (stepResult.nextId == SEP_ID) break
+                    if (stepResult.nextId > MASK_ID && stepResult.confidence.isFinite()) {
+                        tokenConfidences += stepResult.confidence
+                    }
                     ids[len] = stepResult.nextId
                     len++
                     if (len > MAX_TOKENS) break
@@ -1231,8 +1383,12 @@ class MangaOcrEngine @Inject constructor(
                 decodeUs,
             ),
         )
+        val sequenceConfidence = mangaSequenceConfidence(tokenConfidences)
         return BubbleRecognition(
             text = text,
+            averageTokenConfidence = sequenceConfidence.average,
+            minimumTokenConfidence = sequenceConfidence.minimum,
+            confidenceTokenCount = sequenceConfidence.tokenCount,
             encoder = encoderRun.timing,
             decoder = MangaDecoderTiming(
                 totalMs = decoderTotalUs / 1_000L,
@@ -1293,6 +1449,7 @@ class MangaOcrEngine @Inject constructor(
         var hiddenCompactionUs = 0L
         val stepRunSamples = ArrayList<DecoderStepTimingSample>(MAX_TOKENS)
         val activeBatchSteps = IntArray(crops.size + 1)
+        val tokenConfidences = Array(crops.size) { ArrayList<Float>(MAX_TOKENS) }
 
         val texts = traceSection(
             MangaOcrTracePolicy.sectionName(MangaOcrTraceStage.DECODER, bubbleIndices.first())
@@ -1355,6 +1512,13 @@ class MangaOcrEngine @Inject constructor(
                         if (!stepResult.inputDirect) nonDirectInputs++
                         if (stepResult.bufferReused) reusedInputs++
                         if (stepResult.tensorOwnsBuffer) tensorOwnedCopies++
+                        activeRows.forEachIndexed { activeIndex, row ->
+                            val nextId = stepResult.nextIds[activeIndex]
+                            val confidence = stepResult.confidences[activeIndex]
+                            if (nextId > MASK_ID && nextId != SEP_ID && confidence.isFinite()) {
+                                tokenConfidences[row] += confidence
+                            }
+                        }
                         state.accept(activeRows, stepResult.nextIds)
                         if (state.isComplete) break
                     }
@@ -1429,9 +1593,13 @@ class MangaOcrEngine @Inject constructor(
                 },
             hiddenCompactionUs,
         )
-        return texts.map { text ->
+        return texts.mapIndexed { row, text ->
+            val sequenceConfidence = mangaSequenceConfidence(tokenConfidences[row])
             BubbleRecognition(
                 text = text,
+                averageTokenConfidence = sequenceConfidence.average,
+                minimumTokenConfidence = sequenceConfidence.minimum,
+                confidenceTokenCount = sequenceConfidence.tokenCount,
                 encoder = encoderRun.timing,
                 decoder = decoderTiming,
                 batchSize = crops.size,
@@ -1701,7 +1869,7 @@ class MangaOcrEngine @Inject constructor(
             var runUs = 0L
             var logitsReadUs = 0L
             var argmaxUs = 0L
-            val nextId = idsTensor.use { inputIds ->
+            val prediction = idsTensor.use { inputIds ->
                 val runStartedAtNs = SystemClock.elapsedRealtimeNanos()
                 val result = decoder.run(
                     mapOf(
@@ -1719,16 +1887,20 @@ class MangaOcrEngine @Inject constructor(
                         SystemClock.elapsedRealtimeNanos(),
                     )
                     val argmaxStartedAtNs = SystemClock.elapsedRealtimeNanos()
-                    val id = argmaxLastStep(logits[0])
+                    val next = mangaTokenPrediction(
+                        logitsByStep = logits[0],
+                        calculateConfidence = BuildConfig.DEBUG,
+                    )
                     argmaxUs = InferenceTiming.elapsedUs(
                         argmaxStartedAtNs,
                         SystemClock.elapsedRealtimeNanos(),
                     )
-                    id
+                    next
                 }
             }
             DecoderStepResult(
-                nextId = nextId,
+                nextId = prediction.tokenId,
+                confidence = prediction.confidence,
                 bufferAcquireUs = bufferAcquireUs,
                 inputFillUs = inputFillUs,
                 tensorCreateUs = tensorCreateUs,
@@ -1835,7 +2007,7 @@ class MangaOcrEngine @Inject constructor(
             var runUs = 0L
             var logitsReadUs = 0L
             var argmaxUs = 0L
-            val nextIds = idsTensor.use { inputIds ->
+            val predictions = idsTensor.use { inputIds ->
                 val runStartedAtNs = SystemClock.elapsedRealtimeNanos()
                 val result = decoder.run(
                     mapOf(
@@ -1856,16 +2028,24 @@ class MangaOcrEngine @Inject constructor(
                         SystemClock.elapsedRealtimeNanos(),
                     )
                     val argmaxStartedAtNs = SystemClock.elapsedRealtimeNanos()
-                    val ids = IntArray(activeRows.size) { row -> argmaxLastStep(logits[row]) }
+                    val values = Array(activeRows.size) { row ->
+                        mangaTokenPrediction(
+                            logitsByStep = logits[row],
+                            calculateConfidence = BuildConfig.DEBUG,
+                        )
+                    }
                     argmaxUs = InferenceTiming.elapsedUs(
                         argmaxStartedAtNs,
                         SystemClock.elapsedRealtimeNanos(),
                     )
-                    ids
+                    values
                 }
             }
             DecoderBatchStepResult(
-                nextIds = nextIds,
+                nextIds = IntArray(predictions.size) { index -> predictions[index].tokenId },
+                confidences = FloatArray(predictions.size) { index ->
+                    predictions[index].confidence
+                },
                 bufferAcquireUs = bufferAcquireUs,
                 inputFillUs = inputFillUs,
                 tensorCreateUs = tensorCreateUs,
@@ -2181,6 +2361,7 @@ class MangaOcrEngine @Inject constructor(
 
     companion object {
         private const val PERF_TAG = "MangaOcrPerf"
+        private const val MANGA_MIXED_SCRIPT_TAG = "MangaMixedScript"
         private const val ENCODER_DETAIL_TAG = "MangaEncoderDetail"
         private const val DECODER_DETAIL_TAG = "MangaDecoderDetail"
         private const val RUNTIME_DETAIL_TAG = "MangaRuntimeDetail"

@@ -53,7 +53,7 @@ class SettingsBundleTransferTest {
             PortableCase("text stability wait", original.loopTextStableDurationMs, portable.loopTextStableDurationMs),
             PortableCase("dialogue region mode", original.loopTextRegionMode, portable.loopTextRegionMode),
             PortableCase("translate region only", original.loopTranslateRegionOnly, portable.loopTranslateRegionOnly),
-            PortableCase("empty translation retry", original.retryEmptyTranslation, portable.retryEmptyTranslation),
+            PortableCase("failed translation retry", original.retryFailedTranslation, portable.retryFailedTranslation),
             PortableCase("translation output follows recognition", original.translationOutputFollowRecognition, portable.translationOutputFollowRecognition),
             PortableCase("translation output layout", original.translationOutputLayout, portable.translationOutputLayout),
             PortableCase("translation output direction", original.translationOutputDirection, portable.translationOutputDirection),
@@ -242,7 +242,7 @@ class SettingsBundleTransferTest {
         assertEquals(imported.loopFrameSimilarityThreshold, result.settings.loopFrameSimilarityThreshold)
         assertEquals(imported.loopTextRegionMode, result.settings.loopTextRegionMode)
         assertEquals(imported.loopTranslateRegionOnly, result.settings.loopTranslateRegionOnly)
-        assertEquals(imported.retryEmptyTranslation, result.settings.retryEmptyTranslation)
+        assertEquals(imported.retryFailedTranslation, result.settings.retryFailedTranslation)
         assertEquals(imported.developerOptionsEnabled, result.settings.developerOptionsEnabled)
         assertEquals(imported.ocrRedBoxModeEnabled, result.settings.ocrRedBoxModeEnabled)
         assertEquals(imported.ocrRedBoxShowSourceText, result.settings.ocrRedBoxShowSourceText)
@@ -315,7 +315,7 @@ class SettingsBundleTransferTest {
             loopFrameSimilarityThreshold = 0.87f,
             loopTextRegionMode = LoopTextRegionMode.LOWER_SCREEN_FIRST,
             loopTranslateRegionOnly = false,
-            retryEmptyTranslation = true,
+            retryFailedTranslation = true,
             translationOutputFollowRecognition = false,
             translationOutputLayout = TranslationOutputLayout.VERTICAL,
             translationOutputDirection = TranslationOutputDirection.LEFT_TO_RIGHT,

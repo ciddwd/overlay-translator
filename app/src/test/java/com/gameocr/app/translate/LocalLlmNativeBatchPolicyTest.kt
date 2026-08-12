@@ -186,13 +186,101 @@ class LocalLlmNativeBatchPolicyTest {
             assertEquals(case.name, case.expectedGroupSizes, plans.map { it.items.size })
             assertEquals(case.name, case.expectedNativeFlags, plans.map { it.nativeBatch })
             plans.filter { it.nativeBatch }.forEach { plan ->
-                assertTrue(case.name, plan.promptTokens <= case.nativePromptBatch)
+                assertTrue(case.name, plan.decodedPromptTokens <= case.nativePromptBatch)
                 assertTrue(
                     case.name,
                     plan.requiredKvTokens + LocalLlmNativeBatchPolicy.CONTEXT_HEADROOM_TOKENS <=
                         case.engineContext,
                 )
             }
+        }
+    }
+
+    @Test
+    fun plan_tableDriven_countsSharedPromptPrefixOnceWithoutRelaxingKvLimits() {
+        data class PromptCost(
+            val fullTokens: Int,
+            val sharedPrefixTokens: Int,
+        )
+        data class Case(
+            val name: String,
+            val prompts: List<PromptCost>,
+            val effectiveCounterAvailable: Boolean = true,
+            val effectiveCounterValid: Boolean = true,
+            val engineContext: Int = 8_192,
+            val expectedGroupSizes: List<Int>,
+            val expectedDecodedTokens: List<Int>,
+            val expectedNativeFlags: List<Boolean>,
+        )
+
+        listOf(
+            Case(
+                name = "long page forms B4 waves when a large prefix is shared",
+                prompts = List(19) { PromptCost(fullTokens = 350, sharedPrefixTokens = 300) },
+                expectedGroupSizes = listOf(4, 4, 4, 4, 3),
+                expectedDecodedTokens = listOf(500, 500, 500, 500, 450),
+                expectedNativeFlags = listOf(true, true, true, true, true),
+            ),
+            Case(
+                name = "no shared prefix remains serial under the same decode capacity",
+                prompts = List(4) { PromptCost(fullTokens = 350, sharedPrefixTokens = 0) },
+                expectedGroupSizes = listOf(1, 1, 1, 1),
+                expectedDecodedTokens = listOf(350, 350, 350, 350),
+                expectedNativeFlags = listOf(false, false, false, false),
+            ),
+            Case(
+                name = "effective counter failure fails closed to serial",
+                prompts = List(3) { PromptCost(fullTokens = 350, sharedPrefixTokens = 300) },
+                effectiveCounterValid = false,
+                expectedGroupSizes = listOf(1, 1, 1),
+                expectedDecodedTokens = listOf(350, 350, 350),
+                expectedNativeFlags = listOf(false, false, false),
+            ),
+            Case(
+                name = "missing effective counter preserves the previous conservative policy",
+                prompts = List(3) { PromptCost(fullTokens = 350, sharedPrefixTokens = 300) },
+                effectiveCounterAvailable = false,
+                expectedGroupSizes = listOf(1, 1, 1),
+                expectedDecodedTokens = listOf(350, 350, 350),
+                expectedNativeFlags = listOf(false, false, false),
+            ),
+            Case(
+                name = "shared decode fit cannot bypass unified KV capacity",
+                prompts = List(4) { PromptCost(fullTokens = 350, sharedPrefixTokens = 300) },
+                engineContext = 1_200,
+                expectedGroupSizes = listOf(1, 1, 1, 1),
+                expectedDecodedTokens = listOf(350, 350, 350, 350),
+                expectedNativeFlags = listOf(false, false, false, false),
+            ),
+        ).forEach { case ->
+            val effectiveCounter = if (case.effectiveCounterAvailable) {
+                { group: List<PromptCost> ->
+                    if (!case.effectiveCounterValid) {
+                        -1
+                    } else {
+                        val shared = group.minOf(PromptCost::sharedPrefixTokens)
+                        group.sumOf(PromptCost::fullTokens) - shared * (group.size - 1)
+                    }
+                }
+            } else {
+                null
+            }
+            val plans = LocalLlmNativeBatchPolicy.plan(
+                items = case.prompts,
+                requestedBatchSize = 4,
+                configuredContextTokens = 2_048,
+                engineContextTokens = case.engineContext,
+                systemPromptTokens = 0,
+                nativePromptBatchTokens = 512,
+                nativeSequenceCapacity = 8,
+                maxNewTokensPerItem = 256,
+                promptTokenCount = PromptCost::fullTokens,
+                effectivePromptTokenCount = effectiveCounter,
+            )
+
+            assertEquals(case.name, case.expectedGroupSizes, plans.map { it.items.size })
+            assertEquals(case.name, case.expectedDecodedTokens, plans.map { it.decodedPromptTokens })
+            assertEquals(case.name, case.expectedNativeFlags, plans.map { it.nativeBatch })
         }
     }
 
@@ -205,6 +293,8 @@ class LocalLlmNativeBatchPolicyTest {
         val cmake = File(root, "llama-android/src/main/cpp/CMakeLists.txt").readText()
         val contextPolicy = File(root, "llama-android/src/main/cpp/llama_thread_policy.cpp").readText()
         val kotlin = File(root, "app/src/main/java/com/gameocr/app/llm/LlamaMultiSequence.kt").readText()
+        val promptMetrics = File(root, "app/src/main/java/com/gameocr/app/llm/LlamaPromptMetrics.kt").readText()
+        val translator = File(root, "app/src/main/java/com/gameocr/app/translate/LocalLlamaTranslator.kt").readText()
         val gradle = File(root, "app/build.gradle.kts").readText()
 
         data class Case(val name: String, val marker: String, val source: String)
@@ -216,9 +306,20 @@ class LocalLlmNativeBatchPolicyTest {
             Case("native timing is observable", "MULTI STATS", native),
             Case("native failures are recoverable", "return nullptr", native),
             Case("overlay is appended without submodule edits", "llama_multi_sequence.inc", cmake),
+            Case("overlay changes trigger CMake regeneration", "CMAKE_CONFIGURE_DEPENDS", cmake),
             Case("context reserves system plus eight clients", "params.n_seq_max = 9", contextPolicy),
             Case("unified KV keeps full sequence context", "params.kv_unified = true", contextPolicy),
-            Case("Kotlin validates two through eight prompts", "2..MAX_SEQUENCE_COUNT", kotlin),
+            Case("Kotlin validates one through eight prompts", "1..MAX_SEQUENCE_COUNT", kotlin),
+            Case("shared user prompt prefix is decoded once", "shared_prefix_tokens", native),
+            Case("planner uses the same exact tokenizer cost", "effectiveUserPromptBatchTokens", promptMetrics),
+            Case("native exposes exact shared-prefix batch cost", "gameocr_effective_user_prompt_batch_tokens", native),
+            Case("main batches forward per-item line caps", "maxOutputLines = lineCaps", translator),
+            Case("main batches opt into strict invalid markers", "markLimitAsInvalid = markNativeBatchLineLimitAsInvalid", translator),
+            Case("shared prefix KV is copied to each sequence", "system_prompt_position + (int32_t) shared_prefix_tokens", native),
+            Case("request prefix cannot leak into the next call", "llama_memory_seq_rm(memory, 0, system_prompt_position, -1)", native),
+            Case("each sequence has an independent output budget", "sequence.predict_length", native),
+            Case("Sakura can stop before an extra output line", "sequence.max_output_lines", native),
+            Case("strict output limits are observable", "lineLimitStops=%d tokenLimitStops=%d", native),
             Case("B4 is the measured default", ".orElse(\"4\")", gradle),
             Case("all A/B sizes are accepted", "setOf(1, 2, 4, 8)", gradle),
         ).forEach { case -> assertTrue(case.name, case.source.contains(case.marker)) }

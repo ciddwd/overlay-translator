@@ -71,6 +71,12 @@ class RoutingTranslator @Inject constructor(
 
     fun prefersBatchFor(settings: Settings): Boolean = engineFor(settings).prefersBatch
 
+    fun supportsStructuredContextBatchFor(settings: Settings): Boolean =
+        engineFor(settings).supportsStructuredContextBatch
+
+    override fun handlesTranslationFailureRetry(settings: Settings): Boolean =
+        engineFor(settings).handlesTranslationFailureRetry(settings)
+
     suspend fun downloadMlKitLanguagePair(sourceLang: String, targetLang: String) {
         googleMlKit.ensureLanguagePairModelsDownloaded(sourceLang, targetLang)
     }
@@ -115,7 +121,16 @@ class RoutingTranslator @Inject constructor(
         onUpdate: (BatchTranslationUpdate) -> Unit,
     ): List<String?> {
         if (sources.isEmpty()) return emptyList()
-        if (engineFor(settings).requiresFullBatchContext) {
+        val selectedEngine = engineFor(settings)
+        val promptScope = selectedEngine.batchPromptScope(settings)
+        Timber.tag("TranslationBatch").i(
+            "route engine=%s contextMode=%s promptScope=%s sources=%d",
+            settings.translatorEngine.name,
+            settings.translationContextMode.name,
+            promptScope.name,
+            sources.size,
+        )
+        if (promptScope == BatchPromptScope.SHARED_PAGE) {
             return translateFullContextBatch(sources, settings, onUpdate)
         }
         val memoryMatches = translationMemory.recallBatch(sources, settings)

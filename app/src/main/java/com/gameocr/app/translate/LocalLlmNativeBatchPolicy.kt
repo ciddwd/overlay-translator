@@ -6,6 +6,7 @@ import kotlin.math.min
 internal data class LocalLlmNativeBatchPlan<T>(
     val items: List<T>,
     val promptTokens: Int,
+    val decodedPromptTokens: Int,
     val requiredKvTokens: Int,
     val nativeBatch: Boolean,
 )
@@ -44,6 +45,7 @@ internal object LocalLlmNativeBatchPolicy {
         nativeSequenceCapacity: Int,
         maxNewTokensPerItem: Int,
         promptTokenCount: (T) -> Int,
+        effectivePromptTokenCount: ((List<T>) -> Int)? = null,
     ): List<LocalLlmNativeBatchPlan<T>> {
         if (items.isEmpty()) return emptyList()
 
@@ -63,6 +65,7 @@ internal object LocalLlmNativeBatchPolicy {
         while (cursor < items.size) {
             val start = cursor
             var acceptedPromptTokens = 0
+            var acceptedDecodedPromptTokens = 0
             var acceptedKvTokens = systemTokens
 
             while (cursor < items.size && cursor - start < batchSize) {
@@ -72,13 +75,23 @@ internal object LocalLlmNativeBatchPolicy {
                 val perSequenceRequired = systemTokens.toLong() + promptTokens + predictTokens +
                     CONTEXT_HEADROOM_TOKENS
                 val candidatePromptTokens = acceptedPromptTokens.toLong() + promptTokens
+                val candidateItems = items.subList(start, cursor + 1)
+                val candidateDecodedPromptTokens = if (
+                    candidateItems.size > 1 && effectivePromptTokenCount != null
+                ) {
+                    effectivePromptTokenCount(candidateItems)
+                } else {
+                    candidatePromptTokens.toInt()
+                }
                 val candidateKvTokens = acceptedKvTokens.toLong() + promptTokens + predictTokens
                 val fits = perSequenceRequired <= perSequenceContext &&
-                    candidatePromptTokens <= promptBatchTokens &&
+                    candidateDecodedPromptTokens > 0 &&
+                    candidateDecodedPromptTokens <= promptBatchTokens &&
                     candidateKvTokens + CONTEXT_HEADROOM_TOKENS <= engineContext
                 if (!fits) break
 
                 acceptedPromptTokens = candidatePromptTokens.toInt()
+                acceptedDecodedPromptTokens = candidateDecodedPromptTokens
                 acceptedKvTokens = candidateKvTokens.toInt()
                 cursor += 1
             }
@@ -88,6 +101,7 @@ internal object LocalLlmNativeBatchPolicy {
                 result += LocalLlmNativeBatchPlan(
                     items = listOf(items[cursor]),
                     promptTokens = promptTokens,
+                    decodedPromptTokens = promptTokens,
                     requiredKvTokens = systemTokens + promptTokens.coerceAtLeast(0) + predictTokens,
                     nativeBatch = false,
                 )
@@ -97,6 +111,7 @@ internal object LocalLlmNativeBatchPolicy {
                 result += LocalLlmNativeBatchPlan(
                     items = acceptedItems,
                     promptTokens = acceptedPromptTokens,
+                    decodedPromptTokens = acceptedDecodedPromptTokens,
                     requiredKvTokens = acceptedKvTokens,
                     nativeBatch = acceptedItems.size > 1,
                 )

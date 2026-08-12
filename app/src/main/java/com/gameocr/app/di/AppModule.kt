@@ -52,7 +52,7 @@ object AppModule {
     @Provides
     @Singleton
     fun provideOkHttp(
-        privateCleartextInterceptor: PrivateCleartextInterceptor
+        privateCleartextInterceptor: PrivateCleartextInterceptor,
     ): OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
@@ -61,9 +61,11 @@ object AppModule {
         .addInterceptor(privateCleartextInterceptor)
         .apply {
             if (BuildConfig.DEBUG) {
-                addInterceptor(HttpLoggingInterceptor().apply {
-                    level = HttpLoggingInterceptor.Level.BASIC
-                })
+                addInterceptor(
+                    HttpLoggingInterceptor().apply {
+                        level = HttpLoggingInterceptor.Level.BASIC
+                    }
+                )
             }
         }
         .build()

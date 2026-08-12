@@ -17,6 +17,7 @@ class ShapeAwareBubblePatchTest {
         )
         val cases = listOf(
             Case("shape translation", 2, ShapeAwareBubblePatch.Role.SHAPE_TRANSLATION, true),
+            Case("model background repair", 2, ShapeAwareBubblePatch.Role.TEXT_BACKGROUND, false),
             Case("glyph background repair", null, ShapeAwareBubblePatch.Role.TEXT_BACKGROUND, false),
         )
 

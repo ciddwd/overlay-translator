@@ -270,7 +270,7 @@ internal suspend fun dumpMangaMaskDebugSet(
         )
         result.timing.let { timing ->
             timber.log.Timber.i(
-                "Manga detector-guided timingUs total=%d assign=%d estimate(calls=%d,total=%d,background=%d,luminance=%d,candidate=%d,seed=%d,flood=%d,edge=%d,fill=%d,coverageCopy=%d) ellipse(calls=%d,total=%d) maskIo=%d other=%d",
+                "Manga detector-guided timingUs total=%d assign=%d estimate(calls=%d,total=%d,background=%d,features=%d,candidate=%d,seed=%d,flood=%d,edge=%d,fill=%d,coverageCopy=%d) ellipse(calls=%d,total=%d) maskIo=%d other=%d",
                 timing.totalUs,
                 timing.assignmentUs,
                 timing.estimateCalls,
@@ -540,6 +540,17 @@ internal suspend fun dumpMangaMaskDebugSet(
     } else {
         modelSegmentation?.instanceMasks
     }
+    val selectedMaskQualities = if (useDetectorGuidedPatches) {
+        detectorGuidedMasks?.let { guided ->
+            val decisionsByIndex = guided.decisions.associateBy { it.detectionIndex }
+            guided.instanceMasks.indices.map { modelIndex ->
+                decisionsByIndex[modelIndex]?.shapeMaskQuality
+                    ?: BubbleShapeMaskQuality.REJECTED
+            }
+        }
+    } else {
+        selectedMasks?.map { BubbleShapeMaskQuality.TRUSTED }
+    }
     val delayedMaskInput = if (createDelayedSession && selectedMasks != null) {
         MangaDelayedMaskDebugSessionManager.Input(
             width = width,
@@ -549,6 +560,7 @@ internal suspend fun dumpMangaMaskDebugSet(
             memberBounds = polygons.map { polygon -> polygon.bounds },
             modelGroups = selectedGroups,
             modelMasks = selectedMasks,
+            modelMaskQualities = requireNotNull(selectedMaskQualities),
         )
     } else {
         null

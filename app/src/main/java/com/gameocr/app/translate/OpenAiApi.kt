@@ -9,9 +9,18 @@ internal data class ChatRequest(
     val model: String,
     val messages: List<ChatMessage>,
     val temperature: Double = 0.3,
+    @SerialName("top_p") val topP: Double? = null,
     val stream: Boolean = false,
     @SerialName("max_tokens") val maxTokens: Int? = null,
     @SerialName("response_format") val responseFormat: ChatResponseFormat? = null,
+    @SerialName("reasoning_effort") val reasoningEffort: String? = null,
+    val thinking: OpenAiThinkingConfig? = null,
+    @SerialName("enable_thinking") val enableThinking: Boolean? = null,
+)
+
+@Serializable
+internal data class OpenAiThinkingConfig(
+    val type: String,
 )
 
 @Serializable
@@ -57,6 +66,36 @@ internal data class ChatStreamDelta(
     val role: String? = null,
     val content: String? = null
 )
+
+internal sealed interface OpenAiStreamEvent {
+    data class Data(
+        val content: String,
+        val finishReason: String?,
+    ) : OpenAiStreamEvent
+
+    data class Malformed(val payload: String) : OpenAiStreamEvent
+    data object KeepAlive : OpenAiStreamEvent
+    data object Done : OpenAiStreamEvent
+    data object Ignore : OpenAiStreamEvent
+}
+
+internal fun parseOpenAiStreamLine(
+    line: String,
+    json: kotlinx.serialization.json.Json,
+): OpenAiStreamEvent {
+    if (line.isBlank()) return OpenAiStreamEvent.Ignore
+    if (line.startsWith(':')) return OpenAiStreamEvent.KeepAlive
+    if (!line.startsWith("data:")) return OpenAiStreamEvent.Ignore
+    val payload = line.substring(5).trim()
+    if (payload == "[DONE]") return OpenAiStreamEvent.Done
+    val chunk = runCatching { json.decodeFromString<ChatStreamChunk>(payload) }
+        .getOrNull() ?: return OpenAiStreamEvent.Malformed(payload)
+    val choice = chunk.choices.firstOrNull()
+    return OpenAiStreamEvent.Data(
+        content = choice?.delta?.content.orEmpty(),
+        finishReason = choice?.finishReason,
+    )
+}
 
 /** `GET /v1/models` 响应。Ollama / vLLM / OpenAI / DeepSeek 全部用这个 schema。 */
 @Serializable

@@ -74,6 +74,13 @@ class GameOcrApp : Application(), Configuration.Provider {
                     }
                 }
                 .onFailure { Timber.w(it, "Failed to reset retired Manga OCR advanced settings") }
+            runCatching { settingsRepository.migrateMangaOcrDetectorToV6SmallIfNeeded() }
+                .onSuccess { changed ->
+                    if (changed) {
+                        Timber.i("Migrated Manga OCR detector to PP-OCRv6 Small")
+                    }
+                }
+                .onFailure { Timber.w(it, "Failed to migrate Manga OCR detector") }
             settingsRepository.settings.collect { settings ->
                 CrashRecorder.updateSettingsSummary(CrashRecorder.formatSettings(settings))
                 cleartextInterceptor.allowedHosts = settings.cleartextAllowedHosts.toSet()

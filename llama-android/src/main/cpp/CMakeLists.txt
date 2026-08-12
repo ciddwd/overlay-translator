@@ -270,7 +270,7 @@ Java_com_gameocr_app_llm_LlamaPromptMetrics_countUserPromptTokens(
         JNIEnv *env,
         jobject /*unused*/,
         jstring jprompt) {
-    if (g_context == nullptr || jprompt == nullptr) {
+    if (g_context == nullptr || g_chat_templates == nullptr || jprompt == nullptr) {
         return -1;
     }
 
@@ -339,6 +339,9 @@ Java_com_gameocr_app_llm_LlamaPromptMetrics_systemPromptTokens(
 
 # The implementation is appended to ai_chat.cpp's generated translation unit so it can
 # safely reuse the binding's process-global model, context, chat template and system KV.
+set_property(
+        DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_LIST_DIR}/llama_multi_sequence.inc")
 file(READ "${CMAKE_CURRENT_LIST_DIR}/llama_multi_sequence.inc" GAMEOCR_MULTI_SEQUENCE_SOURCE)
 string(APPEND GAMEOCR_AI_CHAT_SOURCE "\n${GAMEOCR_MULTI_SEQUENCE_SOURCE}\n")
 

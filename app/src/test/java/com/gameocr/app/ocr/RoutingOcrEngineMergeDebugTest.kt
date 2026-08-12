@@ -174,6 +174,45 @@ class RoutingOcrEngineMergeDebugTest {
     }
 
     @Test
+    fun vertical_column_merge_allowed_tableDriven_legacyMangaNineToSixRegression() {
+        data class Case(
+            val name: String,
+            val first: MergeDebugRect,
+            val second: MergeDebugRect,
+            val expected: Boolean,
+        )
+
+        val pageRects = listOf(
+            MergeDebugRect(466, 51, 520, 266),
+            MergeDebugRect(1162, 70, 1260, 229),
+            MergeDebugRect(339, 92, 428, 376),
+            MergeDebugRect(137, 145, 201, 368),
+            MergeDebugRect(282, 509, 418, 764),
+            MergeDebugRect(828, 520, 927, 778),
+            MergeDebugRect(1282, 553, 1344, 712),
+            MergeDebugRect(132, 596, 264, 923),
+            MergeDebugRect(1100, 610, 1271, 864),
+        )
+        val limits = verticalColumnMergeLimits(pageRects, verticalGapRatio = 0.8f)
+
+        listOf(
+            Case("top bubble adjacent columns", pageRects[0], pageRects[2], true),
+            Case("right lower bubble adjacent columns", pageRects[6], pageRects[8], true),
+            Case("left lower bubble adjacent columns", pageRects[4], pageRects[7], true),
+            Case("separate lower bubbles keep their gap", pageRects[5], pageRects[8], false),
+            Case("different vertical bands do not merge", pageRects[2], pageRects[4], false),
+            Case("top and lower right bubbles do not merge", pageRects[1], pageRects[8], false),
+        ).forEach { case ->
+            val actual = verticalColumnMergeAllowed(
+                debug = verticalColumnAdjacencyDebug(case.first, case.second),
+                limits = limits,
+                horizontalOverlapRatio = 0.3f,
+            )
+            assertEquals(case.name, case.expected, actual)
+        }
+    }
+
+    @Test
     fun shouldDropVerticalOcrNoise_filtersLowConfidenceTinyAsciiOnlyBlocks() {
         data class Case(
             val name: String,

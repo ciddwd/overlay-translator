@@ -8,6 +8,7 @@ import com.gameocr.app.R
 import com.gameocr.app.data.FloatingMenu
 import com.gameocr.app.data.MangaOcrAdvancedSettingsPolicy
 import com.gameocr.app.data.OcrEngineKind
+import com.gameocr.app.data.OpenAiRequestOptions
 import com.gameocr.app.data.OverlayFontEntry
 import com.gameocr.app.data.OverlayFontCommit
 import com.gameocr.app.data.OverlayTextStyle
@@ -25,6 +26,7 @@ import com.gameocr.app.data.SettingsBundleTransfer
 import com.gameocr.app.data.SettingsRepository
 import com.gameocr.app.data.StagedOverlayFont
 import com.gameocr.app.data.TranslationPreset
+import com.gameocr.app.data.TranslationContextMode
 import com.gameocr.app.data.TranslationBlockInteractionMode
 import com.gameocr.app.data.TranslationPresetCatalog
 import com.gameocr.app.data.TranslationPresetImportResult
@@ -303,6 +305,7 @@ class SettingsViewModel @Inject constructor(
         targetLang: String,
         sourceLang: String,
         prompt: String,
+        openAiRequestOptions: OpenAiRequestOptions,
         textSize: Int,
         overlayTextStyle: OverlayTextStyle,
         alpha: Float,
@@ -321,7 +324,7 @@ class SettingsViewModel @Inject constructor(
         ocrRedBoxShowSourceText: Boolean,
         ocrRedBoxShowTranslation: Boolean,
         streaming: Boolean,
-        retryEmptyTranslation: Boolean,
+        retryFailedTranslation: Boolean,
         ttsEnabled: Boolean,
         ttsProvider: TtsProvider,
         ttsVoice: String,
@@ -390,7 +393,7 @@ class SettingsViewModel @Inject constructor(
         apiTimeoutSeconds: Int,
         mergeAdjacentBlocks: Boolean,
         mergeStrength: com.gameocr.app.data.MergeStrength,
-        disableCrossLineContextTranslation: Boolean,
+        translationContextMode: TranslationContextMode,
         cleartextAllowedHosts: List<String>,
         translatorEngine: TranslatorEngine,
         deeplKey: String,
@@ -420,6 +423,7 @@ class SettingsViewModel @Inject constructor(
                 targetLang = targetLang.trim(),
                 sourceLang = sourceLang.trim(),
                 promptTemplate = prompt,
+                openAiRequestOptions = openAiRequestOptions.normalized(),
                 overlayTextSizeSp = textSize.coerceIn(10, 28),
                 overlayTextStyle = overlayTextStyle.normalized(),
                 overlayAlpha = alpha.coerceIn(0.3f, 1f),
@@ -438,7 +442,7 @@ class SettingsViewModel @Inject constructor(
                 ocrRedBoxShowSourceText = ocrRedBoxShowSourceText,
                 ocrRedBoxShowTranslation = ocrRedBoxShowTranslation,
                 streamingTranslate = streaming,
-                retryEmptyTranslation = retryEmptyTranslation,
+                retryFailedTranslation = retryFailedTranslation,
                 ttsEnabled = ttsEnabled,
                 ttsProvider = ttsProvider,
                 ttsVoice = ttsVoice.trim(),
@@ -512,7 +516,7 @@ class SettingsViewModel @Inject constructor(
                 apiTimeoutSeconds = apiTimeoutSeconds.coerceIn(5, 300),
                 mergeAdjacentBlocks = mergeAdjacentBlocks,
                 mergeStrength = mergeStrength,
-                disableCrossLineContextTranslation = disableCrossLineContextTranslation,
+                translationContextMode = translationContextMode,
                 cleartextAllowedHosts = cleartextHostsWithLocalOcrUrls(
                     cleartextAllowedHosts,
                     umiOcrBaseUrl,
@@ -583,6 +587,10 @@ class SettingsViewModel @Inject constructor(
 
     suspend fun saveWordSelectRememberRegion(enabled: Boolean) {
         repo.update { it.copy(wordSelectRememberRegion = enabled) }
+    }
+
+    suspend fun saveFloatingWindowAutoHideWhenObstructing(enabled: Boolean) {
+        repo.update { it.copy(floatingWindowAutoHideWhenObstructing = enabled) }
     }
 
     /** 弧菜单按钮顺序：拖拽完即时落盘 + 生效，不走主 [save] 流程的 dirty 判定。 */

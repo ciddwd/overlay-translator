@@ -16,8 +16,7 @@ class LocalLlmPrewarmWiringTest {
 
         data class Case(val name: String, val marker: String)
         val cases = listOf(
-            Case("model is loaded before inference", "holder.ensureLoaded(modelKind, systemPrompt)"),
-            Case("real inference uses the shared engine lock", "holder.inferenceMutex.withLock"),
+            Case("model readiness and inference share one session", "holder.withEngineSession(modelKind, systemPrompt)"),
             Case("prewarm submits a user prompt", "engine.sendUserPrompt("),
             Case("prewarm consumes generated output", ").collect { outputPieces++ }"),
             Case("prewarm is limited to one generated token", "PREWARM_PREDICT_LENGTH = 1"),

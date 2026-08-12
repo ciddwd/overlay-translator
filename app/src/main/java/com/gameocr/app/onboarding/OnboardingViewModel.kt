@@ -17,8 +17,8 @@ import javax.inject.Inject
 class OnboardingViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val routingTranslator: RoutingTranslator,
-    private val mangaOcrModelInstaller: MangaOcrModelInstaller,
     private val paddleModelInstaller: PaddleModelInstaller,
+    private val mangaOcrModelInstaller: MangaOcrModelInstaller,
     private val llmModelInstaller: LlmModelInstaller,
     private val modelDownloadManager: ModelDownloadManager,
 ) : ViewModel() {
@@ -34,11 +34,25 @@ class OnboardingViewModel @Inject constructor(
         routingTranslator.downloadMlKitLanguagePair(sourceLang, targetLang)
     }
 
-    fun paddleV5ModelReady(): Boolean =
-        paddleModelInstaller.checkInstalled(PaddleModelVersion.V5_MOBILE) != null
+    fun recommendedModelsReadiness(draft: OnboardingDraft): RecommendedModelsReadiness {
+        val paddleVersion = OnboardingPolicy.recommendedPaddleModelVersion(draft)
+            ?.takeIf { OnboardingPolicy.shouldRecommendPaddleOcr(draft) }
+        val includeHyMt2 = OnboardingPolicy.usesHyMt2MangaTranslation(draft)
+        return RecommendedModelsReadiness(
+            paddleVersion = paddleVersion,
+            paddleReady = paddleVersion == null ||
+                paddleModelInstaller.checkInstalled(paddleVersion) != null,
+            includeHyMt2 = includeHyMt2,
+            hyMt2Ready = !includeHyMt2 ||
+                llmModelInstaller.checkInstalled(LlmModelKind.HY_MT2_1_8B_Q4_K_M) != null,
+        )
+    }
 
-    suspend fun downloadPaddleV5Model(onProgress: (String) -> Unit) {
-        val specs = paddleOcrDownloadSpecs(paddleV5ModelReady())
+    suspend fun downloadMissingRecommendedModels(
+        draft: OnboardingDraft,
+        onProgress: (String) -> Unit,
+    ) {
+        val specs = recommendedModelsDownloadSpecs(recommendedModelsReadiness(draft))
         if (specs.isNotEmpty()) {
             modelDownloadManager.enqueueIndependentlyAndAwait(specs, onProgress)
         }
@@ -49,41 +63,75 @@ class OnboardingViewModel @Inject constructor(
         targetLang: String,
     ): Set<String> = routingTranslator.getMissingMlKitLanguageModels(sourceLang, targetLang)
 
-    fun mangaOfflineModelReadiness(): MangaOfflineModelReadiness =
+    fun mangaOfflineModelReadiness(includeSakura: Boolean): MangaOfflineModelReadiness =
         MangaOfflineModelReadiness(
+            paddleReady = paddleModelInstaller.checkInstalled(PaddleModelVersion.V6_SMALL) != null,
             mangaOcrReady = mangaOcrModelInstaller.checkInstalled() != null,
             sakuraReady =
                 llmModelInstaller.checkInstalled(LlmModelKind.SAKURA_1_5B_Q4) != null,
+            includeSakura = includeSakura,
         )
 
-    suspend fun downloadMissingMangaOfflineModels(onProgress: (String) -> Unit) {
-        val specs = mangaOfflineDownloadSpecs(mangaOfflineModelReadiness())
+    suspend fun downloadMissingMangaOfflineModels(
+        includeSakura: Boolean,
+        onProgress: (String) -> Unit,
+    ) {
+        val specs = mangaOfflineDownloadSpecs(mangaOfflineModelReadiness(includeSakura))
         if (specs.isNotEmpty()) {
             modelDownloadManager.enqueueIndependentlyAndAwait(specs, onProgress)
         }
     }
+
+}
+
+data class RecommendedModelsReadiness(
+    val paddleVersion: PaddleModelVersion?,
+    val paddleReady: Boolean,
+    val includeHyMt2: Boolean,
+    val hyMt2Ready: Boolean,
+) {
+    val allReady: Boolean
+        get() = paddleReady && hyMt2Ready
+
+    /** Preserve the old flow: Hy-MT2 is required, while a standalone OCR download may be skipped. */
+    val requiredModelsReady: Boolean
+        get() = !includeHyMt2 || hyMt2Ready
 }
 
 data class MangaOfflineModelReadiness(
+    val paddleReady: Boolean,
     val mangaOcrReady: Boolean,
     val sakuraReady: Boolean,
+    val includeSakura: Boolean,
 ) {
+    val ocrReady: Boolean
+        get() = paddleReady && mangaOcrReady
+
     val allReady: Boolean
-        get() = mangaOcrReady && sakuraReady
+        get() = ocrReady && (!includeSakura || sakuraReady)
 }
 
 internal fun mangaOfflineDownloadSpecs(
     readiness: MangaOfflineModelReadiness,
 ): List<ModelDownloadSpec> = buildList {
-    if (!readiness.mangaOcrReady) add(ModelDownloadSpec.mangaOcr())
-    if (!readiness.sakuraReady) {
+    if (!readiness.paddleReady) {
+        add(ModelDownloadSpec.paddle(PaddleModelVersion.V6_SMALL))
+    }
+    if (!readiness.mangaOcrReady) {
+        add(ModelDownloadSpec.mangaOcr())
+    }
+    if (readiness.includeSakura && !readiness.sakuraReady) {
         add(ModelDownloadSpec.llm(LlmModelKind.SAKURA_1_5B_Q4))
     }
 }
 
-internal fun paddleOcrDownloadSpecs(modelReady: Boolean): List<ModelDownloadSpec> =
-    if (modelReady) {
-        emptyList()
-    } else {
-        listOf(ModelDownloadSpec.paddle(PaddleModelVersion.V5_MOBILE))
+internal fun recommendedModelsDownloadSpecs(
+    readiness: RecommendedModelsReadiness,
+): List<ModelDownloadSpec> = buildList {
+    if (!readiness.paddleReady) {
+        readiness.paddleVersion?.let { add(ModelDownloadSpec.paddle(it)) }
     }
+    if (readiness.includeHyMt2 && !readiness.hyMt2Ready) {
+        add(ModelDownloadSpec.llm(LlmModelKind.HY_MT2_1_8B_Q4_K_M))
+    }
+}

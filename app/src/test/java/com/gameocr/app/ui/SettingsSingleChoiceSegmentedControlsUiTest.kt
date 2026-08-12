@@ -17,6 +17,7 @@ class SettingsSingleChoiceSegmentedControlsUiTest {
             val startMarker: String,
             val endMarker: String,
             val requiredMarkers: List<String>,
+            val forbiddenMarkers: List<String> = emptyList(),
         )
 
         val cases = listOf(
@@ -29,6 +30,8 @@ class SettingsSingleChoiceSegmentedControlsUiTest {
                     "RenderMode.FLOATING_WINDOW",
                     "selected = renderMode == mode",
                     "if (renderMode != mode)",
+                ),
+                forbiddenMarkers = listOf(
                     "enabled = mode != RenderMode.FLOATING_WINDOW || layoutControlsEnabled",
                 ),
             ),
@@ -70,6 +73,9 @@ class SettingsSingleChoiceSegmentedControlsUiTest {
                 "label = { Text(stringResource(labelRes)) }",
             ).plus(case.requiredMarkers).forEach { marker ->
                 assertTrue("${case.name}: missing $marker", block.contains(marker))
+            }
+            case.forbiddenMarkers.forEach { marker ->
+                assertFalse("${case.name}: forbidden $marker", block.contains(marker))
             }
             assertFalse(
                 "${case.name}: must no longer use loose chips",

@@ -26,6 +26,7 @@ internal object MangaOcrBubbleGroupingPolicy {
         val guidedSource: BubbleModelRegrouper.Source?,
         val modelBubbleIndex: Int?,
         val regionGranularity: TextRegionGranularity = TextRegionGranularity.BUBBLE,
+        val paragraphRegrouped: Boolean = false,
     )
 
     fun select(

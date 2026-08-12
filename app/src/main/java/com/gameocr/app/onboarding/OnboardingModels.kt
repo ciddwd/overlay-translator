@@ -12,6 +12,7 @@ import com.gameocr.app.data.TranslationOutputDirection
 import com.gameocr.app.data.TranslationOutputLayout
 import com.gameocr.app.data.TranslatorEngine
 import com.gameocr.app.data.TtsProvider
+import com.gameocr.app.ocr.OcrLanguageCapability
 import com.gameocr.app.translate.MlKitLanguagePolicy
 import java.net.URI
 
@@ -23,7 +24,7 @@ enum class OnboardingStep {
     USAGE,
     MANGA_DIRECTION,
     TRANSLATION_METHOD,
-    PADDLE_OCR_DOWNLOAD,
+    RECOMMENDED_MODELS_DOWNLOAD,
     OFFLINE_LANGUAGE_DOWNLOAD,
     MANGA_OFFLINE_DOWNLOAD,
     CLOUD_CONFIG,
@@ -148,20 +149,20 @@ object OnboardingPolicy {
             add(OnboardingStep.DISPLAY_MODE)
         }
         add(OnboardingStep.TRANSLATION_METHOD)
-        if (shouldRecommendPaddleOcr(draft)) {
-            add(OnboardingStep.PADDLE_OCR_DOWNLOAD)
+        val usesJapaneseMangaOcr = usesJapaneseMangaOcr(draft)
+        if (usesJapaneseMangaOcr) {
+            add(OnboardingStep.MANGA_OFFLINE_DOWNLOAD)
+        } else if (needsRecommendedModelsDownload(draft)) {
+            add(OnboardingStep.RECOMMENDED_MODELS_DOWNLOAD)
         }
-        add(
-            when (draft.translationMethod) {
-                OnboardingTranslationMethod.OFFLINE ->
-                    if (draft.usage == OnboardingUsage.MANGA) {
-                        OnboardingStep.MANGA_OFFLINE_DOWNLOAD
-                    } else {
-                        OnboardingStep.OFFLINE_LANGUAGE_DOWNLOAD
-                    }
-                OnboardingTranslationMethod.CLOUD_LLM -> OnboardingStep.CLOUD_CONFIG
+        when (draft.translationMethod) {
+            OnboardingTranslationMethod.OFFLINE -> when {
+                usesSakuraMangaTranslation(draft) -> Unit // Included with Manga OCR above.
+                usesHyMt2MangaTranslation(draft) -> Unit // Included with recommended models above.
+                else -> add(OnboardingStep.OFFLINE_LANGUAGE_DOWNLOAD)
             }
-        )
+            OnboardingTranslationMethod.CLOUD_LLM -> add(OnboardingStep.CLOUD_CONFIG)
+        }
         add(OnboardingStep.TTS)
         add(OnboardingStep.SUMMARY)
     }
@@ -173,27 +174,75 @@ object OnboardingPolicy {
     fun isSakuraPairSupported(sourceLang: String, targetLang: String): Boolean =
         sourceLang == "ja" && targetLang == "zh-CN"
 
-    fun ocrEngineForSourceLanguage(sourceLang: String): OcrEngineKind =
-        when (sourceLang.trim().substringBefore('-').substringBefore('_').lowercase()) {
+    /** Sakura is only a translation choice. OCR routing is decided independently below. */
+    fun usesSakuraMangaTranslation(draft: OnboardingDraft): Boolean =
+        draft.usage == OnboardingUsage.MANGA &&
+            draft.translationMethod == OnboardingTranslationMethod.OFFLINE &&
+            isSakuraPairSupported(draft.sourceLang, draft.targetLang)
+
+    fun usesJapaneseMangaOcr(draft: OnboardingDraft): Boolean =
+        draft.usage == OnboardingUsage.MANGA &&
+            isSakuraPairSupported(draft.sourceLang, draft.targetLang)
+
+    fun usesHyMt2MangaTranslation(draft: OnboardingDraft): Boolean =
+        draft.usage == OnboardingUsage.MANGA &&
+            draft.translationMethod == OnboardingTranslationMethod.OFFLINE &&
+            !usesSakuraMangaTranslation(draft)
+
+    private fun normalizedSourceLanguage(sourceLang: String): String =
+        sourceLang.trim().replace('_', '-')
+
+    private fun mlKitOcrEngineForSourceLanguage(sourceLang: String): OcrEngineKind? {
+        val normalized = normalizedSourceLanguage(sourceLang)
+        val candidate = when (normalized.substringBefore('-').lowercase()) {
             "ja" -> OcrEngineKind.ML_KIT_JAPANESE
             "ko" -> OcrEngineKind.ML_KIT_KOREAN
             "zh" -> OcrEngineKind.ML_KIT_CHINESE
-            "en" -> OcrEngineKind.ML_KIT_LATIN
-            else -> OcrEngineKind.PADDLE_ONNX
+            else -> OcrEngineKind.ML_KIT_LATIN
         }
+        return candidate.takeIf {
+            OcrLanguageCapability.supports(it, normalized)
+        }
+    }
+
+    private fun supportsPaddleV6Small(sourceLang: String): Boolean =
+        OcrLanguageCapability.supports(
+            engine = OcrEngineKind.PADDLE_ONNX,
+            sourceCode = normalizedSourceLanguage(sourceLang),
+            paddleModelVersion = PaddleModelVersion.V6_SMALL,
+        )
+
+    /**
+     * Everyday use prioritizes ML Kit when it has a recognizer for the source language.
+     * If it does not, fall back to PaddleOCR v6 Small.
+     */
+    fun ocrEngineForSourceLanguage(sourceLang: String): OcrEngineKind =
+        mlKitOcrEngineForSourceLanguage(sourceLang)
+            ?: OcrEngineKind.PADDLE_ONNX
 
     fun recommendedOcrEngine(draft: OnboardingDraft): OcrEngineKind =
-        if (
-            draft.usage == OnboardingUsage.MANGA &&
-            draft.translationMethod == OnboardingTranslationMethod.OFFLINE
-        ) {
-            OcrEngineKind.MANGA_OCR_JA
-        } else {
-            ocrEngineForSourceLanguage(draft.sourceLang)
+        when (draft.usage) {
+            OnboardingUsage.DAILY -> ocrEngineForSourceLanguage(draft.sourceLang)
+            OnboardingUsage.MANGA -> when {
+                usesJapaneseMangaOcr(draft) -> OcrEngineKind.MANGA_OCR_JA
+                supportsPaddleV6Small(draft.sourceLang) -> OcrEngineKind.PADDLE_ONNX
+                else -> mlKitOcrEngineForSourceLanguage(draft.sourceLang)
+                    ?: OcrEngineKind.PADDLE_ONNX
+            }
         }
 
     fun shouldRecommendPaddleOcr(draft: OnboardingDraft): Boolean =
         recommendedOcrEngine(draft) == OcrEngineKind.PADDLE_ONNX
+
+    fun needsRecommendedModelsDownload(draft: OnboardingDraft): Boolean =
+        shouldRecommendPaddleOcr(draft) || usesHyMt2MangaTranslation(draft)
+
+    fun recommendedPaddleModelVersion(draft: OnboardingDraft): PaddleModelVersion? =
+        when (recommendedOcrEngine(draft)) {
+            OcrEngineKind.PADDLE_ONNX,
+            OcrEngineKind.MANGA_OCR_JA -> PaddleModelVersion.V6_SMALL
+            else -> null
+        }
 
     fun cloudConfigError(draft: OnboardingDraft): CloudConfigError? {
         if (draft.cloudBaseUrl.isBlank()) return CloudConfigError.BASE_URL_REQUIRED
@@ -329,8 +378,10 @@ object OnboardingPolicy {
             overlayPlacement = displaySettings.third,
             translatorEngine = when (draft.translationMethod) {
                 OnboardingTranslationMethod.OFFLINE ->
-                    if (draft.usage == OnboardingUsage.MANGA) {
+                    if (usesSakuraMangaTranslation(draft)) {
                         TranslatorEngine.LOCAL_SAKURA
+                    } else if (draft.usage == OnboardingUsage.MANGA) {
+                        TranslatorEngine.LOCAL_HY_MT2
                     } else {
                         TranslatorEngine.GOOGLE_ML_KIT
                     }
@@ -342,11 +393,8 @@ object OnboardingPolicy {
                     }
             },
             ocrEngine = recommendedOcrEngine(draft),
-            paddleModelVersion = if (shouldRecommendPaddleOcr(draft)) {
-                PaddleModelVersion.V5_MOBILE
-            } else {
-                settings.paddleModelVersion
-            },
+            paddleModelVersion = recommendedPaddleModelVersion(draft)
+                ?: settings.paddleModelVersion,
             ttsEnabled = draft.ttsChoice != OnboardingTtsChoice.DISABLED,
             ttsProvider = draft.ttsChoice.provider ?: settings.ttsProvider,
         )
@@ -387,8 +435,7 @@ object OnboardingPolicy {
                 renderMode = RenderMode.BLOCKS,
                 overlayStyleMode = OverlayStyleMode.ADAPTIVE,
                 overlayPlacement = OverlayPlacement.OVERLAP,
-                mergeAdjacentBlocks = true,
-                mergeStrength = MergeStrength.STANDARD,
+                mergeAdjacentBlocks = false,
                 translationOutputFollowRecognition = output.first,
                 translationOutputLayout = output.second,
                 translationOutputDirection = output.third,

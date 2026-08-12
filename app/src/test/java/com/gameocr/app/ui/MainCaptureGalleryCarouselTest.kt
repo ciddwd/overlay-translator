@@ -132,7 +132,11 @@ class MainCaptureGalleryCarouselTest {
             Case("uses horizontal pager", "HorizontalPager(", true),
             Case("offers an effectively infinite page range", "{ Int.MAX_VALUE }", true),
             Case("starts from the hoisted page", "initialPageIndex", true),
-            Case("reports the settled page", "pagerState.settledPage", true),
+            Case(
+                "reports the settled page after scroll state changes",
+                "pagerState.isScrollInProgress to pagerState.settledPage",
+                true,
+            ),
             Case("reports the logical page index", "currentOnPageChanged(", true),
             Case("rotates around the Y axis", "rotationY =", true),
             Case("measures both cards", ".onSizeChanged", true),
@@ -146,6 +150,142 @@ class MainCaptureGalleryCarouselTest {
             Case("does not keep a fixed carousel height", "CAPTURE_GALLERY_CAROUSEL_HEIGHT", false),
         ).forEach { case ->
             assertEquals(case.name, case.expectedPresent, case.marker in carousel)
+        }
+    }
+
+    @Test
+    fun `horizontal discovery eligibility is table driven`() {
+        data class Case(
+            val name: String,
+            val hintEnabled: Boolean,
+            val hintAlreadyPlayed: Boolean,
+            val hostVisible: Boolean,
+            val isScrollInProgress: Boolean,
+            val itemCount: Int,
+            val expected: Boolean,
+        )
+
+        listOf(
+            Case("unseen idle carousel with alternatives", true, false, true, false, 2, true),
+            Case("persisted discovery disables the hint", false, false, true, false, 2, false),
+            Case("same-session replay is suppressed", true, true, true, false, 2, false),
+            Case("off-screen carousel cannot show a guide", true, false, false, false, 2, false),
+            Case("active scrolling hides the guide", true, false, true, true, 2, false),
+            Case("a single preset has nothing to discover", true, false, true, false, 1, false),
+            Case("an empty carousel is rejected", true, false, true, false, 0, false),
+            Case("a corrupt negative count is rejected", true, false, true, false, -1, false),
+        ).forEach { case ->
+            assertEquals(
+                case.name,
+                case.expected,
+                shouldRunHorizontalDiscoveryHint(
+                    hintEnabled = case.hintEnabled,
+                    hintAlreadyPlayed = case.hintAlreadyPlayed,
+                    hostVisible = case.hostVisible,
+                    isScrollInProgress = case.isScrollInProgress,
+                    itemCount = case.itemCount,
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `main gesture guides wait until the floating bubble tour finishes`() {
+        data class Case(
+            val name: String,
+            val floatingTourCompleted: Boolean,
+            val autoChecking: Boolean,
+            val sharePromptVisible: Boolean,
+            val updateDialogVisible: Boolean,
+            val expected: Boolean,
+        )
+
+        listOf(
+            Case("bubble tour completed and main screen is idle", true, false, false, false, true),
+            Case("bubble tour is still active", false, false, false, false, false),
+            Case("update check blocks guides", true, true, false, false, false),
+            Case("share prompt blocks guides", true, false, true, false, false),
+            Case("update result dialog blocks guides", true, false, false, true, false),
+            Case("all blockers are active", false, true, true, true, false),
+        ).forEach { case ->
+            assertEquals(
+                case.name,
+                case.expected,
+                shouldEnableMainGestureGuides(
+                    floatingTourCompleted = case.floatingTourCompleted,
+                    autoChecking = case.autoChecking,
+                    sharePromptVisible = case.sharePromptVisible,
+                    updateDialogVisible = case.updateDialogVisible,
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `horizontal guide placement keeps presets centered and lowers capture`() {
+        data class Case(
+            val name: String,
+            val host: HorizontalDiscoveryGuideHost,
+            val expectedYOffsetDp: Int,
+        )
+
+        listOf(
+            Case("preset guide stays centered", HorizontalDiscoveryGuideHost.PRESET, 0),
+            Case(
+                "capture service guide moves slightly lower",
+                HorizontalDiscoveryGuideHost.CAPTURE_SERVICE,
+                24,
+            ),
+        ).forEach { case ->
+            assertEquals(
+                case.name,
+                case.expectedYOffsetDp,
+                horizontalDiscoveryGuideYOffsetDp(case.host),
+            )
+        }
+    }
+
+    @Test
+    fun `preset and capture horizontal guides persist only after a real switch`() {
+        val main = sourceFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readText()
+        val repository =
+            sourceFile("src/main/java/com/gameocr/app/data/SettingsRepository.kt").readText()
+        val floatingTourPrefs =
+            sourceFile("src/main/java/com/gameocr/app/overlay/FloatingMenuTourPrefs.kt").readText()
+
+        data class Case(val name: String, val content: String, val marker: String)
+
+        listOf(
+            Case("capture card draws a horizontal guide", main, "SwipeHorizontalGuide("),
+            Case(
+                "a settled page must differ from the scroll start",
+                main,
+                "settledPage != discoveryScrollStartPage",
+            ),
+            Case("preset switch is persisted", main, "viewModel.markMainPresetCarouselSeen()"),
+            Case("capture switch is persisted", main, "viewModel.markMainCaptureGallerySeen()"),
+            Case(
+                "all main guides observe floating tour completion",
+                main,
+                "FloatingMenuTourPrefs.observeCompletion(context)",
+            ),
+            Case(
+                "floating tour completion is observable without polling",
+                floatingTourPrefs,
+                "registerOnSharedPreferenceChangeListener(listener)",
+            ),
+            Case(
+                "preset discovery owns a durable preference",
+                repository,
+                "booleanPreferencesKey(\"main_preset_carousel_seen\")",
+            ),
+            Case(
+                "capture discovery owns a durable preference",
+                repository,
+                "booleanPreferencesKey(\"main_capture_gallery_seen\")",
+            ),
+        ).forEach { case ->
+            assertTrue("${case.name}: missing ${case.marker}", case.marker in case.content)
         }
     }
 

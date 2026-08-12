@@ -172,6 +172,7 @@ import com.gameocr.app.data.LoopTextRegionMode
 import com.gameocr.app.data.MangaOcrAdvancedSettingsPolicy
 import com.gameocr.app.data.MenuItemId
 import com.gameocr.app.data.OcrEngineKind
+import com.gameocr.app.data.OpenAiRequestOptions
 import com.gameocr.app.data.OverlayFontImportError
 import com.gameocr.app.data.OverlayFontImportResult
 import com.gameocr.app.data.OverlayFontPolicy
@@ -193,6 +194,7 @@ import com.gameocr.app.data.Settings
 import com.gameocr.app.data.SettingsBundlePreview
 import com.gameocr.app.data.SettingsBundleTransfer
 import com.gameocr.app.data.TranslationPreset
+import com.gameocr.app.data.TranslationContextMode
 import com.gameocr.app.data.TranslationPresetCatalog
 import com.gameocr.app.data.TranslationPresetImportPlan
 import com.gameocr.app.data.TranslationBlockInteractionMode
@@ -315,6 +317,11 @@ private fun SettingsSearchTarget(
     }
 }
 
+internal fun adjacentBoxMergeAvailableIn(renderMode: RenderMode): Boolean = when (renderMode) {
+    RenderMode.BLOCKS,
+    RenderMode.FLOATING_WINDOW -> true
+}
+
 private fun openExternalBrowser(context: Context, url: String) {
     runCatching {
         context.startActivity(
@@ -435,6 +442,8 @@ fun SettingsScreen(
     var anthropicApiKey by remember { mutableStateOf("") }
     var anthropicModel by remember { mutableStateOf("") }
     var prompt by remember { mutableStateOf("") }
+    var openAiRequestOptions by remember { mutableStateOf(OpenAiRequestOptions()) }
+    var promptAdvancedExpanded by remember { mutableStateOf(false) }
     var targetLang by remember { mutableStateOf("zh-CN") }
     var sourceLang by remember { mutableStateOf("auto") }
     var translatorEngine by remember { mutableStateOf(TranslatorEngine.OPENAI) }
@@ -510,7 +519,7 @@ fun SettingsScreen(
     var ocrRedBoxShowSourceText by remember { mutableStateOf(true) }
     var ocrRedBoxShowTranslation by remember { mutableStateOf(false) }
     var streaming by remember { mutableStateOf(true) }
-    var retryEmptyTranslation by remember { mutableStateOf(false) }
+    var retryFailedTranslation by remember { mutableStateOf(false) }
     var ttsEnabled by remember { mutableStateOf(false) }
     var ttsProvider by remember { mutableStateOf(TtsProvider.SYSTEM) }
     var ttsVoice by remember { mutableStateOf("") }
@@ -624,6 +633,7 @@ fun SettingsScreen(
     var wordSelectPreciseAdjust by remember { mutableStateOf(true) }
     var wordSelectCardMode by remember { mutableStateOf(true) }
     var wordSelectRememberRegion by remember { mutableStateOf(false) }
+    var floatingWindowAutoHideWhenObstructing by remember { mutableStateOf(false) }
     var dictionaryPrompt by remember { mutableStateOf("") }
     // 悬浮按钮"贴边距离" slider 的实时预览：屏幕两侧画 inset 宽度的半透粉条。
     // 默认 false——进设置就显示条带太突兀；用户在 slider 旁手动开启「预览」后才覆盖到屏幕上。
@@ -644,9 +654,11 @@ fun SettingsScreen(
     var allowWrap by remember { mutableStateOf(true) }
     var avoidCollision by remember { mutableStateOf(true) }
     var apiTimeoutSec by remember { mutableStateOf(30f) }
-    var mergeAdjacent by remember { mutableStateOf(true) }
+    var mergeAdjacent by remember { mutableStateOf(Settings().mergeAdjacentBlocks) }
     var mergeStrength by remember { mutableStateOf(com.gameocr.app.data.MergeStrength.STANDARD) }
-    var crossLineContextTranslationEnabled by remember { mutableStateOf(true) }
+    var translationContextMode by remember {
+        mutableStateOf(TranslationContextMode.FAST_PER_SEGMENT)
+    }
     // 文本方向自动判别：默认关；改动后即时落盘（走 viewModel.saveTextOrientationAutoDetect），不进 buildSnapshot
     var textOrientAutoDetect by remember { mutableStateOf(false) }
     // 端侧 LLM 推理参数。Slider 切换即时落盘（saveLocalLlmInferenceParams），下次翻译生效。
@@ -824,7 +836,11 @@ fun SettingsScreen(
             translatorEngine == TranslatorEngine.LOCAL_SAKURA &&
             !supportsSakuraLanguagePair(swapped.first, swapped.second)
         ) {
-            showSakuraFallbackDialog = true
+            translatorEngine = translationEngineAfterLanguageChange(
+                translatorEngine,
+                swapped.first,
+                swapped.second,
+            )
         }
     }
 
@@ -870,6 +886,7 @@ fun SettingsScreen(
         anthropicApiKey = s.anthropicApiKey
         anthropicModel = s.anthropicModel
         prompt = s.promptTemplate
+        openAiRequestOptions = s.openAiRequestOptions
         sourceLang = s.sourceLang
         targetLang = s.targetLang
         dictionaryPrompt = s.dictionaryPrompt
@@ -915,7 +932,7 @@ fun SettingsScreen(
         ocrRedBoxShowSourceText = s.ocrRedBoxShowSourceText
         ocrRedBoxShowTranslation = s.ocrRedBoxShowTranslation
         streaming = s.streamingTranslate
-        retryEmptyTranslation = s.retryEmptyTranslation
+        retryFailedTranslation = s.retryFailedTranslation
         renderMode = s.renderMode
         translationBlockInteractionMode = s.translationBlockInteractionMode
         floatingWindowContentMode = s.floatingWindowContentMode
@@ -962,10 +979,11 @@ fun SettingsScreen(
         wordSelectPreciseAdjust = s.wordSelectPreciseAdjust
         wordSelectCardMode = s.wordSelectCardMode
         wordSelectRememberRegion = s.wordSelectRememberRegion
+        floatingWindowAutoHideWhenObstructing = s.floatingWindowAutoHideWhenObstructing
         apiTimeoutSec = s.apiTimeoutSeconds.toFloat()
         mergeAdjacent = s.mergeAdjacentBlocks
         mergeStrength = s.mergeStrength
-        crossLineContextTranslationEnabled = !s.disableCrossLineContextTranslation
+        translationContextMode = s.translationContextMode
         textOrientAutoDetect = s.textOrientationAutoDetect
         manualTextOrient = s.manualTextOrientation
         resolveTranslationOutputSettings(
@@ -1215,6 +1233,7 @@ fun SettingsScreen(
         targetLang = targetLang,
         mlKitRecentSourceLanguages = mlKitRecentSources,
         promptTemplate = prompt,
+        openAiRequestOptions = openAiRequestOptions.normalized(),
         ocrEngine = ocrEngine,
         captureLoopIntervalMs = loopInterval.toLongOrNull() ?: 2000L,
         loopTriggerMode = loopTriggerMode,
@@ -1235,7 +1254,7 @@ fun SettingsScreen(
         overlayAlpha = alpha,
         overlayFonts = overlayFontEntries,
         streamingTranslate = streaming,
-        retryEmptyTranslation = retryEmptyTranslation,
+        retryFailedTranslation = retryFailedTranslation,
         ttsEnabled = ttsEnabled,
         ttsProvider = ttsProvider,
         ttsVoice = ttsVoice,
@@ -1317,7 +1336,7 @@ fun SettingsScreen(
         apiTimeoutSeconds = apiTimeoutSec.toInt(),
         mergeAdjacentBlocks = mergeAdjacent,
         mergeStrength = mergeStrength,
-        disableCrossLineContextTranslation = !crossLineContextTranslationEnabled,
+        translationContextMode = translationContextMode,
         cleartextAllowedHosts = cleartextHostsWithLocalOcrUrls(
             parseCleartextHosts(cleartextHostsText),
             umiOcrBaseUrl,
@@ -1426,6 +1445,7 @@ fun SettingsScreen(
             anthropicApiKey = anthropicApiKey,
             anthropicModel = anthropicModel,
             targetLang = targetLang, sourceLang = sourceLang, prompt = prompt,
+            openAiRequestOptions = openAiRequestOptions,
             textSize = textSize.toInt(), alpha = alpha,
             overlayTextStyle = overlayTextStyle,
             loopMs = loopInterval.toLongOrNull() ?: 2000L,
@@ -1443,7 +1463,7 @@ fun SettingsScreen(
             ocrRedBoxShowSourceText = ocrRedBoxShowSourceText,
             ocrRedBoxShowTranslation = ocrRedBoxShowTranslation,
             streaming = streaming,
-            retryEmptyTranslation = retryEmptyTranslation,
+            retryFailedTranslation = retryFailedTranslation,
             ttsEnabled = ttsEnabled,
             ttsProvider = ttsProvider,
             ttsVoice = ttsVoice,
@@ -1505,7 +1525,7 @@ fun SettingsScreen(
             apiTimeoutSeconds = apiTimeoutSec.toInt(),
             mergeAdjacentBlocks = mergeAdjacent,
             mergeStrength = mergeStrength,
-            disableCrossLineContextTranslation = !crossLineContextTranslationEnabled,
+            translationContextMode = translationContextMode,
             cleartextAllowedHosts = parseCleartextHosts(cleartextHostsText),
             translatorEngine = effectiveTranslatorEngine(),
             deeplKey = deeplKey,
@@ -2465,6 +2485,7 @@ fun SettingsScreen(
             anthropicApiKey = s.anthropicApiKey
             anthropicModel = s.anthropicModel
             prompt = migratedPrompt
+            openAiRequestOptions = s.openAiRequestOptions
             targetLang = s.targetLang
             sourceLang = s.sourceLang
             translatorEngine = if (isLocalLlmEngine(s.translatorEngine) && !localLlmDeviceCapable) {
@@ -2508,7 +2529,7 @@ fun SettingsScreen(
             ocrRedBoxShowSourceText = s.ocrRedBoxShowSourceText
             ocrRedBoxShowTranslation = s.ocrRedBoxShowTranslation
             streaming = s.streamingTranslate
-            retryEmptyTranslation = s.retryEmptyTranslation
+            retryFailedTranslation = s.retryFailedTranslation
             ttsEnabled = s.ttsEnabled
             ttsProvider = s.ttsProvider
             ttsVoice = s.ttsVoice
@@ -2594,6 +2615,7 @@ fun SettingsScreen(
             wordSelectPreciseAdjust = s.wordSelectPreciseAdjust
             wordSelectCardMode = s.wordSelectCardMode
             wordSelectRememberRegion = s.wordSelectRememberRegion
+            floatingWindowAutoHideWhenObstructing = s.floatingWindowAutoHideWhenObstructing
             dictionaryPrompt = s.dictionaryPrompt
             translationPresets = s.translationPresets
             activeTranslationPresetId = s.activeTranslationPresetId
@@ -2604,7 +2626,7 @@ fun SettingsScreen(
             apiTimeoutSec = s.apiTimeoutSeconds.toFloat()
             mergeAdjacent = s.mergeAdjacentBlocks
             mergeStrength = s.mergeStrength
-            crossLineContextTranslationEnabled = !s.disableCrossLineContextTranslation
+            translationContextMode = s.translationContextMode
             textOrientAutoDetect = s.textOrientationAutoDetect
             dbnetProb = s.dbnetProbThresh
             dbnetScore = s.dbnetBoxScoreThresh
@@ -3627,7 +3649,11 @@ fun SettingsScreen(
                                 translatorEngine == TranslatorEngine.LOCAL_SAKURA &&
                                 !supportsSakuraLanguagePair(it, targetLang)
                             ) {
-                                showSakuraFallbackDialog = true
+                                translatorEngine = translationEngineAfterLanguageChange(
+                                    translatorEngine,
+                                    it,
+                                    targetLang,
+                                )
                             }
                         }
                     },
@@ -3660,7 +3686,11 @@ fun SettingsScreen(
                             translatorEngine == TranslatorEngine.LOCAL_SAKURA &&
                             !supportsSakuraLanguagePair(sourceLang, it)
                         ) {
-                            showSakuraFallbackDialog = true
+                            translatorEngine = translationEngineAfterLanguageChange(
+                                translatorEngine,
+                                sourceLang,
+                                it,
+                            )
                         }
                     },
                     pinned = pinnedLanguages,
@@ -3684,10 +3714,10 @@ fun SettingsScreen(
                     translatorEngine = translatorEngine,
                     streaming = streaming,
                     onStreamingChange = { streaming = it },
-                    crossLineContextTranslationEnabled = crossLineContextTranslationEnabled,
-                    onCrossLineContextTranslationEnabledChange = {
-                        crossLineContextTranslationEnabled = it
-                    },
+                    requestOptions = openAiRequestOptions,
+                    onRequestOptionsChange = { openAiRequestOptions = it },
+                    translationContextMode = translationContextMode,
+                    onTranslationContextModeChange = { translationContextMode = it },
                     glossaryEnabled = translationGlossaryEnabled,
                     onGlossaryEnabledChange = { enabled ->
                         translationGlossaryEnabled = enabled
@@ -3742,8 +3772,8 @@ fun SettingsScreen(
                             }
                     },
                     onOpenGlossary = onOpenGlossary,
-                    retryEmptyTranslation = retryEmptyTranslation,
-                    onRetryEmptyTranslationChange = { retryEmptyTranslation = it },
+                    retryFailedTranslation = retryFailedTranslation,
+                    onRetryFailedTranslationChange = { retryFailedTranslation = it },
                 )
                 }
                 // 推理参数高级设置：仅端侧 LLM 引擎时显示，收起在术语库之后
@@ -3812,8 +3842,13 @@ fun SettingsScreen(
                 ) {
                     SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_PROMPTS) {
                     OpenAiPromptSettings(
+                        searchTargetRegistry = searchTargetRegistry,
                         prompt = prompt,
                         onPromptChange = { prompt = it },
+                        advancedExpanded = promptAdvancedExpanded,
+                        onAdvancedExpandedChange = { promptAdvancedExpanded = it },
+                        requestOptions = openAiRequestOptions,
+                        onRequestOptionsChange = { openAiRequestOptions = it },
                         sourceLang = sourceLang,
                         targetLang = targetLang,
                         dictionaryPrompt = dictionaryPrompt,
@@ -4926,7 +4961,6 @@ fun SettingsScreen(
                                     renderMode = mode
                                 }
                             },
-                            enabled = mode != RenderMode.FLOATING_WINDOW || layoutControlsEnabled,
                             shape = SegmentedButtonDefaults.itemShape(
                                 index = index,
                                 count = renderModeOptions.size,
@@ -5097,9 +5131,14 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.alpha(if (layoutControlsEnabled) 1f else 0.4f),
                     )
+                }
 
-                    SwitchRow(stringResource(R.string.settings_merge_adjacent), mergeAdjacent) { mergeAdjacent = it }
-                    if (mergeAdjacent) {
+                    if (settingsLoaded && adjacentBoxMergeAvailableIn(renderMode)) {
+                        SwitchRow(stringResource(R.string.settings_merge_adjacent), mergeAdjacent) {
+                            mergeAdjacent = it
+                        }
+                    }
+                    if (settingsLoaded && adjacentBoxMergeAvailableIn(renderMode) && mergeAdjacent) {
                         Text(
                             stringResource(R.string.settings_merge_strength_label),
                             style = MaterialTheme.typography.labelLarge
@@ -5147,7 +5186,6 @@ fun SettingsScreen(
                     )
                 }
                 }
-                }
 
             }
 
@@ -5181,6 +5219,14 @@ fun SettingsScreen(
                 ) {
                     wordSelectRememberRegion = it
                     scope.launch { viewModel.saveWordSelectRememberRegion(it) }
+                }
+                SwitchRow(
+                    stringResource(R.string.settings_floating_window_auto_hide),
+                    floatingWindowAutoHideWhenObstructing,
+                    helpText = stringResource(R.string.settings_floating_window_auto_hide_help)
+                ) {
+                    floatingWindowAutoHideWhenObstructing = it
+                    scope.launch { viewModel.saveFloatingWindowAutoHideWhenObstructing(it) }
                 }
             }
             }
@@ -5747,6 +5793,9 @@ fun SettingsScreen(
                                         containerColor = MaterialTheme.colorScheme.surface
                                     ),
                                     modifier = Modifier.clickable {
+                                        if (entry.targetId == R.string.settings_openai_request_options_title) {
+                                            promptAdvancedExpanded = true
+                                        }
                                         closeSearch()
                                         scope.launch {
                                             settingsSectionIndex(entry.sectionKey)?.let { index ->
@@ -6880,6 +6929,92 @@ private fun <T> TtsOptionDropdown(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TranslationContextModeSelector(
+    value: TranslationContextMode,
+    translatorEngine: TranslatorEngine,
+    onValueChange: (TranslationContextMode) -> Unit,
+) {
+    val context = LocalContext.current
+    val supportsContext = supportsTranslationPromptContext(translatorEngine)
+    val unsupportedMessage = stringResource(
+        R.string.settings_translation_mode_unsupported,
+        stringResource(translationContextServiceNameRes(translatorEngine)),
+    )
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            text = stringResource(R.string.settings_translation_mode),
+            style = MaterialTheme.typography.labelLarge,
+        )
+        val modes = TranslationContextMode.entries
+        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+            modes.forEachIndexed { index, mode ->
+                SegmentedButton(
+                    selected = value == mode,
+                    onClick = {
+                        if (!canSelectTranslationContextMode(supportsContext, mode)) {
+                            Toast.makeText(context, unsupportedMessage, Toast.LENGTH_SHORT).show()
+                        } else if (value != mode) {
+                            onValueChange(mode)
+                        }
+                    },
+                    shape = SegmentedButtonDefaults.itemShape(index, modes.size),
+                    icon = {},
+                    label = {
+                        Text(
+                            text = stringResource(translationContextModeLabelRes(mode)),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
+                )
+            }
+        }
+        Text(
+            text = if (!supportsContext) {
+                unsupportedMessage
+            } else {
+                stringResource(
+                when {
+                    value == TranslationContextMode.FAST_PER_SEGMENT ->
+                        R.string.settings_translation_mode_fast_hint
+                    value == TranslationContextMode.PAGE_CONTEXT ->
+                        R.string.settings_translation_mode_page_hint
+                    else -> R.string.settings_translation_mode_continuous_hint
+                }
+                )
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+internal fun canSelectTranslationContextMode(
+    supportsContext: Boolean,
+    requestedMode: TranslationContextMode,
+): Boolean = supportsContext || requestedMode == TranslationContextMode.FAST_PER_SEGMENT
+
+@androidx.annotation.StringRes
+private fun translationContextServiceNameRes(engine: TranslatorEngine): Int = when (engine) {
+    TranslatorEngine.DEEPL -> R.string.settings_translation_service_deepl
+    TranslatorEngine.YOUDAO_PICTRANS -> R.string.settings_translation_service_youdao
+    TranslatorEngine.GOOGLE -> R.string.settings_translation_service_google
+    TranslatorEngine.GOOGLE_ML_KIT -> R.string.settings_translation_service_mlkit
+    TranslatorEngine.VOLC -> R.string.settings_translation_service_volc
+    TranslatorEngine.BAIDU_FANYI -> R.string.settings_translation_service_baidu
+    TranslatorEngine.TENCENT -> R.string.settings_translation_service_tencent
+    else -> translatorEngineLabelRes(engine)
+}
+
+@androidx.annotation.StringRes
+private fun translationContextModeLabelRes(mode: TranslationContextMode): Int = when (mode) {
+    TranslationContextMode.FAST_PER_SEGMENT -> R.string.settings_translation_mode_fast
+    TranslationContextMode.PAGE_CONTEXT -> R.string.settings_translation_mode_page
+    TranslationContextMode.CONTINUOUS_CONTEXT -> R.string.settings_translation_mode_continuous
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun TranslationAssistanceSettings(
@@ -6887,8 +7022,10 @@ private fun TranslationAssistanceSettings(
     translatorEngine: TranslatorEngine,
     streaming: Boolean,
     onStreamingChange: (Boolean) -> Unit,
-    crossLineContextTranslationEnabled: Boolean,
-    onCrossLineContextTranslationEnabledChange: (Boolean) -> Unit,
+    requestOptions: OpenAiRequestOptions,
+    onRequestOptionsChange: (OpenAiRequestOptions) -> Unit,
+    translationContextMode: TranslationContextMode,
+    onTranslationContextModeChange: (TranslationContextMode) -> Unit,
     glossaryEnabled: Boolean,
     onGlossaryEnabledChange: (Boolean) -> Unit,
     foregroundAppDetectionMode: com.gameocr.app.data.ForegroundAppDetectionMode,
@@ -6898,30 +7035,37 @@ private fun TranslationAssistanceSettings(
     usageAccessGranted: Boolean,
     onOpenUsageAccess: () -> Unit,
     onOpenGlossary: () -> Unit,
-    retryEmptyTranslation: Boolean,
-    onRetryEmptyTranslationChange: (Boolean) -> Unit,
+    retryFailedTranslation: Boolean,
+    onRetryFailedTranslationChange: (Boolean) -> Unit,
 ) {
+    TranslationContextModeSelector(
+        value = translationContextMode,
+        translatorEngine = translatorEngine,
+        onValueChange = onTranslationContextModeChange,
+    )
     if (translatorEngine == TranslatorEngine.OPENAI ||
         translatorEngine == TranslatorEngine.ANTHROPIC
     ) {
         SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_streaming) {
         SwitchRow(stringResource(R.string.settings_streaming), streaming, onChange = onStreamingChange)
         }
+        SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_thinking_mode) {
+        SwitchRow(
+            label = stringResource(R.string.settings_thinking_mode),
+            checked = requestOptions.thinkingModeEnabled,
+            helpText = stringResource(R.string.settings_thinking_mode_hint),
+            onChange = { enabled ->
+                onRequestOptionsChange(requestOptions.copy(thinkingModeEnabled = enabled))
+            },
+        )
+        }
     }
-    SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_cross_line_context) {
+    SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_failed_translation_retry) {
     SwitchRow(
-        label = stringResource(R.string.settings_cross_line_context_translation),
-        checked = crossLineContextTranslationEnabled,
-        helpText = stringResource(R.string.settings_cross_line_context_translation_hint),
-        onChange = onCrossLineContextTranslationEnabledChange,
-    )
-    }
-    SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_empty_translation_retry) {
-    SwitchRow(
-        label = stringResource(R.string.settings_retry_empty_translation_label),
-        checked = retryEmptyTranslation,
-        helpText = stringResource(R.string.settings_retry_empty_translation_hint),
-        onChange = onRetryEmptyTranslationChange,
+        label = stringResource(R.string.settings_retry_failed_translation_label),
+        checked = retryFailedTranslation,
+        helpText = stringResource(R.string.settings_retry_failed_translation_hint),
+        onChange = onRetryFailedTranslationChange,
     )
     }
     if (supportsTranslationPromptContext(translatorEngine)) {
@@ -7002,16 +7146,21 @@ private fun TranslationAssistanceSettings(
 
 @Composable
 private fun OpenAiPromptSettings(
+    searchTargetRegistry: SettingsSearchTargetRegistry,
     prompt: String,
     onPromptChange: (String) -> Unit,
+    advancedExpanded: Boolean,
+    onAdvancedExpandedChange: (Boolean) -> Unit,
+    requestOptions: OpenAiRequestOptions,
+    onRequestOptionsChange: (OpenAiRequestOptions) -> Unit,
     sourceLang: String,
     targetLang: String,
     dictionaryPrompt: String,
     onDictionaryPromptChange: (String) -> Unit,
 ) {
     val context = LocalContext.current
-    var promptAdvancedExpanded by remember { mutableStateOf(false) }
     var showResetMainPromptDialog by remember { mutableStateOf(false) }
+    var showResetRequestOptionsDialog by remember { mutableStateOf(false) }
     var showResetDictPromptDialog by remember { mutableStateOf(false) }
 
     Row(
@@ -7019,7 +7168,7 @@ private fun OpenAiPromptSettings(
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
             .clickable(role = Role.Button) {
-                promptAdvancedExpanded = !promptAdvancedExpanded
+                onAdvancedExpandedChange(!advancedExpanded)
             }
             .padding(horizontal = 4.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -7034,12 +7183,12 @@ private fun OpenAiPromptSettings(
             imageVector = Icons.Default.ExpandMore,
             contentDescription = null,
             modifier = Modifier.graphicsLayer {
-                rotationZ = if (promptAdvancedExpanded) 180f else 0f
+                rotationZ = if (advancedExpanded) 180f else 0f
             },
             tint = MaterialTheme.colorScheme.primary,
         )
     }
-    if (!promptAdvancedExpanded) return
+    if (!advancedExpanded) return
 
     OutlinedTextField(
         value = prompt,
@@ -7120,6 +7269,131 @@ private fun OpenAiPromptSettings(
                 }
             },
         )
+    }
+    SettingsSearchTarget(searchTargetRegistry, R.string.settings_openai_request_options_title) {
+    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+    Text(
+        stringResource(R.string.settings_openai_request_options_title),
+        style = MaterialTheme.typography.labelLarge,
+    )
+    OutlinedTextField(
+        value = requestOptions.userMessageTemplate,
+        onValueChange = { onRequestOptionsChange(requestOptions.copy(userMessageTemplate = it)) },
+        label = { Text(stringResource(R.string.settings_openai_user_template)) },
+        supportingText = { Text(stringResource(R.string.settings_openai_user_template_hint)) },
+        modifier = Modifier.fillMaxWidth(),
+        minLines = 2,
+        maxLines = 6,
+    )
+    SwitchRow(
+        label = stringResource(R.string.settings_llm_encode_text_base64),
+        checked = requestOptions.encodeUserTextBase64,
+        helpText = stringResource(R.string.settings_llm_encode_text_base64_hint),
+    ) { enabled ->
+        onRequestOptionsChange(
+            requestOptions.copy(
+                encodeUserTextBase64 = enabled,
+                encodeUserTextUnicode = if (enabled) false else requestOptions.encodeUserTextUnicode,
+            )
+        )
+    }
+    SwitchRow(
+        label = stringResource(R.string.settings_llm_encode_text_unicode),
+        checked = requestOptions.encodeUserTextUnicode,
+        helpText = stringResource(R.string.settings_llm_encode_text_unicode_hint),
+    ) { enabled ->
+        onRequestOptionsChange(
+            requestOptions.copy(
+                encodeUserTextUnicode = enabled,
+                encodeUserTextBase64 = if (enabled) false else requestOptions.encodeUserTextBase64,
+            )
+        )
+    }
+    OutlinedTextField(
+        value = requestOptions.systemPromptSuffix,
+        onValueChange = { onRequestOptionsChange(requestOptions.copy(systemPromptSuffix = it)) },
+        label = { Text(stringResource(R.string.settings_openai_system_suffix)) },
+        supportingText = { Text(stringResource(R.string.settings_openai_system_suffix_hint)) },
+        modifier = Modifier.fillMaxWidth(),
+        minLines = 2,
+        maxLines = 8,
+    )
+    Text(
+        stringResource(
+            R.string.settings_openai_temperature_format,
+            requestOptions.temperature,
+        ),
+        style = MaterialTheme.typography.bodySmall,
+    )
+    Slider(
+        value = requestOptions.temperature.toFloat().coerceIn(0f, 2f),
+        onValueChange = {
+            onRequestOptionsChange(requestOptions.copy(temperature = it.toDouble()))
+        },
+        valueRange = 0f..2f,
+        steps = 19,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    SwitchRow(
+        label = stringResource(R.string.settings_openai_top_p),
+        checked = requestOptions.topP != null,
+    ) { enabled ->
+        onRequestOptionsChange(requestOptions.copy(topP = if (enabled) 0.3 else null))
+    }
+    requestOptions.topP?.let { topP ->
+        Text(
+            stringResource(R.string.settings_openai_top_p_format, topP),
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Slider(
+            value = topP.toFloat().coerceIn(0f, 1f),
+            onValueChange = {
+                onRequestOptionsChange(requestOptions.copy(topP = it.toDouble()))
+            },
+            valueRange = 0f..1f,
+            steps = 9,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+    OutlinedTextField(
+        value = requestOptions.maxTokens?.toString().orEmpty(),
+        onValueChange = { raw ->
+            val digits = raw.filter(Char::isDigit)
+            onRequestOptionsChange(
+                requestOptions.copy(maxTokens = digits.toIntOrNull()?.coerceIn(1, 16_384))
+            )
+        },
+        label = { Text(stringResource(R.string.settings_openai_max_tokens)) },
+        supportingText = { Text(stringResource(R.string.settings_openai_max_tokens_hint)) },
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+    )
+    TextButton(onClick = { showResetRequestOptionsDialog = true }) {
+        Text(stringResource(R.string.settings_openai_request_options_reset))
+    }
+    if (showResetRequestOptionsDialog) {
+        CatalystAlertDialog(
+            onDismissRequest = { showResetRequestOptionsDialog = false },
+            title = {
+                Text(stringResource(R.string.settings_openai_request_options_reset_confirm_title))
+            },
+            text = {
+                Text(stringResource(R.string.settings_openai_request_options_reset_confirm_message))
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onRequestOptionsChange(OpenAiRequestOptions())
+                    showResetRequestOptionsDialog = false
+                }) { Text(stringResource(R.string.settings_reset_confirm_yes)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showResetRequestOptionsDialog = false }) {
+                    Text(stringResource(R.string.settings_reset_confirm_no))
+                }
+            },
+        )
+    }
     }
 
     HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
@@ -7667,8 +7941,10 @@ private val SEARCH_TARGET_TRANSLATOR_PROVIDERS = intArrayOf(
 private val SEARCH_TARGET_SOURCE_LANGUAGE = intArrayOf(R.string.settings_search_item_source_lang)
 private val SEARCH_TARGET_TARGET_LANGUAGE = intArrayOf(R.string.settings_search_item_target_lang)
 private val SEARCH_TARGET_TRANSLATION_ASSISTANCE = intArrayOf(
+    R.string.settings_translation_mode,
     R.string.settings_search_item_streaming,
-    R.string.settings_search_item_empty_translation_retry,
+    R.string.settings_search_item_thinking_mode,
+    R.string.settings_search_item_failed_translation_retry,
     R.string.settings_glossary_enabled,
     R.string.settings_foreground_app_detection,
     R.string.settings_send_app_name,
@@ -7683,6 +7959,7 @@ private val SEARCH_TARGET_TTS = intArrayOf(
 )
 private val SEARCH_TARGET_PROMPTS = intArrayOf(
     R.string.settings_search_item_prompt,
+    R.string.settings_openai_request_options_title,
     R.string.settings_search_item_dictionary_prompt,
 )
 private val SEARCH_TARGET_OCR_ENGINE = intArrayOf(
@@ -7753,6 +8030,7 @@ private val SEARCH_TARGET_WORD_SELECT = intArrayOf(
     R.string.settings_search_item_word_select_precise,
     R.string.settings_search_item_word_select_card_mode,
     R.string.settings_search_item_word_select_remember,
+    R.string.settings_search_item_floating_window_auto_hide,
 )
 private val SEARCH_TARGET_TRIGGER = intArrayOf(
     R.string.settings_search_item_loop_interval,
@@ -7763,7 +8041,6 @@ private val SEARCH_TARGET_TRIGGER = intArrayOf(
 )
 private val SEARCH_TARGET_DEVELOPER = intArrayOf(
     R.string.settings_search_item_developer_ocr,
-    R.string.settings_search_item_cross_line_context,
 )
 private val SEARCH_TARGET_NETWORK = intArrayOf(
     R.string.settings_search_item_api_timeout,
@@ -7829,6 +8106,20 @@ private data class SearchEntry(
 }
 
 private val SETTINGS_SEARCH_SEPARATOR = Regex("[^\\p{L}\\p{N}]+")
+
+internal val SETTINGS_SEARCH_LLM_REQUEST_OPTION_KEYWORDS = listOf(
+    "LLM request parameters",
+    "LLM 请求参数",
+    "user message template",
+    "用户消息模板",
+    "Base64",
+    "Unicode",
+    "system prompt suffix",
+    "系统提示词后缀",
+    "temperature",
+    "top_p",
+    "max_tokens",
+)
 
 private fun normalizeSettingsSearchText(value: String): String = value
         .lowercase(Locale.ROOT)
@@ -7897,9 +8188,9 @@ internal val SETTINGS_SEARCH_COLOR_KEYWORDS = listOf(
     "透明度", "边框",
 )
 
-internal val SETTINGS_SEARCH_EMPTY_TRANSLATION_RETRY_KEYWORDS = listOf(
-    "empty translation", "blank translation", "empty response", "blank response", "retry",
-    "空译文", "空翻译", "空响应", "自动重试", "重试",
+internal val SETTINGS_SEARCH_FAILED_TRANSLATION_RETRY_KEYWORDS = listOf(
+    "translation failed", "failed translation", "empty translation", "blank response", "retry",
+    "翻译失败", "空译文", "异常译文", "自动重试", "重试",
 )
 
 internal val SETTINGS_SEARCH_TRANSLATION_BLOCK_INTERACTION_KEYWORDS = listOf(
@@ -7927,16 +8218,18 @@ internal val SETTINGS_SEARCH_LOOP_REGION_KEYWORDS = listOf(
 internal val SETTINGS_SEARCH_DEVELOPER_OCR_KEYWORDS = listOf(
     "developer", "developer mode", "debug", "diagnostic", "ocr box", "red box",
     "bounding box", "source text", "translation text", "screenshot", "save screenshot",
-    "translation cache", "disable cache", "开发者", "开发者模式", "调试", "诊断",
-    "OCR 红框", "红框", "边界框", "原文", "译文", "截图保存", "翻译缓存", "禁用缓存",
+    "translation cache", "disable cache", "network log", "request body", "response body",
+    "headers", "timing", "开发者", "开发者模式", "调试", "诊断", "网络日志",
+    "请求体", "响应体", "请求头", "响应头", "耗时", "OCR 红框", "红框", "边界框",
+    "原文", "译文", "截图保存", "翻译缓存", "禁用缓存",
 )
 
 private val SETTING_ITEMS: List<SearchEntry> = listOf(
     SearchEntry(
         SectionKeys.TRANSLATE,
         R.string.settings_section_translator,
-        R.string.settings_search_item_empty_translation_retry,
-        SETTINGS_SEARCH_EMPTY_TRANSLATION_RETRY_KEYWORDS,
+        R.string.settings_search_item_failed_translation_retry,
+        SETTINGS_SEARCH_FAILED_TRANSLATION_RETRY_KEYWORDS,
     ),
     SearchEntry(
         SectionKeys.TTS,
@@ -8006,9 +8299,16 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_source_lang, listOf("source", "源语言")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_target_lang, listOf("target", "目标语言")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_prompt, listOf("prompt", "提示词", "system")),
+    SearchEntry(
+        SectionKeys.TRANSLATE,
+        R.string.settings_section_translator,
+        R.string.settings_openai_request_options_title,
+        SETTINGS_SEARCH_LLM_REQUEST_OPTION_KEYWORDS,
+    ),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_dictionary_prompt, listOf("dictionary", "词典", "划词", "word select", "phonetic", "音标", "释义", "definition", "prompt")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_streaming, listOf("streaming", "流式")),
-    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_cross_line_context, listOf("cross context", "cross line", "上下文", "跨上下文", "段落")),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_thinking_mode, listOf("thinking", "reasoning", "思考", "推理")),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_translation_mode, listOf("translation mode", "context", "翻译模式", "上下文", "同屏", "连续")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_glossary_enabled, listOf("name consistency", "term memory", "译名一致性", "人名", "专名")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_send_app_name, listOf("send app name", "prompt app context", "发送应用名称", "模型应用名称")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_foreground_app_detection, listOf("app detection", "foreground app", "accessibility", "usage access", "应用识别", "前台应用")),
@@ -8148,6 +8448,7 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
     SearchEntry(SectionKeys.WORD_SELECT, R.string.settings_section_word_select, R.string.settings_search_item_word_select_precise, listOf("划词", "word select", "precise", "adjust", "松手", "精确调整", "release")),
     SearchEntry(SectionKeys.WORD_SELECT, R.string.settings_section_word_select, R.string.settings_search_item_word_select_card_mode, listOf("划词", "word select", "card", "overlay", "卡片", "叠加", "全屏模式")),
     SearchEntry(SectionKeys.WORD_SELECT, R.string.settings_section_word_select, R.string.settings_search_item_word_select_remember, listOf("划词", "word select", "remember", "记住", "选框", "region")),
+    SearchEntry(SectionKeys.WORD_SELECT, R.string.settings_section_word_select, R.string.settings_search_item_floating_window_auto_hide, listOf("划词", "word select", "floating window", "悬浮窗", "遮挡", "自动隐藏", "闪烁", "capture")),
 
     // —— 触发器 ——
     SearchEntry(SectionKeys.TRIGGER, R.string.settings_section_trigger, R.string.settings_search_item_loop_interval, listOf("loop", "循环", "interval", "间隔")),
@@ -9424,6 +9725,18 @@ internal fun supportsSakuraTarget(targetLang: String): Boolean {
 internal fun supportsSakuraLanguagePair(sourceLang: String, targetLang: String): Boolean {
     return supportsSakuraSource(sourceLang) && supportsSakuraTarget(targetLang)
 }
+
+/** Keeps a user-selected language intact when it leaves Sakura's fixed Japanese→Chinese pair. */
+internal fun translationEngineAfterLanguageChange(
+    engine: TranslatorEngine,
+    sourceLang: String,
+    targetLang: String,
+): TranslatorEngine =
+    if (engine == TranslatorEngine.LOCAL_SAKURA && !supportsSakuraLanguagePair(sourceLang, targetLang)) {
+        TranslatorEngine.LOCAL_HY_MT2
+    } else {
+        engine
+    }
 
 internal fun isLocalLlmEngine(engine: TranslatorEngine): Boolean = when (engine) {
     TranslatorEngine.LOCAL_SAKURA,

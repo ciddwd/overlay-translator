@@ -111,68 +111,31 @@ class SettingsScreenModelStatusTest {
     }
 
     @Test
-    fun crossLineContextTranslation_isEnabledByDefaultBelowStreamingTranslation() {
+    fun translationMode_isTheOnlyTranslationContextControl() {
         val source = File("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
         val assistanceStart = source.indexOf("private fun TranslationAssistanceSettings(")
         val assistanceEnd = source.indexOf(
             "private fun OpenAiPromptSettings(",
             startIndex = assistanceStart,
         )
-        val developerStart = source.indexOf("item(key = SectionKeys.DEVELOPER)")
-        val developerEnd = source.indexOf(
-            "item(key = SectionKeys.NETWORK)",
-            startIndex = developerStart,
-        )
-        val streamingIndex = source.indexOf(
-            "R.string.settings_search_item_streaming",
-            startIndex = assistanceStart,
-        )
-        val crossLineIndex = source.indexOf(
-            "label = stringResource(R.string.settings_cross_line_context_translation)",
-            startIndex = assistanceStart,
-        )
 
         assertTrue("translation assistance function exists", assistanceStart >= 0)
         assertTrue("translation assistance function end exists", assistanceEnd > assistanceStart)
-        assertTrue("streaming switch exists", streamingIndex in assistanceStart until assistanceEnd)
-        assertTrue("cross-context switch is inside translation settings", crossLineIndex in assistanceStart until assistanceEnd)
-        assertTrue("cross-context switch follows streaming translation", streamingIndex < crossLineIndex)
+        val assistance = source.substring(assistanceStart, assistanceEnd)
         assertTrue(
-            "cross-context switch uses positive enabled semantics",
-            source.substring(crossLineIndex, assistanceEnd)
-                .contains("checked = crossLineContextTranslationEnabled"),
+            "translation mode selector remains the context control",
+            assistance.contains("TranslationContextModeSelector("),
         )
-        assertTrue(
-            "cross-context UI defaults to enabled",
-            source.contains("var crossLineContextTranslationEnabled by remember { mutableStateOf(true) }"),
-        )
-        assertTrue(
-            "legacy disable field is inverted when settings load",
-            source.contains("crossLineContextTranslationEnabled = !s.disableCrossLineContextTranslation"),
-        )
-        assertTrue(
-            "positive UI value is inverted for legacy persistence",
-            source.contains("disableCrossLineContextTranslation = !crossLineContextTranslationEnabled"),
-        )
-        assertTrue("developer section exists", developerStart >= 0)
-        assertTrue("developer section end exists", developerEnd > developerStart)
         assertFalse(
-            "developer section no longer exposes cross-context translation",
-            source.substring(developerStart, developerEnd)
-                .contains("settings_cross_line_context_translation"),
+            "removed same-segment switch must not remain in UI or state",
+            source.contains("crossLineContextTranslation") ||
+                source.contains("settings_cross_line_context"),
         )
         assertTrue(
-            "settings search routes cross-context translation to Translation",
+            "settings search routes translation mode to Translation",
             source.contains(
                 "SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, " +
-                    "R.string.settings_search_item_cross_line_context"
-            ),
-        )
-        assertFalse(
-            "settings search no longer routes cross-context translation to Developer",
-            source.contains(
-                "SearchEntry(SectionKeys.DEVELOPER, R.string.settings_section_developer, " +
-                    "R.string.settings_search_item_cross_line_context"
+                    "R.string.settings_translation_mode"
             ),
         )
     }
@@ -232,10 +195,10 @@ class SettingsScreenModelStatusTest {
             Case("Chinese translate region only", "仅翻译 报幕区域", SETTINGS_SEARCH_LOOP_REGION_KEYWORDS),
             Case("English unrestricted region", "dialogue region anywhere", SETTINGS_SEARCH_LOOP_REGION_KEYWORDS),
             Case("English translate all text", "translate all text", SETTINGS_SEARCH_LOOP_REGION_KEYWORDS),
-            Case("Chinese empty translation retry", "空译文 自动重试", SETTINGS_SEARCH_EMPTY_TRANSLATION_RETRY_KEYWORDS),
-            Case("Chinese empty response", "空响应", SETTINGS_SEARCH_EMPTY_TRANSLATION_RETRY_KEYWORDS),
-            Case("English blank response retry", "blank response retry", SETTINGS_SEARCH_EMPTY_TRANSLATION_RETRY_KEYWORDS),
-            Case("English empty translation", "empty translation", SETTINGS_SEARCH_EMPTY_TRANSLATION_RETRY_KEYWORDS),
+            Case("Chinese failed translation retry", "翻译失败 自动重试", SETTINGS_SEARCH_FAILED_TRANSLATION_RETRY_KEYWORDS),
+            Case("Chinese invalid translation", "异常译文", SETTINGS_SEARCH_FAILED_TRANSLATION_RETRY_KEYWORDS),
+            Case("English blank response retry", "blank response retry", SETTINGS_SEARCH_FAILED_TRANSLATION_RETRY_KEYWORDS),
+            Case("English failed translation", "failed translation", SETTINGS_SEARCH_FAILED_TRANSLATION_RETRY_KEYWORDS),
             Case("Chinese long-press selection", "译文块 长按 选择把手", SETTINGS_SEARCH_TRANSLATION_BLOCK_INTERACTION_KEYWORDS),
             Case("Chinese selectable copy panel", "选择文字 复制", SETTINGS_SEARCH_TRANSLATION_BLOCK_INTERACTION_KEYWORDS),
             Case("English long-press selection", "translation block long press selection handles", SETTINGS_SEARCH_TRANSLATION_BLOCK_INTERACTION_KEYWORDS),
@@ -263,22 +226,34 @@ class SettingsScreenModelStatusTest {
         val preview = source.indexOf("OverlayPreviewCard(", startIndex = sectionStart)
         val colors = source.indexOf("R.string.settings_overlay_theme_label", startIndex = sectionStart)
         val displayMode = source.indexOf("R.string.settings_render_mode_label", startIndex = sectionStart)
-        val displayFlow = source.indexOf("FlowRow(", startIndex = displayMode)
+        val displaySegments = source.indexOf("SingleChoiceSegmentedButtonRow(", startIndex = displayMode)
         val blocks = source.indexOf("R.string.settings_render_blocks_chip", startIndex = displayMode)
         val floating = source.indexOf("R.string.settings_render_floating_window_chip", startIndex = displayMode)
         val adaptive = source.indexOf("R.string.settings_overlay_style_adaptive", startIndex = displayMode)
         val floatingContent = source.indexOf("R.string.settings_floating_window_content_label", startIndex = displayMode)
+        val renderModeClick = source.substring(
+            source.indexOf("onClick = {", startIndex = displaySegments),
+            source.indexOf("shape = SegmentedButtonDefaults.itemShape", startIndex = displaySegments),
+        )
         val cases = listOf(
             Case("translation display section exists", sectionStart >= 0),
             Case("preview exists inside section", preview > sectionStart),
             Case("preview precedes color controls", preview in (sectionStart + 1)..<colors),
             Case("display mode follows color controls", displayMode > colors),
-            Case("display mode options use a wrapping row", displayFlow in (displayMode + 1)..<blocks),
-            Case("block display is the first option", blocks in (displayFlow + 1)..<floating),
+            Case("block display is the first option", blocks in (displayMode + 1)..<floating),
+            Case("display mode options use the approved segmented control", displaySegments in (floating + 1)..<adaptive),
             Case("floating window is followed by adaptive switch", adaptive in (floating + 1)..<floatingContent),
             Case("adaptive switch uses the compact labelled control", source.contains("InlineSwitchLabel(")),
             Case(
-                "adaptive switch stays visible but is disabled for floating window",
+                "both display modes stay selectable while adaptive is remembered",
+                !renderModeClick.contains("enabled ="),
+            ),
+            Case(
+                "display mode selection does not rewrite adaptive state",
+                !renderModeClick.contains("overlayStyleMode"),
+            ),
+            Case(
+                "adaptive switch stays visible and inactive in floating window",
                 source.contains("enabled = renderMode == RenderMode.BLOCKS"),
             ),
             Case("translation style mode label is removed", !source.contains("R.string.settings_overlay_style_mode_label")),
@@ -1722,7 +1697,7 @@ class SettingsScreenModelStatusTest {
             issues.first { it.kind == TranslationPresetModelIssueKind.LOCAL_LLM_MISSING }.llmModelKind
         )
         assertEquals(
-            PaddleModelVersion.V5_MOBILE,
+            PaddleModelVersion.V6_SMALL,
             issues.first { it.kind == TranslationPresetModelIssueKind.PADDLE_MISSING }.paddleModelVersion
         )
     }

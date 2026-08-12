@@ -18,7 +18,15 @@ internal data class AnthropicMessageRequest(
     val messages: List<AnthropicInputMessage>,
     val system: String,
     val temperature: Double,
+    @SerialName("top_p") val topP: Double? = null,
     val stream: Boolean,
+    val thinking: AnthropicThinkingConfig? = null,
+)
+
+@Serializable
+internal data class AnthropicThinkingConfig(
+    val type: String,
+    val display: String? = null,
 )
 
 @Serializable
@@ -78,6 +86,7 @@ private data class AnthropicStreamDelta(
 internal sealed interface AnthropicStreamEvent {
     data class Text(val value: String) : AnthropicStreamEvent
     data class Error(val detail: String) : AnthropicStreamEvent
+    data class Malformed(val payload: String) : AnthropicStreamEvent
     data object Stop : AnthropicStreamEvent
     data object Ignore : AnthropicStreamEvent
 }
@@ -90,6 +99,8 @@ internal fun buildAnthropicMessageRequest(
     temperature: Double,
     stream: Boolean,
     json: Json,
+    topP: Double? = null,
+    thinking: AnthropicThinkingConfig? = null,
 ): Request {
     val payload = json.encodeToString(
         AnthropicMessageRequest(
@@ -98,7 +109,9 @@ internal fun buildAnthropicMessageRequest(
             messages = listOf(AnthropicInputMessage(role = "user", content = userText)),
             system = systemPrompt,
             temperature = temperature,
+            topP = topP,
             stream = stream,
+            thinking = thinking,
         )
     )
     return Request.Builder()
@@ -139,8 +152,9 @@ internal fun parseAnthropicModelIds(raw: String, json: Json): List<String> = run
 }.getOrDefault(emptyList())
 
 internal fun parseAnthropicStreamEvent(raw: String, json: Json): AnthropicStreamEvent {
+    if (raw == "[DONE]") return AnthropicStreamEvent.Stop
     val event = runCatching { json.decodeFromString<AnthropicStreamEnvelope>(raw) }
-        .getOrNull() ?: return AnthropicStreamEvent.Ignore
+        .getOrNull() ?: return AnthropicStreamEvent.Malformed(raw)
     return when (event.type) {
         "content_block_start" -> event.contentBlock
             ?.takeIf { it.type == "text" }

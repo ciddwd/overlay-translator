@@ -34,50 +34,72 @@ class FloatingWindowCapturePolicyTest {
     }
 
     @Test
-    fun action_tableDriven_keepsLoopFloatingWindowVisible() {
+    fun action_tableDriven_appliesToEveryCaptureModeAndHonorsAutoHide() {
         data class Case(
             val name: String,
-            val loopMode: Boolean,
             val renderMode: RenderMode,
             val windowShown: Boolean,
+            val autoHide: Boolean,
+            val windowBounds: OverlayCaptureRect?,
+            val captureRegion: CaptureRegion?,
             val expected: FloatingWindowCaptureAction,
         )
 
+        val bounds = OverlayCaptureRect(100, 200, 500, 800)
         val cases = listOf(
             Case(
-                name = "single capture leaves shown floating window unchanged",
-                loopMode = false,
-                renderMode = RenderMode.FLOATING_WINDOW,
-                windowShown = true,
-                expected = FloatingWindowCaptureAction.NONE,
-            ),
-            Case(
-                name = "loop has no floating window yet",
-                loopMode = true,
+                name = "no shown window needs no action",
                 renderMode = RenderMode.FLOATING_WINDOW,
                 windowShown = false,
+                autoHide = false,
+                windowBounds = bounds,
+                captureRegion = null,
                 expected = FloatingWindowCaptureAction.NONE,
             ),
             Case(
-                name = "loop floating window stays visible and is masked in bitmap",
-                loopMode = true,
+                name = "window outside selected region stays visible",
                 renderMode = RenderMode.FLOATING_WINDOW,
                 windowShown = true,
+                autoHide = true,
+                windowBounds = bounds,
+                captureRegion = CaptureRegion(600, 900, 1000, 1400),
+                expected = FloatingWindowCaptureAction.NONE,
+            ),
+            Case(
+                name = "default off preserves and masks overlapping floating window",
+                renderMode = RenderMode.FLOATING_WINDOW,
+                windowShown = true,
+                autoHide = false,
+                windowBounds = bounds,
+                captureRegion = null,
                 expected = FloatingWindowCaptureAction.PRESERVE_AND_MASK,
             ),
             Case(
-                name = "stale floating window in blocks mode is hidden for capture",
-                loopMode = true,
-                renderMode = RenderMode.BLOCKS,
+                name = "enabled auto hide temporarily hides overlapping floating window",
+                renderMode = RenderMode.FLOATING_WINDOW,
                 windowShown = true,
+                autoHide = true,
+                windowBounds = bounds,
+                captureRegion = CaptureRegion(400, 700, 900, 1200),
                 expected = FloatingWindowCaptureAction.HIDE_TEMPORARILY,
             ),
             Case(
-                name = "blocks mode without stale floating window needs no action",
-                loopMode = true,
+                name = "stale floating window in blocks mode is always hidden",
                 renderMode = RenderMode.BLOCKS,
-                windowShown = false,
-                expected = FloatingWindowCaptureAction.NONE,
+                windowShown = true,
+                autoHide = false,
+                windowBounds = bounds,
+                captureRegion = null,
+                expected = FloatingWindowCaptureAction.HIDE_TEMPORARILY,
+            ),
+            Case(
+                name = "unknown shown bounds use safe temporary hide fallback",
+                renderMode = RenderMode.FLOATING_WINDOW,
+                windowShown = true,
+                autoHide = false,
+                windowBounds = null,
+                captureRegion = null,
+                expected = FloatingWindowCaptureAction.HIDE_TEMPORARILY,
             ),
         )
 
@@ -86,9 +108,11 @@ class FloatingWindowCapturePolicyTest {
                 case.name,
                 case.expected,
                 floatingWindowCaptureAction(
-                    loopMode = case.loopMode,
                     renderMode = case.renderMode,
                     isFloatingWindowShown = case.windowShown,
+                    autoHideWhenObstructing = case.autoHide,
+                    windowBounds = case.windowBounds,
+                    captureRegion = case.captureRegion,
                 ),
             )
         }

@@ -114,6 +114,8 @@ class OverlayManager(
     private val bubblePatchViews = mutableListOf<ImageView>()
     private val bubblePatchBitmaps = mutableListOf<Bitmap>()
     private val bubblePatchHiddenBlockIndices = mutableSetOf<Int>()
+    private val bubblePatchFallbackBlockIndices = mutableSetOf<Int>()
+    private val blockPixelMaskFallbackBackgrounds = mutableMapOf<Int, Drawable>()
     private var blocksDiagnosticId: Long? = null
 
     private data class TranslationBlockContent(
@@ -668,6 +670,7 @@ class OverlayManager(
         adaptiveStyles: List<AdaptiveOverlayStyle> = emptyList(),
         followBlockOrientations: Boolean = false,
         pixelMaskPatchPipelineEnabled: Boolean = false,
+        recognizedSourcePending: Boolean = false,
     ) {
         clearBlockResults()
         clearFloatingWindow()
@@ -761,6 +764,9 @@ class OverlayManager(
                 AdaptiveRegionBackgroundMode.ERASE_SOURCE -> adaptiveBg(requireNotNull(adaptiveStyle), block)
                 AdaptiveRegionBackgroundMode.TRANSPARENT -> null
                 null -> themeBg()
+            }
+            if (adaptiveStyle != null && pixelMaskPatchPipelineEnabled) {
+                blockPixelMaskFallbackBackgrounds[idx] = adaptiveBg(adaptiveStyle, block)
             }
             blockContents[idx] = TranslationBlockContent(block.text, dst)
             val baseLeft = (b.left + regionOffset.x + offsetX).coerceAtLeast(0)
@@ -906,7 +912,14 @@ class OverlayManager(
                         minimumReadableTextSizeRatio = 0f
                         adaptiveTextFitEnabled = true
                         adaptiveMaximumTextSizeSp = ADAPTIVE_MAX_TEXT_SIZE_SP.toFloat()
-                        adaptiveTextLayoutPhase = resolveAdaptiveTextLayoutPhase(dst)
+                        adaptiveTextLayoutPhase = resolveInitialAdaptiveTextLayoutPhase(
+                            text = dst,
+                            requestedPhase = if (recognizedSourcePending) {
+                                AdaptiveTextLayoutPhase.PLACEHOLDER
+                            } else {
+                                null
+                            },
+                        )
                         onAdaptiveTextFitResolved = { snapshot ->
                             val expanded = expandAdaptiveVerticalViewport(
                                 view = this@verticalView,
@@ -963,7 +976,14 @@ class OverlayManager(
                     )
                     if (adaptiveStyle != null && allowWrap) {
                         adaptiveTextFitEnabled = true
-                        adaptiveTextLayoutPhase = resolveAdaptiveTextLayoutPhase(dst)
+                        adaptiveTextLayoutPhase = resolveInitialAdaptiveTextLayoutPhase(
+                            text = dst,
+                            requestedPhase = if (recognizedSourcePending) {
+                                AdaptiveTextLayoutPhase.PLACEHOLDER
+                            } else {
+                                null
+                            },
+                        )
                         val initialMaxSizeSp = when (adaptiveTextLayoutPhase) {
                             AdaptiveTextLayoutPhase.PLACEHOLDER -> adaptiveStyle.maxTextSizeSp
                             AdaptiveTextLayoutPhase.STREAMING,
@@ -1573,14 +1593,16 @@ class OverlayManager(
      */
     internal fun showShapeAwareBubblePatches(
         patches: List<ShapeAwareBubblePatch>,
+        fallbackBlockIndices: Set<Int> = emptySet(),
         diagnosticId: Long? = null,
     ): Int {
         val root = blocksView as? FrameLayout ?: return 0
-        if (overlayStyleMode != OverlayStyleMode.ADAPTIVE || patches.isEmpty()) return 0
+        if (overlayStyleMode != OverlayStyleMode.ADAPTIVE) return 0
 
         clearBubblePatches(restoreFallback = true)
         val diagPrefix = diagnosticId.toDiagPrefix()
         var displayed = 0
+        val displayedPatchBlockIndices = linkedSetOf<Int>()
         patches.forEach { patch ->
             val displayBounds = patch.displayBounds()
             val displayWidth = displayBounds.width.coerceAtLeast(1)
@@ -1654,6 +1676,7 @@ class OverlayManager(
             if (patch.replacesBlockViews) {
                 bubblePatchHiddenBlockIndices += patch.blockIndices
             }
+            displayedPatchBlockIndices += patch.blockIndices
             displayed += 1
             VerticalDiagnosticLog.i(
                 "${diagPrefix}adaptive patch displayed role=${patch.role.name} " +
@@ -1667,9 +1690,24 @@ class OverlayManager(
         bubblePatchHiddenBlockIndices.forEach { index ->
             blockViews[index]?.visibility = View.INVISIBLE
         }
+        val unresolvedBlockIndices = AdaptivePatchFallbackPolicy.unresolvedBlockIndices(
+            translatedBlockIndices = fallbackBlockIndices,
+            displayedPatchBlockIndices = displayedPatchBlockIndices,
+        )
+        unresolvedBlockIndices.forEach { index ->
+            val view = blockViews[index] ?: return@forEach
+            val fallbackBackground = blockPixelMaskFallbackBackgrounds[index] ?: return@forEach
+            view.background = fallbackBackground
+            bubblePatchFallbackBlockIndices += index
+        }
         blockViews.forEach { (index, view) ->
             if (index !in bubblePatchHiddenBlockIndices) view.bringToFront()
         }
+        VerticalDiagnosticLog.i(
+            "${diagPrefix}adaptive patch coverage translated=${fallbackBlockIndices.size} " +
+                "covered=${displayedPatchBlockIndices.sorted()} " +
+                "fallback=${bubblePatchFallbackBlockIndices.sorted()}",
+        )
         return displayed
     }
 
@@ -1746,6 +1784,7 @@ class OverlayManager(
         blocksView = null
         blockViews.clear()
         blockContents.clear()
+        blockPixelMaskFallbackBackgrounds.clear()
         blockStreamingUpdateCounts.clear()
         blockFrameUpdateCoalescers.values.forEach { it.discardPending() }
         blockFrameUpdateCoalescers.clear()
@@ -1766,8 +1805,12 @@ class OverlayManager(
             bubblePatchHiddenBlockIndices.forEach { index ->
                 blockViews[index]?.visibility = View.VISIBLE
             }
+            bubblePatchFallbackBlockIndices.forEach { index ->
+                blockViews[index]?.background = null
+            }
         }
         bubblePatchHiddenBlockIndices.clear()
+        bubblePatchFallbackBlockIndices.clear()
     }
 
     private fun clearFloatingWindow() {
@@ -1783,6 +1826,12 @@ class OverlayManager(
     fun clear() {
         clearBlocksAndLoading()
         clearFloatingWindow()
+    }
+
+    /** Clears transient capture chrome while allowing a persistent floating result to stay put. */
+    fun clearForCapture(preserveFloatingWindow: Boolean) {
+        clearBlocksAndLoading()
+        if (!preserveFloatingWindow) clearFloatingWindow()
     }
 
     /**

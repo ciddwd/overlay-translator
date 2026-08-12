@@ -20,6 +20,8 @@ class LocalLlmSamplingPolicyTest {
                 expected = LocalLlmSamplingConfig(
                     temperature = 0.1f,
                     topP = 0.3f,
+                    topK = 40,
+                    repeatPenalty = 1.0f,
                     frequencyPenalty = 0.1f,
                 ),
             ),
@@ -27,8 +29,10 @@ class LocalLlmSamplingPolicyTest {
                 name = "Hy-MT preserves the existing native defaults",
                 kind = LlmModelKind.HY_MT2_1_8B_Q4_K_M,
                 expected = LocalLlmSamplingConfig(
-                    temperature = 0.3f,
-                    topP = 0.95f,
+                    temperature = 0.7f,
+                    topP = 0.6f,
+                    topK = 20,
+                    repeatPenalty = 1.05f,
                     frequencyPenalty = 0.0f,
                 ),
             ),
@@ -42,6 +46,8 @@ class LocalLlmSamplingPolicyTest {
                 mapOf(
                     LocalLlmSamplingPolicy.TEMPERATURE_ENV to case.expected.temperature.toString(),
                     LocalLlmSamplingPolicy.TOP_P_ENV to case.expected.topP.toString(),
+                    LocalLlmSamplingPolicy.TOP_K_ENV to case.expected.topK.toString(),
+                    LocalLlmSamplingPolicy.REPEAT_PENALTY_ENV to case.expected.repeatPenalty.toString(),
                     LocalLlmSamplingPolicy.FREQUENCY_PENALTY_ENV to case.expected.frequencyPenalty.toString(),
                 ),
                 LocalLlmSamplingPolicy.nativeEnvironment(case.kind),

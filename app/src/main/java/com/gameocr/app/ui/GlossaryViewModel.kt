@@ -13,7 +13,11 @@ import com.gameocr.app.translate.TranslationMemoryRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 
 @HiltViewModel
 class GlossaryViewModel @Inject constructor(
@@ -23,6 +27,10 @@ class GlossaryViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val translationMemoryRepository: TranslationMemoryRepository,
 ) : ViewModel() {
+    init {
+        viewModelScope.launch { glossaryRepository.ensureSourcePreservationPresets() }
+    }
+
     val terms = glossaryRepository.observeAll().stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
@@ -34,6 +42,15 @@ class GlossaryViewModel @Inject constructor(
         started = SharingStarted.WhileSubscribed(5_000),
         initialValue = emptyList(),
     )
+
+    val sourcePreservationEnabled: StateFlow<Boolean?> = settingsRepository.settings
+        .map { settings -> settings.sourcePreservationEnabled }
+        .distinctUntilChanged()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = null,
+        )
 
     suspend fun currentApp(): ForegroundApp? {
         val settings = settingsRepository.get()
@@ -56,6 +73,14 @@ class GlossaryViewModel @Inject constructor(
         glossaryRepository.overwriteConflict(term)
 
     suspend fun delete(id: Long) = glossaryRepository.delete(id)
+
+    fun setSourcePreservationEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsRepository.update { settings ->
+                settings.copy(sourcePreservationEnabled = enabled)
+            }
+        }
+    }
 
     suspend fun updateMemory(
         id: Long,

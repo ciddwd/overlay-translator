@@ -4,6 +4,7 @@ import com.gameocr.app.data.Settings
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.int
+import kotlinx.serialization.json.double
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -85,6 +86,77 @@ class AnthropicApiCompatibilityTest {
             assertEquals(case.name, "user", messages.single().jsonObject.getValue("role").jsonPrimitive.content)
             assertEquals(case.name, "こんにちは", messages.single().jsonObject.getValue("content").jsonPrimitive.content)
             assertFalse(case.name, messages.any { it.jsonObject["role"]?.jsonPrimitive?.content == "system" })
+        }
+    }
+
+    @Test
+    fun messageRequest_tableDrivenIncludesTopPOnlyWhenConfigured() {
+        data class Case(val name: String, val topP: Double?, val expected: Double?)
+
+        listOf(
+            Case("default leaves top_p absent", null, null),
+            Case("configured compatible endpoint receives top_p", 0.3, 0.3),
+        ).forEach { case ->
+            val request = buildAnthropicMessageRequest(
+                settings = Settings(
+                    anthropicBaseUrl = "https://api.anthropic.com/v1",
+                    anthropicApiKey = "key",
+                    anthropicModel = "model",
+                ),
+                systemPrompt = "system",
+                userText = "user",
+                maxTokens = 128,
+                temperature = 0.3,
+                stream = false,
+                json = json,
+                topP = case.topP,
+            )
+            val body = json.parseToJsonElement(requireNotNull(request.body).utf8()).jsonObject
+            val actual = body["top_p"]?.jsonPrimitive?.double
+
+            assertEquals(case.name, case.expected, actual)
+        }
+    }
+
+    @Test
+    fun messageRequest_tableDrivenIncludesExplicitThinkingControl() {
+        data class Case(
+            val name: String,
+            val thinking: AnthropicThinkingConfig,
+            val expectedType: String,
+            val expectedDisplay: String?,
+        )
+
+        listOf(
+            Case("off", AnthropicThinkingConfig(type = "disabled"), "disabled", null),
+            Case(
+                "on",
+                AnthropicThinkingConfig(type = "adaptive", display = "omitted"),
+                "adaptive",
+                "omitted",
+            ),
+        ).forEach { case ->
+            val request = buildAnthropicMessageRequest(
+                settings = Settings(
+                    anthropicBaseUrl = "https://api.anthropic.com/v1",
+                    anthropicApiKey = "key",
+                    anthropicModel = "model",
+                ),
+                systemPrompt = "system",
+                userText = "user",
+                maxTokens = 4096,
+                temperature = 0.3,
+                stream = false,
+                json = json,
+                thinking = case.thinking,
+            )
+            val thinking = json.parseToJsonElement(requireNotNull(request.body).utf8())
+                .jsonObject
+                .getValue("thinking")
+                .jsonObject
+
+            assertEquals(case.name, case.expectedType, thinking.getValue("type").jsonPrimitive.content)
+            assertEquals(case.name, case.expectedDisplay, thinking["display"]?.jsonPrimitive?.content)
         }
     }
 
@@ -183,12 +255,13 @@ class AnthropicApiCompatibilityTest {
             Case("ping is ignored", """{"type":"ping"}""", AnthropicStreamEvent.Ignore),
             Case("future event is ignored", """{"type":"future_event","extra":true}""", AnthropicStreamEvent.Ignore),
             Case("message stop ends stream", """{"type":"message_stop"}""", AnthropicStreamEvent.Stop),
+            Case("compatible done marker ends stream", "[DONE]", AnthropicStreamEvent.Stop),
             Case(
                 "stream error keeps type message and request id",
                 """{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_123"}""",
                 AnthropicStreamEvent.Error("overloaded_error: Overloaded (req_123)"),
             ),
-            Case("malformed event is ignored", "not-json", AnthropicStreamEvent.Ignore),
+            Case("malformed event is reported", "not-json", AnthropicStreamEvent.Malformed("not-json")),
         ).forEach { case ->
             assertEquals(case.name, case.expected, parseAnthropicStreamEvent(case.raw, json))
         }

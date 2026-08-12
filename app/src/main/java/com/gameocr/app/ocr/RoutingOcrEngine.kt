@@ -35,6 +35,12 @@ class RoutingOcrEngine @Inject constructor(
         return recognizeWithSettings(bitmap, kind, settingsRepository.get())
     }
 
+    override suspend fun recognize(
+        bitmap: Bitmap,
+        kind: OcrEngineKind,
+        settings: Settings,
+    ): List<TextBlock> = recognizeWithSettings(bitmap, kind, settings)
+
     suspend fun recognizeWithSettings(
         bitmap: Bitmap,
         kind: OcrEngineKind,
@@ -47,8 +53,8 @@ class RoutingOcrEngine @Inject constructor(
             OcrEngineKind.UMI_OCR -> umi.recognize(bitmap, kind)
             OcrEngineKind.LUNA_OCR -> luna.recognize(bitmap, kind)
             OcrEngineKind.PADDLE_AI_STUDIO -> paddleAiStudio.recognize(bitmap, kind)
-            OcrEngineKind.PADDLE_ONNX -> paddle.recognize(bitmap, kind)
-            OcrEngineKind.MANGA_OCR_JA -> manga.recognize(bitmap, kind)
+            OcrEngineKind.PADDLE_ONNX -> paddle.recognize(bitmap, kind, settings)
+            OcrEngineKind.MANGA_OCR_JA -> manga.recognize(bitmap, kind, settings)
             else -> mlKit.recognize(bitmap, kind)
         }
         Timber.tag("OcrMerge").i(
@@ -62,10 +68,28 @@ class RoutingOcrEngine @Inject constructor(
         // 详细日志：打 box 坐标，用于诊断"为什么这两段没合"。仅 Timber（logcat），不写 LogRepository
         // 避免污染用户可见日志。tag = OcrMerge，过滤用。
         logBoxes("before", raw)
-        val merged = mergeAdjacentBlocks(raw, MergeParams.forStrength(settings.mergeStrength))
+        val protectedCount = raw.count { block ->
+            !SemanticBoxMergePolicy.isMergeEligible(
+                granularity = block.regionGranularity,
+                parentRegionId = block.parentRegionId,
+                mergeStandaloneFreeText = kind == OcrEngineKind.MANGA_OCR_JA,
+            )
+        }
+        val merged = SemanticBoxMergePolicy.mergeEligibleRuns(
+            items = raw,
+            isEligible = { block ->
+                SemanticBoxMergePolicy.isMergeEligible(
+                    granularity = block.regionGranularity,
+                    parentRegionId = block.parentRegionId,
+                    mergeStandaloneFreeText = kind == OcrEngineKind.MANGA_OCR_JA,
+                )
+            },
+        ) { lineLevelRun ->
+            mergeAdjacentBlocks(lineLevelRun, MergeParams.forStrength(settings.mergeStrength))
+        }
         Timber.tag("OcrMerge").i(
-            "strength=%s, %d -> %d blocks (final)",
-            settings.mergeStrength, raw.size, merged.size
+            "strength=%s, %d -> %d blocks (final) semanticProtected=%d",
+            settings.mergeStrength, raw.size, merged.size, protectedCount
         )
         logBoxes("after", merged)
         return merged
@@ -142,25 +166,18 @@ class RoutingOcrEngine @Inject constructor(
                 paraMerged.withLayoutOrientation(orientation)
             }
             Orientation.VERTICAL -> {
-                // 竖排日文专属：先丢振假名（ふりがな汉字注音小列），避免译文里出现
-                // "しっぱい/失敗"读音+汉字重复，也让 overlay 不再两列叠在一起。
-                val deFurigana = removeFurigana(directionBlocks)
-                if (deFurigana.size != directionBlocks.size) {
-                    val msg = "[V] removeFurigana: ${directionBlocks.size} -> ${deFurigana.size}"
-                    Timber.tag("OcrMerge").i(msg)
-                }
                 val noiseLimits = verticalColumnMergeLimits(
-                    deFurigana.map { it.boundingBox.toMergeDebugRect() },
+                    directionBlocks.map { it.boundingBox.toMergeDebugRect() },
                     verticalGapRatio = params.verticalGapRatio
                 )
                 val punctuationMerged = mergeVerticalTerminalPunctuation(
-                    deFurigana,
+                    directionBlocks,
                     noiseLimits.baseColumnWidth,
                 )
-                if (punctuationMerged.size != deFurigana.size) {
+                if (punctuationMerged.size != directionBlocks.size) {
                     Timber.tag("OcrMerge").i(
                         "[V] mergeTerminalPunctuation: %d -> %d",
-                        deFurigana.size,
+                        directionBlocks.size,
                         punctuationMerged.size,
                     )
                 }
@@ -406,37 +423,6 @@ class RoutingOcrEngine @Inject constructor(
             previewForLog(b.text)
         )
         return allowed
-    }
-
-    /**
-     * 竖排日文振假名（ふりがな汉字注音）过滤。
-     *
-     * 判据（同时满足才算振假名，丢掉）：
-     *  - 紧贴某更宽 box（水平 gap ≤ 自身宽度）
-     *  - 宽度比小（self.w / big.w < 0.6）
-     *  - 高度比够大（self.h / big.h > 0.25，注音覆盖足够汉字范围；过滤孤立小段如「ため」）
-     *  - 垂直区间完全被大 box 包住（注音只标自己范围内的字，不会越界）
-     *
-     * 调过的样本：百度高精度+位置版输出的「しっぱい」「けんこうてき」「にんげん」「はんにん」
-     * 都能命中；同帧的孤立小段「ため」（h/big.h=0.12）「おる」（h/big.h=0.16）保留。
-     */
-    private fun removeFurigana(blocks: List<TextBlock>): List<TextBlock> {
-        if (blocks.size < 2) return blocks
-        return blocks.filter { small ->
-            val sb = small.boundingBox
-            val isFurigana = blocks.any { other ->
-                if (other === small) return@any false
-                val bb = other.boundingBox
-                if (bb.width() <= sb.width()) return@any false
-                if (sb.width().toFloat() / bb.width() >= 0.6f) return@any false
-                if (sb.height().toFloat() / bb.height() <= 0.25f) return@any false
-                val hGap = if (sb.left >= bb.left) sb.left - bb.right else bb.left - sb.right
-                if (hGap > sb.width()) return@any false
-                if (sb.top < bb.top - 10 || sb.bottom > bb.bottom + 10) return@any false
-                true
-            }
-            !isFurigana
-        }
     }
 
     /**

@@ -41,4 +41,17 @@ class TranslationCacheTest {
             )
         }
     }
+
+    @Test
+    fun remove_evictsOnlyTheRejectedEntry() {
+        val settings = Settings()
+        val cache = TranslationCache(capacity = 2)
+        cache.put("rejected", "[Background Information] leaked", settings)
+        cache.put("valid", "正常译文", settings)
+
+        cache.remove("rejected")
+
+        assertEquals(null, cache.get("rejected", settings))
+        assertEquals("正常译文", cache.get("valid", settings))
+    }
 }

@@ -73,9 +73,13 @@ class GalleryTranslationWorker @AssistedInject constructor(
             } catch (error: Throwable) {
                 val message = error.message?.take(500) ?: error.javaClass.simpleName
                 val nextAttemptCount = item.attemptCount + 1
-                val retry = if (error is EmptyTranslationException) {
-                    GalleryTranslationWorkPolicy.shouldRetryEmptyTranslation(
-                        enabled = settings.retryEmptyTranslation,
+                val retry = if (
+                    error is EmptyTranslationException ||
+                    error is TranslationRequestException
+                ) {
+                    GalleryTranslationWorkPolicy.shouldRetryFailedTranslation(
+                        enabled = settings.retryFailedTranslation &&
+                            !translator.handlesTranslationFailureRetry(settings),
                         attemptCount = nextAttemptCount,
                     )
                 } else {
@@ -112,7 +116,9 @@ class GalleryTranslationWorker @AssistedInject constructor(
         try {
             decoded = imageDecoder.decode(item)
             val segments = if (translator.isEndToEndFor(settings)) {
-                translator.ocrAndTranslate(decoded.bitmap, settings).map { (block, text) ->
+                translateOrThrow {
+                    translator.ocrAndTranslate(decoded.bitmap, settings)
+                }.map { (block, text) ->
                     GalleryTranslationSegment.from(block, text)
                 }
             } else {
@@ -133,7 +139,9 @@ class GalleryTranslationWorker @AssistedInject constructor(
                     rawBlocks
                 }
                 if (blocks.isEmpty()) throw NoTextDetectedException()
-                val translated = translator.translateBatch(blocks.map(TextBlock::text), settings)
+                val translated = translateOrThrow {
+                    translator.translateBatch(blocks.map(TextBlock::text), settings)
+                }
                 blocks.mapIndexed { index, block ->
                     GalleryTranslationSegment.from(block, translated.getOrNull(index))
                 }
@@ -161,6 +169,14 @@ class GalleryTranslationWorker @AssistedInject constructor(
             preprocessed?.takeIf { it !== decoded?.bitmap && !it.isRecycled }?.recycle()
             decoded?.bitmap?.takeIf { !it.isRecycled }?.recycle()
         }
+    }
+
+    private suspend fun <T> translateOrThrow(block: suspend () -> T): T = try {
+        block()
+    } catch (cancellation: CancellationException) {
+        throw cancellation
+    } catch (error: Throwable) {
+        throw TranslationRequestException(error)
     }
 
     private fun createForegroundInfo(
@@ -214,6 +230,8 @@ class GalleryTranslationWorker @AssistedInject constructor(
 
     private class NoTextDetectedException : IllegalStateException("No text detected.")
     private class EmptyTranslationException : IllegalStateException("No translation returned.")
+    private class TranslationRequestException(cause: Throwable) :
+        IllegalStateException(cause.message ?: cause.javaClass.simpleName, cause)
 
     companion object {
         const val KEY_TASK_ID = "task_id"

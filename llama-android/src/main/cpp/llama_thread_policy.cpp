@@ -109,6 +109,29 @@ float sampler_value_from_environment(
     return fallback;
 }
 
+int sampler_integer_from_environment(
+        const char * name,
+        const int fallback,
+        const int minimum,
+        const int maximum) {
+    const char * raw_value = std::getenv(name);
+    if (raw_value == nullptr) return fallback;
+
+    char * end = nullptr;
+    const long value = std::strtol(raw_value, &end, 10);
+    if (end != raw_value && *end == '\0' && value >= minimum && value <= maximum) {
+        return static_cast<int>(value);
+    }
+    __android_log_print(
+            ANDROID_LOG_WARN,
+            "LocalLlmPerf",
+            "invalid sampler environment %s=%s; keeping %d",
+            name,
+            raw_value,
+            fallback);
+    return fallback;
+}
+
 }  // namespace
 
 common_sampler * gameocr_common_sampler_init(
@@ -118,16 +141,21 @@ common_sampler * gameocr_common_sampler_init(
             "GAMEOCR_SAMPLER_TEMPERATURE", params.temp, 0.0f, 2.0f);
     params.top_p = sampler_value_from_environment(
             "GAMEOCR_SAMPLER_TOP_P", params.top_p, 0.0f, 1.0f);
+    params.top_k = sampler_integer_from_environment(
+            "GAMEOCR_SAMPLER_TOP_K", params.top_k, 0, 10000);
+    params.penalty_repeat = sampler_value_from_environment(
+            "GAMEOCR_SAMPLER_REPEAT_PENALTY", params.penalty_repeat, 0.0f, 4.0f);
     params.penalty_freq = sampler_value_from_environment(
             "GAMEOCR_SAMPLER_FREQUENCY_PENALTY", params.penalty_freq, 0.0f, 2.0f);
     __android_log_print(
             ANDROID_LOG_INFO,
             "LocalLlmPerf",
-            "sampler native temperature=%.2f topP=%.2f frequencyPenalty=%.2f repeatPenalty=%.2f",
+            "sampler native temperature=%.2f topP=%.2f topK=%d repeatPenalty=%.2f frequencyPenalty=%.2f",
             params.temp,
             params.top_p,
-            params.penalty_freq,
-            params.penalty_repeat);
+            params.top_k,
+            params.penalty_repeat,
+            params.penalty_freq);
     return common_sampler_init(model, params);
 }
 

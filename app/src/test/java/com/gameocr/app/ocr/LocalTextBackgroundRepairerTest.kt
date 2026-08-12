@@ -9,6 +9,41 @@ import org.junit.Test
 class LocalTextBackgroundRepairerTest {
 
     @Test
+    fun repairTiming_tableDriven_accountsForEveryPipelineShape() {
+        data class Case(
+            val name: String,
+            val masks: List<TextPixelMaskBuilder.BlockMask>,
+        )
+
+        val erase = centeredMask()
+        val cases = listOf(
+            Case("no text masks", emptyList()),
+            Case("single text mask", listOf(blockMask(erase))),
+            Case("multiple text masks", listOf(blockMask(erase), blockMask(erase))),
+        )
+
+        cases.forEach { case ->
+            val source = IntArray(SIZE) { gray(248) }.apply {
+                erase.indices.filter { erase[it] }.forEach { this[it] = gray(8) }
+            }
+            val result = LocalTextBackgroundRepairer.repair(
+                imageWidth = WIDTH,
+                imageHeight = HEIGHT,
+                sourceArgb = source,
+                masks = case.masks,
+            )
+            val timing = result.timing
+
+            assertEquals(case.name, case.masks.size, result.blocks.size)
+            assertTrue(case.name, timing.totalUs >= 0L)
+            assertTrue(case.name, timing.measuredStageUs >= 0L)
+            assertTrue(case.name, timing.otherUs >= 0L)
+            assertEquals(case.name, timing.totalUs, timing.measuredStageUs + timing.otherUs)
+            assertTrue(case.name, timing.toLogString().startsWith("total="))
+        }
+    }
+
+    @Test
     fun repair_tableDriven_createsGlyphOnlyPatchesForFlatBackgrounds() {
         data class Case(val name: String, val background: Int, val foreground: Int)
         val cases = listOf(
@@ -34,18 +69,10 @@ class LocalTextBackgroundRepairerTest {
             assertEquals(case.name, 1, block.acceptedComponentCount)
             patch.indices.forEach { index ->
                 when {
-                    block.feathering.opaqueMask[index] -> {
-                        assertEquals("${case.name}: hard coverage is opaque", 255, patch[index] ushr 24)
+                    block.coverage.repairMask[index] -> {
+                        assertEquals("${case.name}: solid coverage is opaque", 255, patch[index] ushr 24)
                         assertEquals(
                             "${case.name}: hard coverage uses repaired background",
-                            case.background and 0x00ffffff,
-                            patch[index] and 0x00ffffff,
-                        )
-                    }
-                    block.feathering.repairMask[index] -> {
-                        assertTrue("${case.name}: outer coverage is feathered", patch[index] ushr 24 in 1..254)
-                        assertEquals(
-                            "${case.name}: feather uses repaired background",
                             case.background and 0x00ffffff,
                             patch[index] and 0x00ffffff,
                         )
@@ -101,12 +128,13 @@ class LocalTextBackgroundRepairerTest {
             erase.indices.filter { erase[it] }.forEach { index ->
                 assertTrue("${case.name}: every glyph pixel is painted", patch[index] != 0)
             }
-            block.feathering.opaqueMask.indices.filter { block.feathering.opaqueMask[it] }.forEach { index ->
+            block.coverage.repairMask.indices.filter { block.coverage.repairMask[it] }.forEach { index ->
                 assertEquals("${case.name}: coverage-first area stays opaque", 255, patch[index] ushr 24)
             }
-            block.feathering.repairMask.indices.filterNot { block.feathering.repairMask[it] }.forEach { index ->
+            block.coverage.repairMask.indices.filterNot { block.coverage.repairMask[it] }.forEach { index ->
                 assertEquals("${case.name}: pixels outside repair stay transparent", 0, patch[index])
             }
+            assertTrue("${case.name}: no partial alpha", patch.none { color -> color ushr 24 in 1..254 })
             core.indices.filter { core[it] }.forEach { index ->
                 val luminance = patch[index] and 0xff
                 if (case.expectedLightBackground) {
@@ -160,15 +188,51 @@ class LocalTextBackgroundRepairerTest {
         )
     }
 
+    @Test
+    fun repair_tableDriven_marksSamePolarityPixelsOutsideCoverageAsResidual() {
+        data class Case(
+            val name: String,
+            val background: Int,
+            val foreground: Int,
+            val missedInsideSupport: Boolean,
+            val expectedResidual: Boolean,
+        )
+        listOf(
+            Case("dark corner on light bubble", gray(248), gray(8), true, true),
+            Case("light corner on dark panel", gray(18), gray(245), true, true),
+            Case("foreground outside OCR support", gray(248), gray(8), false, false),
+        ).forEach { case ->
+            val erase = centeredMask()
+            val support = BooleanArray(SIZE).apply { fill(this, IntRect(8, 8, 25, 25)) }
+            val source = IntArray(SIZE) { case.background }
+            erase.indices.filter { erase[it] }.forEach { source[it] = case.foreground }
+            val missedX = if (case.missedInsideSupport) 22 else 27
+            source[16 * WIDTH + missedX] = case.foreground
+
+            val block = LocalTextBackgroundRepairer.repair(
+                imageWidth = WIDTH,
+                imageHeight = HEIGHT,
+                sourceArgb = source,
+                masks = listOf(blockMask(erase, erase, support)),
+            ).blocks.single()
+
+            assertEquals(case.name, case.expectedResidual, block.residualPixels > 0)
+            assertEquals(case.name, !case.expectedResidual, block.fullyRepaired)
+            assertTrue("${case.name}: diagnostics do not suppress a valid patch", block.publishable)
+        }
+    }
+
     private fun blockMask(
         mask: BooleanArray,
         core: BooleanArray = mask,
+        support: BooleanArray = mask,
     ) = TextPixelMaskBuilder.BlockMask(
         blockIndex = 0,
         bounds = IntRect(0, 0, WIDTH, HEIGHT),
         pixels = mask,
         corePixels = core,
         selectedCorePixels = core.count { it },
+        supportPixels = support,
     )
 
     private fun centeredMask() = BooleanArray(SIZE).apply {
@@ -183,6 +247,8 @@ class LocalTextBackgroundRepairerTest {
 
     private fun argb(alpha: Int, red: Int, green: Int, blue: Int): Int =
         (alpha shl 24) or (red shl 16) or (green shl 8) or blue
+
+    private fun gray(value: Int): Int = argb(255, value, value, value)
 
     private companion object {
         const val WIDTH = 32

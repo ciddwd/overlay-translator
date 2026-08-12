@@ -94,6 +94,7 @@ private data class PendingGlossaryConflict(
 
 private enum class TranslationLibraryTab {
     TERMS,
+    PRESERVE_SOURCE,
     MEMORY,
 }
 
@@ -106,6 +107,7 @@ fun GlossaryScreen(
     val scope = rememberCoroutineScope()
     val terms by viewModel.terms.collectAsState()
     val memories by viewModel.memories.collectAsState()
+    val sourcePreservationEnabled by viewModel.sourcePreservationEnabled.collectAsState()
     var selectedTab by rememberSaveable { mutableStateOf(TranslationLibraryTab.TERMS) }
     var currentApp by remember { mutableStateOf<ForegroundApp?>(null) }
     var defaultLanguages by remember { mutableStateOf("auto" to "zh-CN") }
@@ -117,6 +119,8 @@ fun GlossaryScreen(
     var showFilter by remember { mutableStateOf(false) }
     var showMemoryFilter by remember { mutableStateOf(false) }
     var listFilter by remember { mutableStateOf(GlossaryListFilter()) }
+    var preservationFilter by remember { mutableStateOf(GlossaryListFilter()) }
+    var editingPreservation by remember { mutableStateOf(false) }
     var memoryQuery by rememberSaveable { mutableStateOf("") }
     var pendingDelete by remember { mutableStateOf<GlossaryTermEntity?>(null) }
     var pendingConflict by remember { mutableStateOf<PendingGlossaryConflict?>(null) }
@@ -127,12 +131,33 @@ fun GlossaryScreen(
         GlossaryTermCategory.PLACE to stringResource(R.string.glossary_category_place),
         GlossaryTermCategory.ORGANIZATION to stringResource(R.string.glossary_category_organization),
         GlossaryTermCategory.TERM to stringResource(R.string.glossary_category_term),
+        GlossaryTermCategory.PRESERVE_SOURCE to
+            stringResource(R.string.source_preservation_category),
     )
     val globalScopeLabel = stringResource(R.string.glossary_scope_global)
-    val visibleTerms = remember(terms, listFilter, categoryLabels, globalScopeLabel) {
+    val glossaryTerms = remember(terms) {
+        terms.filter { it.category != GlossaryTermCategory.PRESERVE_SOURCE }
+    }
+    val preservationTerms = remember(terms) {
+        terms.filter { it.category == GlossaryTermCategory.PRESERVE_SOURCE }
+    }
+    val visibleTerms = remember(glossaryTerms, listFilter, categoryLabels, globalScopeLabel) {
         GlossaryListFilterPolicy.filter(
-            terms = terms,
+            terms = glossaryTerms,
             filter = listFilter,
+            categoryLabels = categoryLabels,
+            globalScopeLabel = globalScopeLabel,
+        )
+    }
+    val visiblePreservationTerms = remember(
+        preservationTerms,
+        preservationFilter,
+        categoryLabels,
+        globalScopeLabel,
+    ) {
+        GlossaryListFilterPolicy.filter(
+            terms = preservationTerms,
+            filter = preservationFilter,
             categoryLabels = categoryLabels,
             globalScopeLabel = globalScopeLabel,
         )
@@ -175,22 +200,22 @@ fun GlossaryScreen(
                         onClick = {
                             when (selectedTab) {
                                 TranslationLibraryTab.TERMS -> showFilter = true
+                                TranslationLibraryTab.PRESERVE_SOURCE -> showFilter = true
                                 TranslationLibraryTab.MEMORY -> showMemoryFilter = true
                             }
                         },
                     ) {
                         val filterActive = when (selectedTab) {
                             TranslationLibraryTab.TERMS -> listFilter.isActive
+                            TranslationLibraryTab.PRESERVE_SOURCE -> preservationFilter.isActive
                             TranslationLibraryTab.MEMORY -> memoryQuery.isNotBlank()
                         }
                         Icon(
                             Icons.Default.Search,
                             stringResource(
-                                if (selectedTab == TranslationLibraryTab.TERMS) {
-                                    R.string.glossary_filter
-                                } else {
+                                if (selectedTab == TranslationLibraryTab.MEMORY)
                                     R.string.translation_memory_filter
-                                }
+                                else R.string.glossary_filter
                             ),
                             tint = if (filterActive) {
                                 MaterialTheme.colorScheme.primary
@@ -206,9 +231,10 @@ fun GlossaryScreen(
             )
         },
         floatingActionButton = {
-            if (selectedTab == TranslationLibraryTab.TERMS) {
+            if (selectedTab != TranslationLibraryTab.MEMORY) {
                 FloatingActionButton(onClick = {
                     editing = null
+                    editingPreservation = selectedTab == TranslationLibraryTab.PRESERVE_SOURCE
                     showEditor = true
                 }) {
                     Icon(Icons.Default.Add, stringResource(R.string.glossary_add))
@@ -222,6 +248,11 @@ fun GlossaryScreen(
                     selected = selectedTab == TranslationLibraryTab.TERMS,
                     onClick = { selectedTab = TranslationLibraryTab.TERMS },
                     text = { Text(stringResource(R.string.translation_library_terms_tab)) },
+                )
+                Tab(
+                    selected = selectedTab == TranslationLibraryTab.PRESERVE_SOURCE,
+                    onClick = { selectedTab = TranslationLibraryTab.PRESERVE_SOURCE },
+                    text = { Text(stringResource(R.string.source_preservation_tab)) },
                 )
                 Tab(
                     selected = selectedTab == TranslationLibraryTab.MEMORY,
@@ -239,7 +270,7 @@ fun GlossaryScreen(
                         item {
                             Text(
                                 text = stringResource(
-                                    if (terms.isEmpty()) {
+                                    if (glossaryTerms.isEmpty()) {
                                         R.string.glossary_empty
                                     } else {
                                         R.string.glossary_filter_empty
@@ -255,6 +286,49 @@ fun GlossaryScreen(
                             term = term,
                             onEdit = {
                                 editing = term
+                                editingPreservation = false
+                                showEditor = true
+                            },
+                            onDelete = { pendingDelete = term },
+                        )
+                    }
+                }
+                TranslationLibraryTab.PRESERVE_SOURCE -> LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    sourcePreservationEnabled?.let { enabled ->
+                        item(key = "source-preservation-master") {
+                            SourcePreservationMasterCard(
+                                disableAll = !enabled,
+                                onDisableAllChange = { disableAll ->
+                                    viewModel.setSourcePreservationEnabled(!disableAll)
+                                },
+                            )
+                        }
+                    }
+                    if (visiblePreservationTerms.isEmpty()) {
+                        item {
+                            Text(
+                                text = stringResource(
+                                    if (preservationTerms.isEmpty()) {
+                                        R.string.source_preservation_empty
+                                    } else {
+                                        R.string.glossary_filter_empty
+                                    }
+                                ),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.fillMaxWidth().padding(24.dp),
+                            )
+                        }
+                    }
+                    items(visiblePreservationTerms, key = GlossaryTermEntity::id) { term ->
+                        GlossaryTermCard(
+                            term = term,
+                            onEdit = {
+                                editing = term
+                                editingPreservation = true
                                 showEditor = true
                             },
                             onDelete = { pendingDelete = term },
@@ -290,6 +364,7 @@ fun GlossaryScreen(
             defaultSourceLang = defaultLanguages.first,
             defaultTargetLang = defaultLanguages.second,
             saving = saveInProgress,
+            sourcePreservationMode = editingPreservation,
             onDismiss = { showEditor = false },
             onSave = { term ->
                 if (saveInProgress) return@GlossaryTermEditor
@@ -312,14 +387,22 @@ fun GlossaryScreen(
     }
 
     if (showFilter) {
+        val filteringPreservation = selectedTab == TranslationLibraryTab.PRESERVE_SOURCE
         GlossaryFilterDialog(
-            terms = terms,
-            initial = listFilter,
+            terms = if (filteringPreservation) preservationTerms else glossaryTerms,
+            initial = if (filteringPreservation) preservationFilter else listFilter,
             categoryLabels = categoryLabels,
+            availableCategories = if (filteringPreservation) {
+                listOf(GlossaryTermCategory.PRESERVE_SOURCE)
+            } else {
+                GlossaryTermCategory.entries.filterNot {
+                    it == GlossaryTermCategory.PRESERVE_SOURCE
+                }
+            },
             globalScopeLabel = globalScopeLabel,
             onDismiss = { showFilter = false },
             onApply = {
-                listFilter = it
+                if (filteringPreservation) preservationFilter = it else listFilter = it
                 showFilter = false
             },
         )
@@ -339,12 +422,20 @@ fun GlossaryScreen(
 
     pendingDelete?.let { term ->
         GlossaryConfirmationDialog(
-            title = stringResource(R.string.glossary_delete_confirm_title),
-            message = stringResource(
-                R.string.glossary_delete_confirm_message,
-                term.sourceTerm,
-                term.targetTerm,
+            title = stringResource(
+                if (term.category == GlossaryTermCategory.PRESERVE_SOURCE)
+                    R.string.source_preservation_delete_title
+                else R.string.glossary_delete_confirm_title
             ),
+            message = if (term.category == GlossaryTermCategory.PRESERVE_SOURCE) {
+                stringResource(R.string.source_preservation_delete_message, term.sourceTerm)
+            } else {
+                stringResource(
+                    R.string.glossary_delete_confirm_message,
+                    term.sourceTerm,
+                    term.targetTerm,
+                )
+            },
             confirmLabel = stringResource(R.string.glossary_delete),
             destructive = true,
             onDismiss = { pendingDelete = null },
@@ -436,6 +527,10 @@ private fun TranslationLibraryHelpDialog(
                             .padding(20.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp),
                     ) {
+                        TranslationLibraryHelpSection(
+                            title = stringResource(R.string.translation_library_help_preserve_title),
+                            body = stringResource(R.string.translation_library_help_preserve_body),
+                        )
                         TranslationLibraryHelpSection(
                             title = stringResource(R.string.translation_library_help_terms_title),
                             body = stringResource(R.string.translation_library_help_terms_body),
@@ -633,6 +728,7 @@ private fun GlossaryFilterDialog(
     terms: List<GlossaryTermEntity>,
     initial: GlossaryListFilter,
     categoryLabels: Map<GlossaryTermCategory, String>,
+    availableCategories: List<GlossaryTermCategory>,
     globalScopeLabel: String,
     onDismiss: () -> Unit,
     onApply: (GlossaryListFilter) -> Unit,
@@ -750,7 +846,7 @@ private fun GlossaryFilterDialog(
                                 onClick = { categories = emptySet() },
                                 label = { Text(stringResource(R.string.glossary_filter_all_categories)) },
                             )
-                            GlossaryTermCategory.entries.forEach { category ->
+                            availableCategories.forEach { category ->
                                 FilterChip(
                                     selected = category in categories,
                                     onClick = {
@@ -860,16 +956,49 @@ private fun GlossaryConfirmationDialog(
 }
 
 @Composable
+private fun SourcePreservationMasterCard(
+    disableAll: Boolean,
+    onDisableAllChange: (Boolean) -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            SwitchRow(
+                label = stringResource(R.string.source_preservation_disable_all),
+                checked = disableAll,
+                onChange = onDisableAllChange,
+            )
+            Text(
+                text = stringResource(R.string.source_preservation_disable_all_description),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
 private fun GlossaryTermCard(
     term: GlossaryTermEntity,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
 ) {
     val context = LocalContext.current
+    val sourcePreservation = term.category == GlossaryTermCategory.PRESERVE_SOURCE
     val scopeLabel = term.appLabel.ifBlank { stringResource(R.string.glossary_scope_global) }
     val categoryLabel = glossaryCategoryLabel(term.category)
     val sourceLanguage = Languages.nameOf(context, term.sourceLang)
-    val targetLanguage = Languages.nameOf(context, term.targetLang)
+    val targetLanguage = if (sourcePreservation) "" else Languages.nameOf(context, term.targetLang)
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
@@ -892,13 +1021,15 @@ private fun GlossaryTermCard(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Text(
-                    text = term.targetTerm,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                if (!sourcePreservation) {
+                    Text(
+                        text = term.targetTerm,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = "$scopeLabel | $categoryLabel",
@@ -924,13 +1055,23 @@ private fun GlossaryTermCard(
                         else MaterialTheme.colorScheme.error,
                     )
                 }
-                Text(
-                    text = "$sourceLanguage -> $targetLanguage",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                if (sourcePreservation) {
+                    Text(
+                        text = sourceLanguage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                } else {
+                    Text(
+                        text = "$sourceLanguage -> $targetLanguage",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
             IconButton(onClick = onEdit) {
                 Icon(Icons.Default.Edit, stringResource(R.string.glossary_edit))
@@ -952,13 +1093,20 @@ private fun GlossaryTermEditor(
     defaultSourceLang: String,
     defaultTargetLang: String,
     saving: Boolean,
+    sourcePreservationMode: Boolean,
     onDismiss: () -> Unit,
     onSave: (GlossaryTermEntity) -> Unit,
 ) {
     var sourceTerm by remember(existing) { mutableStateOf(existing?.sourceTerm.orEmpty()) }
-    var targetTerm by remember(existing) { mutableStateOf(existing?.targetTerm.orEmpty()) }
-    var sourceLang by remember(existing) { mutableStateOf(existing?.sourceLang ?: defaultSourceLang) }
-    var targetLang by remember(existing) { mutableStateOf(existing?.targetLang ?: defaultTargetLang) }
+    var targetTerm by remember(existing, sourcePreservationMode) {
+        mutableStateOf(existing?.targetTerm.orEmpty())
+    }
+    var sourceLang by remember(existing, sourcePreservationMode) {
+        mutableStateOf(existing?.sourceLang ?: if (sourcePreservationMode) "ja" else defaultSourceLang)
+    }
+    var targetLang by remember(existing, sourcePreservationMode) {
+        mutableStateOf(existing?.targetLang ?: if (sourcePreservationMode) "*" else defaultTargetLang)
+    }
     val currentScopeApp = remember(currentApp) {
         currentApp?.let { SelectableApp(packageName = it.packageName, displayName = it.displayName) }
     }
@@ -972,11 +1120,19 @@ private fun GlossaryTermEditor(
     var scopeMode by remember(initialScope) { mutableStateOf(initialScope.mode) }
     var selectedApp by remember(initialScope) { mutableStateOf(initialScope.selectedApp) }
     var showAppPicker by remember { mutableStateOf(false) }
-    var category by remember(existing) { mutableStateOf(existing?.category ?: GlossaryTermCategory.TERM) }
+    var category by remember(existing, sourcePreservationMode) {
+        mutableStateOf(
+            existing?.category ?: if (sourcePreservationMode) {
+                GlossaryTermCategory.PRESERVE_SOURCE
+            } else {
+                GlossaryTermCategory.TERM
+            }
+        )
+    }
     var caseSensitive by remember(existing) { mutableStateOf(existing?.caseSensitive == true) }
     var enabled by remember(existing) { mutableStateOf(existing?.enabled != false) }
     val scopedApp = GlossaryScopePolicy.scopedApp(scopeMode, currentScopeApp, selectedApp)
-    val canSave = sourceTerm.isNotBlank() && targetTerm.isNotBlank() &&
+    val canSave = sourceTerm.isNotBlank() && (sourcePreservationMode || targetTerm.isNotBlank()) &&
         GlossaryScopePolicy.isValid(scopeMode, currentScopeApp, selectedApp)
 
     val baseColors = MaterialTheme.colorScheme
@@ -1016,7 +1172,12 @@ private fun GlossaryTermEditor(
                     ) {
                         Text(
                             text = stringResource(
-                                if (existing == null) R.string.glossary_add else R.string.glossary_edit
+                                if (sourcePreservationMode) {
+                                    if (existing == null) R.string.source_preservation_add
+                                    else R.string.source_preservation_edit
+                                } else {
+                                    if (existing == null) R.string.glossary_add else R.string.glossary_edit
+                                }
                             ),
                             style = MaterialTheme.typography.titleLarge,
                             modifier = Modifier.weight(1f),
@@ -1036,27 +1197,38 @@ private fun GlossaryTermEditor(
                 OutlinedTextField(
                     value = sourceTerm,
                     onValueChange = { sourceTerm = it },
-                    label = { Text(stringResource(R.string.glossary_source_term)) },
+                    label = {
+                        Text(
+                            stringResource(
+                                if (sourcePreservationMode) R.string.source_preservation_source
+                                else R.string.glossary_source_term
+                            )
+                        )
+                    },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                 )
-                OutlinedTextField(
-                    value = targetTerm,
-                    onValueChange = { targetTerm = it },
-                    label = { Text(stringResource(R.string.glossary_target_term)) },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                )
+                if (!sourcePreservationMode) {
+                    OutlinedTextField(
+                        value = targetTerm,
+                        onValueChange = { targetTerm = it },
+                        label = { Text(stringResource(R.string.glossary_target_term)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
+                }
                 LanguagePicker(
                     label = stringResource(R.string.glossary_source_language),
                     currentCode = sourceLang,
                     onSelect = { sourceLang = it },
                 )
-                LanguagePicker(
-                    label = stringResource(R.string.glossary_target_language),
-                    currentCode = targetLang,
-                    onSelect = { targetLang = it },
-                )
+                if (!sourcePreservationMode) {
+                    LanguagePicker(
+                        label = stringResource(R.string.glossary_target_language),
+                        currentCode = targetLang,
+                        onSelect = { targetLang = it },
+                    )
+                }
                 Text(stringResource(R.string.glossary_scope), style = MaterialTheme.typography.labelLarge)
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1113,13 +1285,17 @@ private fun GlossaryTermEditor(
                         }
                     }
                 }
-                Text(stringResource(R.string.glossary_category), style = MaterialTheme.typography.labelLarge)
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    GlossaryTermCategory.entries.forEach { option ->
-                        EngineChip(category, option, glossaryCategoryLabel(option)) { category = it }
+                if (!sourcePreservationMode) {
+                    Text(stringResource(R.string.glossary_category), style = MaterialTheme.typography.labelLarge)
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        GlossaryTermCategory.entries
+                            .filterNot { it == GlossaryTermCategory.PRESERVE_SOURCE }
+                            .forEach { option ->
+                                EngineChip(category, option, glossaryCategoryLabel(option)) { category = it }
+                            }
                     }
                 }
                 SwitchRow(stringResource(R.string.glossary_case_sensitive), caseSensitive) {
@@ -1143,18 +1319,22 @@ private fun GlossaryTermEditor(
                             onClick = {
                                 val base = existing ?: GlossaryTermEntity(
                                     sourceLang = sourceLang,
-                                    targetLang = targetLang,
+                                    targetLang = if (sourcePreservationMode) "*" else targetLang,
                                     sourceTerm = sourceTerm,
-                                    targetTerm = targetTerm,
+                                    targetTerm = if (sourcePreservationMode) sourceTerm else targetTerm,
                                 )
                                 onSave(base.copy(
                                     scopePackage = scopedApp?.packageName.orEmpty(),
                                     appLabel = scopedApp?.displayName.orEmpty(),
                                     sourceLang = sourceLang,
-                                    targetLang = targetLang,
+                                    targetLang = if (sourcePreservationMode) "*" else targetLang,
                                     sourceTerm = sourceTerm,
-                                    targetTerm = targetTerm,
-                                    category = category,
+                                    targetTerm = if (sourcePreservationMode) sourceTerm else targetTerm,
+                                    category = if (sourcePreservationMode) {
+                                        GlossaryTermCategory.PRESERVE_SOURCE
+                                    } else {
+                                        category
+                                    },
                                     caseSensitive = caseSensitive,
                                     enabled = enabled,
                                 ))
@@ -1370,4 +1550,6 @@ private fun glossaryCategoryLabel(category: GlossaryTermCategory): String = when
     GlossaryTermCategory.PLACE -> stringResource(R.string.glossary_category_place)
     GlossaryTermCategory.ORGANIZATION -> stringResource(R.string.glossary_category_organization)
     GlossaryTermCategory.TERM -> stringResource(R.string.glossary_category_term)
+    GlossaryTermCategory.PRESERVE_SOURCE ->
+        stringResource(R.string.source_preservation_category)
 }

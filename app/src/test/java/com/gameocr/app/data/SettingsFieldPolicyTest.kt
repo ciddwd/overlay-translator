@@ -2,12 +2,106 @@ package com.gameocr.app.data
 
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.decodeFromString
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SettingsFieldPolicyTest {
+
+    @Test
+    fun retiredCrossLineSetting_tableDriven_isIgnoredAtEveryImportBoundary() {
+        data class Case(val name: String, val legacyValue: Boolean)
+        val legacyJson = Json { ignoreUnknownKeys = true }
+
+        listOf(
+            Case("legacy enabled representation", false),
+            Case("legacy disabled representation", true),
+        ).forEach { case ->
+            val field = "disableCrossLineContextTranslation"
+            val portable = SettingsFieldPolicy.decodePortable(
+                JsonObject(mapOf(field to JsonPrimitive(case.legacyValue)))
+            )
+            val fullSettings = legacyJson.decodeFromString<Settings>(
+                """{"$field":${case.legacyValue}}"""
+            )
+
+            assertFalse(case.name, field in SettingsFieldPolicy.portableFieldNames)
+            assertFalse(case.name, field in SettingsFieldPolicy.encodePortable(Settings()))
+            assertEquals(case.name, TranslationContextMode.FAST_PER_SEGMENT, portable.settings.translationContextMode)
+            assertEquals(case.name, TranslationContextMode.FAST_PER_SEGMENT, fullSettings.translationContextMode)
+        }
+    }
+
+    @Test
+    fun failedTranslationRetry_legacyNamesMigrateWithoutOverridingTheNewName() {
+        data class Case(
+            val name: String,
+            val values: JsonObject,
+            val expected: Boolean,
+        )
+
+        listOf(
+            Case(
+                "legacy portable field",
+                JsonObject(mapOf("retryEmptyTranslation" to JsonPrimitive(true))),
+                true,
+            ),
+            Case(
+                "new portable field",
+                JsonObject(mapOf("retryFailedTranslation" to JsonPrimitive(true))),
+                true,
+            ),
+            Case(
+                "new field wins when both exist",
+                JsonObject(
+                    mapOf(
+                        "retryEmptyTranslation" to JsonPrimitive(true),
+                        "retryFailedTranslation" to JsonPrimitive(false),
+                    )
+                ),
+                false,
+            ),
+        ).forEach { case ->
+            val decoded = SettingsFieldPolicy.decodePortable(case.values)
+            assertEquals(case.name, case.expected, decoded.settings.retryFailedTranslation)
+            assertTrue(case.name, decoded.skippedFields.isEmpty())
+        }
+
+        assertTrue(
+            "legacy full settings JSON",
+            Json.decodeFromString<Settings>("""{"retryEmptyTranslation":true}""")
+                .retryFailedTranslation,
+        )
+        assertTrue(
+            "legacy preset JSON",
+            Json.decodeFromString<TranslationPreset>(
+                """{"id":"legacy","name":"Legacy","retryEmptyTranslation":true}"""
+            )
+                .retryFailedTranslation,
+        )
+    }
+
+    @Test
+    fun llmOutboundEncoding_tableDriven_roundTripsPortableSettings() {
+        data class Case(val name: String, val options: OpenAiRequestOptions)
+
+        listOf(
+            Case("disabled", OpenAiRequestOptions()),
+            Case("Base64", OpenAiRequestOptions(encodeUserTextBase64 = true)),
+            Case("Unicode", OpenAiRequestOptions(encodeUserTextUnicode = true)),
+            Case("thinking enabled", OpenAiRequestOptions(thinkingModeEnabled = true)),
+        ).forEach { case ->
+            val decoded = SettingsFieldPolicy.decodePortable(
+                SettingsFieldPolicy.encodePortable(Settings(openAiRequestOptions = case.options))
+            )
+
+            assertEquals(case.name, case.options, decoded.settings.openAiRequestOptions)
+            assertTrue(case.name, decoded.skippedFields.isEmpty())
+        }
+    }
 
     @Test
     fun portableEncoding_isAnAllowlistAndNeverIncludesProtectedFields() {
@@ -32,6 +126,61 @@ class SettingsFieldPolicyTest {
         assertEquals(JsonPrimitive("claude-portable"), encoded["anthropicModel"])
         SettingsFieldPolicy.protectedFieldNames.forEach { field ->
             assertFalse("protected export field: $field", field in encoded)
+        }
+    }
+
+    @Test
+    fun floatingWindowAutoHide_roundTripsAndDefaultsOff() {
+        assertFalse(Settings().floatingWindowAutoHideWhenObstructing)
+
+        val decoded = SettingsFieldPolicy.decodePortable(
+            SettingsFieldPolicy.encodePortable(
+                Settings(floatingWindowAutoHideWhenObstructing = true)
+            )
+        )
+
+        assertTrue(decoded.settings.floatingWindowAutoHideWhenObstructing)
+        assertTrue(decoded.skippedFields.isEmpty())
+    }
+
+    @Test
+    fun requestScopedPromptContext_isNeverExportedOrImported() {
+        val context = RuntimeTranslationPromptContext(
+            currentApplication = "Game",
+            glossary = listOf(RuntimeGlossaryTerm("Alice", "爱丽丝")),
+            currentPage = listOf("Current line"),
+            previousFrame = listOf(RuntimeDialogueTurn("Previous", "上一句")),
+        )
+        val encoded = SettingsFieldPolicy.encodePortable(
+            Settings(
+                runtimeTranslationContext = "runtime-only",
+                runtimeTranslationPromptContext = context,
+            )
+        )
+
+        assertFalse("generic runtime context", "runtimeTranslationContext" in encoded)
+        assertFalse("typed runtime context", "runtimeTranslationPromptContext" in encoded)
+
+        val decoded = SettingsFieldPolicy.decodePortable(encoded).settings
+        assertEquals("", decoded.runtimeTranslationContext)
+        assertEquals(RuntimeTranslationPromptContext(), decoded.runtimeTranslationPromptContext)
+    }
+
+    @Test
+    fun sourcePreservationMasterGate_roundTripsAsPortableSetting() {
+        data class Case(val name: String, val enabled: Boolean)
+
+        listOf(
+            Case("enabled", true),
+            Case("disabled", false),
+        ).forEach { case ->
+            val encoded = SettingsFieldPolicy.encodePortable(
+                Settings(sourcePreservationEnabled = case.enabled)
+            )
+            val decoded = SettingsFieldPolicy.decodePortable(encoded).settings
+
+            assertEquals(case.name, case.enabled, decoded.sourcePreservationEnabled)
+            assertTrue(case.name, "sourcePreservationEnabled" in encoded)
         }
     }
 

@@ -52,8 +52,9 @@ class LlamaEngineHolder @Inject constructor(
      * 进入时 state 必须是 ModelReady，否则丢弃并抛 `User prompt discarded due to: <state>`。
      * 屏译一帧 OCR 出多段，[Translator.translateBatch] 默认并发触发 N 个 translate，
      * 端侧 LLM 必须强制串行，否则第 2 段起全部丢弃 + 让 engine 进入 Error。
+     * 同一把锁也覆盖 Token 统计、模型切换和卸载，保护 binding 的进程级 native 状态。
      */
-    val inferenceMutex = Mutex()
+    private val lifecycleGate = LlamaEngineLifecycleGate()
     private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     @Volatile private var engine: InferenceEngine? = null
@@ -86,7 +87,7 @@ class LlamaEngineHolder @Inject constructor(
      * @throws LlmModelNotReadyException 模型文件未下载/不完整，或 native 层判定文件不可加载
      *         （GGUF 损坏 / 量化格式不支持 / 架构不在 llama.cpp 白名单）。UI 层应跳转到模型下载入口。
      */
-    suspend fun ensureLoaded(kind: LlmModelKind, systemPrompt: String? = null): InferenceEngine = initLock.withLock {
+    private suspend fun ensureLoaded(kind: LlmModelKind, systemPrompt: String? = null): InferenceEngine = initLock.withLock {
         if (!isDeviceCapable()) {
             throw LlmModelNotReadyException(
                 context.getString(R.string.err_llm_device_unsupported)
@@ -141,11 +142,14 @@ class LlamaEngineHolder @Inject constructor(
             Timber.tag(PERF_TAG).e(it, "failed to configure native LLM policy kind=%s", kind.name)
         }
         Timber.tag(PERF_TAG).i(
-            "native policy kind=%s requestedVulkan=%s temperature=%.2f topP=%.2f frequencyPenalty=%.2f",
+            "native policy kind=%s requestedVulkan=%s temperature=%.2f topP=%.2f " +
+                "topK=%d repeatPenalty=%.2f frequencyPenalty=%.2f",
             kind.name,
             requestedVulkan,
             samplingConfig.temperature,
             samplingConfig.topP,
+            samplingConfig.topK,
+            samplingConfig.repeatPenalty,
             samplingConfig.frequencyPenalty,
         )
         val e = current ?: AiChat.getInferenceEngine(context)
@@ -220,6 +224,20 @@ class LlamaEngineHolder @Inject constructor(
         e
     }
 
+    /**
+     * Runs one native-model session while unload and model switching are excluded.
+     *
+     * The lock order is always lifecycle gate, then [initLock]. Callers must keep every access to
+     * [LlamaPromptMetrics] and the returned engine inside [action].
+     */
+    suspend fun <T> withEngineSession(
+        kind: LlmModelKind,
+        systemPrompt: String? = null,
+        action: suspend (InferenceEngine) -> T,
+    ): T = lifecycleGate.withSession {
+        action(ensureLoaded(kind, systemPrompt))
+    }
+
     /** 每次翻译触发后调一次：刷新 idle 计时器。 */
     fun touch() = touchInternal()
 
@@ -242,14 +260,16 @@ class LlamaEngineHolder @Inject constructor(
     }
 
     /** 主动卸载模型权重，释放 ~440-1024 MB 物理内存。engine 实例保留以便下次 load。 */
-    suspend fun unload() = initLock.withLock {
-        val e = engine ?: return@withLock
-        val previousKind = loadedKind
-        e.cleanUp()
-        loadedKind = null
-        idleJob?.cancel()
-        idleJob = null
-        Timber.i("LlamaEngineHolder unloaded kind=$previousKind")
+    suspend fun unload() = lifecycleGate.withSession {
+        initLock.withLock {
+            val e = engine ?: return@withLock
+            val previousKind = loadedKind
+            e.cleanUp()
+            loadedKind = null
+            idleJob?.cancel()
+            idleJob = null
+            Timber.i("LlamaEngineHolder unloaded kind=$previousKind")
+        }
     }
 
     companion object {

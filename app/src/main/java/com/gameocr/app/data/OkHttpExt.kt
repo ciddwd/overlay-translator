@@ -12,7 +12,9 @@ import okhttp3.OkHttpClient
  * connect 超时上限 15s（与服务器 TCP 握手不应该等太久）。read/write/call 都用 [seconds]。
  */
 fun OkHttpClient.withApiTimeout(seconds: Int): OkHttpClient {
-    val s = seconds.coerceIn(5, 300).toLong()
+    // Remote LLM requests intentionally use twice the user-facing network timeout.
+    // Other callers still pass the normal 5..300 second setting.
+    val s = seconds.coerceIn(5, 600).toLong()
     val connectSec = minOf(15L, s / 2).coerceAtLeast(5L)
     return newBuilder()
         .connectTimeout(connectSec, TimeUnit.SECONDS)

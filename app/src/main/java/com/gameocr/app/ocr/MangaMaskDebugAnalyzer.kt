@@ -80,6 +80,10 @@ internal object MangaMaskDebugAnalyzer {
         var coverageAndCopyNs: Long = 0L
     }
 
+    internal class Workspace {
+        internal val background = BubbleBackgroundStatistics.Scratch()
+    }
+
     fun analyze(
         width: Int,
         height: Int,
@@ -93,6 +97,7 @@ internal object MangaMaskDebugAnalyzer {
         require(probabilityTextMask.size == width * height)
 
         val bubbleInteriorMask = BooleanArray(width * height)
+        val workspace = Workspace()
         val diagnostics = bubbles.map { bubble ->
             estimateBubble(
                 width = width,
@@ -101,6 +106,7 @@ internal object MangaMaskDebugAnalyzer {
                 polygons = polygons,
                 bubble = bubble,
                 output = bubbleInteriorMask,
+                workspace = workspace,
             )
         }
         val polygonMask = rasterizePolygons(width, height, polygons)
@@ -155,6 +161,7 @@ internal object MangaMaskDebugAnalyzer {
         bubble: BubbleInput,
         output: BooleanArray,
         timing: BubbleTiming? = null,
+        workspace: Workspace = Workspace(),
     ): BubbleDiagnostic {
         require(width > 0 && height > 0)
         require(argb.size == width * height)
@@ -167,6 +174,7 @@ internal object MangaMaskDebugAnalyzer {
             bubble = bubble,
             output = output,
             timing = timing,
+            workspace = workspace,
         )
     }
 
@@ -200,6 +208,7 @@ internal object MangaMaskDebugAnalyzer {
         val core = BooleanArray(width * height)
         polygons.forEach { polygon ->
             val bounds = clamp(polygon.bounds, width, height)
+            if (bounds.width <= 0 || bounds.height <= 0) return@forEach
             val samples = mutableListOf<Int>()
             for (y in bounds.top until bounds.bottom) {
                 for (x in bounds.left until bounds.right) {
@@ -212,25 +221,50 @@ internal object MangaMaskDebugAnalyzer {
                     }
                 }
             }
-            val surroundingSamples = surroundingLuminanceSamples(
+            val surroundingColors = surroundingColorSamples(
                 width = width,
                 height = height,
                 argb = argb,
                 probabilityTextMask = probabilityTextMask,
                 polygon = polygon,
             )
-            val selection = foregroundSelection(samples, surroundingSamples)
+            val selection = foregroundSelection(
+                samples = samples,
+                surroundingSamples = surroundingColors.map(::luminance),
+            )
+            val localSize = bounds.width * bounds.height
+            val localArgb = IntArray(localSize)
+            val localSupport = BooleanArray(localSize)
+            val localStrong = BooleanArray(localSize)
             for (y in bounds.top until bounds.bottom) {
                 for (x in bounds.left until bounds.right) {
                     val index = y * width + x
-                    if (
-                        !probabilityTextMask[index] ||
-                        !pointInPolygon(x + 0.5f, y + 0.5f, polygon.points)
-                    ) {
-                        continue
-                    }
-                    core[index] = selection?.contains(luminance(argb[index])) ?: true
+                    val localIndex = (y - bounds.top) * bounds.width + (x - bounds.left)
+                    localArgb[localIndex] = argb[index]
+                    val inside = pointInPolygon(x + 0.5f, y + 0.5f, polygon.points)
+                    localSupport[localIndex] = inside
+                    localStrong[localIndex] = inside &&
+                        probabilityTextMask[index] &&
+                        (selection?.contains(luminance(argb[index])) ?: true)
                 }
+            }
+            val completed = if (selection != null) {
+                TextForegroundMaskCompleter.complete(
+                    width = bounds.width,
+                    height = bounds.height,
+                    argb = localArgb,
+                    strongMask = localStrong,
+                    supportMask = localSupport,
+                    backgroundSamples = surroundingColors.toIntArray(),
+                ).mask
+            } else {
+                localStrong
+            }
+            for (localIndex in completed.indices) {
+                if (!completed[localIndex]) continue
+                val localX = localIndex % bounds.width
+                val localY = localIndex / bounds.width
+                core[(bounds.top + localY) * width + bounds.left + localX] = true
             }
         }
         val dilated = BooleanArray(core.size)
@@ -333,7 +367,7 @@ internal object MangaMaskDebugAnalyzer {
         )
     }
 
-    private fun surroundingLuminanceSamples(
+    private fun surroundingColorSamples(
         width: Int,
         height: Int,
         argb: IntArray,
@@ -360,7 +394,7 @@ internal object MangaMaskDebugAnalyzer {
                 val index = y * width + x
                 if (probabilityTextMask[index]) continue
                 if (pointInPolygon(x + 0.5f, y + 0.5f, polygon.points)) continue
-                samples += luminance(argb[index])
+                samples += argb[index]
             }
         }
         return samples
@@ -374,6 +408,7 @@ internal object MangaMaskDebugAnalyzer {
         bubble: BubbleInput,
         output: BooleanArray,
         timing: BubbleTiming? = null,
+        workspace: Workspace = Workspace(),
     ): BubbleDiagnostic {
         val members = bubble.memberIndices.mapNotNull(polygons::getOrNull)
         if (members.isEmpty()) {
@@ -410,6 +445,7 @@ internal object MangaMaskDebugAnalyzer {
                 height = height,
             )
         }
+        var preparedSeedCandidates: List<MangaSeedSearchOrder>? = null
         var lastReason = "region_leaked_to_roi"
         var lastPixels = 0
         var lastRoi = candidateRois.first()
@@ -426,6 +462,7 @@ internal object MangaMaskDebugAnalyzer {
                 width = width,
                 roi = roi,
                 members = members,
+                scratch = workspace.background,
             )
             timing?.let { it.backgroundNs += System.nanoTime() - backgroundStartedAtNs }
             if (background == null) {
@@ -434,12 +471,28 @@ internal object MangaMaskDebugAnalyzer {
             if (background.luminance < MIN_BACKGROUND_LUMINANCE) {
                 return rejected(roi, "background_too_dark", attempts = attempts)
             }
+            val seedCandidates = preparedSeedCandidates ?: run {
+                val seedCandidateStartedAtNs = System.nanoTime()
+                members.map { polygon ->
+                    buildSeedCandidates(
+                        polygon = polygon,
+                        imageWidth = width,
+                        imageHeight = height,
+                    )
+                }.also { prepared ->
+                    preparedSeedCandidates = prepared
+                    timing?.let {
+                        it.seedNs += System.nanoTime() - seedCandidateStartedAtNs
+                    }
+                }
+            }
 
             val luminanceStartedAtNs = System.nanoTime()
-            val roiLuminances = extractLuminances(
+            val roiFeatures = extractRoiFeatures(
                 argb = argb,
                 imageWidth = width,
                 roi = roi,
+                background = background,
             )
             timing?.let { it.luminanceNs += System.nanoTime() - luminanceStartedAtNs }
             val candidate = BooleanArray(roi.width * roi.height)
@@ -451,38 +504,19 @@ internal object MangaMaskDebugAnalyzer {
             var invalidatedByLeak = false
             for ((profileIndex, profile) in CANDIDATE_PROFILES.withIndex()) {
                 val candidateStartedAtNs = System.nanoTime()
-                candidate.fill(false)
                 val maximumColorDistanceSquared =
                     profile.maxColorDistance * profile.maxColorDistance
                 val minimumLuminance = minimumCandidateLuminance(background, profile)
-                for (localY in 0 until roi.height) {
-                    val globalOffset = (roi.top + localY) * width + roi.left
-                    val localOffset = localY * roi.width
-                    for (localX in 0 until roi.width) {
-                        val localIndex = localOffset + localX
-                        if (
-                            isBackgroundCandidate(
-                                color = argb[globalOffset + localX],
-                                luminance = roiLuminances[localIndex],
-                                background = background,
-                                maximumColorDistanceSquared = maximumColorDistanceSquared,
-                                minimumLuminance = minimumLuminance,
-                            )
-                        ) {
-                            candidate[localIndex] = true
-                        }
-                    }
+                for (localIndex in candidate.indices) {
+                    candidate[localIndex] =
+                        roiFeatures.colorDistanceSquared[localIndex].toFloat() <=
+                        maximumColorDistanceSquared &&
+                        roiFeatures.luminances[localIndex] >= minimumLuminance
                 }
                 timing?.let { it.candidateBuildNs += System.nanoTime() - candidateStartedAtNs }
 
                 val seedStartedAtNs = System.nanoTime()
-                val seeds = members.mapNotNull { polygon ->
-                    findSeedNearPolygonCenter(
-                        polygon = polygon,
-                        roi = roi,
-                        candidate = candidate,
-                    )
-                }.distinct()
+                val seeds = seedCandidates.mapNotNull { it.nearest(candidate, roi) }.distinct()
                 timing?.let { it.seedNs += System.nanoTime() - seedStartedAtNs }
                 if (seeds.isEmpty()) {
                     lastReason = "no_background_seed"
@@ -529,8 +563,9 @@ internal object MangaMaskDebugAnalyzer {
                 roi = roi,
                 members = members,
                 background = background,
-                luminances = roiLuminances,
+                luminances = roiFeatures.luminances,
                 queue = workQueue,
+                seedCandidates = seedCandidates,
             )
             timing?.let { it.edgeNs += System.nanoTime() - edgeStartedAtNs }
             if (edgeAttempt.regionPixels > lastPixels) {
@@ -664,6 +699,11 @@ internal object MangaMaskDebugAnalyzer {
         val lowLuminance: Int,
     )
 
+    private data class RoiFeatures(
+        val luminances: IntArray,
+        val colorDistanceSquared: IntArray,
+    )
+
     private data class CandidateProfile(
         val maxColorDistance: Float,
         val maxLuminanceDrop: Int,
@@ -693,8 +733,19 @@ internal object MangaMaskDebugAnalyzer {
         width: Int,
         roi: IntRect,
         members: List<Polygon>,
+        scratch: BubbleBackgroundStatistics.Scratch,
     ): BackgroundColor? {
-        val samples = ArrayList<Int>()
+        val capacity = members.sumOf { polygon ->
+            val bounds = clamp(polygon.bounds, roi.right, roi.bottom)
+            val sampleWidth = (minOf(bounds.right, roi.right) - max(bounds.left, roi.left))
+                .coerceAtLeast(0)
+            val sampleHeight = (minOf(bounds.bottom, roi.bottom) - max(bounds.top, roi.top))
+                .coerceAtLeast(0)
+            ((sampleWidth + SAMPLE_STRIDE_PX - 1) / SAMPLE_STRIDE_PX) *
+                ((sampleHeight + SAMPLE_STRIDE_PX - 1) / SAMPLE_STRIDE_PX)
+        }
+        scratch.ensureSampleCapacity(capacity)
+        var sampleCount = 0
         members.forEach { polygon ->
             val bounds = clamp(polygon.bounds, roi.right, roi.bottom)
             val left = max(bounds.left, roi.left)
@@ -706,33 +757,25 @@ internal object MangaMaskDebugAnalyzer {
                 var x = left
                 while (x < right) {
                     if (pointInPolygon(x + 0.5f, y + 0.5f, polygon.points)) {
-                        samples += argb[y * width + x]
+                        scratch.samples[sampleCount++] = argb[y * width + x]
                     }
                     x += SAMPLE_STRIDE_PX
                 }
                 y += SAMPLE_STRIDE_PX
             }
         }
-        if (samples.size < MIN_BACKGROUND_SAMPLES) return null
-        samples.sortBy(::luminance)
-        val brightestStart = (samples.size * BRIGHT_SAMPLE_START_RATIO).roundToInt()
-            .coerceIn(0, samples.lastIndex)
-        val brightest = samples.subList(brightestStart, samples.size)
-        val reds = brightest.map { (it ushr 16) and 0xFF }.sorted()
-        val greens = brightest.map { (it ushr 8) and 0xFF }.sorted()
-        val blues = brightest.map { it and 0xFF }.sorted()
-        val red = reds[reds.size / 2]
-        val green = greens[greens.size / 2]
-        val blue = blues[blues.size / 2]
-        val lowLuminance = luminance(
-            samples[(samples.lastIndex * BACKGROUND_LOW_SAMPLE_RATIO).roundToInt()]
+        if (sampleCount < MIN_BACKGROUND_SAMPLES) return null
+        val estimate = scratch.estimate(
+            count = sampleCount,
+            brightSampleStartRatio = BRIGHT_SAMPLE_START_RATIO,
+            lowSampleRatio = BACKGROUND_LOW_SAMPLE_RATIO,
         )
         return BackgroundColor(
-            red = red,
-            green = green,
-            blue = blue,
-            luminance = luminance(red, green, blue),
-            lowLuminance = lowLuminance,
+            red = estimate.red,
+            green = estimate.green,
+            blue = estimate.blue,
+            luminance = estimate.luminance,
+            lowLuminance = estimate.lowLuminance,
         )
     }
 
@@ -749,23 +792,6 @@ internal object MangaMaskDebugAnalyzer {
             MIN_CANDIDATE_LUMINANCE,
             background.luminance - profile.maxLuminanceDrop,
         )
-    }
-
-    private fun isBackgroundCandidate(
-        color: Int,
-        luminance: Int,
-        background: BackgroundColor,
-        maximumColorDistanceSquared: Float,
-        minimumLuminance: Int,
-    ): Boolean {
-        val red = (color ushr 16) and 0xFF
-        val green = (color ushr 8) and 0xFF
-        val blue = color and 0xFF
-        val dr = red - background.red
-        val dg = green - background.green
-        val db = blue - background.blue
-        val distanceSquared = (dr * dr + dg * dg + db * db).toFloat()
-        return distanceSquared <= maximumColorDistanceSquared && luminance >= minimumLuminance
     }
 
     private fun acceptedReason(attempts: Int, profileIndex: Int): String = when {
@@ -789,6 +815,7 @@ internal object MangaMaskDebugAnalyzer {
         background: BackgroundColor,
         luminances: IntArray? = null,
         queue: IntArray? = null,
+        seedCandidates: List<MangaSeedSearchOrder>? = null,
     ): EdgeRegionAttempt {
         val localLuminances = luminances ?: extractLuminances(argb, imageWidth, roi)
         require(localLuminances.size == roi.width * roi.height)
@@ -808,15 +835,21 @@ internal object MangaMaskDebugAnalyzer {
                     gradient >= EDGE_GRADIENT_THRESHOLD
             }
         }
-        val sealedBarrier = dilateMask(barrier, roi.width, roi.height, EDGE_BARRIER_DILATION_PX)
+        val sealedBarrier = BinarySquareDilation.dilate(
+            input = barrier,
+            width = roi.width,
+            height = roi.height,
+            radius = EDGE_BARRIER_DILATION_PX,
+        )
         val walkable = BooleanArray(sealedBarrier.size) { index -> !sealedBarrier[index] }
-        val seeds = members.mapNotNull { polygon ->
-            findSeedNearPolygonCenter(
+        val reusableSeeds = seedCandidates ?: members.map { polygon ->
+            buildSeedCandidates(
                 polygon = polygon,
-                roi = roi,
-                candidate = walkable,
+                imageWidth = imageWidth,
+                imageHeight = argb.size / imageWidth,
             )
-        }.distinct()
+        }
+        val seeds = reusableSeeds.mapNotNull { it.nearest(walkable, roi) }.distinct()
         if (seeds.isEmpty()) {
             return EdgeRegionAttempt(null, 0, "edge_no_seed", false)
         }
@@ -857,59 +890,64 @@ internal object MangaMaskDebugAnalyzer {
         return luminances
     }
 
-    private fun dilateMask(
-        input: BooleanArray,
-        width: Int,
-        height: Int,
-        radius: Int,
-    ): BooleanArray {
-        if (radius <= 0) return input.copyOf()
-        val output = BooleanArray(input.size)
-        for (y in 0 until height) {
-            for (x in 0 until width) {
-                if (!input[y * width + x]) continue
-                for (dy in -radius..radius) {
-                    val nextY = y + dy
-                    if (nextY !in 0 until height) continue
-                    for (dx in -radius..radius) {
-                        val nextX = x + dx
-                        if (nextX in 0 until width) output[nextY * width + nextX] = true
-                    }
-                }
+    private fun extractRoiFeatures(
+        argb: IntArray,
+        imageWidth: Int,
+        roi: IntRect,
+        background: BackgroundColor,
+    ): RoiFeatures {
+        val luminances = IntArray(roi.width * roi.height)
+        val colorDistanceSquared = IntArray(luminances.size)
+        for (localY in 0 until roi.height) {
+            val globalOffset = (roi.top + localY) * imageWidth + roi.left
+            val localOffset = localY * roi.width
+            for (localX in 0 until roi.width) {
+                val localIndex = localOffset + localX
+                val color = argb[globalOffset + localX]
+                val red = color ushr 16 and 0xff
+                val green = color ushr 8 and 0xff
+                val blue = color and 0xff
+                val dr = red - background.red
+                val dg = green - background.green
+                val db = blue - background.blue
+                luminances[localIndex] = luminance(red, green, blue)
+                colorDistanceSquared[localIndex] = dr * dr + dg * dg + db * db
             }
         }
-        return output
+        return RoiFeatures(
+            luminances = luminances,
+            colorDistanceSquared = colorDistanceSquared,
+        )
     }
 
-    private fun findSeedNearPolygonCenter(
+    private fun buildSeedCandidates(
         polygon: Polygon,
-        roi: IntRect,
-        candidate: BooleanArray,
-    ): Int? {
-        val bounds = clamp(polygon.bounds, roi.right, roi.bottom)
-        val left = max(bounds.left, roi.left)
-        val top = max(bounds.top, roi.top)
-        val right = minOf(bounds.right, roi.right)
-        val bottom = minOf(bounds.bottom, roi.bottom)
+        imageWidth: Int,
+        imageHeight: Int,
+    ): MangaSeedSearchOrder {
+        val bounds = clamp(polygon.bounds, imageWidth, imageHeight)
         val centerX = polygon.points.map { it.x }.average().toFloat()
         val centerY = polygon.points.map { it.y }.average().toFloat()
-        var bestIndex: Int? = null
-        var bestDistance = Float.MAX_VALUE
-        for (y in top until bottom) {
-            for (x in left until right) {
+        val capacity = bounds.width * bounds.height
+        val globalIndices = IntArray(capacity)
+        val distances = FloatArray(capacity)
+        var count = 0
+        for (y in bounds.top until bounds.bottom) {
+            for (x in bounds.left until bounds.right) {
                 if (!pointInPolygon(x + 0.5f, y + 0.5f, polygon.points)) continue
-                val localIndex = (y - roi.top) * roi.width + (x - roi.left)
-                if (!candidate[localIndex]) continue
                 val dx = x + 0.5f - centerX
                 val dy = y + 0.5f - centerY
-                val distance = dx * dx + dy * dy
-                if (distance < bestDistance) {
-                    bestDistance = distance
-                    bestIndex = localIndex
-                }
+                globalIndices[count] = y * imageWidth + x
+                distances[count] = dx * dx + dy * dy
+                count++
             }
         }
-        return bestIndex
+        return MangaSeedSearchOrder.prepare(
+            imageWidth = imageWidth,
+            globalIndices = globalIndices,
+            distanceSquared = distances,
+            count = count,
+        )
     }
 
     private fun memberRegionCoverage(

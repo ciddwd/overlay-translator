@@ -304,7 +304,7 @@ class GalleryTranslationWorkPolicyTest {
     }
 
     @Test
-    fun `empty translation retry follows setting and retry budget`() {
+    fun `failed translation retry follows setting and retry budget`() {
         data class Case(
             val name: String,
             val enabled: Boolean,
@@ -315,13 +315,13 @@ class GalleryTranslationWorkPolicyTest {
         listOf(
             Case("disabled", false, 0, false),
             Case("first retry", true, 1, true),
-            Case("second retry", true, 2, true),
+            Case("second retry is blocked", true, 2, false),
             Case("budget exhausted", true, 3, false),
         ).forEach { case ->
             assertEquals(
                 case.name,
                 case.expected,
-                GalleryTranslationWorkPolicy.shouldRetryEmptyTranslation(
+            GalleryTranslationWorkPolicy.shouldRetryFailedTranslation(
                     case.enabled,
                     case.attempt,
                 ),

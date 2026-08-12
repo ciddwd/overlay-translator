@@ -1,6 +1,8 @@
 // Appended to the generated ai_chat.cpp translation unit by CMakeLists.txt.
 // Sequence 0 retains the reusable system prompt. Sequences 1..8 are independent requests.
 
+#include <cctype>
+
 namespace {
 
 constexpr int GAMEOCR_MAX_PARALLEL_SEQUENCES = 8;
@@ -12,8 +14,13 @@ struct gameocr_multi_sequence_state {
     std::string output;
     int32_t position = 0;
     int32_t logit_index = -1;
+    int32_t predict_length = 0;
+    int32_t max_output_lines = 0;
     int32_t generated_tokens = 0;
+    int32_t output_newlines = 0;
     bool finished = false;
+    bool stopped_for_line_limit = false;
+    bool stopped_for_token_limit = false;
 };
 
 struct gameocr_multi_resources {
@@ -83,7 +90,86 @@ static jobjectArray gameocr_multi_fail(const char * reason, const int sequence_c
     return nullptr;
 }
 
+static int gameocr_effective_user_prompt_batch_tokens(
+        JNIEnv * env,
+        jobjectArray jprompts) {
+    if (g_context == nullptr || g_chat_templates == nullptr || jprompts == nullptr) {
+        return -1;
+    }
+
+    const int prompt_count = env->GetArrayLength(jprompts);
+    if (prompt_count < 1 || prompt_count > GAMEOCR_MAX_PARALLEL_SEQUENCES) {
+        return -1;
+    }
+
+    const bool has_chat_template =
+            common_chat_templates_was_explicit(g_chat_templates.get());
+    std::vector<llama_tokens> tokenized_prompts;
+    tokenized_prompts.reserve(prompt_count);
+    for (int index = 0; index < prompt_count; ++index) {
+        auto * jprompt = static_cast<jstring>(env->GetObjectArrayElement(jprompts, index));
+        if (jprompt == nullptr) {
+            return -1;
+        }
+        const char * prompt_chars = env->GetStringUTFChars(jprompt, nullptr);
+        if (prompt_chars == nullptr) {
+            env->DeleteLocalRef(jprompt);
+            return -1;
+        }
+        const std::string formatted_prompt =
+                gameocr_format_independent_user_prompt(prompt_chars);
+        env->ReleaseStringUTFChars(jprompt, prompt_chars);
+        env->DeleteLocalRef(jprompt);
+
+        auto tokens = common_tokenize(
+                g_context,
+                formatted_prompt,
+                has_chat_template,
+                has_chat_template);
+        if (tokens.empty()) {
+            return -1;
+        }
+        tokenized_prompts.push_back(std::move(tokens));
+    }
+
+    size_t shared_prefix_tokens = tokenized_prompts.front().size();
+    for (int index = 1; index < prompt_count && shared_prefix_tokens > 0; ++index) {
+        shared_prefix_tokens = std::min(
+                shared_prefix_tokens,
+                tokenized_prompts[index].size());
+        size_t token_index = 0;
+        while (token_index < shared_prefix_tokens &&
+                tokenized_prompts.front()[token_index] == tokenized_prompts[index][token_index]) {
+            ++token_index;
+        }
+        shared_prefix_tokens = token_index;
+    }
+    size_t shortest_prompt_tokens = tokenized_prompts.front().size();
+    for (const auto & prompt_tokens : tokenized_prompts) {
+        shortest_prompt_tokens = std::min(shortest_prompt_tokens, prompt_tokens.size());
+    }
+    // generateNative keeps one private token per sequence for independent final logits.
+    shared_prefix_tokens = std::min(
+            shared_prefix_tokens,
+            shortest_prompt_tokens > 0 ? shortest_prompt_tokens - 1 : 0);
+
+    int effective_tokens = static_cast<int>(shared_prefix_tokens);
+    for (const auto & prompt_tokens : tokenized_prompts) {
+        effective_tokens += static_cast<int>(prompt_tokens.size() - shared_prefix_tokens);
+    }
+    return effective_tokens;
+}
+
 }  // namespace
+
+extern "C"
+JNIEXPORT jint JNICALL
+Java_com_gameocr_app_llm_LlamaPromptMetrics_effectiveUserPromptBatchTokens(
+        JNIEnv * env,
+        jobject /*unused*/,
+        jobjectArray jprompts) {
+    return static_cast<jint>(gameocr_effective_user_prompt_batch_tokens(env, jprompts));
+}
 
 extern "C"
 JNIEXPORT jobjectArray JNICALL
@@ -91,27 +177,44 @@ Java_com_gameocr_app_llm_LlamaMultiSequence_generateNative(
         JNIEnv * env,
         jobject /*unused*/,
         jobjectArray jprompts,
-        jint predict_length) {
+        jintArray jpredict_lengths,
+        jintArray jmax_output_lines,
+        jboolean mark_limit_as_invalid) {
     const int64_t total_started_us = ggml_time_us();
-    if (g_model == nullptr || g_context == nullptr || jprompts == nullptr) {
+    if (g_model == nullptr || g_context == nullptr || jprompts == nullptr ||
+            jpredict_lengths == nullptr || jmax_output_lines == nullptr) {
         return gameocr_multi_fail("model_not_ready", 0);
     }
 
     const int sequence_count = env->GetArrayLength(jprompts);
-    if (sequence_count < 2 || sequence_count > GAMEOCR_MAX_PARALLEL_SEQUENCES) {
+    if (sequence_count < 1 || sequence_count > GAMEOCR_MAX_PARALLEL_SEQUENCES) {
         return gameocr_multi_fail("invalid_sequence_count", sequence_count);
     }
-    if (predict_length < 1) {
-        return gameocr_multi_fail("invalid_predict_length", sequence_count);
+    if (env->GetArrayLength(jpredict_lengths) != sequence_count ||
+            env->GetArrayLength(jmax_output_lines) != sequence_count) {
+        return gameocr_multi_fail("parameter_count", sequence_count);
     }
     if ((int) llama_n_seq_max(g_context) < sequence_count + 1) {
         return gameocr_multi_fail("context_sequence_capacity", sequence_count);
     }
 
+    std::vector<jint> predict_lengths(sequence_count);
+    std::vector<jint> max_output_lines(sequence_count);
+    env->GetIntArrayRegion(jpredict_lengths, 0, sequence_count, predict_lengths.data());
+    env->GetIntArrayRegion(jmax_output_lines, 0, sequence_count, max_output_lines.data());
+    if (env->ExceptionCheck()) {
+        return gameocr_multi_fail("parameter_read", sequence_count);
+    }
+    for (int index = 0; index < sequence_count; ++index) {
+        if (predict_lengths[index] < 1 || max_output_lines[index] < 0) {
+            return gameocr_multi_fail("invalid_limits", sequence_count);
+        }
+    }
+
     const bool has_chat_template =
             common_chat_templates_was_explicit(g_chat_templates.get());
     std::vector<gameocr_multi_sequence_state> sequences(sequence_count);
-    int total_prompt_tokens = 0;
+    int original_prompt_tokens = 0;
     int64_t required_kv_tokens = system_prompt_position;
 
     for (int index = 0; index < sequence_count; ++index) {
@@ -131,6 +234,8 @@ Java_com_gameocr_app_llm_LlamaMultiSequence_generateNative(
 
         auto & sequence = sequences[index];
         sequence.seq_id = index + 1;
+        sequence.predict_length = predict_lengths[index];
+        sequence.max_output_lines = max_output_lines[index];
         sequence.prompt_tokens = common_tokenize(
                 g_context,
                 formatted_prompt,
@@ -140,11 +245,34 @@ Java_com_gameocr_app_llm_LlamaMultiSequence_generateNative(
             return gameocr_multi_fail("empty_prompt_tokens", sequence_count);
         }
         sequence.position = system_prompt_position + (int) sequence.prompt_tokens.size();
-        total_prompt_tokens += (int) sequence.prompt_tokens.size();
-        required_kv_tokens += (int64_t) sequence.prompt_tokens.size() + predict_length;
+        original_prompt_tokens += (int) sequence.prompt_tokens.size();
+        required_kv_tokens += (int64_t) sequence.prompt_tokens.size() + sequence.predict_length;
     }
 
-    if (total_prompt_tokens > (int) llama_n_batch(g_context)) {
+    size_t shared_prefix_tokens = sequences.front().prompt_tokens.size();
+    for (int index = 1; index < sequence_count && shared_prefix_tokens > 0; ++index) {
+        shared_prefix_tokens = std::min(shared_prefix_tokens, sequences[index].prompt_tokens.size());
+        size_t token_index = 0;
+        while (token_index < shared_prefix_tokens &&
+                sequences.front().prompt_tokens[token_index] == sequences[index].prompt_tokens[token_index]) {
+            ++token_index;
+        }
+        shared_prefix_tokens = token_index;
+    }
+    size_t shortest_prompt_tokens = sequences.front().prompt_tokens.size();
+    for (const auto & sequence : sequences) {
+        shortest_prompt_tokens = std::min(shortest_prompt_tokens, sequence.prompt_tokens.size());
+    }
+    // Keep one private token per sequence so every final prompt logit has its own batch index.
+    shared_prefix_tokens = std::min(
+            shared_prefix_tokens,
+            shortest_prompt_tokens > 0 ? shortest_prompt_tokens - 1 : 0);
+
+    int decoded_prompt_tokens = (int) shared_prefix_tokens;
+    for (const auto & sequence : sequences) {
+        decoded_prompt_tokens += (int) sequence.prompt_tokens.size() - (int) shared_prefix_tokens;
+    }
+    if (decoded_prompt_tokens > (int) llama_n_batch(g_context)) {
         return gameocr_multi_fail("prompt_batch_capacity", sequence_count);
     }
     if (required_kv_tokens + OVERFLOW_HEADROOM > llama_n_ctx(g_context)) {
@@ -166,14 +294,11 @@ Java_com_gameocr_app_llm_LlamaMultiSequence_generateNative(
     for (llama_seq_id seq_id = 1; seq_id <= GAMEOCR_MAX_PARALLEL_SEQUENCES; ++seq_id) {
         llama_memory_seq_rm(memory, seq_id, -1, -1);
     }
-    for (auto & sequence : sequences) {
-        if (system_prompt_position > 0) {
-            llama_memory_seq_cp(memory, 0, sequence.seq_id, 0, system_prompt_position);
-        }
-    }
-
+    // Sequence 0 keeps only the loaded system prompt between calls. A request-specific shared
+    // user prefix must never leak into the next generation.
+    llama_memory_seq_rm(memory, 0, system_prompt_position, -1);
     gameocr_multi_resources resources;
-    resources.batch = llama_batch_init(std::max(total_prompt_tokens, sequence_count), 0, 1);
+    resources.batch = llama_batch_init(std::max(decoded_prompt_tokens, sequence_count), 0, 1);
     resources.batch_initialized = true;
     resources.samplers.reserve(sequence_count);
     for (auto & sequence : sequences) {
@@ -185,10 +310,39 @@ Java_com_gameocr_app_llm_LlamaMultiSequence_generateNative(
     }
 
     llama_perf_context_reset(g_context);
+    const int64_t prefill_started_us = ggml_time_us();
+    if (shared_prefix_tokens > 0) {
+        common_batch_clear(resources.batch);
+        int32_t position = system_prompt_position;
+        for (size_t token_index = 0; token_index < shared_prefix_tokens; ++token_index) {
+            common_batch_add(
+                    resources.batch,
+                    sequences.front().prompt_tokens[token_index],
+                    position++,
+                    {0},
+                    false);
+        }
+        if (llama_decode(g_context, resources.batch) != 0) {
+            return gameocr_multi_fail("shared_prefix_decode", sequence_count);
+        }
+    }
+    for (auto & sequence : sequences) {
+        if (system_prompt_position > 0 || shared_prefix_tokens > 0) {
+            llama_memory_seq_cp(
+                    memory,
+                    0,
+                    sequence.seq_id,
+                    0,
+                    system_prompt_position + (int32_t) shared_prefix_tokens);
+        }
+    }
+
     common_batch_clear(resources.batch);
     for (auto & sequence : sequences) {
-        int32_t position = system_prompt_position;
-        for (size_t token_index = 0; token_index < sequence.prompt_tokens.size(); ++token_index) {
+        int32_t position = system_prompt_position + (int32_t) shared_prefix_tokens;
+        for (size_t token_index = shared_prefix_tokens;
+                token_index < sequence.prompt_tokens.size();
+                ++token_index) {
             const bool want_logits = token_index + 1 == sequence.prompt_tokens.size();
             if (want_logits) {
                 sequence.logit_index = resources.batch.n_tokens;
@@ -202,7 +356,6 @@ Java_com_gameocr_app_llm_LlamaMultiSequence_generateNative(
         }
     }
 
-    const int64_t prefill_started_us = ggml_time_us();
     if (llama_decode(g_context, resources.batch) != 0) {
         return gameocr_multi_fail("prefill_decode", sequence_count);
     }
@@ -225,12 +378,41 @@ Java_com_gameocr_app_llm_LlamaMultiSequence_generateNative(
             return;
         }
 
-        sequence.output += common_token_to_piece(g_context, token);
+        const std::string piece = common_token_to_piece(g_context, token);
+        bool starts_extra_line = false;
+        size_t accepted_piece_bytes = piece.size();
+        if (sequence.max_output_lines > 0) {
+            for (size_t byte_index = 0; byte_index < piece.size(); ++byte_index) {
+                const unsigned char byte = (unsigned char) piece[byte_index];
+                if (sequence.output_newlines >= sequence.max_output_lines &&
+                        !std::isspace(byte)) {
+                    starts_extra_line = true;
+                    accepted_piece_bytes = byte_index;
+                    break;
+                }
+                if (byte == '\n') {
+                    ++sequence.output_newlines;
+                }
+            }
+        }
+        sequence.output.append(piece, 0, accepted_piece_bytes);
         if (first_output_us == 0) {
             first_output_us = ggml_time_us();
         }
-        if (sequence.generated_tokens >= predict_length) {
+        if (starts_extra_line) {
             sequence.finished = true;
+            sequence.stopped_for_line_limit = true;
+            if (mark_limit_as_invalid) {
+                sequence.output += "\n<|gameocr_line_limit|>";
+            }
+            return;
+        }
+        if (sequence.generated_tokens >= sequence.predict_length) {
+            sequence.finished = true;
+            sequence.stopped_for_token_limit = true;
+            if (mark_limit_as_invalid) {
+                sequence.output += "\n<|gameocr_token_limit|>";
+            }
             return;
         }
 
@@ -267,8 +449,12 @@ Java_com_gameocr_app_llm_LlamaMultiSequence_generateNative(
     const int64_t finished_us = ggml_time_us();
     std::vector<int> generated_per_sequence;
     generated_per_sequence.reserve(sequence_count);
+    int line_limit_stops = 0;
+    int token_limit_stops = 0;
     for (const auto & sequence : sequences) {
         generated_per_sequence.push_back(sequence.generated_tokens);
+        line_limit_stops += sequence.stopped_for_line_limit ? 1 : 0;
+        token_limit_stops += sequence.stopped_for_token_limit ? 1 : 0;
         if (!is_valid_utf8(sequence.output.c_str())) {
             return gameocr_multi_fail("invalid_output_utf8", sequence_count);
         }
@@ -277,13 +463,18 @@ Java_com_gameocr_app_llm_LlamaMultiSequence_generateNative(
     __android_log_print(
             ANDROID_LOG_INFO,
             "LocalLlmPerf",
-            "MULTI STATS sequences=%d promptTokens=%d generatedTokens=%d perSequence=%s "
+            "MULTI STATS sequences=%d promptTokens=%d decodedPromptTokens=%d sharedPrefixTokens=%zu "
+            "generatedTokens=%d perSequence=%s lineLimitStops=%d tokenLimitStops=%d "
             "initMs=%.1f prefillMs=%.1f firstTokenMs=%.1f decodeMs=%.1f "
             "decodeCalls=%d totalMs=%.1f",
             sequence_count,
-            total_prompt_tokens,
+            original_prompt_tokens,
+            decoded_prompt_tokens,
+            shared_prefix_tokens,
             total_generated_tokens,
             join(generated_per_sequence, ",").c_str(),
+            line_limit_stops,
+            token_limit_stops,
             (prefill_started_us - total_started_us) / 1000.0,
             (prefill_finished_us - prefill_started_us) / 1000.0,
             first_output_us == 0 ? -1.0 : (first_output_us - total_started_us) / 1000.0,

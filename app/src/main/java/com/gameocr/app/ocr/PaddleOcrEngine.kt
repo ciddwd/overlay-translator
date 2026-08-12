@@ -14,6 +14,7 @@ import com.gameocr.app.R
 import com.gameocr.app.data.OcrEngineKind
 import com.gameocr.app.data.PaddleDetectionProfile
 import com.gameocr.app.data.PaddleModelVersion
+import com.gameocr.app.data.Settings
 import com.gameocr.app.data.adaptiveOverlayActive
 import com.gameocr.app.util.CpuThreadPolicy
 import com.gameocr.app.util.InferenceTiming
@@ -35,6 +36,24 @@ import java.util.concurrent.atomic.AtomicLong
 internal enum class PaddleCropOrientation {
     ORIGINAL,
     ROTATED_90,
+}
+
+internal data class PaddleSessionReadinessDecision(
+    val invalidateLoadedSessions: Boolean,
+    val reuseLoadedSessions: Boolean,
+)
+
+internal fun paddleSessionReadinessDecision(
+    requestedVersion: PaddleModelVersion,
+    loadedVersion: PaddleModelVersion?,
+    detSessionReady: Boolean,
+    recSessionReady: Boolean,
+): PaddleSessionReadinessDecision {
+    val versionChanged = loadedVersion != requestedVersion
+    return PaddleSessionReadinessDecision(
+        invalidateLoadedSessions = versionChanged,
+        reuseLoadedSessions = !versionChanged && detSessionReady && recSessionReady,
+    )
 }
 
 internal data class PaddleRecognitionResizePlan(
@@ -90,6 +109,13 @@ internal data class PaddleRecognitionCandidate(
 internal data class PaddleRecognizedText(
     val text: String,
     val confidence: Float,
+)
+
+internal data class PaddleMangaLineRecognition(
+    val memberIndex: Int,
+    val text: String,
+    val confidence: Float,
+    val modelVersion: String,
 )
 
 internal fun paddleRecognizedText(candidate: PaddleRecognitionCandidate?): PaddleRecognizedText =
@@ -320,15 +346,22 @@ class PaddleOcrEngine @Inject constructor(
     private val ortThreads by lazy { CpuThreadPolicy.select(availableProcessors) }
 
     override suspend fun recognize(bitmap: Bitmap, kind: OcrEngineKind): List<TextBlock> {
-        ensureReady()
-        val s = settingsRepository.get()
+        return recognize(bitmap, kind, settingsRepository.get())
+    }
+
+    override suspend fun recognize(
+        bitmap: Bitmap,
+        kind: OcrEngineKind,
+        settings: Settings,
+    ): List<TextBlock> {
+        ensureReady(settings.paddleModelVersion)
         val maskFrameDecision = MangaShapeAwareFramePolicy.decide(
             shapeAwareRenderingEnabled = adaptiveOverlayActive(
-                s.overlayStyleMode,
-                s.renderMode,
+                settings.overlayStyleMode,
+                settings.renderMode,
             ),
-            developerOptionsEnabled = s.developerOptionsEnabled,
-            screenshotSavingEnabled = s.ocrScreenshotSavingEnabled,
+            developerOptionsEnabled = settings.developerOptionsEnabled,
+            screenshotSavingEnabled = settings.ocrScreenshotSavingEnabled,
             bubbleDetectorAvailable = MangaBubbleDetectionDebugEngine.isInstalled(context),
             localSegmentationModelAvailable =
                 MangaBubbleSegmentationDebugEngine.isInstalled(context),
@@ -336,19 +369,21 @@ class PaddleOcrEngine @Inject constructor(
         return withContext(Dispatchers.Default) {
             runFull(
                 bitmap = bitmap,
-                binThresh = s.dbnetProbThresh,
-                scoreThresh = s.dbnetBoxScoreThresh,
-                unclipRatio = s.dbnetUnclipRatio,
-                profile = s.paddleDetectionProfile,
+                binThresh = settings.dbnetProbThresh,
+                scoreThresh = settings.dbnetBoxScoreThresh,
+                unclipRatio = settings.dbnetUnclipRatio,
+                profile = settings.paddleDetectionProfile,
                 maskFrameDecision = maskFrameDecision,
-                regroupDetectedBubbles = s.mergeAdjacentBlocks,
+                regroupDetectedBubbles = settings.mergeAdjacentBlocks,
             )
         }
     }
 
-    suspend fun ensureReady() = initLock.withLock {
-        val s = settingsRepository.get()
-        val version = s.paddleModelVersion
+    suspend fun ensureReady() {
+        ensureReady(settingsRepository.get().paddleModelVersion)
+    }
+
+    internal suspend fun ensureReady(version: PaddleModelVersion) = initLock.withLock {
         val initStart = System.currentTimeMillis()
         Timber.i(
             "PaddleOCR ensureReady requested version=%s loaded=%s detSession=%s recSession=%s",
@@ -358,7 +393,13 @@ class PaddleOcrEngine @Inject constructor(
             recSession != null,
         )
         // 版本切换时释放旧 session，强制重新加载
-        if (loadedVersion != version) {
+        val readiness = paddleSessionReadinessDecision(
+            requestedVersion = version,
+            loadedVersion = loadedVersion,
+            detSessionReady = detSession != null,
+            recSessionReady = recSession != null,
+        )
+        if (readiness.invalidateLoadedSessions) {
             Timber.i("PaddleOCR switching model version from %s to %s", loadedVersion?.name ?: "null", version.name)
             runCatching { detSession?.close() }
             runCatching { recSession?.close() }
@@ -366,7 +407,7 @@ class PaddleOcrEngine @Inject constructor(
             recSession = null
             loadedVersion = null
         }
-        if (detSession != null && recSession != null) {
+        if (readiness.reuseLoadedSessions) {
             Timber.i("PaddleOCR ensureReady reuse version=%s keys=%d", version.name, keys.size)
             return@withLock
         }
@@ -1019,6 +1060,38 @@ class PaddleOcrEngine @Inject constructor(
             best
         } finally {
             crop.recycle()
+        }
+    }
+
+    /**
+     * Targeted comparison path used by Manga OCR. Paddle recognition is line-based, so each
+     * existing DBNet member is recognized once instead of feeding a multi-line bubble crop into a
+     * single-line CTC model. The caller decides whether a specific mixed-script span is reliable.
+     */
+    internal fun recognizeMangaMembers(
+        src: Bitmap,
+        quads: List<DBPostprocessor.Quad>,
+        memberIndices: Collection<Int>,
+    ): List<PaddleMangaLineRecognition> {
+        val runId = runCounter.incrementAndGet()
+        val modelVersion = loadedVersion?.name ?: "?"
+        return memberIndices.distinct().map { memberIndex ->
+            val recognized = quads.getOrNull(memberIndex)?.let { quad ->
+                paddleRecognizedText(
+                    recognizeQuad(
+                        src = src,
+                        quad = quad,
+                        runId = runId,
+                        boxIndex = memberIndex,
+                    )
+                )
+            } ?: PaddleRecognizedText(text = "", confidence = 0f)
+            PaddleMangaLineRecognition(
+                memberIndex = memberIndex,
+                text = recognized.text,
+                confidence = recognized.confidence,
+                modelVersion = modelVersion,
+            )
         }
     }
 

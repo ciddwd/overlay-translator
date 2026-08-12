@@ -11,6 +11,30 @@ import org.junit.Test
 class SettingsLazyLayoutTest {
 
     @Test
+    fun llmRequestOptions_areSearchableByEveryVisibleControl_tableDriven() {
+        data class Case(val name: String, val query: String)
+
+        listOf(
+            Case("section title", "LLM 请求参数"),
+            Case("user message template", "用户消息模板"),
+            Case("Base64", "base64"),
+            Case("Unicode", "unicode"),
+            Case("system suffix", "系统提示词后缀"),
+            Case("temperature", "temperature"),
+            Case("top p", "top_p"),
+            Case("max tokens", "max_tokens"),
+        ).forEach { case ->
+            val score = settingsSearchScore(
+                query = case.query,
+                itemLabel = "LLM 请求参数",
+                sectionLabel = "翻译",
+                keywords = SETTINGS_SEARCH_LLM_REQUEST_OPTION_KEYWORDS,
+            )
+            assertTrue(case.name, score != null)
+        }
+    }
+
+    @Test
     fun searchTargetContainer_stacksMultiControlTargetsVertically() {
         val source = sourceFile("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
         val functionStart = source.indexOf("private fun SettingsSearchTarget(")

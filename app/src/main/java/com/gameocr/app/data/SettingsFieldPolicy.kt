@@ -100,6 +100,11 @@ object SettingsFieldPolicy {
         portable("sourceLang", R.string.settings_search_item_source_lang),
         portable("targetLang", R.string.settings_search_item_target_lang),
         portable("promptTemplate", R.string.settings_search_item_prompt, SettingsDiagnostic.SUMMARY),
+        portable(
+            "openAiRequestOptions",
+            R.string.settings_openai_request_options_title,
+            SettingsDiagnostic.SUMMARY,
+        ),
         portable("ocrEngine", R.string.settings_search_item_ocr_switch),
         portable("captureLoopIntervalMs", R.string.settings_search_item_loop_interval),
         portable("loopTriggerMode", R.string.settings_search_item_loop_trigger_mode),
@@ -112,7 +117,7 @@ object SettingsFieldPolicy {
         portable("ocrScreenshotSavingEnabled", R.string.settings_search_item_developer_ocr),
         portable("disableTranslationCache", R.string.settings_search_item_developer_ocr),
         portable("batchCumulativeCompletionTimeEnabled", R.string.settings_search_item_developer_ocr),
-        portable("disableCrossLineContextTranslation", R.string.settings_search_item_cross_line_context),
+        portable("translationContextMode", R.string.settings_translation_mode),
         portable("ocrRedBoxModeEnabled", R.string.settings_search_item_developer_ocr),
         portable("ocrRedBoxShowSourceText", R.string.settings_search_item_developer_ocr),
         portable("ocrRedBoxShowTranslation", R.string.settings_search_item_developer_ocr),
@@ -127,7 +132,7 @@ object SettingsFieldPolicy {
         portable("overlayFontDisplayName", R.string.settings_search_item_overlay_font, SettingsDiagnostic.SUMMARY),
         portable("overlayFonts", R.string.settings_search_item_overlay_font, SettingsDiagnostic.SUMMARY),
         portable("streamingTranslate", R.string.settings_search_item_streaming),
-        portable("retryEmptyTranslation", R.string.settings_search_item_empty_translation_retry),
+        portable("retryFailedTranslation", R.string.settings_search_item_failed_translation_retry),
         portable("ttsEnabled", R.string.settings_search_item_tts_enable),
         portable("ttsProvider", R.string.settings_search_item_tts_provider),
         portable("ttsVoice", R.string.settings_search_item_tts_provider),
@@ -218,6 +223,7 @@ object SettingsFieldPolicy {
         portable("a11yVolumeTrigger", R.string.settings_search_item_a11y_volume),
         portable("translatorEngine", R.string.settings_search_item_translator_engine),
         portable("translationGlossaryEnabled", R.string.settings_glossary_enabled),
+        portable("sourcePreservationEnabled"),
         portable("foregroundAppDetectionMode", R.string.settings_foreground_app_detection),
         portable("sendAppNameToTranslator", R.string.settings_send_app_name),
         credential("deeplApiKey", R.string.settings_search_item_deepl_api_key),
@@ -245,6 +251,10 @@ object SettingsFieldPolicy {
         deviceLocal("floatingWindowHeightDp", R.string.settings_search_item_floating_window_reset),
         portable("floatingWindowContentMode", R.string.settings_search_item_floating_window_content),
         portable("floatingWindowLocked", R.string.settings_search_item_floating_window_locked),
+        portable(
+            "floatingWindowAutoHideWhenObstructing",
+            R.string.settings_search_item_floating_window_auto_hide,
+        ),
         portable("customBorderStyle", R.string.settings_search_item_border_style),
         portable("overlayAllowWrap", R.string.settings_search_item_allow_wrap),
         portable("overlayAvoidCollision", R.string.settings_search_item_avoid_collision),
@@ -287,6 +297,12 @@ object SettingsFieldPolicy {
             diagnostic = SettingsDiagnostic.OMITTED,
         ),
         SettingsFieldRule(
+            name = "runtimeTranslationPromptContext",
+            persistence = SettingsPersistence.RUNTIME_ONLY,
+            portability = SettingsPortability.RUNTIME_ONLY,
+            diagnostic = SettingsDiagnostic.OMITTED,
+        ),
+        SettingsFieldRule(
             name = "runtimeTranslationScopePackage",
             persistence = SettingsPersistence.RUNTIME_ONLY,
             portability = SettingsPortability.RUNTIME_ONLY,
@@ -324,7 +340,7 @@ object SettingsFieldPolicy {
 
     fun encodePortable(settings: Settings): JsonObject {
         val encoded = json.encodeToJsonElement(
-            MangaOcrAdvancedSettingsPolicy.normalize(settings)
+            MangaOcrSettingsPolicy.normalize(settings)
         ).asObject()
         return JsonObject(encoded.filterKeys(portableFieldNames::contains))
     }
@@ -332,7 +348,7 @@ object SettingsFieldPolicy {
     fun decodePortable(values: JsonObject): SettingsFieldDecodeResult {
         val defaults = json.encodeToJsonElement(Settings()).asObject().toMutableMap()
         val skipped = mutableListOf<String>()
-        values.forEach { (name, value) ->
+        migratePortableAliases(values).forEach { (name, value) ->
             if (name !in portableFieldNames) return@forEach
             val candidate = JsonObject(defaults + (name to value))
             if (runCatching { json.decodeFromJsonElement<Settings>(candidate) }.isSuccess) {
@@ -342,10 +358,19 @@ object SettingsFieldPolicy {
             }
         }
         return SettingsFieldDecodeResult(
-            settings = MangaOcrAdvancedSettingsPolicy.normalize(
+            settings = MangaOcrSettingsPolicy.normalize(
                 json.decodeFromJsonElement<Settings>(JsonObject(defaults))
             ),
             skippedFields = skipped.sorted(),
+        )
+    }
+
+    private fun migratePortableAliases(values: JsonObject): JsonObject {
+        if ("retryFailedTranslation" in values || "retryEmptyTranslation" !in values) return values
+        return JsonObject(
+            values.toMutableMap().apply {
+                this["retryFailedTranslation"] = remove("retryEmptyTranslation")!!
+            }
         )
     }
 
@@ -354,9 +379,10 @@ object SettingsFieldPolicy {
         val importedValues = json.encodeToJsonElement(imported).asObject()
         val merged = currentValues.toMutableMap()
         portableFieldNames.forEach { name -> importedValues[name]?.let { merged[name] = it } }
-        return MangaOcrAdvancedSettingsPolicy.normalize(
+        return MangaOcrSettingsPolicy.normalize(
             json.decodeFromJsonElement<Settings>(JsonObject(merged)).copy(
                 runtimeTranslationContext = current.runtimeTranslationContext,
+                runtimeTranslationPromptContext = current.runtimeTranslationPromptContext,
                 runtimeTranslationScopePackage = current.runtimeTranslationScopePackage,
                 runtimeTranslationScopeLabel = current.runtimeTranslationScopeLabel,
             )
@@ -365,7 +391,7 @@ object SettingsFieldPolicy {
 
     fun formatDiagnostics(settings: Settings): String {
         val encoded = json.encodeToJsonElement(
-            MangaOcrAdvancedSettingsPolicy.normalize(settings)
+            MangaOcrSettingsPolicy.normalize(settings)
         ).asObject()
         return buildString {
             rules.forEach { rule ->

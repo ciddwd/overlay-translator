@@ -32,8 +32,8 @@ class FloatingWindowLoopFlickerTest {
         cases.forEach { case ->
             val snippet = functionSnippet(source, case.signature)
             assertTrue(
-                "${case.name} should clear only transient/block overlays",
-                "clearBlocksAndLoading()" in snippet,
+                "${case.name} should replace only prior block results while translation owns loading",
+                "clearBlockResults()" in snippet,
             )
             assertFalse(
                 "${case.name} must not destroy the floating window before updating it",
@@ -72,10 +72,22 @@ class FloatingWindowLoopFlickerTest {
                 signature = "private fun clearBlocksAndLoading()",
                 requiredMarkers = listOf(
                     "clearLoading()",
+                    "clearBlockResults()",
+                ),
+                forbiddenMarkers = listOf(
+                    "floatingWindow.",
+                    "lastFloatingPairs",
+                ),
+            ),
+            Case(
+                name = "block-result cleanup preserves loading and floating window",
+                signature = "private fun clearBlockResults()",
+                requiredMarkers = listOf(
                     "dismissError()",
                     "blockViews.clear()",
                 ),
                 forbiddenMarkers = listOf(
+                    "clearLoading()",
                     "floatingWindow.",
                     "lastFloatingPairs",
                 ),

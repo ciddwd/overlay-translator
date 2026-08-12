@@ -3,30 +3,20 @@ package com.gameocr.app.ocr
 import kotlin.math.ceil
 import kotlin.math.sqrt
 
-/** Builds a coverage-first alpha mask for local text-background repair patches. */
-internal object TextRepairFeathering {
+/** Builds an opaque, coverage-first mask for local text-background repair patches. */
+internal object TextRepairSolidCoverage {
 
     data class Plan(
-        val opaqueMask: BooleanArray,
         val repairMask: BooleanArray,
-        val alpha: IntArray,
         val existingExpansionPx: Int,
-        val hardExpansionPx: Int,
-        val featherWidthPx: Int,
+        val solidExpansionPx: Int,
     ) {
         init {
-            require(opaqueMask.size == repairMask.size)
-            require(alpha.size == repairMask.size)
             require(existingExpansionPx >= 0)
-            require(hardExpansionPx > 0)
-            require(featherWidthPx > 0)
+            require(solidExpansionPx > 0)
         }
 
-        val opaquePixelCount: Int = opaqueMask.count { it }
-
         val repairPixelCount: Int = repairMask.count { it }
-
-        val featherPixelCount: Int = alpha.count { it in 1..254 }
     }
 
     fun plan(
@@ -44,6 +34,7 @@ internal object TextRepairFeathering {
         require(coreMask.any { it })
         require(coreMask.indices.all { index -> !coreMask[index] || baseMask[index] })
 
+        // Preserve the previous opaque coverage radius. Only the outer translucent band is removed.
         val existingExpansion = maximumMaskDistance(
             width = width,
             height = height,
@@ -51,51 +42,45 @@ internal object TextRepairFeathering {
             seedMask = coreMask,
         )
         val displayExpansion = (existingExpansion / coordinateScale).coerceAtLeast(1f)
-        val displayFeatherWidth = ceil(sqrt(displayExpansion.toDouble())).toInt()
-        val featherWidth = ceil(displayFeatherWidth * coordinateScale).toInt().coerceAtLeast(1)
-        val hardExpansion = ceil(featherWidth / 2f).toInt().coerceAtLeast(1)
-        val distanceSquared = BinaryMaskDistanceField.squaredEuclidean(
-            width = width,
-            height = height,
-            sourceMask = baseMask,
-        )
-        val hardRadiusSquared = hardExpansion * hardExpansion
-        val repairRadius = hardExpansion + featherWidth
-        val repairRadiusSquared = repairRadius * repairRadius
-        val opaqueMask = BooleanArray(baseMask.size)
-        val repairMask = BooleanArray(baseMask.size)
-        val alpha = IntArray(baseMask.size)
-        for (index in distanceSquared.indices) {
-            val squaredDistance = distanceSquared[index]
-            if (squaredDistance <= hardRadiusSquared) {
-                opaqueMask[index] = true
-                repairMask[index] = true
-                alpha[index] = 255
-            } else if (squaredDistance <= repairRadiusSquared) {
-                repairMask[index] = true
-                val featherLayer = ceil(
-                    sqrt(squaredDistance.toDouble()) - hardExpansion
-                ).toInt().coerceIn(1, featherWidth)
-                alpha[index] = ((featherWidth + 1 - featherLayer) * 255) /
-                    (featherWidth + 1)
-            }
-        }
+        val solidExpansion = ceil(sqrt(displayExpansion.toDouble()))
+            .toInt()
+            .let { ceil(it * coordinateScale).toInt() }
+            .coerceAtLeast(1)
         return Plan(
-            opaqueMask = opaqueMask,
-            repairMask = repairMask,
-            alpha = alpha,
+            repairMask = dilateEuclidean(
+                width = width,
+                height = height,
+                sourceMask = baseMask,
+                radius = solidExpansion,
+            ),
             existingExpansionPx = existingExpansion,
-            hardExpansionPx = hardExpansion,
-            featherWidthPx = featherWidth,
+            solidExpansionPx = solidExpansion,
         )
     }
 
-    fun applyAlpha(color: Int, maskAlpha: Int): Int {
-        require(maskAlpha in 0..255)
-        if (maskAlpha == 0) return 0
-        val sourceAlpha = color ushr 24 and 0xff
-        val outputAlpha = (sourceAlpha * maskAlpha + 127) / 255
-        return (outputAlpha shl 24) or (color and 0x00ffffff)
+    private fun dilateEuclidean(
+        width: Int,
+        height: Int,
+        sourceMask: BooleanArray,
+        radius: Int,
+    ): BooleanArray {
+        val output = sourceMask.copyOf()
+        val radiusSquared = radius * radius
+        for (index in sourceMask.indices) {
+            if (!sourceMask[index]) continue
+            val x = index % width
+            val y = index / width
+            for (dy in -radius..radius) {
+                val targetY = y + dy
+                if (targetY !in 0 until height) continue
+                for (dx in -radius..radius) {
+                    if (dx * dx + dy * dy > radiusSquared) continue
+                    val targetX = x + dx
+                    if (targetX in 0 until width) output[targetY * width + targetX] = true
+                }
+            }
+        }
+        return output
     }
 
     private fun maximumMaskDistance(
@@ -137,5 +122,4 @@ internal object TextRepairFeathering {
         }
         return maximum
     }
-
 }

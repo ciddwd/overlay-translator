@@ -490,6 +490,10 @@ class MainScreenPresetCarouselTest {
             Case("returns with a spring", carousel, "animationSpec = spring("),
             Case("uses a bouncy damping ratio", carousel, "Spring.DampingRatioMediumBouncy"),
             Case("uses a slow spring", carousel, "Spring.StiffnessVeryLow"),
+            Case("shows the swipe guide during discovery", carousel, "SwipeUpGuide("),
+            Case("starts the guide with the carousel nudge", carousel, "discoveryGuideVisible = true"),
+            Case("always hides the guide after discovery", carousel, "finally {"),
+            Case("clears the guide visibility", carousel, "discoveryGuideVisible = false"),
             Case("loads persisted discovery", main, "viewModel.hasSeenMainStatusPreset()"),
             Case("persists preset discovery", main, "viewModel.markMainStatusPresetSeen()"),
             Case(

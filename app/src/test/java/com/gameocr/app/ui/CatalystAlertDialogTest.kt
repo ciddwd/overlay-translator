@@ -69,7 +69,7 @@ class CatalystAlertDialogTest {
             Case(
                 name = "main",
                 path = "src/main/java/com/gameocr/app/ui/MainScreen.kt",
-                expectedSharedDialogCalls = 3,
+                expectedSharedDialogCalls = 5,
             ),
             Case(
                 name = "logs",
@@ -84,7 +84,7 @@ class CatalystAlertDialogTest {
             Case(
                 name = "settings",
                 path = "src/main/java/com/gameocr/app/ui/SettingsScreen.kt",
-                expectedSharedDialogCalls = 19,
+                expectedSharedDialogCalls = 22,
             ),
         ).forEach { case ->
             val source = sourceFile(case.path).readText()

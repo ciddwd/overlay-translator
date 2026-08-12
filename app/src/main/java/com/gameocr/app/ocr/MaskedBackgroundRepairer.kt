@@ -25,6 +25,7 @@ internal object MaskedBackgroundRepairer {
         NONE,
         DOMINANT_FILL,
         DIRECTIONAL_INTERPOLATION,
+        SPATIAL_INTERPOLATION,
     }
 
     data class ComponentDecision(
@@ -36,6 +37,12 @@ internal object MaskedBackgroundRepairer {
         val boundarySamples: Int,
         val dominantInlierFraction: Float,
         val colorSpread: Float,
+        val referenceColor: Int? = null,
+        val foregroundColor: Int? = null,
+        val boundaryLuminanceMin: Int = 0,
+        val boundaryLuminanceMax: Int = 0,
+        val outputLuminanceMin: Int = 0,
+        val outputLuminanceMax: Int = 0,
     )
 
     data class Result(
@@ -77,7 +84,11 @@ internal object MaskedBackgroundRepairer {
         val output = sourceArgb.copyOf()
         val repairedMask = BooleanArray(eraseMask.size)
         val eraseComponents = labelComponents(width, height, eraseMask)
-        val completionComponents = labelComponents(width, height, flatCompletionMask)
+        val completionComponents = if (flatCompletionMask === eraseMask) {
+            eraseComponents
+        } else {
+            labelComponents(width, height, flatCompletionMask)
+        }
         val sampleMarks = IntArray(eraseMask.size)
         var sampleStamp = 0
         val plans = eraseComponents.items.mapIndexed { componentIndex, component ->
@@ -104,6 +115,14 @@ internal object MaskedBackgroundRepairer {
                 )
             }
 
+            val boundaryLuminanceMin = samples.minOf { index -> luminance(sourceArgb[index]) }
+            val boundaryLuminanceMax = samples.maxOf { index -> luminance(sourceArgb[index]) }
+            val foregroundSamples = foregroundReferenceMask
+                ?.let { referenceMask -> filterIndices(component) { referenceMask[it] } }
+                ?: IntArray(0)
+            val foregroundColor = foregroundSamples
+                .takeIf { it.isNotEmpty() }
+                ?.let { estimateDominantBackground(sourceArgb, it).color }
             val dominantEstimate = estimateDominantBackground(sourceArgb, samples)
             val backgroundTooComplex =
                 dominantEstimate.inlierFraction < MIN_DOMINANT_INLIER_FRACTION ||
@@ -123,12 +142,12 @@ internal object MaskedBackgroundRepairer {
                 )
             }
             val estimate = if (backgroundTooComplex && allowComplexBackgroundInterpolation) {
-                foregroundReferenceMask
-                    ?.let { referenceMask ->
+                foregroundColor
+                    ?.let { color ->
                         estimateContrastingBackground(
                             sourceArgb = sourceArgb,
                             backgroundSamples = samples,
-                            foregroundSamples = component.filter { referenceMask[it] }.toIntArray(),
+                            foregroundColor = color,
                         )
                     }
                     ?: dominantEstimate
@@ -152,17 +171,32 @@ internal object MaskedBackgroundRepairer {
                     ),
                 )
             }
-            val mode = if (
-                backgroundTooComplex ||
-                estimate.colorSpread > MAX_FLAT_BACKGROUND_SPREAD
-            ) {
-                Mode.DIRECTIONAL_INTERPOLATION
+            val mode = when {
+                backgroundTooComplex -> Mode.SPATIAL_INTERPOLATION
+                estimate.colorSpread > MAX_FLAT_BACKGROUND_SPREAD -> Mode.DIRECTIONAL_INTERPOLATION
+                else -> Mode.DOMINANT_FILL
+            }
+            val referenceColor = if (mode == Mode.SPATIAL_INTERPOLATION) {
+                val spatialMedian = ArgbChannelMedian.fromIndexedColors(sourceArgb, samples)
+                if (
+                    foregroundColor != null &&
+                    colorDistanceSquared(spatialMedian, foregroundColor) <
+                    MIN_FOREGROUND_BACKGROUND_CONTRAST_SQUARED &&
+                    colorDistanceSquared(estimate.color, foregroundColor) >=
+                    MIN_FOREGROUND_BACKGROUND_CONTRAST_SQUARED
+                ) {
+                    estimate.color
+                } else {
+                    spatialMedian
+                }
             } else {
-                Mode.DOMINANT_FILL
+                estimate.color
             }
             RepairPlan(
                 component = component,
                 estimate = estimate,
+                spatialFallbackColor = referenceColor,
+                foregroundColor = foregroundColor,
                 decision = ComponentDecision(
                     componentIndex = componentIndex,
                     accepted = true,
@@ -172,6 +206,10 @@ internal object MaskedBackgroundRepairer {
                     boundarySamples = samples.size,
                     dominantInlierFraction = estimate.inlierFraction,
                     colorSpread = estimate.colorSpread,
+                    referenceColor = referenceColor,
+                    foregroundColor = foregroundColor,
+                    boundaryLuminanceMin = boundaryLuminanceMin,
+                    boundaryLuminanceMax = boundaryLuminanceMax,
                 ),
             )
         }
@@ -195,6 +233,7 @@ internal object MaskedBackgroundRepairer {
             }
         }
 
+        var spatialSampleMap: SpatialSampleMap? = null
         plans.forEachIndexed { planIndex, plan ->
             val estimate = plan.estimate ?: return@forEachIndexed
             when (plan.decision.mode) {
@@ -245,13 +284,59 @@ internal object MaskedBackgroundRepairer {
                         )
                     }
                 }
+                Mode.SPATIAL_INTERPOLATION -> {
+                    val samples = spatialSampleMap ?: SpatialSampleMap.build(
+                        width = width,
+                        height = height,
+                        eraseMask = eraseMask,
+                        allowedSampleMask = allowedSampleMask,
+                    ).also { spatialSampleMap = it }
+                    plan.component.forEach { index ->
+                        fillPixel(
+                            index = index,
+                            color = interpolateSpatialPixel(
+                                index = index,
+                                width = width,
+                                height = height,
+                                sourceArgb = sourceArgb,
+                                eraseMask = eraseMask,
+                                allowedSampleMask = allowedSampleMask,
+                                samples = samples,
+                                foregroundColor = plan.foregroundColor,
+                                fallbackColor = plan.spatialFallbackColor ?: estimate.color,
+                            ),
+                            output = output,
+                            repairedMask = repairedMask,
+                        )
+                    }
+                }
                 Mode.NONE -> Unit
+            }
+        }
+        val decisions = plans.map { plan ->
+            var outputMin = 255
+            var outputMax = 0
+            var outputCount = 0
+            plan.component.forEach { index ->
+                if (!repairedMask[index]) return@forEach
+                val value = luminance(output[index])
+                outputMin = minOf(outputMin, value)
+                outputMax = maxOf(outputMax, value)
+                outputCount++
+            }
+            if (outputCount == 0) {
+                plan.decision
+            } else {
+                plan.decision.copy(
+                    outputLuminanceMin = outputMin,
+                    outputLuminanceMax = outputMax,
+                )
             }
         }
         return Result(
             pixels = output,
             repairedMask = repairedMask,
-            decisions = plans.map { it.decision },
+            decisions = decisions,
         )
     }
 
@@ -259,6 +344,8 @@ internal object MaskedBackgroundRepairer {
         val component: IntArray,
         val estimate: BackgroundEstimate?,
         val decision: ComponentDecision,
+        val spatialFallbackColor: Int? = null,
+        val foregroundColor: Int? = null,
     )
 
     private data class Components(
@@ -398,15 +485,15 @@ internal object MaskedBackgroundRepairer {
             if (histogram[index] > histogram[dominantBin]) dominantBin = index
         }
         val binColor = binCenterColor(dominantBin)
-        val firstPass = samples.filter { index ->
+        val firstPass = filterIndices(samples) { index ->
             colorDistanceSquared(sourceArgb[index], binColor) <= DOMINANT_COLOR_RADIUS_SQUARED
         }
         val representative = if (firstPass.isEmpty()) {
             binColor
         } else {
-            medianColor(sourceArgb, firstPass)
+            ArgbChannelMedian.fromIndexedColors(sourceArgb, firstPass)
         }
-        val inliers = samples.filter { index ->
+        val inliers = filterIndices(samples) { index ->
             colorDistanceSquared(sourceArgb[index], representative) <=
                 DOMINANT_COLOR_RADIUS_SQUARED
         }
@@ -427,10 +514,9 @@ internal object MaskedBackgroundRepairer {
     private fun estimateContrastingBackground(
         sourceArgb: IntArray,
         backgroundSamples: IntArray,
-        foregroundSamples: IntArray,
+        foregroundColor: Int,
     ): BackgroundEstimate? {
-        if (backgroundSamples.isEmpty() || foregroundSamples.isEmpty()) return null
-        val foreground = estimateDominantBackground(sourceArgb, foregroundSamples).color
+        if (backgroundSamples.isEmpty()) return null
         val histogram = IntArray(COLOR_BIN_COUNT)
         backgroundSamples.forEach { index ->
             histogram[colorBin(sourceArgb[index])]++
@@ -440,7 +526,7 @@ internal object MaskedBackgroundRepairer {
         var selectedSupport = -1
         histogram.forEachIndexed { bin, support ->
             if (support == 0) return@forEachIndexed
-            val contrast = colorDistanceSquared(binCenterColor(bin), foreground)
+            val contrast = colorDistanceSquared(binCenterColor(bin), foregroundColor)
             val score = support.toLong() * contrast
             if (
                 score > selectedScore ||
@@ -453,13 +539,13 @@ internal object MaskedBackgroundRepairer {
         }
         if (selectedBin < 0) return null
         val selectedCenter = binCenterColor(selectedBin)
-        val selectedCluster = backgroundSamples.filter { index ->
+        val selectedCluster = filterIndices(backgroundSamples) { index ->
             colorDistanceSquared(sourceArgb[index], selectedCenter) <=
                 DOMINANT_COLOR_RADIUS_SQUARED
         }
         if (selectedCluster.isEmpty()) return null
-        val representative = medianColor(sourceArgb, selectedCluster)
-        val inliers = backgroundSamples.filter { index ->
+        val representative = ArgbChannelMedian.fromIndexedColors(sourceArgb, selectedCluster)
+        val inliers = filterIndices(backgroundSamples) { index ->
             colorDistanceSquared(sourceArgb[index], representative) <=
                 DOMINANT_COLOR_RADIUS_SQUARED
         }
@@ -473,27 +559,256 @@ internal object MaskedBackgroundRepairer {
         )
     }
 
-    private fun medianColor(
-        sourceArgb: IntArray,
-        sampleIndices: List<Int>,
-    ): Int {
-        val alpha = IntArray(sampleIndices.size)
-        val red = IntArray(sampleIndices.size)
-        val green = IntArray(sampleIndices.size)
-        val blue = IntArray(sampleIndices.size)
-        sampleIndices.forEachIndexed { position, index ->
-            val color = sourceArgb[index]
-            alpha[position] = color ushr 24 and 0xff
-            red[position] = color ushr 16 and 0xff
-            green[position] = color ushr 8 and 0xff
-            blue[position] = color and 0xff
+    private data class SpatialSampleMap(
+        val left: IntArray,
+        val right: IntArray,
+        val top: IntArray,
+        val bottom: IntArray,
+    ) {
+        companion object {
+            fun build(
+                width: Int,
+                height: Int,
+                eraseMask: BooleanArray,
+                allowedSampleMask: BooleanArray,
+            ): SpatialSampleMap {
+                val left = IntArray(eraseMask.size) { NO_SAMPLE }
+                val right = IntArray(eraseMask.size) { NO_SAMPLE }
+                val top = IntArray(eraseMask.size) { NO_SAMPLE }
+                val bottom = IntArray(eraseMask.size) { NO_SAMPLE }
+                for (y in 0 until height) {
+                    var nearest = NO_SAMPLE
+                    for (x in 0 until width) {
+                        val index = y * width + x
+                        if (!eraseMask[index] && allowedSampleMask[index]) nearest = index
+                        left[index] = nearest
+                    }
+                    nearest = NO_SAMPLE
+                    for (x in width - 1 downTo 0) {
+                        val index = y * width + x
+                        if (!eraseMask[index] && allowedSampleMask[index]) nearest = index
+                        right[index] = nearest
+                    }
+                }
+                for (x in 0 until width) {
+                    var nearest = NO_SAMPLE
+                    for (y in 0 until height) {
+                        val index = y * width + x
+                        if (!eraseMask[index] && allowedSampleMask[index]) nearest = index
+                        top[index] = nearest
+                    }
+                    nearest = NO_SAMPLE
+                    for (y in height - 1 downTo 0) {
+                        val index = y * width + x
+                        if (!eraseMask[index] && allowedSampleMask[index]) nearest = index
+                        bottom[index] = nearest
+                    }
+                }
+                return SpatialSampleMap(left, right, top, bottom)
+            }
         }
-        alpha.sort()
-        red.sort()
-        green.sort()
-        blue.sort()
-        val middle = sampleIndices.size / 2
-        return argb(alpha[middle], red[middle], green[middle], blue[middle])
+    }
+
+    private data class AxisInterpolation(
+        val color: Int,
+        val endpointDifference: Int,
+        val totalDistance: Int,
+        val hasOpposingSamples: Boolean,
+    )
+
+    private fun interpolateSpatialPixel(
+        index: Int,
+        width: Int,
+        height: Int,
+        sourceArgb: IntArray,
+        eraseMask: BooleanArray,
+        allowedSampleMask: BooleanArray,
+        samples: SpatialSampleMap,
+        foregroundColor: Int?,
+        fallbackColor: Int,
+    ): Int {
+        val excludeForeground = foregroundColor != null &&
+            colorDistanceSquared(foregroundColor, fallbackColor) >=
+            MIN_FOREGROUND_BACKGROUND_CONTRAST_SQUARED
+        val left = resolveSpatialSample(
+            candidate = samples.left[index],
+            dx = -1,
+            dy = 0,
+            width = width,
+            height = height,
+            sourceArgb = sourceArgb,
+            eraseMask = eraseMask,
+            allowedSampleMask = allowedSampleMask,
+            foregroundColor = foregroundColor,
+            excludeForeground = excludeForeground,
+        )
+        val right = resolveSpatialSample(
+            candidate = samples.right[index],
+            dx = 1,
+            dy = 0,
+            width = width,
+            height = height,
+            sourceArgb = sourceArgb,
+            eraseMask = eraseMask,
+            allowedSampleMask = allowedSampleMask,
+            foregroundColor = foregroundColor,
+            excludeForeground = excludeForeground,
+        )
+        val top = resolveSpatialSample(
+            candidate = samples.top[index],
+            dx = 0,
+            dy = -1,
+            width = width,
+            height = height,
+            sourceArgb = sourceArgb,
+            eraseMask = eraseMask,
+            allowedSampleMask = allowedSampleMask,
+            foregroundColor = foregroundColor,
+            excludeForeground = excludeForeground,
+        )
+        val bottom = resolveSpatialSample(
+            candidate = samples.bottom[index],
+            dx = 0,
+            dy = 1,
+            width = width,
+            height = height,
+            sourceArgb = sourceArgb,
+            eraseMask = eraseMask,
+            allowedSampleMask = allowedSampleMask,
+            foregroundColor = foregroundColor,
+            excludeForeground = excludeForeground,
+        )
+        val horizontal = axisInterpolation(index, left, right, width, sourceArgb)
+        val vertical = axisInterpolation(index, top, bottom, width, sourceArgb)
+        return chooseSpatialInterpolation(horizontal, vertical, fallbackColor)
+    }
+
+    private fun resolveSpatialSample(
+        candidate: Int,
+        dx: Int,
+        dy: Int,
+        width: Int,
+        height: Int,
+        sourceArgb: IntArray,
+        eraseMask: BooleanArray,
+        allowedSampleMask: BooleanArray,
+        foregroundColor: Int?,
+        excludeForeground: Boolean,
+    ): Int {
+        if (candidate == NO_SAMPLE) return NO_SAMPLE
+        var x = candidate % width
+        var y = candidate / width
+        while (x in 0 until width && y in 0 until height) {
+            val index = y * width + x
+            if (!eraseMask[index] && allowedSampleMask[index]) {
+                val foregroundLike = excludeForeground && foregroundColor != null &&
+                    colorDistanceSquared(sourceArgb[index], foregroundColor) <=
+                    FOREGROUND_EXCLUSION_RADIUS_SQUARED
+                if (!foregroundLike) return index
+            }
+            x += dx
+            y += dy
+        }
+        return NO_SAMPLE
+    }
+
+    private fun axisInterpolation(
+        target: Int,
+        first: Int,
+        second: Int,
+        width: Int,
+        sourceArgb: IntArray,
+    ): AxisInterpolation? {
+        if (first == NO_SAMPLE && second == NO_SAMPLE) return null
+        val targetX = target % width
+        val targetY = target / width
+        fun distance(sample: Int): Int = if (sample == NO_SAMPLE) {
+            Int.MAX_VALUE
+        } else {
+            abs(sample % width - targetX) + abs(sample / width - targetY)
+        }
+        if (first == NO_SAMPLE || second == NO_SAMPLE) {
+            val sample = if (first != NO_SAMPLE) first else second
+            return AxisInterpolation(
+                color = sourceArgb[sample],
+                endpointDifference = Int.MAX_VALUE,
+                totalDistance = distance(sample),
+                hasOpposingSamples = false,
+            )
+        }
+        val firstDistance = distance(first).coerceAtLeast(1)
+        val secondDistance = distance(second).coerceAtLeast(1)
+        return AxisInterpolation(
+            color = interpolateColors(
+                first = sourceArgb[first],
+                second = sourceArgb[second],
+                firstDistance = firstDistance,
+                secondDistance = secondDistance,
+            ),
+            endpointDifference = colorDistanceSquared(sourceArgb[first], sourceArgb[second]),
+            totalDistance = firstDistance + secondDistance,
+            hasOpposingSamples = true,
+        )
+    }
+
+    private fun chooseSpatialInterpolation(
+        horizontal: AxisInterpolation?,
+        vertical: AxisInterpolation?,
+        fallbackColor: Int,
+    ): Int {
+        if (horizontal == null) return vertical?.color ?: fallbackColor
+        if (vertical == null) return horizontal.color
+        if (horizontal.hasOpposingSamples != vertical.hasOpposingSamples) {
+            return if (horizontal.hasOpposingSamples) horizontal.color else vertical.color
+        }
+        if (!horizontal.hasOpposingSamples) {
+            return if (horizontal.totalDistance <= vertical.totalDistance) {
+                horizontal.color
+            } else {
+                vertical.color
+            }
+        }
+        return when {
+            horizontal.endpointDifference < vertical.endpointDifference -> horizontal.color
+            vertical.endpointDifference < horizontal.endpointDifference -> vertical.color
+            horizontal.totalDistance <= vertical.totalDistance -> horizontal.color
+            else -> vertical.color
+        }
+    }
+
+    private fun interpolateColors(
+        first: Int,
+        second: Int,
+        firstDistance: Int,
+        secondDistance: Int,
+    ): Int {
+        val total = firstDistance + secondDistance
+        fun channel(shift: Int): Int {
+            val firstValue = first ushr shift and 0xff
+            val secondValue = second ushr shift and 0xff
+            return (
+                (firstValue.toLong() * secondDistance + secondValue.toLong() * firstDistance) /
+                    total
+                ).toInt().coerceIn(0, 255)
+        }
+        return argb(
+            alpha = channel(24),
+            red = channel(16),
+            green = channel(8),
+            blue = channel(0),
+        )
+    }
+
+    private inline fun filterIndices(
+        source: IntArray,
+        predicate: (Int) -> Boolean,
+    ): IntArray {
+        val output = IntArray(source.size)
+        var outputSize = 0
+        source.forEach { value ->
+            if (predicate(value)) output[outputSize++] = value
+        }
+        return output.copyOf(outputSize)
     }
 
     private fun interpolatePixel(
@@ -598,6 +913,13 @@ internal object MaskedBackgroundRepairer {
         return red * red + green * green + blue * blue
     }
 
+    private fun luminance(color: Int): Int {
+        val red = color ushr 16 and 0xff
+        val green = color ushr 8 and 0xff
+        val blue = color and 0xff
+        return ((red * 299 + green * 587 + blue * 114) / 1000).coerceIn(0, 255)
+    }
+
     private fun argb(alpha: Int, red: Int, green: Int, blue: Int): Int =
         (alpha shl 24) or (red shl 16) or (green shl 8) or blue
 
@@ -628,6 +950,7 @@ internal object MaskedBackgroundRepairer {
     private const val BOUNDARY_INNER_RADIUS = 2
     private const val BOUNDARY_OUTER_RADIUS = 7
     private const val NO_COMPONENT = -1
+    private const val NO_SAMPLE = -1
     private const val MAX_BOUNDARY_SAMPLES = 8_192
     private const val MIN_BOUNDARY_SAMPLES = 16
     private const val MAX_REQUIRED_BOUNDARY_SAMPLES = 96
@@ -642,6 +965,13 @@ internal object MaskedBackgroundRepairer {
     private const val MIN_DOMINANT_INLIER_FRACTION = 0.62f
     private const val MAX_DOMINANT_COLOR_SPREAD = 26f
     private const val MAX_FLAT_BACKGROUND_SPREAD = 9f
+
+    private const val FOREGROUND_EXCLUSION_RADIUS = 40
+    private const val FOREGROUND_EXCLUSION_RADIUS_SQUARED =
+        FOREGROUND_EXCLUSION_RADIUS * FOREGROUND_EXCLUSION_RADIUS
+    private const val MIN_FOREGROUND_BACKGROUND_CONTRAST = 48
+    private const val MIN_FOREGROUND_BACKGROUND_CONTRAST_SQUARED =
+        MIN_FOREGROUND_BACKGROUND_CONTRAST * MIN_FOREGROUND_BACKGROUND_CONTRAST
 
     private const val MAX_DIRECTIONAL_SEARCH = 28
     private const val DIRECTIONAL_COLOR_RADIUS = 64

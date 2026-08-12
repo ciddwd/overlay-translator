@@ -15,7 +15,7 @@ class TranslationLogElapsedCoverageTest {
         )
 
         val cases = listOf(
-            Case("src/main/java/com/gameocr/app/service/CaptureService.kt", expectedPairCalls = 6),
+            Case("src/main/java/com/gameocr/app/service/CaptureService.kt", expectedPairCalls = 5),
             Case("src/main/java/com/gameocr/app/translate/ProcessTextTranslateActivity.kt", expectedPairCalls = 1),
         )
 

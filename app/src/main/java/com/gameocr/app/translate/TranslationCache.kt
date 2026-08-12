@@ -30,6 +30,10 @@ class TranslationCache(capacity: Int = 256) {
         synchronized(cache) { cache[key] = value }
     }
 
+    fun remove(key: String) {
+        synchronized(cache) { cache.remove(key) }
+    }
+
     fun clear() {
         synchronized(cache) { cache.clear() }
     }

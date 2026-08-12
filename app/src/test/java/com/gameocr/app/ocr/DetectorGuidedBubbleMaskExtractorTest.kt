@@ -101,6 +101,7 @@ class DetectorGuidedBubbleMaskExtractorTest {
                 case.name,
                 decision.accepted,
                 decision.diagnostic.reason,
+                decision.shapeMaskQuality,
                 decision.diagnostic.attempts,
                 decision.diagnostic.regionPixels,
                 result.instanceMasks.single().pixels.count { it },
@@ -112,11 +113,11 @@ class DetectorGuidedBubbleMaskExtractorTest {
 
         assertEquals(
             listOf(
-                "closed ellipse|true|accepted|1|2325|2325|2325|1|0",
-                "tight detector retry|true|accepted_after_roi_expand|2|2325|2325|2325|1|0",
-                "open ellipse fallback|true|accepted_ellipse_fallback|2|2600|2600|2600|1|1",
-                "dark reject|false|background_too_dark|1|0|0|0|1|1",
-                "no member|false|detector_no_ocr_members|1|0|0|0|0|0",
+                "closed ellipse|true|accepted|TRUSTED|1|2325|2325|2325|1|0",
+                "tight detector retry|true|accepted_after_roi_expand|TRUSTED|2|2325|2325|2325|1|0",
+                "open ellipse fallback|true|accepted_ellipse_fallback|APPROXIMATE|2|2600|2600|2600|1|1",
+                "dark reject|false|background_too_dark|REJECTED|1|0|0|0|1|1",
+                "no member|false|detector_no_ocr_members|REJECTED|1|0|0|0|0|0",
             ),
             actual,
         )
