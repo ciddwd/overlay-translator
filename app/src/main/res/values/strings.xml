@@ -233,7 +233,7 @@
     <string name="settings_about_version_format">Version %1$s</string>
     <string name="settings_about_github_label">GitHub repository</string>
     <string name="settings_about_open_github">Open in browser</string>
-    <string name="settings_about_tagline">Open-source on-screen translation / OCR overlay</string>
+    <string name="settings_about_tagline">Open-source real-time on-screen translation</string>
     <string name="settings_about_qq_group_label">QQ community</string>
     <string name="settings_about_qq_group_name_format">Screen Translator community · Group %1$s</string>
     <string name="settings_about_join_qq_group">Join QQ group</string>

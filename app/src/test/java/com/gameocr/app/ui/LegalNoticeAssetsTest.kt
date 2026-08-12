@@ -355,6 +355,47 @@ class LegalNoticeAssetsTest {
         )
     }
 
+    @Test
+    fun aboutPage_taglineDescribesRealTimeTranslationWithoutOcrOverlayWording() {
+        data class Case(
+            val locale: String,
+            val resourcePath: String,
+            val expected: String,
+            val forbidden: List<String>,
+        )
+
+        listOf(
+            Case(
+                locale = "English",
+                resourcePath = "src/main/res/values/strings.xml",
+                expected = "Open-source real-time on-screen translation",
+                forbidden = listOf("OCR overlay", "on-screen translation /"),
+            ),
+            Case(
+                locale = "Simplified Chinese",
+                resourcePath = "src/main/res/values-zh-rCN/strings.xml",
+                expected = "开源屏幕实时翻译工具",
+                forbidden = listOf("OCR 叠加", "屏幕翻译 /"),
+            ),
+        ).forEach { case ->
+            val resources = moduleFile(case.resourcePath).readText()
+            val tagline = requireNotNull(
+                Regex("""<string name="settings_about_tagline">([^<]*)</string>""")
+                    .find(resources)
+                    ?.groupValues
+                    ?.get(1)
+            ) { "${case.locale} tagline resource is missing" }
+            assertEquals(
+                "${case.locale} tagline must describe real-time translation",
+                case.expected,
+                tagline,
+            )
+            case.forbidden.forEach { wording ->
+                assertFalse("${case.locale} tagline must not contain $wording", tagline.contains(wording))
+            }
+        }
+    }
+
     private fun moduleFile(path: String): File = listOf(File(path), File("app", path))
         .firstOrNull(File::isFile)
         ?: error("Module file not found: $path")
