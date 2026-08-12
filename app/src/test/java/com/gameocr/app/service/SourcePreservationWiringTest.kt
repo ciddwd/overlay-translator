@@ -9,7 +9,7 @@ class SourcePreservationWiringTest {
         listOf(
             File("src/main/java/com/gameocr/app/service/CaptureService.kt"),
             File("app/src/main/java/com/gameocr/app/service/CaptureService.kt"),
-        ).first(File::isFile).readText()
+        ).first(File::isFile).readText().replace("\r\n", "\n")
     }
 
     @Test

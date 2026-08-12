@@ -37,5 +37,8 @@ class OcrSettingsSnapshotWiringTest {
     private fun source(path: String): String = listOf(
         File("../$path"),
         File(path),
-    ).firstOrNull(File::isFile)?.readText() ?: error("Source not found: $path")
+    ).firstOrNull(File::isFile)?.readText()?.normalizeLineEndings()
+        ?: error("Source not found: $path")
+
+    private fun String.normalizeLineEndings(): String = replace("\r\n", "\n")
 }

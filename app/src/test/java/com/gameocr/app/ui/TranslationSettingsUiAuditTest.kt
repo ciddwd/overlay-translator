@@ -8,7 +8,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TranslationSettingsUiAuditTest {
-    private val source by lazy { sourceFile("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText() }
+    private val source by lazy {
+        sourceFile("src/main/java/com/gameocr/app/ui/SettingsScreen.kt")
+            .readText()
+            .replace("\r\n", "\n")
+    }
 
     @Test
     fun adjacentBoxMerge_isAvailableInEveryRenderMode_tableDriven() {
