@@ -53,6 +53,10 @@ internal object RemoteThinkingPolicy {
                 style = OpenAiThinkingWireStyle.ENABLE_THINKING,
                 enableThinking = enabled,
             )
+            host == "generativelanguage.googleapis.com" -> OpenAiThinkingControl(
+                style = OpenAiThinkingWireStyle.REASONING_EFFORT,
+                reasoningEffort = if (enabled) "high" else null,
+            )
             else -> OpenAiThinkingControl(
                 style = OpenAiThinkingWireStyle.REASONING_EFFORT,
                 reasoningEffort = if (enabled) "high" else "none",

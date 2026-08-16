@@ -3,6 +3,7 @@ package com.gameocr.app.translate
 import com.gameocr.app.data.OpenAiRequestOptions
 import com.gameocr.app.data.RuntimeTranslationPromptContext
 import com.gameocr.app.data.TranslationContextMode
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
@@ -256,6 +257,20 @@ class OpenAiRequestPolicyTest {
                 OpenAiThinkingWireStyle.ENABLE_THINKING,
                 enableThinking = false,
             ),
+            Case(
+                "Gemini omits reasoning_effort when thinking is disabled",
+                "https://generativelanguage.googleapis.com/v1beta/openai/",
+                false,
+                OpenAiThinkingWireStyle.REASONING_EFFORT,
+                reasoningEffort = null,
+            ),
+            Case(
+                "Gemini enables high reasoning",
+                "https://generativelanguage.googleapis.com/v1beta/openai/",
+                true,
+                OpenAiThinkingWireStyle.REASONING_EFFORT,
+                reasoningEffort = "high",
+            ),
         ).forEach { case ->
             val actual = RemoteThinkingPolicy.openAi(case.baseUrl, case.enabled)
             assertEquals(case.name, case.style, actual.style)
@@ -263,6 +278,27 @@ class OpenAiRequestPolicyTest {
             assertEquals(case.name, case.thinkingType, actual.thinking?.type)
             assertEquals(case.name, case.enableThinking, actual.enableThinking)
         }
+    }
+
+    @Test
+    fun `null reasoning effort is omitted from ChatRequest JSON`() {
+        val json = Json {
+            ignoreUnknownKeys = true
+            encodeDefaults = true
+            explicitNulls = false
+            coerceInputValues = true
+        }
+        val payload = json.encodeToString(
+            ChatRequest(
+                model = "gemini-3-flash-lite",
+                messages = listOf(ChatMessage(role = "user", content = "ping")),
+                reasoningEffort = null,
+            ),
+        )
+
+        assertFalse(
+            Json.parseToJsonElement(payload).jsonObject.containsKey("reasoning_effort"),
+        )
     }
 
     @Test
