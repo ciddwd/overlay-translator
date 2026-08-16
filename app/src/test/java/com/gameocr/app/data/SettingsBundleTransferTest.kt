@@ -48,6 +48,11 @@ class SettingsBundleTransferTest {
         data class PortableCase(val name: String, val expected: Any?, val actual: Any?)
         val portableCases = listOf(
             PortableCase("prompt", original.promptTemplate, portable.promptTemplate),
+            PortableCase(
+                "remote thinking request options",
+                original.openAiRequestOptions,
+                portable.openAiRequestOptions,
+            ),
             PortableCase("loop interval", original.captureLoopIntervalMs, portable.captureLoopIntervalMs),
             PortableCase("loop trigger mode", original.loopTriggerMode, portable.loopTriggerMode),
             PortableCase("text stability wait", original.loopTextStableDurationMs, portable.loopTextStableDurationMs),
@@ -308,6 +313,14 @@ class SettingsBundleTransferTest {
             sourceLang = "ja",
             targetLang = "zh-TW",
             promptTemplate = "portable prompt",
+            openAiRequestOptions = OpenAiRequestOptions(
+                thinkingModeEnabled = true,
+                reasoningEffort = RemoteReasoningEffort.CUSTOM,
+                thinkingParameterFormat = RemoteThinkingParameterFormat.CUSTOM_JSON,
+                customReasoningEffort = "fast_plus",
+                customThinkingEnabledJson = """{"thinking_level":"{effort}"}""",
+                customThinkingDisabledJson = """{"thinking_level":"off"}""",
+            ),
             captureLoopIntervalMs = 3456L,
             loopTriggerMode = LoopTriggerMode.FIXED_INTERVAL,
             loopTextStableDurationMs = 1400L,

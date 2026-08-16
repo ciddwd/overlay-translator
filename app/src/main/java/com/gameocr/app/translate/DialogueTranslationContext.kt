@@ -212,11 +212,10 @@ internal object DialogueTranslationContextPolicy {
         settings: Settings,
         currentSources: List<String>,
         historySession: DialogueHistorySession,
+        availableHistory: DialogueContextFrame? = historySession.historyFor(contextKey(settings)),
     ): Settings {
         val sources = currentSources.map(String::trim).filter(String::isNotBlank)
         val mode = effectiveMode(settings)
-        val key = contextKey(settings)
-        val availableHistory = historySession.historyFor(key)
         val usesGenericRuntimeText =
             TranslationPromptContextPolicy.usesGenericRuntimeText(settings.translatorEngine)
         val clearedPromptContext = settings.runtimeTranslationPromptContext.copy(

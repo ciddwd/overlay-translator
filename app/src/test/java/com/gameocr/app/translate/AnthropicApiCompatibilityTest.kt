@@ -1,5 +1,7 @@
 package com.gameocr.app.translate
 
+import com.gameocr.app.data.OpenAiRequestOptions
+import com.gameocr.app.data.RemoteReasoningEffort
 import com.gameocr.app.data.Settings
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.boolean
@@ -122,18 +124,30 @@ class AnthropicApiCompatibilityTest {
     fun messageRequest_tableDrivenIncludesExplicitThinkingControl() {
         data class Case(
             val name: String,
-            val thinking: AnthropicThinkingConfig,
+            val options: OpenAiRequestOptions,
             val expectedType: String,
             val expectedDisplay: String?,
+            val expectedEffort: String?,
         )
 
         listOf(
-            Case("off", AnthropicThinkingConfig(type = "disabled"), "disabled", null),
+            Case("off", OpenAiRequestOptions(), "disabled", null, null),
             Case(
-                "on",
-                AnthropicThinkingConfig(type = "adaptive", display = "omitted"),
+                "on with provider default effort",
+                OpenAiRequestOptions(thinkingModeEnabled = true),
                 "adaptive",
                 "omitted",
+                null,
+            ),
+            Case(
+                "on with explicit low effort",
+                OpenAiRequestOptions(
+                    thinkingModeEnabled = true,
+                    reasoningEffort = RemoteReasoningEffort.LOW,
+                ),
+                "adaptive",
+                "omitted",
+                "low",
             ),
         ).forEach { case ->
             val request = buildAnthropicMessageRequest(
@@ -148,15 +162,18 @@ class AnthropicApiCompatibilityTest {
                 temperature = 0.3,
                 stream = false,
                 json = json,
-                thinking = case.thinking,
+                thinkingControl = RemoteThinkingPolicy.anthropic(case.options),
             )
-            val thinking = json.parseToJsonElement(requireNotNull(request.body).utf8())
-                .jsonObject
-                .getValue("thinking")
-                .jsonObject
+            val body = json.parseToJsonElement(requireNotNull(request.body).utf8()).jsonObject
+            val thinking = body.getValue("thinking").jsonObject
 
             assertEquals(case.name, case.expectedType, thinking.getValue("type").jsonPrimitive.content)
             assertEquals(case.name, case.expectedDisplay, thinking["display"]?.jsonPrimitive?.content)
+            assertEquals(
+                case.name,
+                case.expectedEffort,
+                body["output_config"]?.jsonObject?.get("effort")?.jsonPrimitive?.content,
+            )
         }
     }
 

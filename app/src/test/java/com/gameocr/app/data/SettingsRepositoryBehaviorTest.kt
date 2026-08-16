@@ -13,6 +13,39 @@ import org.junit.Test
 class SettingsRepositoryBehaviorTest {
 
     @Test
+    fun loopTriggerMode_freshInstallDefaultsToFixedAndSavedChoiceIsPreserved_tableDriven() =
+        runBlocking {
+            data class Case(
+                val name: String,
+                val savedMode: LoopTriggerMode?,
+                val expected: LoopTriggerMode,
+            )
+
+            listOf(
+                Case("fresh install", null, LoopTriggerMode.FIXED_INTERVAL),
+                Case(
+                    "saved smart trigger",
+                    LoopTriggerMode.WAIT_FOR_TEXT_COMPLETE,
+                    LoopTriggerMode.WAIT_FOR_TEXT_COMPLETE,
+                ),
+                Case(
+                    "saved fixed trigger",
+                    LoopTriggerMode.FIXED_INTERVAL,
+                    LoopTriggerMode.FIXED_INTERVAL,
+                ),
+            ).forEach { case ->
+                val repository = fileBackedRepository(
+                    Files.createTempDirectory("settings-loop-trigger-default-test").toFile()
+                )
+                case.savedMode?.let { mode ->
+                    repository.update { settings -> settings.copy(loopTriggerMode = mode) }
+                }
+
+                assertEquals(case.name, case.expected, repository.get().loopTriggerMode)
+            }
+        }
+
+    @Test
     fun llmOutboundEncoding_tableDriven_roundTripsNormalizedState() = runBlocking {
         data class Case(
             val name: String,
@@ -250,6 +283,14 @@ class SettingsRepositoryBehaviorTest {
             sourceLang = "ja",
             targetLang = "zh-TW",
             promptTemplate = "roundtrip prompt",
+            openAiRequestOptions = OpenAiRequestOptions(
+                thinkingModeEnabled = true,
+                reasoningEffort = RemoteReasoningEffort.CUSTOM,
+                thinkingParameterFormat = RemoteThinkingParameterFormat.CUSTOM_JSON,
+                customReasoningEffort = "fast_plus",
+                customThinkingEnabledJson = """{"thinking_level":"{effort}"}""",
+                customThinkingDisabledJson = """{"thinking_level":"off"}""",
+            ),
             ocrEngine = OcrEngineKind.PADDLE_ONNX,
             captureLoopIntervalMs = 4321L,
             loopTriggerMode = LoopTriggerMode.FIXED_INTERVAL,

@@ -15,7 +15,17 @@ class TranslationPresetTest {
             Case("disabled", OpenAiRequestOptions()),
             Case("Base64", OpenAiRequestOptions(encodeUserTextBase64 = true)),
             Case("Unicode", OpenAiRequestOptions(encodeUserTextUnicode = true)),
-            Case("thinking enabled", OpenAiRequestOptions(thinkingModeEnabled = true)),
+            Case(
+                "custom thinking configuration",
+                OpenAiRequestOptions(
+                    thinkingModeEnabled = true,
+                    reasoningEffort = RemoteReasoningEffort.CUSTOM,
+                    thinkingParameterFormat = RemoteThinkingParameterFormat.CUSTOM_JSON,
+                    customReasoningEffort = "fast_plus",
+                    customThinkingEnabledJson = """{"thinking_level":"{effort}"}""",
+                    customThinkingDisabledJson = """{"thinking_level":"off"}""",
+                ),
+            ),
         ).forEachIndexed { index, case ->
             val source = Settings(openAiRequestOptions = case.options)
             val preset = TranslationPresetCatalog.fromSettings(

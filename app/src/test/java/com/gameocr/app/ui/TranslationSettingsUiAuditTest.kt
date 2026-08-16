@@ -128,6 +128,115 @@ class TranslationSettingsUiAuditTest {
     }
 
     @Test
+    fun reasoningControls_keepCommonChoicesVisibleAndCompatibilityFieldsAdvanced_tableDriven() {
+        val assistanceStart = source.indexOf("private fun TranslationAssistanceSettings(")
+        val assistanceEnd = source.indexOf("private fun ", startIndex = assistanceStart + 1)
+        val assistance = source.substring(assistanceStart, assistanceEnd)
+        val promptStart = source.indexOf("private fun OpenAiPromptSettings(")
+        val promptEnd = source.indexOf("private fun ", startIndex = promptStart + 1)
+        val prompt = source.substring(promptStart, promptEnd)
+        val advancedGate = prompt.indexOf("if (!advancedExpanded) return")
+
+        data class SourceCase(val name: String, val section: String, val marker: String)
+        listOf(
+            SourceCase(
+                "effort is shown only while thinking is enabled",
+                assistance,
+                "if (requestOptions.thinkingModeEnabled)",
+            ),
+            SourceCase("effort uses a stepped slider", assistance, "steps = reasoningEffortSliderSteps"),
+            SourceCase(
+                "custom effort input is available",
+                assistance,
+                "requestOptions.reasoningEffort == RemoteReasoningEffort.CUSTOM",
+            ),
+            SourceCase(
+                "custom effort guidance is an input placeholder",
+                assistance,
+                "placeholder = {\n                                Text(stringResource(R.string.settings_reasoning_effort_custom_hint))",
+            ),
+            SourceCase(
+                "parameter format is in prompt advanced settings",
+                prompt,
+                "R.string.settings_thinking_parameter_format",
+            ),
+            SourceCase(
+                "enabled custom JSON is available",
+                prompt,
+                "requestOptions.customThinkingEnabledJson",
+            ),
+            SourceCase(
+                "disabled custom JSON is available",
+                prompt,
+                "requestOptions.customThinkingDisabledJson",
+            ),
+        ).forEach { case -> assertTrue(case.name, case.section.contains(case.marker)) }
+
+        assertFalse(
+            "custom effort guidance must not occupy a supporting-text row",
+            assistance.contains(
+                "supportingText = {\n                                Text(stringResource(R.string.settings_reasoning_effort_custom_hint))"
+            ),
+        )
+
+        listOf(
+            "R.string.settings_thinking_parameter_format",
+            "requestOptions.customThinkingEnabledJson",
+            "requestOptions.customThinkingDisabledJson",
+        ).forEach { marker ->
+            assertTrue("$marker must follow the advanced gate", prompt.indexOf(marker) > advancedGate)
+        }
+
+        data class ResourceCase(val locale: String, val path: String)
+        listOf(
+            ResourceCase("English", "src/main/res/values/strings.xml"),
+            ResourceCase("Simplified Chinese", "src/main/res/values-zh-rCN/strings.xml"),
+        ).forEach { case ->
+            val xml = sourceFile(case.path).readText()
+            listOf(
+                "settings_reasoning_effort",
+                "settings_thinking_parameter_format",
+                "settings_thinking_custom_enabled_json",
+                "settings_thinking_custom_disabled_json",
+            ).forEach { resource ->
+                assertTrue("${case.locale}: $resource", xml.contains(resource))
+            }
+        }
+    }
+
+    @Test
+    fun reasoningEffortSlider_roundTripsEveryStepAndClampsOutOfRange_tableDriven() {
+        com.gameocr.app.data.RemoteReasoningEffort.entries.forEachIndexed { index, effort ->
+            assertEquals("step for $effort", index.toFloat(), reasoningEffortStep(effort))
+            assertEquals("round trip for $effort", effort, reasoningEffortAtStep(index.toFloat()))
+        }
+
+        data class ClampCase(
+            val name: String,
+            val step: Float,
+            val expected: com.gameocr.app.data.RemoteReasoningEffort,
+        )
+        listOf(
+            ClampCase("below minimum", -10f, com.gameocr.app.data.RemoteReasoningEffort.AUTO),
+            ClampCase(
+                "above maximum",
+                100f,
+                com.gameocr.app.data.RemoteReasoningEffort.CUSTOM,
+            ),
+            ClampCase("rounds down", 1.49f, com.gameocr.app.data.RemoteReasoningEffort.LOW),
+            ClampCase("rounds up", 1.51f, com.gameocr.app.data.RemoteReasoningEffort.MEDIUM),
+        ).forEach { case ->
+            assertEquals(case.name, case.expected, reasoningEffortAtStep(case.step))
+        }
+
+        assertEquals(
+            "one tick per enum value",
+            com.gameocr.app.data.RemoteReasoningEffort.entries.size - 2,
+            reasoningEffortSliderSteps,
+        )
+    }
+
+    @Test
     fun promptEditors_areInsideCollapsedAdvancedSection() {
         val advancedGate = source.indexOf("if (!advancedExpanded) return")
         listOf(

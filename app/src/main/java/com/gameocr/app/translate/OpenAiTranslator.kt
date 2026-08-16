@@ -614,6 +614,11 @@ class OpenAiTranslator @Inject constructor(
             .replace("{target_lang}", targetDisplay)
             .withDifficultyNotesContract(targetDisplay)
             .withLexicalDetailsContract(sourceDisplay) + settings.runtimeTranslationContext
+        val thinking = RemoteThinkingPolicy.openAi(
+            baseUrl = settings.baseUrl,
+            model = settings.model,
+            options = settings.openAiRequestOptions,
+        )
 
         val reqBody = ChatRequest(
             model = settings.model,
@@ -625,20 +630,12 @@ class OpenAiTranslator @Inject constructor(
             stream = false,
             maxTokens = DICTIONARY_MAX_TOKENS,
             responseFormat = dictionaryJsonResponseFormatOrNull(settings.baseUrl),
-            reasoningEffort = RemoteThinkingPolicy.openAi(
-                settings.baseUrl,
-                settings.openAiRequestOptions.thinkingModeEnabled,
-            ).reasoningEffort,
-            thinking = RemoteThinkingPolicy.openAi(
-                settings.baseUrl,
-                settings.openAiRequestOptions.thinkingModeEnabled,
-            ).thinking,
-            enableThinking = RemoteThinkingPolicy.openAi(
-                settings.baseUrl,
-                settings.openAiRequestOptions.thinkingModeEnabled,
-            ).enableThinking,
         )
-        val payload = json.encodeToString(reqBody)
+        val payload = RemoteThinkingPolicy.mergeIntoPayload(
+            payload = json.encodeToString(reqBody),
+            control = thinking,
+            serializer = json,
+        )
         val request = Request.Builder()
             .url(ensureSlash(settings.baseUrl) + "chat/completions")
             .header("Authorization", "Bearer ${settings.apiKey}")
@@ -710,8 +707,9 @@ class OpenAiTranslator @Inject constructor(
         responseFormat: ChatResponseFormat? = null,
     ): Request {
         val thinking = RemoteThinkingPolicy.openAi(
-            settings.baseUrl,
-            resolved.thinkingModeEnabled,
+            baseUrl = settings.baseUrl,
+            model = settings.model,
+            options = settings.openAiRequestOptions,
         )
         val body = ChatRequest(
             model = settings.model,
@@ -724,11 +722,12 @@ class OpenAiTranslator @Inject constructor(
             stream = stream,
             maxTokens = resolved.maxTokens,
             responseFormat = responseFormat,
-            reasoningEffort = thinking.reasoningEffort,
-            thinking = thinking.thinking,
-            enableThinking = thinking.enableThinking,
         )
-        val payload = json.encodeToString(body)
+        val payload = RemoteThinkingPolicy.mergeIntoPayload(
+            payload = json.encodeToString(body),
+            control = thinking,
+            serializer = json,
+        )
         val url = ensureSlash(settings.baseUrl) + "chat/completions"
         return Request.Builder()
             .url(url)

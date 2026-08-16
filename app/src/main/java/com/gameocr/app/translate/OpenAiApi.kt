@@ -13,14 +13,6 @@ internal data class ChatRequest(
     val stream: Boolean = false,
     @SerialName("max_tokens") val maxTokens: Int? = null,
     @SerialName("response_format") val responseFormat: ChatResponseFormat? = null,
-    @SerialName("reasoning_effort") val reasoningEffort: String? = null,
-    val thinking: OpenAiThinkingConfig? = null,
-    @SerialName("enable_thinking") val enableThinking: Boolean? = null,
-)
-
-@Serializable
-internal data class OpenAiThinkingConfig(
-    val type: String,
 )
 
 @Serializable

@@ -37,7 +37,7 @@ data class Settings(
     val openAiRequestOptions: OpenAiRequestOptions = OpenAiRequestOptions(),
     val ocrEngine: OcrEngineKind = OcrEngineKind.ML_KIT_AUTO,
     val captureLoopIntervalMs: Long = 2000L,
-    val loopTriggerMode: LoopTriggerMode = LoopTriggerMode.WAIT_FOR_TEXT_COMPLETE,
+    val loopTriggerMode: LoopTriggerMode = LoopTriggerMode.FIXED_INTERVAL,
     val loopTextStableDurationMs: Long = DEFAULT_LOOP_TEXT_STABLE_DURATION_MS,
     val loopSkipSimilarFrames: Boolean = true,
     val loopFrameSimilarityThreshold: Float = 0.95f,
@@ -428,6 +428,28 @@ data class OverlayFontEntry(
     val displayName: String
 )
 
+@Serializable
+enum class RemoteReasoningEffort(val wireValue: String?) {
+    AUTO(null),
+    LOW("low"),
+    MEDIUM("medium"),
+    HIGH("high"),
+    XHIGH("xhigh"),
+    MAX("max"),
+    CUSTOM(null),
+}
+
+@Serializable
+enum class RemoteThinkingParameterFormat {
+    AUTO,
+    OPENAI_CHAT_COMPLETIONS,
+    OPENAI_RESPONSES,
+    DEEPSEEK,
+    ANTHROPIC,
+    DASHSCOPE,
+    CUSTOM_JSON,
+}
+
 /**
  * Remote LLM request options shared by OpenAI-compatible and Anthropic-compatible engines.
  *
@@ -444,6 +466,17 @@ data class OpenAiRequestOptions(
     val systemPromptSuffix: String = DEFAULT_SYSTEM_PROMPT_SUFFIX,
     /** Explicitly controls model reasoning for supported remote LLM protocols. */
     val thinkingModeEnabled: Boolean = false,
+    /** Reasoning depth is independent from the thinking on/off switch. */
+    val reasoningEffort: RemoteReasoningEffort = RemoteReasoningEffort.AUTO,
+    /** Selects only the thinking-field shape; it never changes the configured API endpoint. */
+    val thinkingParameterFormat: RemoteThinkingParameterFormat =
+        RemoteThinkingParameterFormat.AUTO,
+    /** Provider-specific value used when [reasoningEffort] is [RemoteReasoningEffort.CUSTOM]. */
+    val customReasoningEffort: String = "",
+    /** Root JSON fields merged only when custom thinking format is selected and thinking is on. */
+    val customThinkingEnabledJson: String = "{}",
+    /** Root JSON fields merged only when custom thinking format is selected and thinking is off. */
+    val customThinkingDisabledJson: String = "{}",
     val temperature: Double = 0.3,
     val topP: Double? = null,
     val maxTokens: Int? = null,
@@ -457,6 +490,9 @@ data class OpenAiRequestOptions(
     fun normalized(): OpenAiRequestOptions = copy(
         // The two wire encodings are alternatives. Base64 wins for malformed imported presets.
         encodeUserTextUnicode = encodeUserTextUnicode && !encodeUserTextBase64,
+        customReasoningEffort = customReasoningEffort.trim().take(64),
+        customThinkingEnabledJson = customThinkingEnabledJson.trim().ifBlank { "{}" },
+        customThinkingDisabledJson = customThinkingDisabledJson.trim().ifBlank { "{}" },
         temperature = temperature.takeIf(Double::isFinite)?.coerceIn(0.0, 2.0) ?: 0.3,
         topP = topP?.takeIf(Double::isFinite)?.coerceIn(0.0, 1.0),
         maxTokens = maxTokens?.takeIf { it > 0 }?.coerceAtMost(16_384),

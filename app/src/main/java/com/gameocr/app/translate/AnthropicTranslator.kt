@@ -173,7 +173,7 @@ class AnthropicTranslator @Inject constructor(
             stream = stream,
             json = json,
             topP = resolvedRequest.topP,
-            thinking = RemoteThinkingPolicy.anthropic(resolvedRequest.thinkingModeEnabled),
+            thinkingControl = RemoteThinkingPolicy.anthropic(settings.openAiRequestOptions),
         )
         val requestId = UUID.randomUUID().toString().take(8)
         val startedAt = System.currentTimeMillis()
@@ -345,7 +345,7 @@ class AnthropicTranslator @Inject constructor(
             stream = false,
             json = json,
             topP = resolvedRequest.topP,
-            thinking = RemoteThinkingPolicy.anthropic(resolvedRequest.thinkingModeEnabled),
+            thinkingControl = RemoteThinkingPolicy.anthropic(settings.openAiRequestOptions),
         )
         val requestId = UUID.randomUUID().toString().take(8)
         TranslationRequestAudit.log(
@@ -390,7 +390,7 @@ class AnthropicTranslator @Inject constructor(
             stream = true,
             json = json,
             topP = resolvedRequest.topP,
-            thinking = RemoteThinkingPolicy.anthropic(resolvedRequest.thinkingModeEnabled),
+            thinkingControl = RemoteThinkingPolicy.anthropic(settings.openAiRequestOptions),
         )
         val requestId = UUID.randomUUID().toString().take(8)
         TranslationRequestAudit.log(
@@ -481,7 +481,9 @@ class AnthropicTranslator @Inject constructor(
             temperature = 0.0,
             stream = false,
             json = json,
-            thinking = RemoteThinkingPolicy.anthropic(false),
+            thinkingControl = RemoteThinkingPolicy.anthropic(
+                settings.openAiRequestOptions.copy(thinkingModeEnabled = false),
+            ),
         )
         return runCatching {
             val startedAt = System.currentTimeMillis()
@@ -531,9 +533,7 @@ class AnthropicTranslator @Inject constructor(
             temperature = 0.0,
             stream = false,
             json = json,
-            thinking = RemoteThinkingPolicy.anthropic(
-                settings.openAiRequestOptions.thinkingModeEnabled,
-            ),
+            thinkingControl = RemoteThinkingPolicy.anthropic(settings.openAiRequestOptions),
         )
         val requestId = UUID.randomUUID().toString().take(8)
         TranslationRequestAudit.log(

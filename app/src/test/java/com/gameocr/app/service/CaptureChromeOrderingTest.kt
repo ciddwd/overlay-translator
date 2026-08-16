@@ -370,15 +370,15 @@ class CaptureChromeOrderingTest {
 
         assertTrue(
             "both renderers should plan final translation units from OCR blocks in one place",
-            "val units = planPageTranslationUnits(blocks)" in planSnippet,
+            "val units = planPageTranslationUnits(blocks, presentation)" in planSnippet,
         )
         assertFalse(
             "translation planning must not run a second geometry merger",
             "planCrossLine" in planSnippet || "mergeDisablesCrossLine" in planSnippet,
         )
         assertTrue(
-            "floating window placeholders should preserve the exact OCR-block row count used by Blocks",
-            "overlay?.prepareFloatingWindow(blocks.map(TextBlock::text))" in renderSnippet,
+            "floating placeholders should use the same indexed units after presentation-only text shaping",
+            "overlay?.prepareFloatingWindow(sourceTexts)" in renderSnippet,
         )
         assertTrue(
             "floating rendering should use the shared page executor",

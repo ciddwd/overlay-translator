@@ -1,7 +1,15 @@
 package com.gameocr.app.translate
 
 import com.gameocr.app.data.OpenAiRequestOptions
+import com.gameocr.app.data.RemoteReasoningEffort
+import com.gameocr.app.data.RemoteThinkingParameterFormat
 import java.util.Base64
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.put
 
 internal data class ResolvedOpenAiRequest(
     val systemMessage: String,
@@ -10,7 +18,7 @@ internal data class ResolvedOpenAiRequest(
     val topP: Double?,
     val maxTokens: Int?,
     val timeoutSeconds: Int,
-    val thinkingModeEnabled: Boolean,
+    val thinkingOptionsFingerprint: String,
 ) {
     val cacheFingerprint: String = listOf(
         systemMessage,
@@ -18,53 +26,232 @@ internal data class ResolvedOpenAiRequest(
         temperature.toString(),
         topP?.toString().orEmpty(),
         maxTokens?.toString().orEmpty(),
-        thinkingModeEnabled.toString(),
+        thinkingOptionsFingerprint,
     ).joinToString("\u001f")
 }
 
 internal enum class OpenAiThinkingWireStyle {
+    OMIT,
     REASONING_EFFORT,
+    RESPONSES_REASONING,
     THINKING_OBJECT,
+    ANTHROPIC_OUTPUT_CONFIG,
     ENABLE_THINKING,
+    CUSTOM_JSON,
 }
 
 internal data class OpenAiThinkingControl(
     val style: OpenAiThinkingWireStyle,
-    val reasoningEffort: String? = null,
-    val thinking: OpenAiThinkingConfig? = null,
-    val enableThinking: Boolean? = null,
+    val fields: JsonObject = JsonObject(emptyMap()),
 )
 
 /**
- * Maps a configured endpoint family to its documented thinking control without inspecting the
- * model name. Unknown OpenAI-compatible endpoints use the OpenAI/vLLM reasoning_effort field.
+ * Maps the explicit compatibility setting, or a small set of official endpoint families, to the
+ * documented thinking fields. Unknown OpenAI-compatible endpoints omit all thinking fields in
+ * AUTO mode so a nominally compatible server cannot fail on an unsupported extension.
  */
 internal object RemoteThinkingPolicy {
-    fun openAi(baseUrl: String, enabled: Boolean): OpenAiThinkingControl {
+    private val json = Json { explicitNulls = false }
+    private val protectedRootFields = setOf(
+        "model",
+        "messages",
+        "input",
+        "system",
+        "stream",
+        "max_tokens",
+        "max_output_tokens",
+        "response_format",
+        "temperature",
+        "top_p",
+    )
+
+    fun openAi(
+        baseUrl: String,
+        model: String,
+        options: OpenAiRequestOptions,
+    ): OpenAiThinkingControl {
+        val normalized = options.normalized()
+        val requestedFormat = normalized.thinkingParameterFormat
+        val resolvedFormat = if (requestedFormat == RemoteThinkingParameterFormat.AUTO) {
+            automaticOpenAiFormat(baseUrl)
+        } else {
+            requestedFormat
+        }
+        val allowNone = requestedFormat != RemoteThinkingParameterFormat.AUTO ||
+            openAiModelSupportsNone(model)
+        return controlFor(
+            format = resolvedFormat,
+            enabled = normalized.thinkingModeEnabled,
+            effort = effortValue(normalized),
+            customEnabledJson = normalized.customThinkingEnabledJson,
+            customDisabledJson = normalized.customThinkingDisabledJson,
+            allowOpenAiNone = allowNone,
+        )
+    }
+
+    fun anthropic(options: OpenAiRequestOptions): OpenAiThinkingControl {
+        val normalized = options.normalized()
+        val format = normalized.thinkingParameterFormat.let { requested ->
+            if (requested == RemoteThinkingParameterFormat.AUTO) {
+                RemoteThinkingParameterFormat.ANTHROPIC
+            } else {
+                requested
+            }
+        }
+        return controlFor(
+            format = format,
+            enabled = normalized.thinkingModeEnabled,
+            effort = effortValue(normalized),
+            customEnabledJson = normalized.customThinkingEnabledJson,
+            customDisabledJson = normalized.customThinkingDisabledJson,
+            allowOpenAiNone = true,
+        )
+    }
+
+    fun mergeIntoPayload(
+        payload: String,
+        control: OpenAiThinkingControl,
+        serializer: Json,
+    ): String {
+        if (control.fields.isEmpty()) return payload
+        val base = serializer.parseToJsonElement(payload).jsonObject
+        return JsonObject(base + control.fields).toString()
+    }
+
+    fun optionsFingerprint(options: OpenAiRequestOptions): String {
+        val normalized = options.normalized()
+        return listOf(
+            normalized.thinkingModeEnabled,
+            normalized.reasoningEffort,
+            normalized.thinkingParameterFormat,
+            normalized.customReasoningEffort,
+            normalized.customThinkingEnabledJson,
+            normalized.customThinkingDisabledJson,
+        ).joinToString("\u001e")
+    }
+
+    private fun controlFor(
+        format: RemoteThinkingParameterFormat?,
+        enabled: Boolean,
+        effort: String?,
+        customEnabledJson: String,
+        customDisabledJson: String,
+        allowOpenAiNone: Boolean,
+    ): OpenAiThinkingControl = when (format) {
+        null, RemoteThinkingParameterFormat.AUTO -> OpenAiThinkingControl(
+            style = OpenAiThinkingWireStyle.OMIT,
+        )
+        RemoteThinkingParameterFormat.OPENAI_CHAT_COMPLETIONS -> OpenAiThinkingControl(
+            style = OpenAiThinkingWireStyle.REASONING_EFFORT,
+            fields = when {
+                enabled && effort != null -> jsonFields("reasoning_effort" to JsonPrimitive(effort))
+                !enabled && allowOpenAiNone -> jsonFields("reasoning_effort" to JsonPrimitive("none"))
+                else -> JsonObject(emptyMap())
+            },
+        )
+        RemoteThinkingParameterFormat.OPENAI_RESPONSES -> OpenAiThinkingControl(
+            style = OpenAiThinkingWireStyle.RESPONSES_REASONING,
+            fields = when {
+                enabled && effort != null -> reasoningObject(effort)
+                !enabled && allowOpenAiNone -> reasoningObject("none")
+                else -> JsonObject(emptyMap())
+            },
+        )
+        RemoteThinkingParameterFormat.DEEPSEEK -> OpenAiThinkingControl(
+            style = OpenAiThinkingWireStyle.THINKING_OBJECT,
+            fields = buildJsonObject {
+                put("thinking", buildJsonObject {
+                    put("type", if (enabled) "enabled" else "disabled")
+                })
+                if (enabled && effort != null) put("reasoning_effort", effort)
+            },
+        )
+        RemoteThinkingParameterFormat.ANTHROPIC -> OpenAiThinkingControl(
+            style = OpenAiThinkingWireStyle.ANTHROPIC_OUTPUT_CONFIG,
+            fields = buildJsonObject {
+                put("thinking", buildJsonObject {
+                    put("type", if (enabled) "adaptive" else "disabled")
+                    if (enabled) put("display", "omitted")
+                })
+                if (enabled && effort != null) {
+                    put("output_config", buildJsonObject { put("effort", effort) })
+                }
+            },
+        )
+        RemoteThinkingParameterFormat.DASHSCOPE -> OpenAiThinkingControl(
+            style = OpenAiThinkingWireStyle.ENABLE_THINKING,
+            fields = jsonFields("enable_thinking" to JsonPrimitive(enabled)),
+        )
+        RemoteThinkingParameterFormat.CUSTOM_JSON -> OpenAiThinkingControl(
+            style = OpenAiThinkingWireStyle.CUSTOM_JSON,
+            fields = parseCustomFields(
+                raw = if (enabled) customEnabledJson else customDisabledJson,
+                effort = effort ?: "auto",
+            ),
+        )
+    }
+
+    private fun automaticOpenAiFormat(baseUrl: String): RemoteThinkingParameterFormat? {
         val host = runCatching { java.net.URI(baseUrl.trim()).host.orEmpty().lowercase() }
             .getOrDefault("")
         return when {
-            host == "api.deepseek.com" -> OpenAiThinkingControl(
-                style = OpenAiThinkingWireStyle.THINKING_OBJECT,
-                thinking = OpenAiThinkingConfig(type = if (enabled) "enabled" else "disabled"),
-            )
-            host == "dashscope.aliyuncs.com" ||
-                host.endsWith(".dashscope.aliyuncs.com") -> OpenAiThinkingControl(
-                style = OpenAiThinkingWireStyle.ENABLE_THINKING,
-                enableThinking = enabled,
-            )
-            else -> OpenAiThinkingControl(
-                style = OpenAiThinkingWireStyle.REASONING_EFFORT,
-                reasoningEffort = if (enabled) "high" else "none",
-            )
+            host == "api.deepseek.com" -> RemoteThinkingParameterFormat.DEEPSEEK
+            host == "dashscope.aliyuncs.com" || host.endsWith(".dashscope.aliyuncs.com") ->
+                RemoteThinkingParameterFormat.DASHSCOPE
+            host == "api.openai.com" -> RemoteThinkingParameterFormat.OPENAI_CHAT_COMPLETIONS
+            else -> null
         }
     }
 
-    fun anthropic(enabled: Boolean): AnthropicThinkingConfig = if (enabled) {
-        AnthropicThinkingConfig(type = "adaptive", display = "omitted")
-    } else {
-        AnthropicThinkingConfig(type = "disabled")
+    private fun effortValue(options: OpenAiRequestOptions): String? = when (options.reasoningEffort) {
+        RemoteReasoningEffort.AUTO -> null
+        RemoteReasoningEffort.CUSTOM -> options.customReasoningEffort
+            .takeIf(String::isNotBlank)
+            ?.also { value ->
+                require(CUSTOM_EFFORT_PATTERN.matches(value)) {
+                    "Custom reasoning effort may contain only letters, digits, dot, underscore, or hyphen."
+                }
+            }
+        else -> options.reasoningEffort.wireValue
     }
+
+    private fun reasoningObject(effort: String): JsonObject = buildJsonObject {
+        put("reasoning", buildJsonObject { put("effort", effort) })
+    }
+
+    private fun parseCustomFields(raw: String, effort: String): JsonObject {
+        val substituted = raw.replace("{effort}", effort)
+        val fields = runCatching { json.parseToJsonElement(substituted).jsonObject }
+            .getOrElse { cause ->
+                throw IllegalArgumentException(
+                    "Custom thinking fields must be a valid JSON object.",
+                    cause,
+                )
+            }
+        val forbidden = fields.keys.intersect(protectedRootFields)
+        require(forbidden.isEmpty()) {
+            "Custom thinking fields cannot override: ${forbidden.sorted().joinToString()}."
+        }
+        return fields
+    }
+
+    private fun jsonFields(vararg entries: Pair<String, JsonPrimitive>): JsonObject =
+        JsonObject(linkedMapOf(*entries))
+
+    private fun openAiModelSupportsNone(model: String): Boolean {
+        val normalized = model.trim().lowercase()
+        if (normalized.contains("-pro")) return false
+        return OPENAI_NONE_MODEL_PREFIXES.any(normalized::startsWith)
+    }
+
+    private val CUSTOM_EFFORT_PATTERN = Regex("[A-Za-z0-9._-]{1,64}")
+    private val OPENAI_NONE_MODEL_PREFIXES = listOf(
+        "gpt-5.1",
+        "gpt-5.2",
+        "gpt-5.4",
+        "gpt-5.5",
+        "gpt-5.6",
+    )
 }
 
 /** Resolves the generic OpenAI-compatible request without guessing from the model name. */
@@ -132,7 +319,7 @@ internal object OpenAiRequestPolicy {
             topP = normalized.topP,
             maxTokens = normalized.maxTokens,
             timeoutSeconds = remoteLlmTimeoutSeconds(networkRequestTimeoutSeconds),
-            thinkingModeEnabled = normalized.thinkingModeEnabled,
+            thinkingOptionsFingerprint = RemoteThinkingPolicy.optionsFingerprint(normalized),
         )
     }
 

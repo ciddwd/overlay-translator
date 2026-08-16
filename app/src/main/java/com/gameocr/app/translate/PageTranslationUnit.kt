@@ -1,6 +1,7 @@
 package com.gameocr.app.translate
 
 import android.graphics.Rect
+import com.gameocr.app.data.RenderMode
 import com.gameocr.app.ocr.TextBlock
 
 /**
@@ -45,11 +46,14 @@ internal data class PageTranslationRowUpdate(
     val text: String,
 )
 
-internal fun planPageTranslationUnits(blocks: List<TextBlock>): List<PageTranslationUnit> =
+internal fun planPageTranslationUnits(
+    blocks: List<TextBlock>,
+    presentation: RenderMode = RenderMode.BLOCKS,
+): List<PageTranslationUnit> =
     blocks.mapIndexed { index, block ->
         PageTranslationUnit(
             blockIndex = index,
-            sourceText = block.text,
+            sourceText = PageTranslationPresentationTextPolicy.normalize(presentation, block.text),
             geometry = DialogueGeometry.from(block.boundingBox),
         )
     }

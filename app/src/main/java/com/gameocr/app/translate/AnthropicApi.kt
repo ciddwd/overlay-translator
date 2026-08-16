@@ -20,13 +20,6 @@ internal data class AnthropicMessageRequest(
     val temperature: Double,
     @SerialName("top_p") val topP: Double? = null,
     val stream: Boolean,
-    val thinking: AnthropicThinkingConfig? = null,
-)
-
-@Serializable
-internal data class AnthropicThinkingConfig(
-    val type: String,
-    val display: String? = null,
 )
 
 @Serializable
@@ -100,9 +93,9 @@ internal fun buildAnthropicMessageRequest(
     stream: Boolean,
     json: Json,
     topP: Double? = null,
-    thinking: AnthropicThinkingConfig? = null,
+    thinkingControl: OpenAiThinkingControl? = null,
 ): Request {
-    val payload = json.encodeToString(
+    val basePayload = json.encodeToString(
         AnthropicMessageRequest(
             model = settings.anthropicModel,
             maxTokens = maxTokens,
@@ -111,9 +104,11 @@ internal fun buildAnthropicMessageRequest(
             temperature = temperature,
             topP = topP,
             stream = stream,
-            thinking = thinking,
         )
     )
+    val payload = thinkingControl?.let { control ->
+        RemoteThinkingPolicy.mergeIntoPayload(basePayload, control, json)
+    } ?: basePayload
     return Request.Builder()
         .url(anthropicApiUrl(settings.anthropicBaseUrl, "messages"))
         .header("x-api-key", settings.anthropicApiKey)

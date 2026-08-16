@@ -118,6 +118,7 @@ import com.gameocr.app.ui.MainActivity
 import com.gameocr.app.translate.BatchTranslationProgressState
 import com.gameocr.app.translate.BatchTranslationUpdate
 import com.gameocr.app.translate.PageTranslationUnit
+import com.gameocr.app.translate.PageTranslationPresentationTextPolicy
 import com.gameocr.app.translate.DialogueHistorySession
 import com.gameocr.app.translate.DialogueTranslationContextPolicy
 import com.gameocr.app.translate.ContinuousTranslationReusePolicy
@@ -248,6 +249,7 @@ class CaptureService : Service() {
     private var previousLoopFingerprint: LoopFrameFingerprint? = null
     private var previousLoopOcrText: String? = null
     private val dialogueHistorySession = DialogueHistorySession()
+    private val floatingDialogueHistorySession = DialogueHistorySession()
     private var loopFrameStabilityState = LoopFrameStabilityState()
     private var pendingLoopRoiResult: PendingLoopRoiResult? = null
     private var loopRoiTextFallbackActive: Boolean = false
@@ -2950,6 +2952,8 @@ class CaptureService : Service() {
         val useBatch: Boolean,
         val structuredContextBatch: Boolean,
         val contextModeName: String,
+        val presentation: RenderMode,
+        val historySession: DialogueHistorySession,
     )
 
     private fun preparePageTranslationPlan(
@@ -2960,10 +2964,17 @@ class CaptureService : Service() {
     ): PageTranslationPlan {
         val routing = translator as? RoutingTranslator
         val prefersBatch = routing?.prefersBatchFor(settings) ?: translator.prefersBatch
-        val units = planPageTranslationUnits(blocks)
+        val units = planPageTranslationUnits(blocks, presentation)
+        val historySession = when (presentation) {
+            RenderMode.BLOCKS -> dialogueHistorySession
+            RenderMode.FLOATING_WINDOW -> floatingDialogueHistorySession
+        }
         val effectiveContextMode = DialogueTranslationContextPolicy.effectiveMode(settings)
         val contextKey = DialogueTranslationContextPolicy.contextKey(settings)
-        val previousFrame = dialogueHistorySession.historyFor(contextKey)
+        val previousFrame = PageTranslationPresentationTextPolicy.normalizeHistory(
+            presentation,
+            historySession.historyFor(contextKey),
+        )
         val reusedTranslationsByIndex = ContinuousTranslationReusePolicy.plan(
             mode = effectiveContextMode,
             current = units,
@@ -2980,12 +2991,15 @@ class CaptureService : Service() {
             contextualSettings = DialogueTranslationContextPolicy.contextualize(
                 settings = settings,
                 currentSources = units.map(PageTranslationUnit::sourceText),
-                historySession = dialogueHistorySession,
+                historySession = historySession,
+                availableHistory = previousFrame,
             ),
             reusedTranslationsByIndex = reusedTranslationsByIndex,
             useBatch = prefersBatch || structuredContextBatch,
             structuredContextBatch = structuredContextBatch,
             contextModeName = effectiveContextMode.name,
+            presentation = presentation,
+            historySession = historySession,
         )
         diagId?.let { id ->
             logVerticalDiag(
@@ -3144,6 +3158,8 @@ class CaptureService : Service() {
         val translationUnits = pagePlan.units
         val contextualSettings = pagePlan.contextualSettings
         val successfulUnitTranslations = java.util.concurrent.ConcurrentHashMap<Int, String>()
+        fun normalizeOutput(text: String): String =
+            PageTranslationPresentationTextPolicy.normalize(pagePlan.presentation, text)
         val loopSession = beginLoopTranslation(diagId)
         launchTranslationBatch(diagId) {
             var completed = false
@@ -3151,9 +3167,10 @@ class CaptureService : Service() {
                 prepare(translationUnits.map(PageTranslationUnit::sourceText))
                 pagePlan.reusedTranslationsByIndex.forEach { (index, translatedText) ->
                     val unit = translationUnits.getOrNull(index) ?: return@forEach
-                    render(index, unit, translatedText, false, AdaptiveTextLayoutPhase.FINAL)
-                    successfulUnitTranslations[index] = translatedText
-                    onAccepted(index, unit, translatedText)
+                    val normalizedText = normalizeOutput(translatedText)
+                    render(index, unit, normalizedText, false, AdaptiveTextLayoutPhase.FINAL)
+                    successfulUnitTranslations[index] = normalizedText
+                    onAccepted(index, unit, normalizedText)
                 }
                 val pendingIndexes = translationUnits.indices
                     .filterNot(pagePlan.reusedTranslationsByIndex::containsKey)
@@ -3172,16 +3189,17 @@ class CaptureService : Service() {
                         diagId = diagId,
                         render = { pendingIndex, unit, translatedText, failed, _, _ ->
                             val index = pendingIndexes[pendingIndex]
+                            val normalizedText = normalizeOutput(translatedText)
                             render(
                                 index,
                                 unit,
-                                translatedText,
+                                normalizedText,
                                 failed,
                                 AdaptiveTextLayoutPhase.FINAL,
                             )
                             if (!failed) {
-                                successfulUnitTranslations[index] = translatedText
-                                onAccepted(index, unit, translatedText)
+                                successfulUnitTranslations[index] = normalizedText
+                                onAccepted(index, unit, normalizedText)
                             }
                         },
                         publishFailure = { failedPendingIndexes, error ->
@@ -3195,13 +3213,14 @@ class CaptureService : Service() {
                         diagId = diagId,
                     ) { pendingIndex, unit, partial, phase ->
                         val index = pendingIndexes[pendingIndex]
-                        render(index, unit, partial, false, phase)
+                        render(index, unit, normalizeOutput(partial), false, phase)
                     }
                     translated.forEach { (pendingIndex, text) ->
                         val index = pendingIndexes[pendingIndex]
                         val unit = translationUnits[index]
-                        successfulUnitTranslations[index] = text
-                        onAccepted(index, unit, text)
+                        val normalizedText = normalizeOutput(text)
+                        successfulUnitTranslations[index] = normalizedText
+                        onAccepted(index, unit, normalizedText)
                     }
                 }
                 ensureCurrentTranslationBatch(diagId)
@@ -3209,6 +3228,7 @@ class CaptureService : Service() {
                     settings = contextualSettings,
                     units = translationUnits,
                     translationsByIndex = successfulUnitTranslations,
+                    historySession = pagePlan.historySession,
                     diagId = diagId,
                 )
                 completed = true
@@ -3223,6 +3243,7 @@ class CaptureService : Service() {
         settings: Settings,
         units: List<PageTranslationUnit>,
         translationsByIndex: Map<Int, String>,
+        historySession: DialogueHistorySession,
         diagId: Long?,
     ) {
         if (!DialogueTranslationContextPolicy.shouldCommitHistory(
@@ -3231,7 +3252,7 @@ class CaptureService : Service() {
                 translationsByIndex = translationsByIndex,
             )
         ) return
-        val committed = dialogueHistorySession.commitUnits(
+        val committed = historySession.commitUnits(
             contextKey = DialogueTranslationContextPolicy.contextKey(settings),
             units = units,
             translationsByIndex = translationsByIndex,
@@ -3708,11 +3729,10 @@ class CaptureService : Service() {
         launchPageTranslationExecution(
             pagePlan = pagePlan,
             diagId = diagId,
-            prepare = {
+            prepare = { sourceTexts ->
                 withContext(Dispatchers.Main) {
                     if (translationBatchGate.accepts(diagId)) {
-                        // Presentation rows are the original OCR blocks in both display modes.
-                        overlay?.prepareFloatingWindow(blocks.map(TextBlock::text))
+                        overlay?.prepareFloatingWindow(sourceTexts)
                     }
                 }
             },
@@ -3734,7 +3754,10 @@ class CaptureService : Service() {
                     if (translationBatchGate.accepts(diagId)) {
                         pendingIndexes.forEach { index ->
                             pageTranslationRowUpdates(
-                                translatedText = "[!] " + (error.message ?: ""),
+                                translatedText = PageTranslationPresentationTextPolicy.normalize(
+                                    RenderMode.FLOATING_WINDOW,
+                                    "[!] " + (error.message ?: ""),
+                                ),
                                 unit = translationUnits[index],
                             ).forEach { update ->
                                 overlay?.updateFloatingWindowText(update.blockIndex, update.text)
@@ -4334,6 +4357,7 @@ class CaptureService : Service() {
         localLlmWarmupJob = null
         resetLoopCaptureState()
         dialogueHistorySession.clear()
+        floatingDialogueHistorySession.clear()
         resetLoopRuntimeState()
         settingsCollectJob?.cancel()
         settingsCollectJob = null
