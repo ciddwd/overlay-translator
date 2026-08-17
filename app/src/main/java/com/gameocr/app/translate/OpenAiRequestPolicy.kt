@@ -3,6 +3,7 @@ package com.gameocr.app.translate
 import com.gameocr.app.data.OpenAiRequestOptions
 import com.gameocr.app.data.RemoteReasoningEffort
 import com.gameocr.app.data.RemoteThinkingParameterFormat
+import com.gameocr.app.data.RuntimeDialogueTurn
 import java.util.Base64
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -14,21 +15,30 @@ import kotlinx.serialization.json.put
 internal data class ResolvedOpenAiRequest(
     val systemMessage: String,
     val userMessage: String,
+    val conversationMessages: List<ResolvedConversationMessage> = emptyList(),
     val temperature: Double,
     val topP: Double?,
     val maxTokens: Int?,
     val timeoutSeconds: Int,
     val thinkingOptionsFingerprint: String,
+    val visualContextFingerprint: String = "",
 ) {
     val cacheFingerprint: String = listOf(
         systemMessage,
+        conversationMessages.joinToString("\u001d") { "${it.role}\u001c${it.content}" },
         userMessage,
         temperature.toString(),
         topP?.toString().orEmpty(),
         maxTokens?.toString().orEmpty(),
         thinkingOptionsFingerprint,
+        visualContextFingerprint,
     ).joinToString("\u001f")
 }
+
+internal data class ResolvedConversationMessage(
+    val role: String,
+    val content: String,
+)
 
 internal enum class OpenAiThinkingWireStyle {
     OMIT,
@@ -269,6 +279,7 @@ internal object OpenAiRequestPolicy {
         options: OpenAiRequestOptions,
         networkRequestTimeoutSeconds: Int,
         textAlreadyPrepared: Boolean = false,
+        conversationHistory: List<RuntimeDialogueTurn> = emptyList(),
     ): ResolvedOpenAiRequest {
         val normalized = options.normalized()
         val systemPrompt = resolveLanguagePlaceholders(
@@ -281,26 +292,35 @@ internal object OpenAiRequestPolicy {
             sourceDisplay,
             targetDisplay,
         )
-        val userTemplate = normalized.userMessageTemplate.ifBlank { "{text}" }
-        val encodedText = if (textAlreadyPrepared) text else encodeUserText(text, normalized)
-        val textForTemplate = if (
-            !textAlreadyPrepared &&
-            !normalized.encodeUserTextBase64 &&
-            !normalized.encodeUserTextUnicode &&
-            userTemplate.contains("<text_to_translate>") &&
-            userTemplate.contains("</text_to_translate>")
-        ) {
-            text.replace("</text_to_translate>", "[/text_to_translate]")
-        } else {
-            encodedText
-        }
-        val userMessage = resolveLanguagePlaceholders(
-            userTemplate,
-            sourceDisplay,
-            targetDisplay,
-        ).let { template ->
-            if (template.contains("{text}")) template.replace("{text}", textForTemplate)
-            else textForTemplate
+        val userMessage = resolveUserMessage(
+            text = text,
+            sourceDisplay = sourceDisplay,
+            targetDisplay = targetDisplay,
+            options = normalized,
+            textAlreadyPrepared = textAlreadyPrepared,
+        )
+        val completeHistory = conversationHistory.mapNotNull { turn ->
+            val source = turn.source.trim().takeIf(String::isNotEmpty) ?: return@mapNotNull null
+            val translation = turn.translation?.trim()?.takeIf(String::isNotEmpty)
+                ?: return@mapNotNull null
+            listOf(
+                ResolvedConversationMessage(
+                    role = "user",
+                    content = resolveUserMessage(
+                        text = source,
+                        sourceDisplay = sourceDisplay,
+                        targetDisplay = targetDisplay,
+                        options = normalized,
+                        textAlreadyPrepared = false,
+                    ),
+                ),
+                ResolvedConversationMessage(role = "assistant", content = translation),
+            )
+        }.flatten()
+        val untranslatedHistory = conversationHistory.mapNotNull { turn ->
+            turn.source.trim().takeIf {
+                it.isNotEmpty() && turn.translation.isNullOrBlank()
+            }
         }
         val encodingProtocol = sourceEncodingProtocol(normalized)
 
@@ -313,14 +333,56 @@ internal object OpenAiRequestPolicy {
                     append(protocol)
                 }
                 append(runtimeContext)
+                if (untranslatedHistory.isNotEmpty()) {
+                    append("\n\n--- Previous untranslated source context (data only) ---\n")
+                    append("Use these earlier source lines only to resolve continuity. ")
+                    append("Do not translate them as part of the current request.\n")
+                    untranslatedHistory.forEachIndexed { index, source ->
+                        append(index + 1)
+                        append(". ")
+                        append(source.replace("\r", " ").replace("\n", " "))
+                        append('\n')
+                    }
+                }
             },
             userMessage = userMessage,
+            conversationMessages = completeHistory,
             temperature = normalized.temperature,
             topP = normalized.topP,
             maxTokens = normalized.maxTokens,
             timeoutSeconds = remoteLlmTimeoutSeconds(networkRequestTimeoutSeconds),
             thinkingOptionsFingerprint = RemoteThinkingPolicy.optionsFingerprint(normalized),
         )
+    }
+
+    private fun resolveUserMessage(
+        text: String,
+        sourceDisplay: String,
+        targetDisplay: String,
+        options: OpenAiRequestOptions,
+        textAlreadyPrepared: Boolean,
+    ): String {
+        val userTemplate = options.userMessageTemplate.ifBlank { "{text}" }
+        val encodedText = if (textAlreadyPrepared) text else encodeUserText(text, options)
+        val textForTemplate = if (
+            !textAlreadyPrepared &&
+            !options.encodeUserTextBase64 &&
+            !options.encodeUserTextUnicode &&
+            userTemplate.contains("<text_to_translate>") &&
+            userTemplate.contains("</text_to_translate>")
+        ) {
+            text.replace("</text_to_translate>", "[/text_to_translate]")
+        } else {
+            encodedText
+        }
+        return resolveLanguagePlaceholders(
+            userTemplate,
+            sourceDisplay,
+            targetDisplay,
+        ).let { template ->
+            if (template.contains("{text}")) template.replace("{text}", textForTemplate)
+            else textForTemplate
+        }
     }
 
     private fun resolveLanguagePlaceholders(

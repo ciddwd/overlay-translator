@@ -21,7 +21,7 @@ internal object TranslationRequestAudit {
     ) {
         if (!BuildConfig.DEBUG) return
         val payload = runCatching {
-            requestPayload(request)
+            redactVisualPayload(requestPayload(request))
         }.getOrElse { error ->
             Timber.tag(REQUEST_TAG).w(
                 error,
@@ -119,6 +119,16 @@ internal object TranslationRequestAudit {
         request.body?.writeTo(buffer)
         buffer.readUtf8()
     }
+
+    internal fun redactVisualPayload(payload: String): String = payload
+        .replace(
+            Regex("data:image/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=_-]+"),
+            "data:image/[redacted];base64,[image omitted]",
+        )
+        .replace(
+            Regex("\\\"data\\\":\\\"[A-Za-z0-9+/=_-]{128,}\\\""),
+            "\"data\":\"[image omitted]\"",
+        )
 
     internal fun chunkUtf8(
         value: String,

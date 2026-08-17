@@ -271,7 +271,8 @@ data class Settings(
      * box 取 union。漫画 / 字幕场景百度等引擎经常把一句话拆成多段，开启后能让译文
      * 不再分裂成多个互相重叠的小框。默认关，按需在设置里开启。
      *
-     * 阈值由 [mergeStrength] 选择：保守 / 标准 / 激进。
+     * 阈值由 [mergeStrength] 选择：保守 / 标准 / 激进。悬浮窗口还可选择“全部”，
+     * 将当前画面的最终 OCR 结果组成一个翻译单元；Blocks 始终忽略该专用档位。
      */
     val mergeAdjacentBlocks: Boolean = false,
     /** 合并相邻 box 的强度档位，仅在 [mergeAdjacentBlocks] = true 时生效。 */
@@ -368,6 +369,8 @@ data class Settings(
     @kotlinx.serialization.Transient
     val runtimeTranslationPromptContext: RuntimeTranslationPromptContext =
         RuntimeTranslationPromptContext(),
+    @kotlinx.serialization.Transient
+    val runtimeTranslationVisualContext: RuntimeTranslationVisualContext? = null,
     /**
      * Request-scoped glossary/memory override. null resolves the foreground app as before;
      * an empty string explicitly selects global glossary entries and disables app memory.
@@ -464,6 +467,8 @@ data class OpenAiRequestOptions(
     /** Escape only the `{text}` value sent to a remote LLM as UTF-16 `\uXXXX` units. */
     val encodeUserTextUnicode: Boolean = false,
     val systemPromptSuffix: String = DEFAULT_SYSTEM_PROMPT_SUFFIX,
+    /** Send the current capture to remote multimodal LLMs as request-scoped visual context. */
+    val sendScreenImage: Boolean = false,
     /** Explicitly controls model reasoning for supported remote LLM protocols. */
     val thinkingModeEnabled: Boolean = false,
     /** Reasoning depth is independent from the thinking on/off switch. */
@@ -1030,7 +1035,8 @@ object FloatingMenu {
 
 /**
  * OCR 合并相邻 box 的强度档位。从保守到激进——保守宁可让 OCR 输出散一些不误合，
- * 激进容忍更大间距 / 行高差，适合漫画气泡内多行被切碎的情形。
+ * 激进容忍更大间距 / 行高差，适合漫画气泡内多行被切碎的情形。“全部”是悬浮窗口
+ * 的展示与请求策略，不作为几何合并阈值，也不改变 Blocks 的 OCR 结果。
  */
 @Serializable
 enum class MergeStrength {
@@ -1039,7 +1045,9 @@ enum class MergeStrength {
     /** 默认：当前调优好的中间值（gap 1.2x、垂直 0.8x、相交 30%）。 */
     STANDARD,
     /** 视觉小说 / 长段密集场景：严格阈值（gap 0.8x、垂直 0.5x、相交 50%），少误合但段落易拆开。 */
-    CONSERVATIVE
+    CONSERVATIVE,
+    /** 仅悬浮窗口：忽略距离，把当前画面的最终文字按现有阅读顺序组成一个翻译单元。 */
+    ALL,
 }
 
 @Serializable

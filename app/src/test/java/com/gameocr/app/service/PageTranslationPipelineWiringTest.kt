@@ -53,6 +53,11 @@ class PageTranslationPipelineWiringTest {
             "the shared executor applies the presentation policy before rendering and history",
             source.contains("PageTranslationPresentationTextPolicy.normalize(pagePlan.presentation, text)"),
         )
+        assertTrue(
+            "the planner gates merge-all by presentation before building units",
+            source.contains("PageTranslationGroupingPolicy.shouldMergeAll(") &&
+                source.contains("singleMergedFloating = mergeAllFloating"),
+        )
 
         val sakura = source("app/src/main/java/com/gameocr/app/translate/SakuraGalTranslator.kt")
         val routing = source("app/src/main/java/com/gameocr/app/translate/RoutingTranslator.kt")

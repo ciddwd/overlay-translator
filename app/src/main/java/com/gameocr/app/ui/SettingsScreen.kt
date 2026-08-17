@@ -326,6 +326,26 @@ internal fun adjacentBoxMergeAvailableIn(renderMode: RenderMode): Boolean = when
     RenderMode.FLOATING_WINDOW -> true
 }
 
+internal fun mergeStrengthOptionsFor(renderMode: RenderMode): List<com.gameocr.app.data.MergeStrength> =
+    buildList {
+        add(com.gameocr.app.data.MergeStrength.CONSERVATIVE)
+        add(com.gameocr.app.data.MergeStrength.STANDARD)
+        add(com.gameocr.app.data.MergeStrength.AGGRESSIVE)
+        if (renderMode == RenderMode.FLOATING_WINDOW) {
+            add(com.gameocr.app.data.MergeStrength.ALL)
+        }
+    }
+
+internal fun displayedMergeStrength(
+    renderMode: RenderMode,
+    stored: com.gameocr.app.data.MergeStrength,
+): com.gameocr.app.data.MergeStrength =
+    if (renderMode == RenderMode.BLOCKS && stored == com.gameocr.app.data.MergeStrength.ALL) {
+        com.gameocr.app.data.MergeStrength.STANDARD
+    } else {
+        stored
+    }
+
 private fun openExternalBrowser(context: Context, url: String) {
     runCatching {
         context.startActivity(
@@ -1715,8 +1735,11 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                HorizontalDivider()
-                OrientationModelSection(
+                // Keep the complete optional-model UI implementation available for a future
+                // opt-in flow, while hiding the package from current user-facing settings.
+                if (OrientationModelVisibilityPolicy.userManagementVisible) {
+                    HorizontalDivider()
+                    OrientationModelSection(
                     status = statusDuringBackgroundDownload(
                         ModelDownloadSpec.orientation(),
                         orientationModelStatus,
@@ -1766,7 +1789,8 @@ fun SettingsScreen(
                             refreshOrientationModelState()
                         }
                     }
-                )
+                    )
+                }
             }
             }
             }
@@ -5155,18 +5179,23 @@ fun SettingsScreen(
                             stringResource(R.string.settings_merge_strength_label),
                             style = MaterialTheme.typography.labelLarge
                         )
-                        val mergeStrengthOptions = listOf(
-                            com.gameocr.app.data.MergeStrength.CONSERVATIVE to
-                                R.string.settings_merge_strength_conservative,
-                            com.gameocr.app.data.MergeStrength.STANDARD to
-                                R.string.settings_merge_strength_standard,
-                            com.gameocr.app.data.MergeStrength.AGGRESSIVE to
-                                R.string.settings_merge_strength_aggressive,
-                        )
+                        val shownMergeStrength = displayedMergeStrength(renderMode, mergeStrength)
+                        val mergeStrengthOptions = mergeStrengthOptionsFor(renderMode).map { strength ->
+                            strength to when (strength) {
+                                com.gameocr.app.data.MergeStrength.CONSERVATIVE ->
+                                    R.string.settings_merge_strength_conservative
+                                com.gameocr.app.data.MergeStrength.STANDARD ->
+                                    R.string.settings_merge_strength_standard
+                                com.gameocr.app.data.MergeStrength.AGGRESSIVE ->
+                                    R.string.settings_merge_strength_aggressive
+                                com.gameocr.app.data.MergeStrength.ALL ->
+                                    R.string.settings_merge_strength_all
+                            }
+                        }
                         SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                             mergeStrengthOptions.forEachIndexed { index, (strength, labelRes) ->
                                 SegmentedButton(
-                                    selected = mergeStrength == strength,
+                                    selected = shownMergeStrength == strength,
                                     onClick = {
                                         if (mergeStrength != strength) {
                                             mergeStrength = strength
@@ -5182,10 +5211,11 @@ fun SettingsScreen(
                             }
                         }
                         Text(
-                            stringResource(when (mergeStrength) {
+                            stringResource(when (shownMergeStrength) {
                                 com.gameocr.app.data.MergeStrength.CONSERVATIVE -> R.string.settings_merge_strength_conservative_hint
                                 com.gameocr.app.data.MergeStrength.STANDARD -> R.string.settings_merge_strength_standard_hint
                                 com.gameocr.app.data.MergeStrength.AGGRESSIVE -> R.string.settings_merge_strength_aggressive_hint
+                                com.gameocr.app.data.MergeStrength.ALL -> R.string.settings_merge_strength_all_hint
                             }),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -7099,6 +7129,16 @@ private fun TranslationAssistanceSettings(
         SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_streaming) {
         SwitchRow(stringResource(R.string.settings_streaming), streaming, onChange = onStreamingChange)
         }
+        SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_send_screen_image) {
+        SwitchRow(
+            label = stringResource(R.string.settings_send_screen_image),
+            checked = requestOptions.sendScreenImage,
+            helpText = stringResource(R.string.settings_send_screen_image_hint),
+            onChange = { enabled ->
+                onRequestOptionsChange(requestOptions.copy(sendScreenImage = enabled))
+            },
+        )
+        }
         SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_thinking_mode) {
         SwitchRow(
             label = stringResource(R.string.settings_thinking_mode),
@@ -8102,6 +8142,7 @@ private val SEARCH_TARGET_TARGET_LANGUAGE = intArrayOf(R.string.settings_search_
 private val SEARCH_TARGET_TRANSLATION_ASSISTANCE = intArrayOf(
     R.string.settings_translation_mode,
     R.string.settings_search_item_streaming,
+    R.string.settings_search_item_send_screen_image,
     R.string.settings_search_item_thinking_mode,
     R.string.settings_search_item_failed_translation_retry,
     R.string.settings_glossary_enabled,
@@ -8141,11 +8182,13 @@ private val SEARCH_TARGET_OCR_ENGINE = intArrayOf(
     R.string.settings_search_item_invert,
     R.string.settings_search_item_binarize,
 )
-private val SEARCH_TARGET_ORIENTATION_DETECTION = intArrayOf(
-    R.string.settings_orient_auto_detect_title,
-    R.string.settings_search_item_manual_orientation,
-    R.string.settings_search_item_orientation_model,
-)
+private val SEARCH_TARGET_ORIENTATION_DETECTION = buildList {
+    add(R.string.settings_orient_auto_detect_title)
+    add(R.string.settings_search_item_manual_orientation)
+    if (OrientationModelVisibilityPolicy.userManagementVisible) {
+        add(R.string.settings_search_item_orientation_model)
+    }
+}.toIntArray()
 private val SEARCH_TARGET_ORIENTATION_OUTPUT = intArrayOf(
     R.string.settings_translation_output_follow_title,
     R.string.settings_translation_output_layout_label,
@@ -8383,7 +8426,7 @@ internal val SETTINGS_SEARCH_DEVELOPER_OCR_KEYWORDS = listOf(
     "原文", "译文", "截图保存", "翻译缓存", "禁用缓存",
 )
 
-private val SETTING_ITEMS: List<SearchEntry> = listOf(
+private val SETTING_ITEMS: List<SearchEntry> = listOfNotNull(
     SearchEntry(
         SectionKeys.TRANSLATE,
         R.string.settings_section_translator,
@@ -8466,6 +8509,7 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
     ),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_dictionary_prompt, listOf("dictionary", "词典", "划词", "word select", "phonetic", "音标", "释义", "definition", "prompt")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_streaming, listOf("streaming", "流式")),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_send_screen_image, listOf("vision", "image", "multimodal", "画面", "图片", "多模态", "发送画面")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_thinking_mode, listOf("thinking", "reasoning", "思考", "推理")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_translation_mode, listOf("translation mode", "context", "翻译模式", "上下文", "同屏", "连续")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_glossary_enabled, listOf("name consistency", "term memory", "译名一致性", "人名", "专名")),
@@ -8534,7 +8578,11 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_dbnet_advanced, listOf("dbnet", "threshold", "prob", "box score", "unclip", "bubble", "cluster", "gap", "advanced", "阈值", "二值化", "连通域", "外扩", "气泡", "聚类", "高级")),
     SearchEntry(SectionKeys.TEXT_ORIENTATION, R.string.settings_text_orientation_section_title, R.string.settings_orient_auto_detect_title, listOf("orientation", "text orientation", "direction", "vertical", "horizontal", "自动判别", "方向", "文本方向", "竖排", "横排")),
     SearchEntry(SectionKeys.TEXT_ORIENTATION, R.string.settings_text_orientation_section_title, R.string.settings_search_item_manual_orientation, listOf("manual", "lock", "orientation", "vertical", "horizontal", "stacked", "手动", "锁定", "方向", "竖排", "横排", "逐字")),
-    SearchEntry(SectionKeys.TEXT_ORIENTATION, R.string.settings_text_orientation_section_title, R.string.settings_search_item_orientation_model, listOf("orientation model", "doc orientation", "direction model", "ONNX", "方向模型", "文本方向模型", "模型", "download", "下载", "本地导入", "local import", "导入", "delete", "删除")),
+    if (OrientationModelVisibilityPolicy.userManagementVisible) {
+        SearchEntry(SectionKeys.TEXT_ORIENTATION, R.string.settings_text_orientation_section_title, R.string.settings_search_item_orientation_model, listOf("orientation model", "doc orientation", "direction model", "ONNX", "方向模型", "文本方向模型", "模型", "download", "下载", "本地导入", "local import", "导入", "delete", "删除"))
+    } else {
+        null
+    },
 
     // —— 图像预处理（在 OCR section 内）——
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_upscale, listOf("upscale", "放大", "上采样", "preprocess", "图像预处理")),
@@ -9982,7 +10030,13 @@ internal fun translationPresetModelIssues(
         OcrEngineKind.UMI_OCR,
         OcrEngineKind.LUNA_OCR -> Unit
     }
-    if (preset.textOrientationAutoDetect && !orientationModelReady) {
+    // Preserve the optional model readiness implementation without surfacing a hidden package as
+    // a required preset download. Geometry-based orientation fallback remains available.
+    if (OrientationModelVisibilityPolicy.shouldReportMissingForPreset(
+            textOrientationAutoDetect = preset.textOrientationAutoDetect,
+            modelReady = orientationModelReady,
+        )
+    ) {
         add(TranslationPresetModelIssue(TranslationPresetModelIssueKind.ORIENTATION_MISSING))
     }
 }

@@ -65,6 +65,19 @@ class RoutingOcrEngine @Inject constructor(
             logBoxes("raw-no-merge", raw)
             return raw
         }
+        if (OcrMergePresentationPolicy.deferGeometricMerge(
+                renderMode = settings.renderMode,
+                mergeAdjacentBlocks = settings.mergeAdjacentBlocks,
+                mergeStrength = settings.mergeStrength,
+            )
+        ) {
+            Timber.tag("OcrMerge").i(
+                "defer geometric merge for floating ALL; preserve %d atomic regions for reading order",
+                raw.size,
+            )
+            logBoxes("raw-floating-all", raw)
+            return raw
+        }
         // 详细日志：打 box 坐标，用于诊断"为什么这两段没合"。仅 Timber（logcat），不写 LogRepository
         // 避免污染用户可见日志。tag = OcrMerge，过滤用。
         logBoxes("before", raw)
@@ -610,7 +623,10 @@ class RoutingOcrEngine @Inject constructor(
                     horizontalOverlapRatio = 0.5f,
                     heightRatioLimit = 1.4f
                 )
-                MergeStrength.STANDARD -> MergeParams(
+                MergeStrength.STANDARD,
+                // ALL is a floating-window translation-unit policy. Keep OCR geometry on the
+                // stable standard thresholds so switching to Blocks cannot change OCR grouping.
+                MergeStrength.ALL -> MergeParams(
                     sameLineTopTolerance = 0.5f,
                     adjacentGapRatio = 1.2f,
                     verticalGapRatio = 0.8f,

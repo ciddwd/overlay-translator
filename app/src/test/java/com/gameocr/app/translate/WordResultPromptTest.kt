@@ -253,7 +253,12 @@ class WordResultPromptTest {
         val encoded = json.encodeToString(
             ChatRequest(
                 model = "deepseek-chat",
-                messages = listOf(ChatMessage("user", "json")),
+                messages = listOf(
+                    OpenAiRequestMessage(
+                        "user",
+                        kotlinx.serialization.json.JsonPrimitive("json"),
+                    )
+                ),
                 responseFormat = dictionaryJsonResponseFormatOrNull("https://api.deepseek.com/v1/"),
             )
         )

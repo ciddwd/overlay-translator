@@ -10,7 +10,7 @@ class AnthropicRequestOptionsWiringTest {
     fun remoteLlmTranslations_useSharedPolicyForFastPageAndContinuousModes_tableDriven() {
         data class EngineCase(
             val name: String,
-            val path: String,
+            val paths: List<String>,
             val systemMarker: String,
             val userMarker: String,
             val maxTokensMarker: String,
@@ -20,16 +20,22 @@ class AnthropicRequestOptionsWiringTest {
         val engines = listOf(
             EngineCase(
                 name = "OpenAI compatible",
-                path = "src/main/java/com/gameocr/app/translate/OpenAiTranslator.kt",
-                systemMarker = "ChatMessage(role = \"system\", content = resolved.systemMessage)",
-                userMarker = "ChatMessage(role = \"user\", content = resolved.userMessage)",
+                paths = listOf(
+                    "src/main/java/com/gameocr/app/translate/OpenAiTranslator.kt",
+                    "src/main/java/com/gameocr/app/translate/OpenAiApi.kt",
+                ),
+                systemMarker = "OpenAiRequestMessage(role = \"system\", content = JsonPrimitive(resolved.systemMessage))",
+                userMarker = "JsonPrimitive(resolved.userMessage)",
                 maxTokensMarker = "maxTokens = resolved.maxTokens",
                 temperatureMarker = "temperature = resolved.temperature",
                 topPMarker = "topP = resolved.topP",
             ),
             EngineCase(
                 name = "Anthropic compatible",
-                path = "src/main/java/com/gameocr/app/translate/AnthropicTranslator.kt",
+                paths = listOf(
+                    "src/main/java/com/gameocr/app/translate/AnthropicTranslator.kt",
+                    "src/main/java/com/gameocr/app/translate/AnthropicApi.kt",
+                ),
                 systemMarker = "systemPrompt = resolvedRequest.systemMessage",
                 userMarker = "userText = resolvedRequest.userMessage",
                 maxTokensMarker = "resolvedRequest.maxTokens ?: TRANSLATION_MAX_TOKENS",
@@ -49,7 +55,7 @@ class AnthropicRequestOptionsWiringTest {
         )
 
         engines.forEach { engine ->
-            val source = sourceFile(engine.path).readText()
+            val source = engine.paths.joinToString("\n") { sourceFile(it).readText() }
             sharedMarkers.forEach { marker ->
                 assertTrue("${engine.name}/${marker.name}", source.contains(marker.marker))
             }

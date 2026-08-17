@@ -19,6 +19,7 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.Window
 import android.view.WindowManager
 import android.widget.FrameLayout
@@ -39,10 +40,17 @@ import com.gameocr.app.data.TranslationBlockInteractionMode
 import com.gameocr.app.ocr.TextBlock
 import com.gameocr.app.ocr.TextOrientation
 import com.gameocr.app.ocr.ShapeAwareBubblePatch
+import com.gameocr.app.translate.FloatingWordLookupOutcome
 import com.gameocr.app.util.VerticalDiagnosticLog
 import com.gameocr.app.util.physicalDisplaySize
 import kotlin.math.ceil
+import kotlin.math.abs
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import timber.log.Timber
 
 internal fun performPlaybackOverlayDismiss(
@@ -68,6 +76,10 @@ class OverlayManager(
     private val onTranslationBlockDetailRequested: (source: String, translation: String) -> Unit = { _, _ -> },
     private val onTranslationCorrectionRequested: (TranslationCorrectionRequest) -> Unit = {},
     private val onFloatingWindowDismissed: () -> Unit = {},
+    private val onFloatingWordLookupRequested: suspend (String) -> FloatingWordLookupOutcome = { word ->
+        FloatingWordLookupOutcome(word, null, null, null)
+    },
+    private val onFloatingWordDetailsRequested: (FloatingWordLookupOutcome) -> Unit = {},
     @Volatile var textSizeSp: Int = 14,
     @Volatile var alpha: Float = 0.85f,
     @Volatile var regionOffset: android.graphics.Point = android.graphics.Point(0, 0),
@@ -90,6 +102,7 @@ class OverlayManager(
     @Volatile var translationBlockInteractionMode: TranslationBlockInteractionMode =
         TranslationBlockInteractionMode.COPY_BUTTON,
     @Volatile var translationBlockSelectionSpeechAction: TtsPlaybackAction? = null,
+    @Volatile var floatingWordSpeechAction: TtsPlaybackAction? = null,
     /** CUSTOM 主题的边框样式（仅 CUSTOM 主题生效）。CaptureService 同步。 */
     @Volatile var customBorderStyle: BorderStyle = BorderStyle.SOLID,
     @Volatile var overlayTypeface: Typeface? = null,
@@ -148,6 +161,8 @@ class OverlayManager(
     private var lastFloatingPairs: MutableList<Pair<String, String>>? = null
     /** 上一次是流式还是整批显示。重建 content 时保留原渲染阶段。 */
     private var lastFloatingStreaming: Boolean = false
+    private var floatingWordLookupJob: Job? = null
+    private var floatingWordRequestId: Long = 0L
 
     private val overlayType: Int = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
         WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -614,7 +629,149 @@ class OverlayManager(
                 }
             },
         )
+        configureFloatingEnglishWordTap(contentView)
         return contentView
+    }
+
+    @Suppress("ClickableViewAccessibility")
+    private fun configureFloatingEnglishWordTap(textView: TextView) {
+        val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
+        val longPressTimeout = ViewConfiguration.getLongPressTimeout().toLong()
+        var downX = 0f
+        var downY = 0f
+        var downAtMs = 0L
+        var moved = false
+        textView.setOnTouchListener { _, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downX = event.x
+                    downY = event.y
+                    downAtMs = event.eventTime
+                    moved = false
+                }
+
+                MotionEvent.ACTION_MOVE -> {
+                    if (abs(event.x - downX) > touchSlop || abs(event.y - downY) > touchSlop) {
+                        moved = true
+                    }
+                }
+
+                MotionEvent.ACTION_UP -> {
+                    val deliberateTap = !moved &&
+                        event.eventTime - downAtMs < longPressTimeout &&
+                        textView.selectionStart == textView.selectionEnd
+                    if (deliberateTap) {
+                        val hit = floatingWordHitAt(textView, event.x, event.y)
+                        if (hit == null) {
+                            cancelFloatingWordLookup(dismissPreview = true)
+                        } else {
+                            val anchor = floatingWordAnchor(textView, hit) ?: return@setOnTouchListener false
+                            startFloatingWordLookup(hit.word, anchor)
+                        }
+                    }
+                }
+
+                MotionEvent.ACTION_CANCEL -> moved = true
+            }
+            // Preserve TextView's native scrolling, selection and long-press action mode.
+            false
+        }
+    }
+
+    private fun floatingWordHitAt(
+        textView: TextView,
+        x: Float,
+        y: Float,
+    ): FloatingEnglishWordHit? {
+        val layout = textView.layout ?: return null
+        val localY = y - textView.totalPaddingTop + textView.scrollY
+        if (localY < 0f || localY > layout.height.toFloat()) return null
+        val line = layout.getLineForVertical(localY.toInt())
+        val localX = x - textView.totalPaddingLeft + textView.scrollX
+        val tolerance = 2f * context.resources.displayMetrics.density
+        val lineLeft = minOf(layout.getLineLeft(line), layout.getLineRight(line)) - tolerance
+        val lineRight = maxOf(layout.getLineLeft(line), layout.getLineRight(line)) + tolerance
+        if (localX !in lineLeft..lineRight) return null
+        val offset = textView.getOffsetForPosition(x, y)
+        return floatingEnglishWordAt(textView.text, offset)
+    }
+
+    private fun floatingWordAnchor(
+        textView: TextView,
+        hit: FloatingEnglishWordHit,
+    ): Rect? {
+        val layout = textView.layout ?: return null
+        val line = layout.getLineForOffset(hit.start.coerceIn(0, textView.text.length))
+        val start = maxOf(hit.start, layout.getLineStart(line))
+        val end = minOf(hit.end, layout.getLineEnd(line))
+        if (start >= end) return null
+        val startX = layout.getPrimaryHorizontal(start)
+        val endX = layout.getPrimaryHorizontal(end)
+        val location = IntArray(2)
+        textView.getLocationInWindow(location)
+        val contentLeft = location[0] + textView.totalPaddingLeft - textView.scrollX
+        val contentTop = location[1] + textView.totalPaddingTop - textView.scrollY
+        return Rect(
+            contentLeft + minOf(startX, endX).toInt(),
+            contentTop + layout.getLineTop(line),
+            contentLeft + maxOf(startX, endX).toInt(),
+            contentTop + layout.getLineBottom(line),
+        )
+    }
+
+    private fun startFloatingWordLookup(word: String, anchorInWindow: Rect) {
+        cancelFloatingWordLookup(dismissPreview = false)
+        val requestId = ++floatingWordRequestId
+        showFloatingWordPreview(
+            anchorInWindow = anchorInWindow,
+            outcome = FloatingWordLookupOutcome(word, null, null, null),
+            loading = true,
+        )
+        floatingWordLookupJob = ioScope.launch {
+            val outcome = try {
+                onFloatingWordLookupRequested(word)
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (error: Throwable) {
+                FloatingWordLookupOutcome(word, null, null, error)
+            }
+            withContext(Dispatchers.Main.immediate) {
+                if (requestId != floatingWordRequestId || !floatingWindow.isShown()) return@withContext
+                showFloatingWordPreview(anchorInWindow, outcome, loading = false)
+            }
+        }
+    }
+
+    private fun showFloatingWordPreview(
+        anchorInWindow: Rect,
+        outcome: FloatingWordLookupOutcome,
+        loading: Boolean,
+    ) {
+        val preview = floatingWordPreviewContent(
+            word = outcome.word,
+            translation = outcome.translation,
+            partsOfSpeech = outcome.wordResult?.pos.orEmpty(),
+            loading = loading,
+            failed = !loading && !outcome.hasDetails,
+            loadingLabel = context.getString(R.string.word_card_loading),
+            failedLabel = context.getString(R.string.floating_word_lookup_failed),
+        )
+        val speech = floatingWordSpeechAction
+        floatingWindow.showWordPreview(
+            anchorInWindow = anchorInWindow,
+            content = preview,
+            onSpeak = speech?.let { { it.onToggle(outcome.word) } },
+            onOpenDetails = outcome.takeIf { !loading && it.hasDetails }?.let {
+                { onFloatingWordDetailsRequested(it) }
+            },
+        )
+    }
+
+    private fun cancelFloatingWordLookup(dismissPreview: Boolean) {
+        floatingWordRequestId += 1L
+        floatingWordLookupJob?.cancel()
+        floatingWordLookupJob = null
+        if (dismissPreview) floatingWindow.dismissWordPreview()
     }
 
     private fun buildFloatingWindowText(pairs: List<Pair<String, String>>): CharSequence {
@@ -1814,6 +1971,7 @@ class OverlayManager(
     }
 
     private fun clearFloatingWindow() {
+        cancelFloatingWordLookup(dismissPreview = true)
         floatingWindow.hide()
         floatingContentView = null
         floatingStreamingUpdateCounts.clear()

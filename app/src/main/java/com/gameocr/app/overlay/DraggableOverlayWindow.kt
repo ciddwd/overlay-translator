@@ -5,11 +5,14 @@ import android.app.Dialog
 import android.content.Context
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.text.Selection
 import android.text.Spannable
+import android.text.TextUtils
+import android.util.TypedValue
 import android.view.ActionMode
 import android.view.Gravity
 import android.view.Menu
@@ -109,6 +112,8 @@ class DraggableOverlayWindow(
     private var dialog: Dialog? = null
     private var layoutParams: WindowManager.LayoutParams? = null
     private var contentSlot: FrameLayout? = null
+    private var transientLayer: FrameLayout? = null
+    private var wordPreviewView: View? = null
     private var activeSelectionActionMode: ActionMode? = null
     private val selectableTextViews: MutableMap<TextView, () -> Boolean> = WeakHashMap()
     /** show / 旋转后缓存的屏幕尺寸——给 onConfigurationChanged 做 ratio 重算的基准。
@@ -247,6 +252,7 @@ class DraggableOverlayWindow(
     fun setContent(content: View) {
         val slot = contentSlot ?: return
         endActiveSelection()
+        dismissWordPreview()
         slot.removeAllViews()
         slot.addView(
             content,
@@ -256,6 +262,55 @@ class DraggableOverlayWindow(
             )
         )
         applyLocked()
+    }
+
+    /** Shows the compact three-line dictionary preview inside the existing floating window. */
+    internal fun showWordPreview(
+        anchorInWindow: Rect,
+        content: FloatingWordPreviewContent,
+        onSpeak: (() -> Unit)?,
+        onOpenDetails: (() -> Unit)?,
+    ) {
+        val layer = transientLayer ?: return
+        dismissWordPreview()
+        val density = context.resources.displayMetrics.density
+        val horizontalMargin = (10 * density).roundToInt()
+        val verticalGap = (6 * density).roundToInt()
+        val card = buildWordPreviewCard(content, onSpeak) {
+            if (onOpenDetails != null) {
+                dismissWordPreview()
+                onOpenDetails()
+            }
+        }
+        val params = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+        ).apply {
+            leftMargin = horizontalMargin
+            rightMargin = horizontalMargin
+        }
+        layer.addView(card, params)
+        wordPreviewView = card
+        card.post {
+            if (wordPreviewView !== card || layer.width <= 0 || layer.height <= 0) return@post
+            val layerLocation = IntArray(2)
+            layer.getLocationInWindow(layerLocation)
+            val anchorTop = anchorInWindow.top - layerLocation[1]
+            val anchorBottom = anchorInWindow.bottom - layerLocation[1]
+            val minimumTop = (8 * density).roundToInt()
+            val maximumTop = (layer.height - card.height - minimumTop).coerceAtLeast(minimumTop)
+            val above = anchorTop - card.height - verticalGap
+            val below = anchorBottom + verticalGap
+            params.topMargin = (if (above >= minimumTop) above else below)
+                .coerceIn(minimumTop, maximumTop)
+            card.layoutParams = params
+        }
+    }
+
+    fun dismissWordPreview() {
+        val preview = wordPreviewView ?: return
+        wordPreviewView = null
+        (preview.parent as? FrameLayout)?.removeView(preview)
     }
 
     /**
@@ -430,12 +485,14 @@ class DraggableOverlayWindow(
     fun hide() {
         if (rootView == null && dialog == null) return
         endActiveSelection()
+        dismissWordPreview()
         val currentDialog = dialog
         dialog = null
         runCatching { currentDialog?.dismiss() }
         rootView = null
         layoutParams = null
         contentSlot = null
+        transientLayer = null
         headerView = null
         footerView = null
         lockButtonView = null
@@ -580,6 +637,21 @@ class DraggableOverlayWindow(
             )
         )
 
+        // Transient dictionary previews stay inside the same overlay window. The empty layer is
+        // not clickable, so touches outside its card continue to the scrolling text underneath.
+        val transient = FrameLayout(context).apply {
+            clipChildren = false
+            clipToPadding = false
+        }
+        root.addView(
+            transient,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+            ),
+        )
+        transientLayer = transient
+
         // —— 独立的锁按钮（始终居左上角；锁定状态下 header/footer GONE 仍可见，便于解锁）——
         val lockBtn = ImageView(context).apply {
             setImageResource(lockIconRes(locked))
@@ -603,6 +675,82 @@ class DraggableOverlayWindow(
         footerView = footer
         lockButtonView = lockBtn
         return root
+    }
+
+    private fun buildWordPreviewCard(
+        content: FloatingWordPreviewContent,
+        onSpeak: (() -> Unit)?,
+        onOpenDetails: () -> Unit,
+    ): View {
+        val density = context.resources.displayMetrics.density
+        val horizontalPadding = (12 * density).roundToInt()
+        val verticalPadding = (8 * density).roundToInt()
+        val foreground = themeFgColor()
+        val muted = themeFgMutedColor()
+        val stroke = themeStroke().takeIf { it.first > 0 }?.second ?: muted
+
+        fun oneLineText(
+            value: String,
+            sizeSp: Float,
+            color: Int,
+        ) = TextView(context).apply {
+            text = value
+            setTextColor(color)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp)
+            maxLines = 1
+            minLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            setHorizontallyScrolling(false)
+        }
+
+        val card = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            elevation = 8 * density
+            isClickable = true
+            isFocusable = true
+            setPadding(horizontalPadding, verticalPadding, horizontalPadding, verticalPadding)
+            background = GradientDrawable().apply {
+                cornerRadius = 10 * density
+                setColor(themeBgColor())
+                setStroke((1 * density).roundToInt().coerceAtLeast(1), stroke)
+            }
+            contentDescription = context.getString(
+                R.string.floating_word_open_details,
+                content.word,
+            )
+            setOnClickListener { onOpenDetails() }
+        }
+
+        val wordRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        wordRow.addView(
+            oneLineText(content.word, 15f, foreground).apply {
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+            },
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+        )
+        onSpeak?.let { speak ->
+            val size = (30 * density).roundToInt()
+            wordRow.addView(
+                ImageView(context).apply {
+                    setImageResource(R.drawable.ic_volume_up)
+                    imageTintList = android.content.res.ColorStateList.valueOf(foreground)
+                    val padding = (6 * density).roundToInt()
+                    setPadding(padding, padding, padding, padding)
+                    isClickable = true
+                    isFocusable = true
+                    contentDescription = context.getString(R.string.word_card_speak_source)
+                    setOnClickListener { speak() }
+                },
+                LinearLayout.LayoutParams(size, size),
+            )
+        }
+        card.addView(wordRow)
+        card.addView(oneLineText(content.translation, 14f, foreground))
+        card.addView(oneLineText(content.partOfSpeech, 12f, muted))
+        return card
     }
 
     private fun lockIconRes(locked: Boolean): Int =

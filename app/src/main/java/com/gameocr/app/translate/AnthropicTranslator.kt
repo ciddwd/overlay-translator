@@ -67,7 +67,10 @@ class AnthropicTranslator @Inject constructor(
         if (sources.isEmpty()) return emptyList()
         validate(settings)
         val capabilityKey = RemoteStructuredOutputCapability.anthropicKey(settings)
-        if (!RemoteStructuredOutputCapability.tracker.shouldAttemptStructured(capabilityKey)) {
+        if (
+            settings.runtimeTranslationVisualContext == null &&
+            !RemoteStructuredOutputCapability.tracker.shouldAttemptStructured(capabilityKey)
+        ) {
             Timber.w(
                 "Anthropic structuredBatch bypassed count=%d model=%s reason=capability_cooldown",
                 sources.size,
@@ -75,7 +78,7 @@ class AnthropicTranslator @Inject constructor(
             )
             return translateStructuredFallbackIndividually(
                 sources = sources,
-                settings = settings,
+                settings = settings.copy(runtimeTranslationVisualContext = null),
                 onUpdate = onUpdate,
                 translateOne = ::translate,
             )
@@ -123,7 +126,7 @@ class AnthropicTranslator @Inject constructor(
             )
             return translateStructuredFallbackIndividually(
                 sources = sources,
-                settings = settings,
+                settings = settings.copy(runtimeTranslationVisualContext = null),
                 onUpdate = onUpdate,
                 translateOne = ::translate,
             )
@@ -140,7 +143,7 @@ class AnthropicTranslator @Inject constructor(
         )
         return translateStructuredFallbackIndividually(
             sources = sources,
-            settings = settings,
+            settings = settings.copy(runtimeTranslationVisualContext = null),
             onUpdate = onUpdate,
             translateOne = ::translate,
         )
@@ -149,9 +152,12 @@ class AnthropicTranslator @Inject constructor(
     private suspend fun executeStructuredBatchAttempt(
         attempt: StructuredBatchAttempt,
         settings: Settings,
+        allowVisualFallback: Boolean = true,
     ): String {
         val resolvedRequest = resolveRequest(
-            text = StructuredBatchPromptPolicy.buildUserPayload(
+            text = settings.runtimeTranslationVisualContext?.let { visual ->
+                VisualTranslationPromptPolicy.buildUserPayload(visual, attempt.activeIds)
+            } ?: StructuredBatchPromptPolicy.buildUserPayload(
                 attempt,
                 settings.openAiRequestOptions,
             ),
@@ -174,6 +180,8 @@ class AnthropicTranslator @Inject constructor(
             json = json,
             topP = resolvedRequest.topP,
             thinkingControl = RemoteThinkingPolicy.anthropic(settings.openAiRequestOptions),
+            conversationMessages = resolvedRequest.conversationMessages,
+            visualContext = settings.runtimeTranslationVisualContext,
         )
         val requestId = UUID.randomUUID().toString().take(8)
         val startedAt = System.currentTimeMillis()
@@ -186,11 +194,19 @@ class AnthropicTranslator @Inject constructor(
             attempt.activeIds,
             settings.anthropicModel,
         )
-        return try {
+        val translated = try {
             withContext(Dispatchers.IO) {
                 client.withApiTimeout(resolvedRequest.timeoutSeconds).newCall(request).execute().use { response ->
                     if (!response.isSuccessful) {
                         val raw = response.body?.string().orEmpty()
+                        if (
+                            settings.runtimeTranslationVisualContext != null &&
+                            VisualRequestFallbackPolicy.shouldRetryWithoutImage(response.code)
+                        ) {
+                            throw VisualContextRejectedException(
+                                "HTTP ${response.code}: ${anthropicErrorDetail(raw, json)}"
+                            )
+                        }
                         throw TranslationException("HTTP ${response.code}: ${anthropicErrorDetail(raw, json)}")
                     }
                     if (stream) {
@@ -221,6 +237,20 @@ class AnthropicTranslator @Inject constructor(
                 System.currentTimeMillis() - startedAt,
             )
             throw error
+        } catch (error: VisualContextRejectedException) {
+            if (allowVisualFallback && settings.runtimeTranslationVisualContext != null) {
+                Timber.w(
+                    error,
+                    "Anthropic request=%s rejected visual context; retry once with text only",
+                    requestId,
+                )
+                return executeStructuredBatchAttempt(
+                    attempt = attempt,
+                    settings = settings.copy(runtimeTranslationVisualContext = null),
+                    allowVisualFallback = false,
+                )
+            }
+            throw error
         } catch (error: Throwable) {
             Timber.w(
                 error,
@@ -230,10 +260,33 @@ class AnthropicTranslator @Inject constructor(
             )
             throw error
         }
+        val visualResponseComplete = StructuredBatchResponseParser.parse(
+                raw = translated,
+                expectedIndexes = attempt.activeIndexes,
+                json = json,
+            ).batchComplete
+        if (VisualResponseFallbackPolicy.shouldRetryWithoutImage(
+                visualContextPresent = settings.runtimeTranslationVisualContext != null,
+                fallbackAllowed = allowVisualFallback,
+                structuredResponseComplete = visualResponseComplete,
+            )
+        ) {
+            Timber.w(
+                "Anthropic request=%s visual response invalid; retry once with text only",
+                requestId,
+            )
+            return executeStructuredBatchAttempt(
+                attempt = attempt,
+                settings = settings.copy(runtimeTranslationVisualContext = null),
+                allowVisualFallback = false,
+            )
+        }
+        return translated
     }
 
     private fun shouldUseStructuredBatch(settings: Settings): Boolean =
-        settings.runtimeTranslationPromptContext.currentPage.isNotEmpty()
+        settings.runtimeTranslationPromptContext.currentPage.isNotEmpty() ||
+            settings.runtimeTranslationVisualContext != null
 
     private fun readStructuredAnthropicStream(
         response: okhttp3.Response,
@@ -346,6 +399,7 @@ class AnthropicTranslator @Inject constructor(
             json = json,
             topP = resolvedRequest.topP,
             thinkingControl = RemoteThinkingPolicy.anthropic(settings.openAiRequestOptions),
+            conversationMessages = resolvedRequest.conversationMessages,
         )
         val requestId = UUID.randomUUID().toString().take(8)
         TranslationRequestAudit.log(
@@ -391,6 +445,7 @@ class AnthropicTranslator @Inject constructor(
             json = json,
             topP = resolvedRequest.topP,
             thinkingControl = RemoteThinkingPolicy.anthropic(settings.openAiRequestOptions),
+            conversationMessages = resolvedRequest.conversationMessages,
         )
         val requestId = UUID.randomUUID().toString().take(8)
         TranslationRequestAudit.log(
@@ -588,6 +643,14 @@ class AnthropicTranslator @Inject constructor(
             options = settings.openAiRequestOptions,
             networkRequestTimeoutSeconds = settings.apiTimeoutSeconds,
             textAlreadyPrepared = textAlreadyPrepared,
+            conversationHistory = settings.runtimeTranslationPromptContext
+                .takeIf { it.currentPage.isEmpty() }
+                ?.previousFrame
+                .orEmpty(),
+        ).copy(
+            visualContextFingerprint = settings.runtimeTranslationVisualContext?.let { visual ->
+                "visual:v${visual.promptVersion}:${visual.sha256}:${visual.combineIntoSingleOutput}"
+            }.orEmpty(),
         )
     }
 

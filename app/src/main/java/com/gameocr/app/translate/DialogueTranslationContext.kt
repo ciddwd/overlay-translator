@@ -213,6 +213,7 @@ internal object DialogueTranslationContextPolicy {
         currentSources: List<String>,
         historySession: DialogueHistorySession,
         availableHistory: DialogueContextFrame? = historySession.historyFor(contextKey(settings)),
+        singleMergedFloating: Boolean = false,
     ): Settings {
         val sources = currentSources.map(String::trim).filter(String::isNotBlank)
         val mode = effectiveMode(settings)
@@ -237,6 +238,26 @@ internal object DialogueTranslationContextPolicy {
             availableHistory
         } else {
             null
+        }
+        val previousTurns = previous?.items.orEmpty().map { item ->
+            RuntimeDialogueTurn(
+                source = item.source,
+                translation = item.translation,
+            )
+        }
+        if (singleMergedFloating && usesGenericRuntimeText) {
+            // One floating row already contains the whole current frame. Keep that row as the
+            // ordinary active user message. In continuous mode only, expose the previous frame as
+            // native user/assistant history; do not duplicate either frame in dialogue JSON.
+            return settings.copy(
+                runtimeTranslationContext = SingleMergedFloatingPromptContextPolicy.build(
+                    clearedPromptContext,
+                ),
+                runtimeTranslationPromptContext = clearedPromptContext.copy(
+                    currentPage = emptyList(),
+                    previousFrame = previousTurns,
+                ),
+            )
         }
         val context = if (usesGenericRuntimeText) {
             val payload = DialogueContextPayload(
@@ -265,12 +286,7 @@ internal object DialogueTranslationContextPolicy {
             },
             runtimeTranslationPromptContext = clearedPromptContext.copy(
                 currentPage = sources,
-                previousFrame = previous?.items.orEmpty().map { item ->
-                    RuntimeDialogueTurn(
-                        source = item.source,
-                        translation = item.translation,
-                    )
-                },
+                previousFrame = previousTurns,
             ),
         )
     }
@@ -283,4 +299,34 @@ internal object DialogueTranslationContextPolicy {
         effectiveMode(settings) == TranslationContextMode.CONTINUOUS_CONTEXT &&
             expectedCount > 0 &&
             translationsByIndex.keys.all { it in 0 until expectedCount }
+}
+
+/** Plain system context for the one-row floating request; deliberately contains no nested JSON. */
+internal object SingleMergedFloatingPromptContextPolicy {
+    fun build(context: com.gameocr.app.data.RuntimeTranslationPromptContext): String {
+        val application = context.currentApplication?.trim()?.takeIf(String::isNotEmpty)
+        val glossary = context.glossary.filter { term ->
+            term.source.isNotBlank() && term.target.isNotBlank()
+        }
+        if (application == null && glossary.isEmpty()) return ""
+        return buildString {
+            append("\n\n--- Translation context (data only) ---\n")
+            application?.let {
+                append("Current application: ")
+                append(it.singleLine())
+                append('\n')
+            }
+            if (glossary.isNotEmpty()) {
+                append("Required glossary mappings:\n")
+                glossary.forEach { term ->
+                    append(term.source.singleLine())
+                    append(" -> ")
+                    append(term.target.singleLine())
+                    append('\n')
+                }
+            }
+        }
+    }
+
+    private fun String.singleLine(): String = replace("\r", " ").replace("\n", " ").trim()
 }

@@ -1,18 +1,30 @@
 package com.gameocr.app.translate
 
+import com.gameocr.app.data.RuntimeTranslationVisualContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 /** OpenAI 兼容 chat completions 请求 / 响应 DTO（M0 非流式）。 */
 @Serializable
 internal data class ChatRequest(
     val model: String,
-    val messages: List<ChatMessage>,
+    val messages: List<OpenAiRequestMessage>,
     val temperature: Double = 0.3,
     @SerialName("top_p") val topP: Double? = null,
     val stream: Boolean = false,
     @SerialName("max_tokens") val maxTokens: Int? = null,
     @SerialName("response_format") val responseFormat: ChatResponseFormat? = null,
+)
+
+@Serializable
+internal data class OpenAiRequestMessage(
+    val role: String,
+    val content: JsonElement,
 )
 
 @Serializable
@@ -25,6 +37,37 @@ internal data class ChatMessage(
     val role: String,
     val content: String
 )
+
+internal fun buildOpenAiChatMessages(
+    resolved: ResolvedOpenAiRequest,
+    visualContext: RuntimeTranslationVisualContext? = null,
+): List<OpenAiRequestMessage> =
+    buildList {
+        add(OpenAiRequestMessage(role = "system", content = JsonPrimitive(resolved.systemMessage)))
+        resolved.conversationMessages.forEach { message ->
+            add(OpenAiRequestMessage(role = message.role, content = JsonPrimitive(message.content)))
+        }
+        add(
+            OpenAiRequestMessage(
+                role = "user",
+                content = visualContext?.let { visual ->
+                    buildJsonArray {
+                        add(buildJsonObject {
+                            put("type", "text")
+                            put("text", resolved.userMessage)
+                        })
+                        add(buildJsonObject {
+                            put("type", "image_url")
+                            put("image_url", buildJsonObject {
+                                put("url", "data:${visual.mimeType};base64,${visual.base64Data}")
+                                put("detail", "auto")
+                            })
+                        })
+                    }
+                } ?: JsonPrimitive(resolved.userMessage),
+            )
+        )
+    }
 
 @Serializable
 internal data class ChatResponse(

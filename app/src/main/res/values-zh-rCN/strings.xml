@@ -179,6 +179,8 @@
     <string name="settings_alpha">译文透明度</string>
     <string name="settings_loop_interval">循环间隔 (ms)</string>
     <string name="settings_streaming">流式翻译（边译边显示）</string>
+    <string name="settings_send_screen_image">随翻译发送画面</string>
+    <string name="settings_send_screen_image_hint">把当前画面和识别文字一起交给 LLM，帮助理解对话顺序、人物关系和上下文。画面会上传到当前翻译服务，并增加流量和等待时间。</string>
     <string name="settings_thinking_mode">思考模式</string>
     <string name="settings_thinking_mode_hint">开启后模型会先进行推理，可能提高复杂内容的准确性，但会增加等待时间和 Token 消耗。翻译场景建议保持关闭。</string>
     <string name="settings_reasoning_effort">推理强度</string>
@@ -728,9 +730,11 @@
     <string name="settings_merge_strength_conservative">保守</string>
     <string name="settings_merge_strength_standard">标准</string>
     <string name="settings_merge_strength_aggressive">激进</string>
+    <string name="settings_merge_strength_all">全部</string>
     <string name="settings_merge_strength_conservative_hint">严格阈值，少误合但段落容易拆开。适合视觉小说 / 长段密集场景。</string>
     <string name="settings_merge_strength_standard_hint">默认平衡阈值，适合大多数场景。</string>
     <string name="settings_merge_strength_aggressive_hint">宽松阈值，更容易合并多行气泡。漫画 / 短句场景推荐；可能误合相邻气泡。</string>
+    <string name="settings_merge_strength_all_hint">仅悬浮窗口：把画面里的所有文字合成一段翻译，相隔较远的文字也会放在一起。</string>
     <string name="settings_floating_size_format">悬浮按钮大小: %1$d dp</string>
     <string name="settings_loop_trigger_mode_label">循环触发方式</string>
     <string name="settings_loop_trigger_fixed">固定间隔</string>
@@ -824,6 +828,7 @@
     <string name="settings_search_item_target_lang">目标语言</string>
     <string name="settings_search_item_prompt">Prompt 模板</string>
     <string name="settings_search_item_streaming">流式翻译</string>
+    <string name="settings_search_item_send_screen_image">随翻译发送画面</string>
     <string name="settings_search_item_thinking_mode">思考模式</string>
     <string name="settings_search_item_reasoning_effort">推理强度</string>
     <string name="settings_search_item_thinking_parameter_format">思考参数格式</string>
@@ -877,7 +882,7 @@
     <string name="settings_search_item_border_style">边框样式（实线 / 虚线 / 点线 / 双线 / 凹槽）</string>
     <string name="settings_search_item_allow_wrap">译文允许换行</string>
     <string name="settings_search_item_avoid_collision">避免 box 碰撞</string>
-    <string name="settings_search_item_merge_strength">合并强度（保守 / 标准 / 激进）</string>
+    <string name="settings_search_item_merge_strength">合并强度（保守 / 标准 / 激进 / 悬浮全部）</string>
     <string name="settings_search_item_floating_snap">悬浮按钮贴边</string>
     <string name="settings_search_item_floating_auto_dock">悬浮按钮自动停靠</string>
     <string name="settings_search_item_floating_dock_inset">悬浮按钮贴边距离</string>
@@ -1401,6 +1406,8 @@
 
     <!-- 划词翻译卡片 -->
     <string name="word_card_loading">翻译中…</string>
+    <string name="floating_word_lookup_failed">查询失败</string>
+    <string name="floating_word_open_details">查看 %1$s 的完整释义</string>
     <string name="word_card_recognizing">正在识别选中文字…</string>
     <string name="word_card_no_text">选中区域内没识别到文字</string>
     <string name="word_card_dismiss">关闭</string>
@@ -1520,7 +1527,7 @@
     <!-- 文本方向自动判别 -->
     <string name="settings_text_orientation_section_title">自动判别方向</string>
     <string name="settings_orient_auto_detect_title">自动判别排版方向</string>
-    <string name="settings_orient_auto_detect_summary">这个功能主要用于横排以外文字的增强，例如竖排文字增强。基于 OCR 输出的 bbox 几何判别排版方向，必要时自动用更合适的引擎重跑一次 OCR。如不需要，可以精简删除方向模型包以减少系统占用，并关闭此功能以提升翻译速度。</string>
+    <string name="settings_orient_auto_detect_summary">这个功能主要用于横排以外文字的增强，例如竖排文字增强。它会根据 OCR 文字框判断排版方向，必要时自动用更合适的引擎重新识别。如不需要，关闭此功能即可提升翻译速度。</string>
     <string name="settings_orient_manual_label">手动锁定方向</string>
     <string name="settings_orient_manual_auto">自动</string>
     <string name="settings_orient_horizontal_ltr">横排</string>

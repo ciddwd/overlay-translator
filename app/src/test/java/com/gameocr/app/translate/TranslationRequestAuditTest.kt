@@ -10,6 +10,19 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TranslationRequestAuditTest {
+    @Test
+    fun redactVisualPayload_tableDrivenRemovesOpenAiAndAnthropicImageBytes() {
+        val largeBase64 = "A".repeat(256)
+        mapOf(
+            "openai" to "{\"url\":\"data:image/jpeg;base64,$largeBase64\"}",
+            "anthropic" to "{\"source\":{\"type\":\"base64\",\"data\":\"$largeBase64\"}}",
+        ).forEach { (name, payload) ->
+            val redacted = TranslationRequestAudit.redactVisualPayload(payload)
+            assertFalse(name, redacted.contains(largeBase64))
+            assertTrue(name, redacted.contains("image omitted"))
+        }
+    }
+
 
     @Test
     fun chunkUtf8_tableDriven_preservesExactPayloadWithinByteLimit() {

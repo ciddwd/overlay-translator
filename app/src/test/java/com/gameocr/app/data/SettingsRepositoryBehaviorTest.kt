@@ -66,6 +66,11 @@ class SettingsRepositoryBehaviorTest {
                 OpenAiRequestOptions(encodeUserTextUnicode = true),
             ),
             Case(
+                "visual context",
+                OpenAiRequestOptions(sendScreenImage = true),
+                OpenAiRequestOptions(sendScreenImage = true),
+            ),
+            Case(
                 "conflict prefers Base64",
                 OpenAiRequestOptions(encodeUserTextBase64 = true, encodeUserTextUnicode = true),
                 OpenAiRequestOptions(encodeUserTextBase64 = true),
@@ -393,7 +398,7 @@ class SettingsRepositoryBehaviorTest {
             overlayAvoidCollision = false,
             apiTimeoutSeconds = 47,
             mergeAdjacentBlocks = true,
-            mergeStrength = MergeStrength.CONSERVATIVE,
+            mergeStrength = MergeStrength.ALL,
             pinnedLanguages = listOf("ja", "zh-TW", "en"),
             mlKitRecentSourceLanguages = listOf("ru", "en", "ja", "ko"),
             cleartextAllowedHosts = listOf("192.168.0.2", "localhost"),

@@ -82,7 +82,10 @@ class OpenAiTranslator @Inject constructor(
         if (sources.isEmpty()) return emptyList()
         validate(settings)
         val capabilityKey = RemoteStructuredOutputCapability.openAiKey(settings)
-        if (!RemoteStructuredOutputCapability.tracker.shouldAttemptStructured(capabilityKey)) {
+        if (
+            settings.runtimeTranslationVisualContext == null &&
+            !RemoteStructuredOutputCapability.tracker.shouldAttemptStructured(capabilityKey)
+        ) {
             Timber.w(
                 "OpenAI structuredBatch bypassed count=%d model=%s reason=capability_cooldown",
                 sources.size,
@@ -90,7 +93,7 @@ class OpenAiTranslator @Inject constructor(
             )
             return translateStructuredFallbackIndividually(
                 sources = sources,
-                settings = settings,
+                settings = settings.copy(runtimeTranslationVisualContext = null),
                 onUpdate = onUpdate,
                 translateOne = ::translate,
             )
@@ -138,7 +141,7 @@ class OpenAiTranslator @Inject constructor(
             )
             return translateStructuredFallbackIndividually(
                 sources = sources,
-                settings = settings,
+                settings = settings.copy(runtimeTranslationVisualContext = null),
                 onUpdate = onUpdate,
                 translateOne = ::translate,
             )
@@ -155,7 +158,7 @@ class OpenAiTranslator @Inject constructor(
         )
         return translateStructuredFallbackIndividually(
             sources = sources,
-            settings = settings,
+            settings = settings.copy(runtimeTranslationVisualContext = null),
             onUpdate = onUpdate,
             translateOne = ::translate,
         )
@@ -164,9 +167,12 @@ class OpenAiTranslator @Inject constructor(
     private suspend fun executeStructuredBatchAttempt(
         attempt: StructuredBatchAttempt,
         settings: Settings,
+        allowVisualFallback: Boolean = true,
     ): String {
         val resolvedRequest = resolveRequest(
-            text = StructuredBatchPromptPolicy.buildUserPayload(
+            text = settings.runtimeTranslationVisualContext?.let { visual ->
+                VisualTranslationPromptPolicy.buildUserPayload(visual, attempt.activeIds)
+            } ?: StructuredBatchPromptPolicy.buildUserPayload(
                 attempt,
                 settings.openAiRequestOptions,
             ),
@@ -196,11 +202,19 @@ class OpenAiTranslator @Inject constructor(
             attempt.activeIds,
             settings.model,
         )
-        return try {
+        val translated = try {
             withContext(Dispatchers.IO) {
                 client.withApiTimeout(resolvedRequest.timeoutSeconds).newCall(request).execute().use { response ->
                     if (!response.isSuccessful) {
                         val raw = response.body?.string().orEmpty()
+                        if (
+                            settings.runtimeTranslationVisualContext != null &&
+                            VisualRequestFallbackPolicy.shouldRetryWithoutImage(response.code)
+                        ) {
+                            throw VisualContextRejectedException(
+                                "HTTP ${response.code}: ${raw.take(200)}"
+                            )
+                        }
                         throw TranslationException("HTTP ${response.code}: ${raw.take(200)}")
                     }
                     if (stream) {
@@ -238,6 +252,20 @@ class OpenAiTranslator @Inject constructor(
                 System.currentTimeMillis() - startedAt,
             )
             throw error
+        } catch (error: VisualContextRejectedException) {
+            if (allowVisualFallback && settings.runtimeTranslationVisualContext != null) {
+                Timber.w(
+                    error,
+                    "OpenAI request=%s rejected visual context; retry once with text only",
+                    requestId,
+                )
+                return executeStructuredBatchAttempt(
+                    attempt = attempt,
+                    settings = settings.copy(runtimeTranslationVisualContext = null),
+                    allowVisualFallback = false,
+                )
+            }
+            throw error
         } catch (error: Throwable) {
             Timber.w(
                 error,
@@ -247,10 +275,33 @@ class OpenAiTranslator @Inject constructor(
             )
             throw error
         }
+        val visualResponseComplete = StructuredBatchResponseParser.parse(
+                raw = translated,
+                expectedIndexes = attempt.activeIndexes,
+                json = json,
+            ).batchComplete
+        if (VisualResponseFallbackPolicy.shouldRetryWithoutImage(
+                visualContextPresent = settings.runtimeTranslationVisualContext != null,
+                fallbackAllowed = allowVisualFallback,
+                structuredResponseComplete = visualResponseComplete,
+            )
+        ) {
+            Timber.w(
+                "OpenAI request=%s visual response invalid; retry once with text only",
+                requestId,
+            )
+            return executeStructuredBatchAttempt(
+                attempt = attempt,
+                settings = settings.copy(runtimeTranslationVisualContext = null),
+                allowVisualFallback = false,
+            )
+        }
+        return translated
     }
 
     private fun shouldUseStructuredBatch(settings: Settings): Boolean =
-        settings.runtimeTranslationPromptContext.currentPage.isNotEmpty()
+        settings.runtimeTranslationPromptContext.currentPage.isNotEmpty() ||
+            settings.runtimeTranslationVisualContext != null
 
     private fun readStructuredOpenAiStream(
         response: okhttp3.Response,
@@ -549,7 +600,9 @@ class OpenAiTranslator @Inject constructor(
         return runCatching {
             val body = ChatRequest(
                 model = settings.model,
-                messages = listOf(ChatMessage(role = "user", content = "ping")),
+                messages = listOf(
+                    OpenAiRequestMessage(role = "user", content = kotlinx.serialization.json.JsonPrimitive("ping"))
+                ),
                 temperature = 0.0,
                 stream = false,
                 maxTokens = 1
@@ -623,8 +676,14 @@ class OpenAiTranslator @Inject constructor(
         val reqBody = ChatRequest(
             model = settings.model,
             messages = listOf(
-                ChatMessage(role = "system", content = systemPrompt),
-                ChatMessage(role = "user", content = trimmed)
+                OpenAiRequestMessage(
+                    role = "system",
+                    content = kotlinx.serialization.json.JsonPrimitive(systemPrompt),
+                ),
+                OpenAiRequestMessage(
+                    role = "user",
+                    content = kotlinx.serialization.json.JsonPrimitive(trimmed),
+                )
             ),
             temperature = 0.0,
             stream = false,
@@ -697,6 +756,14 @@ class OpenAiTranslator @Inject constructor(
             options = settings.openAiRequestOptions,
             networkRequestTimeoutSeconds = settings.apiTimeoutSeconds,
             textAlreadyPrepared = textAlreadyPrepared,
+            conversationHistory = settings.runtimeTranslationPromptContext
+                .takeIf { it.currentPage.isEmpty() }
+                ?.previousFrame
+                .orEmpty(),
+        ).copy(
+            visualContextFingerprint = settings.runtimeTranslationVisualContext?.let { visual ->
+                "visual:v${visual.promptVersion}:${visual.sha256}:${visual.combineIntoSingleOutput}"
+            }.orEmpty(),
         )
     }
 
@@ -713,10 +780,7 @@ class OpenAiTranslator @Inject constructor(
         )
         val body = ChatRequest(
             model = settings.model,
-            messages = listOf(
-                ChatMessage(role = "system", content = resolved.systemMessage),
-                ChatMessage(role = "user", content = resolved.userMessage),
-            ),
+            messages = buildOpenAiChatMessages(resolved, settings.runtimeTranslationVisualContext),
             temperature = resolved.temperature,
             topP = resolved.topP,
             stream = stream,

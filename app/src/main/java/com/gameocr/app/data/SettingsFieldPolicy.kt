@@ -218,7 +218,9 @@ object SettingsFieldPolicy {
         portable("paddleDetectionProfile", R.string.settings_search_item_dbnet_advanced),
         privateConnection("paddleModelMirrorUrl", R.string.settings_search_item_paddle_download),
         privateConnection("mangaOcrModelMirrorUrl", R.string.settings_search_item_manga_ocr_download),
-        privateConnection("orientationModelMirrorUrl", R.string.settings_search_item_orientation_model),
+        // Keep the hidden optional package mirror in storage/import/export, but do not expose a
+        // search destination while its user-facing management UI is disabled.
+        privateConnection("orientationModelMirrorUrl"),
         deviceLocal("preferShizukuCapture"),
         portable("a11yVolumeTrigger", R.string.settings_search_item_a11y_volume),
         portable("translatorEngine", R.string.settings_search_item_translator_engine),
@@ -298,6 +300,12 @@ object SettingsFieldPolicy {
         ),
         SettingsFieldRule(
             name = "runtimeTranslationPromptContext",
+            persistence = SettingsPersistence.RUNTIME_ONLY,
+            portability = SettingsPortability.RUNTIME_ONLY,
+            diagnostic = SettingsDiagnostic.OMITTED,
+        ),
+        SettingsFieldRule(
+            name = "runtimeTranslationVisualContext",
             persistence = SettingsPersistence.RUNTIME_ONLY,
             portability = SettingsPortability.RUNTIME_ONLY,
             diagnostic = SettingsDiagnostic.OMITTED,
@@ -383,6 +391,7 @@ object SettingsFieldPolicy {
             json.decodeFromJsonElement<Settings>(JsonObject(merged)).copy(
                 runtimeTranslationContext = current.runtimeTranslationContext,
                 runtimeTranslationPromptContext = current.runtimeTranslationPromptContext,
+                runtimeTranslationVisualContext = current.runtimeTranslationVisualContext,
                 runtimeTranslationScopePackage = current.runtimeTranslationScopePackage,
                 runtimeTranslationScopeLabel = current.runtimeTranslationScopeLabel,
             )

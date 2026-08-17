@@ -3,6 +3,8 @@ package com.gameocr.app.translate
 import com.gameocr.app.data.OpenAiRequestOptions
 import com.gameocr.app.data.RemoteReasoningEffort
 import com.gameocr.app.data.Settings
+import com.gameocr.app.data.RuntimeTranslationVisualContext
+import com.gameocr.app.data.RuntimeVisualTextItem
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.int
@@ -20,6 +22,47 @@ class AnthropicApiCompatibilityTest {
     private val json = Json {
         ignoreUnknownKeys = true
         explicitNulls = false
+    }
+
+    @Test
+    fun messageRequest_visualContextUsesNativeImageBlockBeforeText() {
+        val request = buildAnthropicMessageRequest(
+            settings = Settings(
+                anthropicBaseUrl = "https://api.anthropic.com/v1",
+                anthropicApiKey = "key",
+                anthropicModel = "model",
+            ),
+            systemPrompt = "system",
+            userText = "numbered text",
+            maxTokens = 128,
+            temperature = 0.3,
+            stream = false,
+            json = json,
+            visualContext = RuntimeTranslationVisualContext(
+                mimeType = "image/jpeg",
+                base64Data = "YWJj",
+                width = 10,
+                height = 20,
+                byteCount = 3,
+                sha256 = "hash",
+                items = listOf(RuntimeVisualTextItem(1, "source", 0, 0, 1000, 1000)),
+                combineIntoSingleOutput = false,
+            ),
+        )
+        val content = json.parseToJsonElement(requireNotNull(request.body).utf8())
+            .jsonObject.getValue("messages").jsonArray.single().jsonObject
+            .getValue("content").jsonArray
+
+        assertEquals(2, content.size)
+        assertEquals("image", content[0].jsonObject.getValue("type").jsonPrimitive.content)
+        assertEquals("base64", content[0].jsonObject.getValue("source").jsonObject
+            .getValue("type").jsonPrimitive.content)
+        assertEquals("image/jpeg", content[0].jsonObject.getValue("source").jsonObject
+            .getValue("media_type").jsonPrimitive.content)
+        assertEquals("YWJj", content[0].jsonObject.getValue("source").jsonObject
+            .getValue("data").jsonPrimitive.content)
+        assertEquals("text", content[1].jsonObject.getValue("type").jsonPrimitive.content)
+        assertEquals("numbered text", content[1].jsonObject.getValue("text").jsonPrimitive.content)
     }
 
     @Test
@@ -89,6 +132,36 @@ class AnthropicApiCompatibilityTest {
             assertEquals(case.name, "こんにちは", messages.single().jsonObject.getValue("content").jsonPrimitive.content)
             assertFalse(case.name, messages.any { it.jsonObject["role"]?.jsonPrimitive?.content == "system" })
         }
+    }
+
+    @Test
+    fun messageRequest_preservesNativeHistoryBeforeCurrentUser() {
+        val request = buildAnthropicMessageRequest(
+            settings = Settings(
+                anthropicBaseUrl = "https://api.anthropic.com/v1",
+                anthropicApiKey = "key",
+                anthropicModel = "model",
+            ),
+            systemPrompt = "system",
+            userText = "current frame",
+            maxTokens = 128,
+            temperature = 0.3,
+            stream = false,
+            json = json,
+            conversationMessages = listOf(
+                ResolvedConversationMessage("user", "previous source"),
+                ResolvedConversationMessage("assistant", "previous translation"),
+            ),
+        )
+        val messages = json.parseToJsonElement(requireNotNull(request.body).utf8())
+            .jsonObject.getValue("messages").jsonArray
+
+        assertEquals(listOf("user", "assistant", "user"), messages.map {
+            it.jsonObject.getValue("role").jsonPrimitive.content
+        })
+        assertEquals(listOf("previous source", "previous translation", "current frame"), messages.map {
+            it.jsonObject.getValue("content").jsonPrimitive.content
+        })
     }
 
     @Test

@@ -15,6 +15,7 @@ class TranslationPresetTest {
             Case("disabled", OpenAiRequestOptions()),
             Case("Base64", OpenAiRequestOptions(encodeUserTextBase64 = true)),
             Case("Unicode", OpenAiRequestOptions(encodeUserTextUnicode = true)),
+            Case("visual context", OpenAiRequestOptions(sendScreenImage = true)),
             Case(
                 "custom thinking configuration",
                 OpenAiRequestOptions(

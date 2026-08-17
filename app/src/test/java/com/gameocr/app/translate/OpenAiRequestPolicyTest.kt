@@ -3,6 +3,7 @@ package com.gameocr.app.translate
 import com.gameocr.app.data.OpenAiRequestOptions
 import com.gameocr.app.data.RemoteReasoningEffort
 import com.gameocr.app.data.RemoteThinkingParameterFormat
+import com.gameocr.app.data.RuntimeDialogueTurn
 import com.gameocr.app.data.RuntimeTranslationPromptContext
 import com.gameocr.app.data.TranslationContextMode
 import kotlinx.serialization.decodeFromString
@@ -198,6 +199,71 @@ class OpenAiRequestPolicyTest {
         assertEquals(1, resolved.systemMessage.countOccurrences("--- Encoded source protocol ---"))
         assertTrue(resolved.systemMessage.contains("Base64-encoded UTF-8"))
         assertFalse(resolved.systemMessage.contains("literal UTF-16 Unicode escape sequences"))
+    }
+
+    @Test
+    fun `single text conversation history uses native messages without dialogue JSON_tableDriven`() {
+        data class Case(
+            val name: String,
+            val options: OpenAiRequestOptions,
+            val expectedPreviousUser: String,
+            val expectedCurrentUser: String,
+        )
+        listOf(
+            Case("plain", OpenAiRequestOptions(), "前の原文", "今の原文"),
+            Case(
+                "Base64 applies to historical and current user text",
+                OpenAiRequestOptions(encodeUserTextBase64 = true),
+                "5YmN44Gu5Y6f5paH",
+                "5LuK44Gu5Y6f5paH",
+            ),
+        ).forEach { case ->
+            val resolved = OpenAiRequestPolicy.resolve(
+                text = "今の原文",
+                systemPromptTemplate = "translate",
+                sourceDisplay = "Japanese",
+                targetDisplay = "Chinese",
+                runtimeContext = "",
+                options = case.options.copy(
+                    userMessageTemplate = "{text}",
+                    systemPromptSuffix = "",
+                ),
+                networkRequestTimeoutSeconds = 30,
+                conversationHistory = listOf(
+                    RuntimeDialogueTurn("前の原文", "上一句"),
+                    RuntimeDialogueTurn("翻译失败的原文", null),
+                ),
+            )
+
+            assertEquals(case.name, case.expectedCurrentUser, resolved.userMessage)
+            assertEquals(case.name, listOf("user", "assistant"),
+                resolved.conversationMessages.map(ResolvedConversationMessage::role))
+            assertEquals(case.name, case.expectedPreviousUser, resolved.conversationMessages[0].content)
+            assertEquals(case.name, "上一句", resolved.conversationMessages[1].content)
+            assertTrue(case.name, resolved.systemMessage.contains("翻译失败的原文"))
+            assertFalse(case.name, resolved.systemMessage.contains("dialogue_context_json"))
+            assertEquals(
+                case.name,
+                listOf("system", "user", "assistant", "user"),
+                buildOpenAiChatMessages(resolved).map(OpenAiRequestMessage::role),
+            )
+        }
+    }
+
+    @Test
+    fun `conversation history participates in the translation cache fingerprint`() {
+        fun resolve(historyTranslation: String) = OpenAiRequestPolicy.resolve(
+            text = "current",
+            systemPromptTemplate = "translate",
+            sourceDisplay = "Japanese",
+            targetDisplay = "Chinese",
+            runtimeContext = "",
+            options = OpenAiRequestOptions(userMessageTemplate = "{text}", systemPromptSuffix = ""),
+            networkRequestTimeoutSeconds = 30,
+            conversationHistory = listOf(RuntimeDialogueTurn("previous", historyTranslation)),
+        )
+
+        assertFalse(resolve("A").cacheFingerprint == resolve("B").cacheFingerprint)
     }
 
     @Test

@@ -117,22 +117,28 @@ import com.gameocr.app.overlay.WordSelectOverlay
 import com.gameocr.app.ui.MainActivity
 import com.gameocr.app.translate.BatchTranslationProgressState
 import com.gameocr.app.translate.BatchTranslationUpdate
+import com.gameocr.app.translate.PageTranslationGroupingPolicy
 import com.gameocr.app.translate.PageTranslationUnit
 import com.gameocr.app.translate.PageTranslationPresentationTextPolicy
 import com.gameocr.app.translate.DialogueHistorySession
 import com.gameocr.app.translate.DialogueTranslationContextPolicy
+import com.gameocr.app.translate.FloatingWordLookupCoordinator
+import com.gameocr.app.translate.FloatingWordLookupOutcome
 import com.gameocr.app.translate.ContinuousTranslationReusePolicy
 import com.gameocr.app.translate.TranslationException
 import com.gameocr.app.translate.TranslationMemoryService
 import com.gameocr.app.translate.Translator
 import com.gameocr.app.translate.RoutingTranslator
 import com.gameocr.app.translate.StructuredContextBatchSelectionPolicy
+import com.gameocr.app.translate.RuntimeTranslationVisualContextFactory
+import com.gameocr.app.translate.TranslationVisualContextPolicy
 import com.gameocr.app.translate.pageTranslationRowUpdates
 import com.gameocr.app.translate.planPageTranslationUnits
 import com.gameocr.app.translate.WordHeuristic
 import com.gameocr.app.translate.WordResult
 import com.gameocr.app.translate.WordSelectTranslationCoordinator
 import com.gameocr.app.translate.WordSelectTranslationStage
+import com.gameocr.app.translate.forFloatingEnglishWordLookup
 import com.gameocr.app.tts.TtsEngine
 import com.gameocr.app.util.InferenceTiming
 import com.gameocr.app.util.VerticalDiagnosticLog
@@ -366,6 +372,8 @@ class CaptureService : Service() {
             onTranslationBlockDetailRequested = ::showTranslationBlockCopyPanel,
             onTranslationCorrectionRequested = ::showTranslationCorrection,
             onFloatingWindowDismissed = { ttsEngine.stop() },
+            onFloatingWordLookupRequested = ::lookupFloatingEnglishWord,
+            onFloatingWordDetailsRequested = ::showFloatingEnglishWordDetails,
         )
         floatingButton = FloatingButtonManager(
             this,
@@ -1921,10 +1929,12 @@ class CaptureService : Service() {
 
             val smartLoopEnabled = loopMode &&
                 settings.loopTriggerMode == LoopTriggerMode.WAIT_FOR_TEXT_COMPLETE
-            val roiOptimizationEnabled = smartLoopEnabled && allowsFrequentTextStabilityProbe(
-                settings.ocrEngine,
-                isEndToEnd,
-            )
+            val roiOptimizationEnabled = smartLoopEnabled &&
+                !TranslationVisualContextPolicy.shouldPrepare(settings) &&
+                allowsFrequentTextStabilityProbe(
+                    settings.ocrEngine,
+                    isEndToEnd,
+                )
             var forceTextStabilityFallback = loopRoiTextFallbackActive
             if (roiOptimizationEnabled && !forceTextStabilityFallback) {
                 val pending = pendingLoopRoiResult
@@ -2728,6 +2738,12 @@ class CaptureService : Service() {
             }
             val sourcePreservationPlan = sourcePreservationService.plan(blocks, settings)
             val translationBlocks = sourcePreservationPlan.retainedBlocks
+            val translationRequestSettings = prepareVisualTranslationSettings(
+                bitmap = workBitmap,
+                blocks = translationBlocks,
+                settings = settings,
+                diagId = diagId,
+            )
             val adaptiveStyles = analyzeAdaptiveOverlayStyles(
                 workBitmap,
                 translationBlocks,
@@ -2781,7 +2797,7 @@ class CaptureService : Service() {
             when {
                 redBoxActive -> renderBlocks(
                     translationBlocks,
-                    settings,
+                    translationRequestSettings,
                     renderOrientation,
                     diagId,
                     adaptiveStyles,
@@ -2790,13 +2806,13 @@ class CaptureService : Service() {
                 settings.renderMode == RenderMode.BLOCKS ->
                     renderBlocks(
                         translationBlocks,
-                        settings,
+                        translationRequestSettings,
                         renderOrientation,
                         diagId,
                         adaptiveStyles,
                         delayedMaskDebugBatch,
                     )
-                else -> renderFloatingWindow(translationBlocks, settings, diagId)
+                else -> renderFloatingWindow(translationBlocks, translationRequestSettings, diagId)
             }
         } finally {
             restoreFloatingButtonAfterCapture()
@@ -2964,7 +2980,17 @@ class CaptureService : Service() {
     ): PageTranslationPlan {
         val routing = translator as? RoutingTranslator
         val prefersBatch = routing?.prefersBatchFor(settings) ?: translator.prefersBatch
-        val units = planPageTranslationUnits(blocks, presentation)
+        val mergeAllFloating = PageTranslationGroupingPolicy.shouldMergeAll(
+            presentation = presentation,
+            mergeAdjacentBlocks = settings.mergeAdjacentBlocks,
+            mergeStrength = settings.mergeStrength,
+        )
+        val units = planPageTranslationUnits(
+            blocks = blocks,
+            presentation = presentation,
+            mergeAdjacentBlocks = settings.mergeAdjacentBlocks,
+            mergeStrength = settings.mergeStrength,
+        )
         val historySession = when (presentation) {
             RenderMode.BLOCKS -> dialogueHistorySession
             RenderMode.FLOATING_WINDOW -> floatingDialogueHistorySession
@@ -2985,6 +3011,7 @@ class CaptureService : Service() {
             unitCount = units.size,
             engineSupportsStructuredBatch = routing?.supportsStructuredContextBatchFor(settings)
                 ?: translator.supportsStructuredContextBatch,
+            forceSingleVisualBatch = settings.runtimeTranslationVisualContext != null,
         )
         val plan = PageTranslationPlan(
             units = units,
@@ -2993,6 +3020,7 @@ class CaptureService : Service() {
                 currentSources = units.map(PageTranslationUnit::sourceText),
                 historySession = historySession,
                 availableHistory = previousFrame,
+                singleMergedFloating = mergeAllFloating,
             ),
             reusedTranslationsByIndex = reusedTranslationsByIndex,
             useBatch = prefersBatch || structuredContextBatch,
@@ -3010,18 +3038,116 @@ class CaptureService : Service() {
                     "streaming=${settings.streamingTranslate} unitSource=OCR_FINAL " +
                     "contextMode=${plan.contextModeName} blocks=${blocks.size} units=${units.size} " +
                     "configuredMerge=${settings.mergeAdjacentBlocks} " +
+                    "floatingMergeAll=$mergeAllFloating " +
+                    "visual=${settings.runtimeTranslationVisualContext != null} " +
                     "reused=${reusedTranslationsByIndex.size} pending=${units.size - reusedTranslationsByIndex.size}"
             )
             units.forEachIndexed { index, unit ->
                 logVerticalDiag(
                     id,
                     "pageContextUnit#${index + 1} " +
-                        "blocks=[${unit.blockIndex + 1}] " +
+                        "blocks=${unit.blockIndexes.map { it + 1 }} " +
                         "src=${unit.sourceText.toDiagText()}"
                 )
             }
         }
         return plan
+    }
+
+    private suspend fun lookupFloatingEnglishWord(word: String): FloatingWordLookupOutcome {
+        val settings = settingsRepository.get()
+        val startedAt = SystemClock.elapsedRealtime()
+        val outcome = FloatingWordLookupCoordinator(translator).execute(word, settings)
+        logVerticalDiag(
+            captureSequence.get(),
+            "floatingWord lookup word=${word.toDiagText()} success=${outcome.hasDetails} " +
+                "dictionary=${outcome.wordResult != null} elapsedMs=${SystemClock.elapsedRealtime() - startedAt}",
+        )
+        return outcome
+    }
+
+    private fun showFloatingEnglishWordDetails(outcome: FloatingWordLookupOutcome) {
+        scope.launch {
+            val settings = settingsRepository.get().forFloatingEnglishWordLookup()
+            val diagId = captureSequence.incrementAndGet()
+            val sourceSpeech = wordSelectTtsAction(
+                settings = settings.copy(targetLang = "en"),
+                diagId = diagId,
+                role = "floating_word_source",
+                playbackId = "floating-word:$diagId:source",
+            )
+            val translationSpeech = wordSelectTtsAction(
+                settings = settings,
+                diagId = diagId,
+                role = "floating_word_translation",
+                playbackId = "floating-word:$diagId:translation",
+            )
+            val dictionarySpeech = wordSelectTtsAction(
+                settings = settings,
+                diagId = diagId,
+                role = "floating_word_dictionary",
+                playbackId = "floating-word:$diagId:dictionary",
+            )
+            withContext(Dispatchers.Main) {
+                translationBlockCopyOverlay?.dismiss()
+                val card = translationCard ?: TranslationCardOverlay(
+                    context = this@CaptureService,
+                    onDismissed = { ttsEngine.stop() },
+                ).also { translationCard = it }
+                card.show(
+                    sourceText = outcome.word,
+                    translation = outcome.translation,
+                    wordResult = outcome.wordResult,
+                    settings = settings,
+                    onSpeakSource = sourceSpeech,
+                    onSpeakTranslation = translationSpeech,
+                    onSpeakDictionary = dictionarySpeech,
+                    onCorrectTranslation = { source, translation ->
+                        showTranslationCorrection(
+                            TranslationCorrectionRequest(source, translation)
+                        )
+                    },
+                )
+            }
+        }
+    }
+
+    private suspend fun prepareVisualTranslationSettings(
+        bitmap: Bitmap,
+        blocks: List<TextBlock>,
+        settings: Settings,
+        diagId: Long?,
+    ): Settings {
+        if (!TranslationVisualContextPolicy.shouldPrepare(settings) || blocks.isEmpty()) {
+            return settings.copy(runtimeTranslationVisualContext = null)
+        }
+        val mergeAllFloating = PageTranslationGroupingPolicy.shouldMergeAll(
+            presentation = settings.renderMode,
+            mergeAdjacentBlocks = settings.mergeAdjacentBlocks,
+            mergeStrength = settings.mergeStrength,
+        )
+        val visual = withContext(Dispatchers.Default) {
+            RuntimeTranslationVisualContextFactory.create(
+                bitmap = bitmap,
+                blocks = blocks,
+                presentation = settings.renderMode,
+                combineIntoSingleOutput = mergeAllFloating,
+            )
+        }
+        if (visual == null) {
+            diagId?.let { logVerticalDiag(it, "visual translation context unavailable; use text only") }
+            return settings.copy(runtimeTranslationVisualContext = null)
+        }
+        diagId?.let {
+            logVerticalDiag(
+                it,
+                "visual translation context image=${visual.width}x${visual.height} " +
+                    "mime=${visual.mimeType} bytes=${visual.byteCount} sha256=${visual.sha256} " +
+                    "items=${visual.items.size} combine=${visual.combineIntoSingleOutput} " +
+                    "promptVersion=${visual.promptVersion}",
+            )
+        }
+        return settings.copy(runtimeTranslationVisualContext = visual)
     }
 
     private suspend fun renderBlocks(
@@ -3078,8 +3204,8 @@ class CaptureService : Service() {
                 )
             }
         }
-        // Recognition, semantic grouping, context and request routing are planned once without any
-        // renderer-specific decisions. Blocks and the floating window consume the same plan.
+        // Recognition and semantic OCR grouping stay shared. Translation-unit presentation may
+        // apply a floating-only grouping policy, while this Blocks path remains one-to-one.
         val pagePlan = preparePageTranslationPlan(blocks, settings, RenderMode.BLOCKS, diagId)
         val translationUnits = pagePlan.units
         val successfulMaskBlockIndices = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
@@ -4310,6 +4436,12 @@ class CaptureService : Service() {
                     diagId = captureSequence.get(),
                     role = "block_translation_direct_selection",
                     playbackId = "translation-block:${captureSequence.get()}:direct-selection",
+                )
+                floatingWordSpeechAction = wordSelectTtsAction(
+                    settings = settings.forFloatingEnglishWordLookup().copy(targetLang = "en"),
+                    diagId = captureSequence.get(),
+                    role = "floating_word_preview",
+                    playbackId = "floating-word:${captureSequence.get()}:preview",
                 )
                 floatingWindowContentMode = settings.floatingWindowContentMode
                 customBorderStyle = settings.customBorderStyle

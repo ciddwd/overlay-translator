@@ -360,7 +360,7 @@ class CaptureChromeOrderingTest {
     }
 
     @Test
-    fun renderers_useCanonicalOcrUnitsForBatchAndStreaming() {
+    fun renderers_planPresentationUnitsOnceForBatchAndStreaming() {
         val source = captureServiceSource()
         val renderSnippet = functionSnippet(source, "private suspend fun renderFloatingWindow(")
         val planSnippet = functionSnippet(source, "private fun preparePageTranslationPlan(")
@@ -369,8 +369,9 @@ class CaptureChromeOrderingTest {
         val individualSnippet = functionSnippet(source, "private suspend fun translatePageIndividually(")
 
         assertTrue(
-            "both renderers should plan final translation units from OCR blocks in one place",
-            "val units = planPageTranslationUnits(blocks, presentation)" in planSnippet,
+            "both renderers should plan presentation translation units from OCR blocks in one place",
+            "val units = planPageTranslationUnits(" in planSnippet &&
+                "mergeStrength = settings.mergeStrength" in planSnippet,
         )
         assertFalse(
             "translation planning must not run a second geometry merger",

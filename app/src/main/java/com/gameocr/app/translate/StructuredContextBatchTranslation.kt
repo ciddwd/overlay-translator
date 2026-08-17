@@ -60,10 +60,11 @@ internal object StructuredContextBatchSelectionPolicy {
         mode: TranslationContextMode,
         unitCount: Int,
         engineSupportsStructuredBatch: Boolean,
+        forceSingleVisualBatch: Boolean = false,
     ): Boolean =
         engineSupportsStructuredBatch &&
-            unitCount > 1 &&
-            mode != TranslationContextMode.FAST_PER_SEGMENT
+            unitCount > 0 &&
+            (forceSingleVisualBatch || (unitCount > 1 && mode != TranslationContextMode.FAST_PER_SEGMENT))
 }
 
 internal object StructuredBatchPromptPolicy {

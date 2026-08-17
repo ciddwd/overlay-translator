@@ -179,6 +179,8 @@
     <string name="settings_alpha">Opacity</string>
     <string name="settings_loop_interval">Loop interval (ms)</string>
     <string name="settings_streaming">Streaming translation (show as it streams)</string>
+    <string name="settings_send_screen_image">Send screen with translation</string>
+    <string name="settings_send_screen_image_hint">Send the current screen and recognized text to the LLM to help it understand reading order, speakers, and context. The image is uploaded to the current translation service and increases data use and waiting time.</string>
     <string name="settings_thinking_mode">Thinking mode</string>
     <string name="settings_thinking_mode_hint">When enabled, the model reasons before answering. This may improve difficult translations but increases waiting time and token usage. Keep it off for most translations.</string>
     <string name="settings_reasoning_effort">Reasoning effort</string>
@@ -729,9 +731,11 @@
     <string name="settings_merge_strength_conservative">Conservative</string>
     <string name="settings_merge_strength_standard">Standard</string>
     <string name="settings_merge_strength_aggressive">Aggressive</string>
+    <string name="settings_merge_strength_all">All</string>
     <string name="settings_merge_strength_conservative_hint">Strict thresholds: rarely over-merges but paragraphs may stay split. Suits visual novels / dense long passages.</string>
     <string name="settings_merge_strength_standard_hint">Balanced default, suits most scenarios.</string>
     <string name="settings_merge_strength_aggressive_hint">Loose thresholds: merges multi-line bubbles more readily. Recommended for comics / short bubbles; may merge adjacent bubbles by accident.</string>
+    <string name="settings_merge_strength_all_hint">Floating window only: combine all text on the screen into one translation. Text that is far apart will also be combined.</string>
     <string name="settings_floating_size_format">Floating button size: %1$d dp</string>
     <string name="settings_loop_trigger_mode_label">Loop trigger mode</string>
     <string name="settings_loop_trigger_fixed">Fixed interval</string>
@@ -825,6 +829,7 @@
     <string name="settings_search_item_target_lang">Target language</string>
     <string name="settings_search_item_prompt">Prompt template</string>
     <string name="settings_search_item_streaming">Streaming translation</string>
+    <string name="settings_search_item_send_screen_image">Send screen with translation</string>
     <string name="settings_search_item_thinking_mode">Thinking mode</string>
     <string name="settings_search_item_reasoning_effort">Reasoning effort</string>
     <string name="settings_search_item_thinking_parameter_format">Thinking parameter format</string>
@@ -878,7 +883,7 @@
     <string name="settings_search_item_border_style">Border style (solid / dashed / dotted / double / groove)</string>
     <string name="settings_search_item_allow_wrap">Allow translation wrap</string>
     <string name="settings_search_item_avoid_collision">Avoid box collision</string>
-    <string name="settings_search_item_merge_strength">Merge strength (conservative / standard / aggressive)</string>
+    <string name="settings_search_item_merge_strength">Merge strength (conservative / standard / aggressive / floating all)</string>
     <string name="settings_search_item_floating_snap">Floating button snap-to-edge</string>
     <string name="settings_search_item_floating_auto_dock">Floating button auto-dock</string>
     <string name="settings_search_item_floating_dock_inset">Floating button dock inset</string>
@@ -1402,6 +1407,8 @@
 
     <!-- Translation card -->
     <string name="word_card_loading">Translating…</string>
+    <string name="floating_word_lookup_failed">Lookup failed</string>
+    <string name="floating_word_open_details">View complete definitions for %1$s</string>
     <string name="word_card_recognizing">Recognizing selected text…</string>
     <string name="word_card_no_text">No text recognized in the selected area</string>
     <string name="word_card_dismiss">Close</string>
@@ -1521,7 +1528,7 @@
     <!-- Text orientation auto-detect -->
     <string name="settings_text_orientation_section_title">Auto-detect orientation</string>
     <string name="settings_orient_auto_detect_title">Auto-detect text orientation</string>
-    <string name="settings_orient_auto_detect_summary">This mainly improves non-horizontal text, such as vertical layouts. It detects layout direction from OCR bbox geometry and can re-run OCR with a better engine when needed. If you do not need it, delete the orientation model package to reduce storage use and turn this off to improve translation speed.</string>
+    <string name="settings_orient_auto_detect_summary">This mainly improves non-horizontal text, such as vertical layouts. It detects layout direction from OCR box geometry and can re-run OCR with a better engine when needed. If you do not need it, turn this off to improve translation speed.</string>
     <string name="settings_orient_manual_label">Manually lock orientation</string>
     <string name="settings_orient_manual_auto">Auto</string>
     <string name="settings_orient_horizontal_ltr">Horizontal</string>

@@ -12,6 +12,34 @@ import org.junit.Test
 class SettingsFieldPolicyTest {
 
     @Test
+    fun visualContext_tableDrivenPersistsToggleButNeverExportsRuntimeImage() {
+        val runtime = RuntimeTranslationVisualContext(
+            mimeType = "image/jpeg",
+            base64Data = "secret-image-bytes",
+            width = 10,
+            height = 20,
+            byteCount = 18,
+            sha256 = "hash",
+            items = listOf(RuntimeVisualTextItem(1, "source", 0, 0, 1000, 1000)),
+            combineIntoSingleOutput = false,
+        )
+        listOf(false, true).forEach { enabled ->
+            val encoded = SettingsFieldPolicy.encodePortable(
+                Settings(
+                    openAiRequestOptions = OpenAiRequestOptions(sendScreenImage = enabled),
+                    runtimeTranslationVisualContext = runtime,
+                )
+            )
+            val decoded = SettingsFieldPolicy.decodePortable(encoded).settings
+
+            assertFalse("runtime field must not be exported", encoded.containsKey("runtimeTranslationVisualContext"))
+            assertFalse("image bytes must not be exported", encoded.toString().contains("secret-image-bytes"))
+            assertEquals(enabled, decoded.openAiRequestOptions.sendScreenImage)
+            assertEquals(null, decoded.runtimeTranslationVisualContext)
+        }
+    }
+
+    @Test
     fun retiredCrossLineSetting_tableDriven_isIgnoredAtEveryImportBoundary() {
         data class Case(val name: String, val legacyValue: Boolean)
         val legacyJson = Json { ignoreUnknownKeys = true }
@@ -92,6 +120,7 @@ class SettingsFieldPolicyTest {
             Case("disabled", OpenAiRequestOptions()),
             Case("Base64", OpenAiRequestOptions(encodeUserTextBase64 = true)),
             Case("Unicode", OpenAiRequestOptions(encodeUserTextUnicode = true)),
+            Case("visual context", OpenAiRequestOptions(sendScreenImage = true)),
             Case(
                 "custom thinking configuration",
                 OpenAiRequestOptions(

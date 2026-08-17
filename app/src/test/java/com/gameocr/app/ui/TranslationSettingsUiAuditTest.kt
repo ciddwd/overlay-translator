@@ -1,6 +1,7 @@
 package com.gameocr.app.ui
 
 import com.gameocr.app.data.RenderMode
+import com.gameocr.app.data.MergeStrength
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -124,6 +125,42 @@ class TranslationSettingsUiAuditTest {
             assertTrue("${case.name}: missing ${case.before}", beforeIndex >= 0)
             assertTrue("${case.name}: missing ${case.after}", afterIndex >= 0)
             assertTrue(case.name, beforeIndex < afterIndex)
+        }
+    }
+
+    @Test
+    fun mergeAllOption_tableDriven_isVisibleOnlyForFloatingWindow() {
+        data class Case(
+            val name: String,
+            val renderMode: RenderMode,
+            val expectedOptions: List<MergeStrength>,
+            val expectedDisplayedWhenStoredAll: MergeStrength,
+        )
+        listOf(
+            Case(
+                "Blocks keeps three geometric strengths",
+                RenderMode.BLOCKS,
+                listOf(MergeStrength.CONSERVATIVE, MergeStrength.STANDARD, MergeStrength.AGGRESSIVE),
+                MergeStrength.STANDARD,
+            ),
+            Case(
+                "floating window exposes all",
+                RenderMode.FLOATING_WINDOW,
+                listOf(
+                    MergeStrength.CONSERVATIVE,
+                    MergeStrength.STANDARD,
+                    MergeStrength.AGGRESSIVE,
+                    MergeStrength.ALL,
+                ),
+                MergeStrength.ALL,
+            ),
+        ).forEach { case ->
+            assertEquals(case.name, case.expectedOptions, mergeStrengthOptionsFor(case.renderMode))
+            assertEquals(
+                case.name,
+                case.expectedDisplayedWhenStoredAll,
+                displayedMergeStrength(case.renderMode, MergeStrength.ALL),
+            )
         }
     }
 
