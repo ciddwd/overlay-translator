@@ -110,6 +110,7 @@ class TranslationVisualContextPolicyTest {
             val expectedComplete: Boolean,
             val expectedOrder: List<Int> = emptyList(),
             val expectedCorrectionIds: List<Int> = emptyList(),
+            val expectedTranslation: String? = null,
         )
         listOf(
             Case(
@@ -120,6 +121,7 @@ class TranslationVisualContextPolicyTest {
                 true,
                 listOf(2, 1),
                 listOf(2),
+                "译文",
             ),
             Case(
                 "numeric string ids remain compatible",
@@ -128,6 +130,25 @@ class TranslationVisualContextPolicyTest {
                 listOf(0),
                 true,
                 listOf(2, 1),
+                expectedTranslation = "译文",
+            ),
+            Case(
+                "merged output accepts complete per-item translations in reading order",
+                """{"ordered_ids":[2,1],"ocr_corrections":[],"translations":[{"id":1,"translation":"梓酱是谁？"},{"id":2,"translation":"她是我表妹。"}]}""",
+                true,
+                listOf(0),
+                true,
+                listOf(2, 1),
+                expectedTranslation = "她是我表妹。 梓酱是谁？",
+            ),
+            Case(
+                "merged output accepts strict alternate value fields",
+                """{"ordered_ids":[1,2],"ocr_corrections":[],"translations":[{"id":"2","text":"她是我表妹。"},{"id":"1","result":"梓酱是谁？"}]}""",
+                true,
+                listOf(0),
+                true,
+                listOf(1, 2),
+                expectedTranslation = "梓酱是谁？ 她是我表妹。",
             ),
             Case(
                 "ordinary visual batch also requires complete reading order",
@@ -136,6 +157,27 @@ class TranslationVisualContextPolicyTest {
                 listOf(0, 1),
                 true,
                 listOf(2, 1),
+            ),
+            Case(
+                "merged per-item output rejects a missing visual id",
+                """{"ordered_ids":[2,1],"ocr_corrections":[],"translations":[{"id":1,"translation":"甲"},{"id":3,"translation":"丙"}]}""",
+                true,
+                listOf(0),
+                false,
+            ),
+            Case(
+                "merged per-item output rejects duplicate visual ids",
+                """{"ordered_ids":[2,1],"ocr_corrections":[],"translations":[{"id":1,"translation":"甲"},{"id":1,"translation":"重复"},{"id":2,"translation":"乙"}]}""",
+                true,
+                listOf(0),
+                false,
+            ),
+            Case(
+                "merged per-item output rejects blank translations",
+                """{"ordered_ids":[2,1],"ocr_corrections":[],"translations":[{"id":1,"translation":"甲"},{"id":2,"translation":"  "}]}""",
+                true,
+                listOf(0),
+                false,
             ),
             Case(
                 "missing order is rejected",
@@ -235,6 +277,12 @@ class TranslationVisualContextPolicyTest {
                 assertTrue(case.name, result.normalizedPayload.orEmpty().contains("\"translations\""))
                 assertFalse(case.name, result.normalizedPayload.orEmpty().contains("ordered_ids"))
                 assertFalse(case.name, result.normalizedPayload.orEmpty().contains("ocr_corrections"))
+                val normalized = Json.parseToJsonElement(result.normalizedPayload.orEmpty()).jsonObject
+                case.expectedTranslation?.let { expectedTranslation ->
+                    val translation = normalized.getValue("translations").jsonArray
+                        .single().jsonObject.values.last().jsonPrimitive.content
+                    assertEquals(case.name, expectedTranslation, translation)
+                }
             } else {
                 assertEquals(case.name, null, result.normalizedPayload)
             }

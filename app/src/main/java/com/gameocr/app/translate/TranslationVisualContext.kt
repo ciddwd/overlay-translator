@@ -274,18 +274,17 @@ internal object VisualTranslationResponsePolicy {
         StructuredBatchResponseParser.candidateObjects(raw, json).forEach { root ->
             if (root.keys != requiredKeys) return@forEach
             val translations = root["translations"] as? JsonArray ?: return@forEach
-            val normalized = JsonObject(mapOf("translations" to translations)).toString()
-            val translationResult = StructuredBatchResponseParser.parse(
-                raw = normalized,
-                expectedIndexes = expectedIndexes,
-                json = json,
-            )
-            if (!translationResult.batchComplete) return@forEach
-
             val orderedIds = parseOrderedIds(root["ordered_ids"]) ?: return@forEach
             if (!isExactPermutation(orderedIds, context.items)) {
                 return@forEach
             }
+            val normalized = normalizeTranslations(
+                translations = translations,
+                context = context,
+                expectedIndexes = expectedIndexes,
+                orderedIds = orderedIds,
+                json = json,
+            ) ?: return@forEach
             val correctionIds = if (context.combineIntoSingleOutput) {
                 context.items.mapTo(linkedSetOf(), RuntimeVisualTextItem::id)
             } else {
@@ -309,6 +308,68 @@ internal object VisualTranslationResponsePolicy {
             ocrCorrections = emptyList(),
             complete = false,
         )
+    }
+
+    private fun normalizeTranslations(
+        translations: JsonArray,
+        context: RuntimeTranslationVisualContext,
+        expectedIndexes: List<Int>,
+        orderedIds: List<Int>,
+        json: Json,
+    ): String? {
+        val directPayload = JsonObject(mapOf("translations" to translations)).toString()
+        val directResult = StructuredBatchResponseParser.parse(
+            raw = directPayload,
+            expectedIndexes = expectedIndexes,
+            json = json,
+        )
+        if (directResult.batchComplete) return directPayload
+        if (!context.combineIntoSingleOutput || expectedIndexes.size != 1) return null
+
+        val translationsByVisualId = parseVisualItemTranslations(
+            translations = translations,
+            items = context.items,
+        ) ?: return null
+        val merged = orderedIds
+            .map(translationsByVisualId::getValue)
+            .joinToString(separator = " ") { it.trim() }
+            .trim()
+            .takeIf(String::isNotBlank)
+            ?: return null
+        val resultId = expectedIndexes.single() + 1
+        return buildJsonObject {
+            put("translations", buildJsonArray {
+                add(buildJsonObject {
+                    put("id", resultId)
+                    put("translation", merged)
+                })
+            })
+        }.toString()
+    }
+
+    private fun parseVisualItemTranslations(
+        translations: JsonArray,
+        items: List<RuntimeVisualTextItem>,
+    ): Map<Int, String>? {
+        val expectedIds = items.mapTo(linkedSetOf(), RuntimeVisualTextItem::id)
+        val parsed = linkedMapOf<Int, String>()
+        translations.forEach { element ->
+            val item = element as? JsonObject ?: return null
+            if (item.size != 2 || "id" !in item) return null
+            val id = item.numericValue("id") ?: return null
+            if (id !in expectedIds || id in parsed) return null
+            val translation = item.entries
+                .singleOrNull { (name, _) -> name != "id" }
+                ?.value
+                ?.let { it as? JsonPrimitive }
+                ?.takeIf(JsonPrimitive::isString)
+                ?.contentOrNull
+                ?.trim()
+                ?.takeIf(String::isNotBlank)
+                ?: return null
+            parsed[id] = translation
+        }
+        return parsed.takeIf { it.keys == expectedIds }
     }
 
     private fun parseCorrections(
