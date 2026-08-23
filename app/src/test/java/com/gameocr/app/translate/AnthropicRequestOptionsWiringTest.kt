@@ -25,7 +25,7 @@ class AnthropicRequestOptionsWiringTest {
                     "src/main/java/com/gameocr/app/translate/OpenAiApi.kt",
                 ),
                 systemMarker = "OpenAiRequestMessage(role = \"system\", content = JsonPrimitive(resolved.systemMessage))",
-                userMarker = "JsonPrimitive(resolved.userMessage)",
+                userMarker = "content = buildOpenAiUserContent(",
                 maxTokensMarker = "maxTokens = resolved.maxTokens",
                 temperatureMarker = "temperature = resolved.temperature",
                 topPMarker = "topP = resolved.topP",

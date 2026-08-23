@@ -154,14 +154,21 @@ interface Translator {
      * 都没有词典 API，全部走默认实现。
      */
     suspend fun translateWord(source: String, settings: Settings): WordResult? = null
+
+    /**
+     * Compact dictionary lookup used by tap-to-preview surfaces. Implementations should only
+     * request a lemma and grouped part-of-speech meanings so the preview can appear quickly.
+     * Full dictionary details remain the responsibility of [translateWord].
+     */
+    suspend fun translateWordCompact(source: String, settings: Settings): WordResult? = null
 }
 
 /**
  * 划词翻译返回结构化数据。任何字段缺失用空串 / 空数组占位，UI 卡片按非空分段渲染。
  *
  * - [phonetic]：单词读音 / 音标（源语言）；CJK 用罗马音或汉语拼音
- * - [pos]：词性标签数组（目标语言），如 ["名", "动"] / ["n.", "v."]
- * - [definitions]：目标语言释义列表，最少 1 条
+ * - [senses]：首选结构；每个词性与只属于它的释义保持在同一项
+ * - [pos] / [definitions]：兼容旧模型响应的扁平字段，不得按数组下标猜测对应关系
  * - [inflections]：源语言中常见的词形变化，如过去式、过去分词、复数或比较级
  * - [synonyms]：源语言同义词或近义词
  * - [difficultyNotes]：生僻词、专业术语、缩写或易混淆用法的难点解释；普通词留空
@@ -176,13 +183,98 @@ data class WordResult(
     val synonyms: List<String> = emptyList(),
     val difficultyNotes: List<String> = emptyList(),
     val examples: List<ExamplePair> = emptyList(),
-    val fallbackTranslation: String? = null
+    val fallbackTranslation: String? = null,
+    /** Canonical source-language lemma, for example `display` for `displayed`. */
+    val lemma: String = "",
+    /** Meanings grouped with the part of speech they belong to. */
+    val senses: List<WordSense> = emptyList(),
 ) {
     /** 任何字典字段都为空 → 等价于纯翻译失败。 */
     fun isEmpty(): Boolean = phonetic.isBlank() && pos.isEmpty() &&
+        senses.none { sense -> sense.definitions.any(String::isNotBlank) } &&
         definitions.isEmpty() && inflections.isEmpty() && synonyms.isEmpty() &&
         difficultyNotes.isEmpty() && examples.isEmpty()
+
+    fun effectiveDefinitions(): List<String> = senses
+        .mapNotNull(WordSense::normalizedOrNull)
+        .flatMap(WordSense::definitions)
+        .takeIf(List<String>::isNotEmpty)
+        ?: definitions
+
+    fun effectivePartsOfSpeech(): List<String> = senses
+        .mapNotNull(WordSense::normalizedOrNull)
+        .map(WordSense::partOfSpeech)
+        .filter(String::isNotBlank)
+        .distinct()
+        .takeIf(List<String>::isNotEmpty)
+        ?: pos
+
+    /**
+     * Legacy responses are grouped only when there is exactly one part of speech. Pairing two
+     * unrelated arrays by index would silently attach meanings to the wrong grammatical role.
+     */
+    fun effectiveSenses(): List<WordSense> = senses
+        .mergeByPartOfSpeech()
+        .takeIf(List<WordSense>::isNotEmpty)
+        ?: if (pos.size == 1 && definitions.isNotEmpty()) {
+            listOf(WordSense(partOfSpeech = pos.single(), definitions = definitions))
+                .mergeByPartOfSpeech()
+        } else {
+            emptyList()
+        }
 }
+
+data class WordSense(
+    val partOfSpeech: String = "",
+    val definitions: List<String> = emptyList(),
+    val formNote: String = "",
+) {
+    internal fun normalizedOrNull(): WordSense? {
+        val normalizedDefinitions = definitions
+            .map(String::trim)
+            .filter(String::isNotEmpty)
+            .distinct()
+        if (normalizedDefinitions.isEmpty()) return null
+        return copy(
+            partOfSpeech = partOfSpeech.trim(),
+            definitions = normalizedDefinitions,
+            formNote = formNote.trim(),
+        )
+    }
+}
+
+/**
+ * Models sometimes split one grammatical role into several JSON sense objects. Merge only senses
+ * whose normalized part-of-speech labels are equal; meanings from different roles never cross.
+ */
+internal fun Iterable<WordSense>.mergeByPartOfSpeech(): List<WordSense> {
+    data class SenseAccumulator(
+        val partOfSpeech: String,
+        val definitions: LinkedHashSet<String> = linkedSetOf(),
+        val formNotes: LinkedHashSet<String> = linkedSetOf(),
+    )
+
+    val grouped = linkedMapOf<String, SenseAccumulator>()
+    for (sense in this) {
+        val normalized = sense.normalizedOrNull() ?: continue
+        val displayPartOfSpeech = normalized.partOfSpeech.replace(POS_WHITESPACE, " ")
+        val key = displayPartOfSpeech.lowercase()
+        val accumulator = grouped.getOrPut(key) {
+            SenseAccumulator(partOfSpeech = displayPartOfSpeech)
+        }
+        accumulator.definitions.addAll(normalized.definitions)
+        normalized.formNote.takeIf(String::isNotBlank)?.let(accumulator.formNotes::add)
+    }
+    return grouped.values.map { accumulator ->
+        WordSense(
+            partOfSpeech = accumulator.partOfSpeech,
+            definitions = accumulator.definitions.toList(),
+            formNote = accumulator.formNotes.joinToString("；"),
+        )
+    }
+}
+
+private val POS_WHITESPACE = Regex("\\s+")
 
 data class ExamplePair(val src: String, val dst: String)
 

@@ -2,6 +2,7 @@ package com.gameocr.app.ui
 
 import com.gameocr.app.data.RenderMode
 import com.gameocr.app.data.MergeStrength
+import com.gameocr.app.data.RemoteImageDetail
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -183,6 +184,11 @@ class TranslationSettingsUiAuditTest {
             ),
             SourceCase("effort uses a stepped slider", assistance, "steps = reasoningEffortSliderSteps"),
             SourceCase(
+                "effort shows the actual wire value",
+                assistance,
+                "R.string.settings_reasoning_effort_value_with_wire",
+            ),
+            SourceCase(
                 "custom effort input is available",
                 assistance,
                 "requestOptions.reasoningEffort == RemoteReasoningEffort.CUSTOM",
@@ -271,6 +277,54 @@ class TranslationSettingsUiAuditTest {
             com.gameocr.app.data.RemoteReasoningEffort.entries.size - 2,
             reasoningEffortSliderSteps,
         )
+    }
+
+    @Test
+    fun imageDetailSlider_roundTripsEveryStepAndKeepsCustomProviderValue_tableDriven() {
+        RemoteImageDetail.entries.forEachIndexed { index, detail ->
+            assertEquals("step for $detail", index.toFloat(), imageDetailStep(detail))
+            assertEquals("round trip for $detail", detail, imageDetailAtStep(index.toFloat()))
+        }
+
+        data class ClampCase(val name: String, val step: Float, val expected: RemoteImageDetail)
+        listOf(
+            ClampCase("below minimum", -10f, RemoteImageDetail.OMIT),
+            ClampCase("above maximum", 100f, RemoteImageDetail.CUSTOM),
+            ClampCase("rounds down", 1.49f, RemoteImageDetail.LOW),
+            ClampCase("rounds up", 1.51f, RemoteImageDetail.AUTO),
+        ).forEach { case ->
+            assertEquals(case.name, case.expected, imageDetailAtStep(case.step))
+        }
+        assertEquals(RemoteImageDetail.entries.size - 2, imageDetailSliderSteps)
+
+        val assistanceStart = source.indexOf("private fun TranslationAssistanceSettings(")
+        val assistanceEnd = source.indexOf("private fun ", startIndex = assistanceStart + 1)
+        val assistance = source.substring(assistanceStart, assistanceEnd)
+        listOf(
+            "requestOptions.sendScreenImage && translatorEngine == TranslatorEngine.OPENAI",
+            "steps = imageDetailSliderSteps",
+            "requestOptions.imageDetail == RemoteImageDetail.CUSTOM",
+            "requestOptions.customImageDetail",
+            "R.string.settings_image_detail_custom_hint",
+        ).forEach { marker -> assertTrue(marker, assistance.contains(marker)) }
+
+        data class ResourceCase(val locale: String, val path: String)
+        listOf(
+            ResourceCase("English", "src/main/res/values/strings.xml"),
+            ResourceCase("Simplified Chinese", "src/main/res/values-zh-rCN/strings.xml"),
+        ).forEach { case ->
+            val xml = sourceFile(case.path).readText()
+            listOf(
+                "settings_image_detail_value",
+                "settings_image_detail_omit",
+                "settings_image_detail_low",
+                "settings_image_detail_auto",
+                "settings_image_detail_high",
+                "settings_image_detail_custom",
+            ).forEach { resource ->
+                assertTrue("${case.locale}: $resource", xml.contains(resource))
+            }
+        }
     }
 
     @Test

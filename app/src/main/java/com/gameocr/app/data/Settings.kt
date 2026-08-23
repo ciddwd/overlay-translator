@@ -405,9 +405,15 @@ data class Settings(
          */
         const val DEFAULT_DICTIONARY_PROMPT: String = """你是一名{source}→{target}的双语词典助手。请把用户输入当作一个单词或固定短语来处理，**只输出**下面格式的 JSON，不要加 markdown、代码块、解释。
 {
+  "lemma": "{source}原形（无则空串）",
   "phonetic": "音标或读音（{source}; 无则空串）",
-  "pos": ["词性，{target}缩写，如 名/动/形 或 n./v./adj.; 无则空数组"],
-  "definitions": ["{target}释义 1", "{target}释义 2"],
+  "senses": [
+    {
+      "pos": "词性缩写，如 n./v./adj.",
+      "definitions": ["只属于该词性的{target}释义 1", "只属于该词性的{target}释义 2"],
+      "form_note": "用{target}说明与原形的关系，如 display 的过去式和过去分词；无则空串"
+    }
+  ],
   "inflections": ["词形标签: {source}词形，如过去式、过去分词、复数、比较级或适用的变位；无则空数组"],
   "synonyms": ["{source}常用同义词或近义词；无则空数组"],
   "difficulty_notes": ["用{target}解释生僻含义、专业领域、缩写全称或易混淆用法；普通词为空数组"],
@@ -416,7 +422,7 @@ data class Settings(
   ]
 }
 要求：
-1. 必须是合法 JSON，键名与上面完全一致；
+1. 必须是合法 JSON，键名与上面完全一致；每条释义必须放在对应词性的 senses 项内；
 2. 没有信息的字段用空串或空数组占位；
 3. 词形变化最多 6 项、同义词最多 5 项、例句最多 2 条；
 4. 生僻词、专业名词、缩写、文化专名或易混淆用法必须给出难点解释，最多 3 条，不要重复释义；普通词用空数组；
@@ -439,6 +445,15 @@ enum class RemoteReasoningEffort(val wireValue: String?) {
     HIGH("high"),
     XHIGH("xhigh"),
     MAX("max"),
+    CUSTOM(null),
+}
+
+@Serializable
+enum class RemoteImageDetail(val wireValue: String?) {
+    OMIT(null),
+    LOW("low"),
+    AUTO("auto"),
+    HIGH("high"),
     CUSTOM(null),
 }
 
@@ -469,6 +484,10 @@ data class OpenAiRequestOptions(
     val systemPromptSuffix: String = DEFAULT_SYSTEM_PROMPT_SUFFIX,
     /** Send the current capture to remote multimodal LLMs as request-scoped visual context. */
     val sendScreenImage: Boolean = false,
+    /** OpenAI-compatible image detail value. Anthropic image blocks do not expose this field. */
+    val imageDetail: RemoteImageDetail = RemoteImageDetail.AUTO,
+    /** Provider-specific OpenAI-compatible image detail value used by [RemoteImageDetail.CUSTOM]. */
+    val customImageDetail: String = "",
     /** Explicitly controls model reasoning for supported remote LLM protocols. */
     val thinkingModeEnabled: Boolean = false,
     /** Reasoning depth is independent from the thinking on/off switch. */
@@ -495,6 +514,7 @@ data class OpenAiRequestOptions(
     fun normalized(): OpenAiRequestOptions = copy(
         // The two wire encodings are alternatives. Base64 wins for malformed imported presets.
         encodeUserTextUnicode = encodeUserTextUnicode && !encodeUserTextBase64,
+        customImageDetail = customImageDetail.trim().take(64),
         customReasoningEffort = customReasoningEffort.trim().take(64),
         customThinkingEnabledJson = customThinkingEnabledJson.trim().ifBlank { "{}" },
         customThinkingDisabledJson = customThinkingDisabledJson.trim().ifBlank { "{}" },
@@ -502,6 +522,11 @@ data class OpenAiRequestOptions(
         topP = topP?.takeIf(Double::isFinite)?.coerceIn(0.0, 1.0),
         maxTokens = maxTokens?.takeIf { it > 0 }?.coerceAtMost(16_384),
     )
+
+    fun imageDetailWireValue(): String? = when (imageDetail) {
+        RemoteImageDetail.CUSTOM -> customImageDetail.trim().take(64).ifBlank { null }
+        else -> imageDetail.wireValue
+    }
 
     companion object {
         const val DEFAULT_USER_MESSAGE_TEMPLATE: String =
@@ -1539,14 +1564,14 @@ enum class LoopTextRegionMode {
 
 /**
  * 此引擎是否要求 [CaptureService] 跳过 [PreprocessOptions.invert] / [PreprocessOptions.binarize]
- * 预处理，传入接近原图的 bitmap。MANGA_OCR_JA 训练时见的是漫画原图（含网点、灰阶），
- * 二值化后效果显著下降，因此走 raw 路径。其它引擎默认走完整预处理链。
+ * 预处理，保留原图的颜色、灰阶和抗锯齿边缘。MANGA_OCR_JA 依赖漫画原图细节；ML Kit
+ * Japanese 的字符识别也会被全屏 Otsu 二值化破坏细笔画和描边，因此两者走保真输入路径。
  *
  * 注：[PreprocessOptions.upscale2x] 仍会应用——DBNet 对小字检测有帮助，对 manga-ocr 224×224
  * squash resize 后无副作用。
  */
 val OcrEngineKind.needsRawBitmap: Boolean
-    get() = this == OcrEngineKind.MANGA_OCR_JA
+    get() = this == OcrEngineKind.MANGA_OCR_JA || this == OcrEngineKind.ML_KIT_JAPANESE
 
 fun Settings.dbnetUnclipRatioFor(engine: OcrEngineKind): Float =
     if (engine == OcrEngineKind.MANGA_OCR_JA) mangaOcrDbnetUnclipRatio else dbnetUnclipRatio

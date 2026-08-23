@@ -38,9 +38,30 @@ internal data class ChatMessage(
     val content: String
 )
 
+internal fun buildOpenAiUserContent(
+    text: String,
+    visualContext: RuntimeTranslationVisualContext?,
+    imageDetail: String? = "auto",
+): JsonElement = visualContext?.let { visual ->
+    buildJsonArray {
+        add(buildJsonObject {
+            put("type", "text")
+            put("text", text)
+        })
+        add(buildJsonObject {
+            put("type", "image_url")
+            put("image_url", buildJsonObject {
+                put("url", "data:${visual.mimeType};base64,${visual.base64Data}")
+                imageDetail?.takeIf { it.isNotBlank() }?.let { put("detail", it) }
+            })
+        })
+    }
+} ?: JsonPrimitive(text)
+
 internal fun buildOpenAiChatMessages(
     resolved: ResolvedOpenAiRequest,
     visualContext: RuntimeTranslationVisualContext? = null,
+    imageDetail: String? = "auto",
 ): List<OpenAiRequestMessage> =
     buildList {
         add(OpenAiRequestMessage(role = "system", content = JsonPrimitive(resolved.systemMessage)))
@@ -50,21 +71,7 @@ internal fun buildOpenAiChatMessages(
         add(
             OpenAiRequestMessage(
                 role = "user",
-                content = visualContext?.let { visual ->
-                    buildJsonArray {
-                        add(buildJsonObject {
-                            put("type", "text")
-                            put("text", resolved.userMessage)
-                        })
-                        add(buildJsonObject {
-                            put("type", "image_url")
-                            put("image_url", buildJsonObject {
-                                put("url", "data:${visual.mimeType};base64,${visual.base64Data}")
-                                put("detail", "auto")
-                            })
-                        })
-                    }
-                } ?: JsonPrimitive(resolved.userMessage),
+                content = buildOpenAiUserContent(resolved.userMessage, visualContext, imageDetail),
             )
         )
     }

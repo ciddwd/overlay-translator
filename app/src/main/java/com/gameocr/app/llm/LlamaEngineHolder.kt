@@ -1,7 +1,6 @@
 package com.gameocr.app.llm
 
 import android.content.Context
-import android.os.Build
 import android.os.SystemClock
 import android.system.Os
 import com.arm.aichat.AiChat
@@ -44,6 +43,7 @@ import timber.log.Timber
 class LlamaEngineHolder @Inject constructor(
     @ApplicationContext private val context: Context,
     private val installer: LlmModelInstaller,
+    private val deviceCapability: LocalLlmDeviceCapability,
 ) {
 
     private val initLock = Mutex()
@@ -63,7 +63,7 @@ class LlamaEngineHolder @Inject constructor(
     private var idleJob: Job? = null
 
     /** 设备 API level 是否满足 binding 要求（Android 13+）。 */
-    fun isDeviceCapable(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+    fun isDeviceCapable(): Boolean = deviceCapability.isSupported()
 
     val currentKind: LlmModelKind? get() = loadedKind
 

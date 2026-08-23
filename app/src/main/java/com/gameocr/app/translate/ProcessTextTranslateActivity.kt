@@ -181,8 +181,8 @@ class ProcessTextTranslateActivity : ComponentActivity() {
                 "PROCESS_TEXT dictionary parsed=%s phonetic=%s pos=%d definitions=%d notes=%d examples=%d",
                 outcome.wordResult != null,
                 outcome.wordResult?.phonetic?.isNotBlank() == true,
-                outcome.wordResult?.pos?.size ?: 0,
-                outcome.wordResult?.definitions?.size ?: 0,
+                outcome.wordResult?.effectivePartsOfSpeech()?.size ?: 0,
+                outcome.wordResult?.effectiveDefinitions()?.size ?: 0,
                 outcome.wordResult?.difficultyNotes?.size ?: 0,
                 outcome.wordResult?.examples?.size ?: 0,
             )
@@ -237,7 +237,7 @@ internal fun processTextTranslationPresentation(
     failureText: String,
 ): ProcessTextTranslationPresentation {
     val dictionaryFallback = outcome.wordResult?.fallbackTranslation
-        ?: outcome.wordResult?.definitions?.firstOrNull()
+        ?: outcome.wordResult?.effectiveDefinitions()?.firstOrNull()
     val translation = outcome.translation?.takeIf(String::isNotBlank)
         ?: dictionaryFallback?.takeIf(String::isNotBlank)
     return ProcessTextTranslationPresentation(

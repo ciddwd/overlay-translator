@@ -12,7 +12,9 @@ import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.text.SpannableStringBuilder
+import android.text.Spannable
 import android.text.Spanned
+import android.text.style.BackgroundColorSpan
 import android.text.style.ForegroundColorSpan
 import android.text.style.RelativeSizeSpan
 import android.util.TypedValue
@@ -163,6 +165,13 @@ class OverlayManager(
     private var lastFloatingStreaming: Boolean = false
     private var floatingWordLookupJob: Job? = null
     private var floatingWordRequestId: Long = 0L
+    private var floatingWordHighlight: FloatingWordHighlight? = null
+
+    private data class FloatingWordHighlight(
+        val textView: TextView,
+        val text: Spannable,
+        val span: BackgroundColorSpan,
+    )
 
     private val overlayType: Int = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
         WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -666,6 +675,7 @@ class OverlayManager(
                             cancelFloatingWordLookup(dismissPreview = true)
                         } else {
                             val anchor = floatingWordAnchor(textView, hit) ?: return@setOnTouchListener false
+                            showFloatingWordHighlight(textView, hit)
                             startFloatingWordLookup(hit.word, anchor)
                         }
                     }
@@ -742,6 +752,34 @@ class OverlayManager(
         }
     }
 
+    private fun showFloatingWordHighlight(
+        textView: TextView,
+        hit: FloatingEnglishWordHit,
+    ) {
+        clearFloatingWordHighlight()
+        val spannable = (textView.text as? Spannable) ?: SpannableStringBuilder(textView.text).also {
+            textView.text = it
+        }
+        val start = hit.start.coerceIn(0, spannable.length)
+        val end = hit.end.coerceIn(start, spannable.length)
+        if (start == end) return
+        val accent = translationActionAccentColor(
+            theme = theme,
+            customBorderColor = customBorder,
+            customForegroundColor = customFg,
+        )
+        val span = BackgroundColorSpan(translationActionMarkerColor(accent))
+        spannable.setSpan(span, start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        floatingWordHighlight = FloatingWordHighlight(textView, spannable, span)
+    }
+
+    private fun clearFloatingWordHighlight() {
+        val highlight = floatingWordHighlight ?: return
+        floatingWordHighlight = null
+        highlight.text.removeSpan(highlight.span)
+        highlight.textView.invalidate()
+    }
+
     private fun showFloatingWordPreview(
         anchorInWindow: Rect,
         outcome: FloatingWordLookupOutcome,
@@ -750,7 +788,7 @@ class OverlayManager(
         val preview = floatingWordPreviewContent(
             word = outcome.word,
             translation = outcome.translation,
-            partsOfSpeech = outcome.wordResult?.pos.orEmpty(),
+            wordResult = outcome.wordResult,
             loading = loading,
             failed = !loading && !outcome.hasDetails,
             loadingLabel = context.getString(R.string.word_card_loading),
@@ -761,9 +799,23 @@ class OverlayManager(
             anchorInWindow = anchorInWindow,
             content = preview,
             onSpeak = speech?.let { { it.onToggle(outcome.word) } },
-            onOpenDetails = outcome.takeIf { !loading && it.hasDetails }?.let {
+            onOpenDetails = outcome.takeIf {
+                shouldShowFloatingWordDetailsAction(
+                    loading = loading,
+                    hasDetails = it.hasDetails,
+                )
+            }?.let {
                 { onFloatingWordDetailsRequested(it) }
             },
+            textSizeSp = textSizeSp.toFloat(),
+            textStyle = overlayTextStyle,
+            typeface = overlayTypeface,
+            accentColor = translationActionAccentColor(
+                theme = theme,
+                customBorderColor = customBorder,
+                customForegroundColor = customFg,
+            ),
+            onPreviewDismissed = ::clearFloatingWordHighlight,
         )
     }
 
@@ -771,7 +823,10 @@ class OverlayManager(
         floatingWordRequestId += 1L
         floatingWordLookupJob?.cancel()
         floatingWordLookupJob = null
-        if (dismissPreview) floatingWindow.dismissWordPreview()
+        if (dismissPreview) {
+            floatingWindow.dismissWordPreview()
+            clearFloatingWordHighlight()
+        }
     }
 
     private fun buildFloatingWindowText(pairs: List<Pair<String, String>>): CharSequence {

@@ -2,6 +2,7 @@ package com.gameocr.app.overlay
 
 import java.text.BreakIterator
 import java.util.Locale
+import com.gameocr.app.translate.WordResult
 
 internal data class FloatingEnglishWordHit(
     val word: String,
@@ -11,8 +12,13 @@ internal data class FloatingEnglishWordHit(
 
 internal data class FloatingWordPreviewContent(
     val word: String,
-    val translation: String,
-    val partOfSpeech: String,
+    val lines: List<String>,
+)
+
+internal data class FloatingWordDetailsContent(
+    val translation: String?,
+    val wordResult: WordResult?,
+    val loading: Boolean,
 )
 
 /** Resolves only deliberate taps on Latin letters; nearby whitespace never selects a word. */
@@ -52,26 +58,78 @@ internal fun floatingEnglishWordAt(
 internal fun floatingWordPreviewContent(
     word: String,
     translation: String?,
-    partsOfSpeech: List<String>,
+    wordResult: WordResult?,
     loading: Boolean,
     failed: Boolean,
     loadingLabel: String,
     failedLabel: String,
-): FloatingWordPreviewContent = FloatingWordPreviewContent(
-    word = word,
-    translation = when {
-        loading -> loadingLabel
-        !translation.isNullOrBlank() -> translation.trim()
-        failed -> failedLabel
-        else -> ""
-    },
-    partOfSpeech = partsOfSpeech
-        .asSequence()
-        .map(String::trim)
-        .filter(String::isNotEmpty)
-        .distinct()
-        .joinToString(" / "),
-)
+): FloatingWordPreviewContent {
+    val lines = when {
+        loading -> listOf(loadingLabel)
+        wordResult != null -> wordResult.compactSenseLines().ifEmpty {
+            listOfNotNull(translation?.trim()?.takeIf(String::isNotEmpty))
+        }
+        !translation.isNullOrBlank() -> listOf(translation.trim())
+        failed -> listOf(failedLabel)
+        else -> emptyList()
+    }
+    return FloatingWordPreviewContent(word = word, lines = lines)
+}
+
+internal fun WordResult.compactSenseLines(): List<String> {
+    val grouped = effectiveSenses().map { sense ->
+        val meanings = sense.definitions.toMutableList()
+        if (sense.formNote.isNotBlank() && meanings.isNotEmpty()) {
+            meanings[0] = "${meanings[0]}（${sense.formNote}）"
+        }
+        listOf(sense.partOfSpeech, meanings.joinToString("；"))
+            .filter(String::isNotBlank)
+            .joinToString(" ")
+    }.filter(String::isNotBlank)
+    if (grouped.isNotEmpty()) return grouped
+
+    val meanings = effectiveDefinitions().joinToString("；").takeIf(String::isNotBlank)
+    val parts = effectivePartsOfSpeech().joinToString(" / ").takeIf(String::isNotBlank)
+    return buildList {
+        meanings?.let(::add)
+        parts?.let { add("词性：$it") }
+        fallbackTranslation?.trim()?.takeIf(String::isNotBlank)?.let { fallback ->
+            if (fallback !in this) add(fallback)
+        }
+    }
+}
+
+internal fun shouldShowFloatingWordDetailsAction(
+    loading: Boolean,
+    hasDetails: Boolean,
+): Boolean = !loading && hasDetails
+
+/**
+ * The full dictionary card never carries compact preview content across states. While the fresh
+ * full lookup is running it shows only its loading state; completion replaces that state with
+ * either the full structured result or an explicit failure message.
+ */
+internal fun floatingWordDetailsContent(
+    completed: Boolean,
+    wordResult: WordResult?,
+    failedLabel: String,
+): FloatingWordDetailsContent = when {
+    !completed -> FloatingWordDetailsContent(
+        translation = null,
+        wordResult = null,
+        loading = true,
+    )
+    wordResult != null && !wordResult.isEmpty() -> FloatingWordDetailsContent(
+        translation = null,
+        wordResult = wordResult,
+        loading = false,
+    )
+    else -> FloatingWordDetailsContent(
+        translation = failedLabel,
+        wordResult = null,
+        loading = false,
+    )
+}
 
 private fun Char.isAsciiLatinLetter(): Boolean = this in 'A'..'Z' || this in 'a'..'z'
 

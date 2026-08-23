@@ -295,6 +295,12 @@ class RoutingTranslator @Inject constructor(
             ?.let { normalizeWordResult(it, enriched) }
     }
 
+    override suspend fun translateWordCompact(source: String, settings: Settings): WordResult? {
+        val enriched = translationContextResolver.enrich(source, settings)
+        return engineFor(enriched).translateWordCompact(source, enriched)
+            ?.let { normalizeWordResult(it, enriched) }
+    }
+
     private fun normalizeText(text: String?, settings: Settings, stage: String): String? {
         val raw = text ?: return null
         val normalized = normalizePlain(raw, settings)
@@ -361,6 +367,12 @@ class RoutingTranslator @Inject constructor(
         val normalized = result.copy(
             pos = result.pos.map { normalizePlain(it, settings) },
             definitions = result.definitions.map { normalizePlain(it, settings) },
+            senses = result.senses.map { sense ->
+                sense.copy(
+                    definitions = sense.definitions.map { normalizePlain(it, settings) },
+                    formNote = normalizePlain(sense.formNote, settings),
+                )
+            },
             difficultyNotes = result.difficultyNotes.map { normalizePlain(it, settings) },
             examples = result.examples.map { example ->
                 example.copy(dst = normalizePlain(example.dst, settings))
@@ -368,8 +380,8 @@ class RoutingTranslator @Inject constructor(
             fallbackTranslation = result.fallbackTranslation?.let { normalizePlain(it, settings) }
         )
         if (normalized != result) {
-            val before = result.fallbackTranslation ?: result.definitions.firstOrNull().orEmpty()
-            val after = normalized.fallbackTranslation ?: normalized.definitions.firstOrNull().orEmpty()
+            val before = result.fallbackTranslation ?: result.effectiveDefinitions().firstOrNull().orEmpty()
+            val after = normalized.fallbackTranslation ?: normalized.effectiveDefinitions().firstOrNull().orEmpty()
             logNormalization("word", settings.targetLang, 1, 1, before, after)
         }
         return normalized

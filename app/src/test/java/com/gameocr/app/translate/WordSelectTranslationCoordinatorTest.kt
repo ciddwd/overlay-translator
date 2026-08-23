@@ -30,10 +30,34 @@ class WordSelectTranslationCoordinatorTest {
                 expectedUpdates = listOf("par", "partial"),
             ),
             Case(
+                name = "streaming ignores blank keepalive before first text",
+                streaming = true,
+                chunks = listOf("", "  ", "\n", "translated"),
+                expectedUpdates = listOf("translated"),
+            ),
+            Case(
+                name = "streaming ignores blank keepalive between text updates",
+                streaming = true,
+                chunks = listOf("part", "", "\r\n", "partial"),
+                expectedUpdates = listOf("part", "partial"),
+            ),
+            Case(
+                name = "streaming blank-only response never clears loading state",
+                streaming = true,
+                chunks = listOf("", " ", "\n"),
+                expectedUpdates = emptyList(),
+            ),
+            Case(
                 name = "non streaming emits once",
                 streaming = false,
                 single = "complete",
                 expectedUpdates = listOf("complete"),
+            ),
+            Case(
+                name = "non streaming blank response never clears loading state",
+                streaming = false,
+                single = " \r\n ",
+                expectedUpdates = emptyList(),
             ),
             Case(
                 name = "translation failure is reported without a dictionary result",
@@ -46,6 +70,7 @@ class WordSelectTranslationCoordinatorTest {
 
         cases.forEach { case ->
             val updates = mutableListOf<String>()
+            val stages = mutableListOf<WordSelectTranslationStage>()
             val translator = FakeTranslator(
                 chunks = case.chunks,
                 single = case.single,
@@ -57,12 +82,24 @@ class WordSelectTranslationCoordinatorTest {
                 dictionaryTerm = null,
                 onPartialTranslation = updates::add,
                 onWordResult = {},
+                onStage = stages::add,
             )
 
             assertEquals(case.name, case.expectedUpdates, updates)
             assertEquals(case.name, case.expectedUpdates.lastOrNull(), outcome.translation)
             assertNull(case.name, outcome.wordResult)
             assertEquals(case.name, case.expectedUpdates.size, outcome.chunkCount)
+            assertEquals(
+                case.name,
+                buildList {
+                    add(WordSelectTranslationStage.PRIMARY_STARTED)
+                    if (case.expectedUpdates.isNotEmpty()) {
+                        add(WordSelectTranslationStage.FIRST_PARTIAL_VISIBLE)
+                    }
+                    add(WordSelectTranslationStage.PRIMARY_FINISHED)
+                },
+                stages,
+            )
             if (case.expectTranslationError) assertNotNull(case.name, outcome.translationError)
             else assertNull(case.name, outcome.translationError)
         }

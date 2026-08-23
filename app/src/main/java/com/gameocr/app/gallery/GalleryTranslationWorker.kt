@@ -14,16 +14,21 @@ import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
 import com.gameocr.app.R
+import com.gameocr.app.data.RenderMode
 import com.gameocr.app.data.Settings
 import com.gameocr.app.data.needsRawBitmap
 import com.gameocr.app.ocr.BitmapPreprocessor
 import com.gameocr.app.ocr.RoutingOcrEngine
 import com.gameocr.app.ocr.TextBlock
 import com.gameocr.app.translate.RoutingTranslator
+import com.gameocr.app.translate.TranslationVisualContextPreparer
+import com.gameocr.app.translate.TranslationVisualDebugStore
 import com.gameocr.app.ui.MainActivity
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import timber.log.Timber
 
 @HiltWorker
@@ -36,6 +41,10 @@ class GalleryTranslationWorker @AssistedInject constructor(
     private val translator: RoutingTranslator,
     private val translatedPreviewStore: GalleryTranslatedPreviewStore,
 ) : CoroutineWorker(appContext, workerParams) {
+
+    private val translationVisualDebugStore by lazy {
+        TranslationVisualDebugStore.forContext(applicationContext)
+    }
 
     override suspend fun doWork(): Result {
         val taskId = inputData.getString(KEY_TASK_ID).orEmpty()
@@ -139,8 +148,33 @@ class GalleryTranslationWorker @AssistedInject constructor(
                     rawBlocks
                 }
                 if (blocks.isEmpty()) throw NoTextDetectedException()
+                val visualPreparation = withContext(Dispatchers.Default) {
+                    TranslationVisualContextPreparer.prepare(
+                        bitmap = decoded.bitmap,
+                        blocks = blocks,
+                        settings = settings,
+                        presentation = RenderMode.BLOCKS,
+                        combineIntoSingleOutput = false,
+                        origin = "gallery-${item.id}",
+                        debugStore = translationVisualDebugStore,
+                    )
+                }
+                visualPreparation.context?.let { visual ->
+                    Timber.i(
+                        "Gallery visual context item=%s image=%dx%d bytes=%d sha256=%s debugPath=%s",
+                        item.id,
+                        visual.width,
+                        visual.height,
+                        visual.byteCount,
+                        visual.sha256,
+                        visualPreparation.debugArtifact?.absolutePath ?: "none",
+                    )
+                }
                 val translated = translateOrThrow {
-                    translator.translateBatch(blocks.map(TextBlock::text), settings)
+                    translator.translateBatch(
+                        blocks.map(TextBlock::text),
+                        visualPreparation.settings,
+                    )
                 }
                 blocks.mapIndexed { index, block ->
                     GalleryTranslationSegment.from(block, translated.getOrNull(index))

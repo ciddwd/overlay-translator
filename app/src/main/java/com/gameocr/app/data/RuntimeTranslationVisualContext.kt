@@ -13,7 +13,7 @@ data class RuntimeTranslationVisualContext(
     val promptVersion: Int = CURRENT_PROMPT_VERSION,
 ) {
     companion object {
-        const val CURRENT_PROMPT_VERSION: Int = 1
+        const val CURRENT_PROMPT_VERSION: Int = 3
     }
 }
 

@@ -29,13 +29,14 @@ internal fun dictionaryTextSegments(
     labels: DictionaryTextLabels,
 ): List<DictionaryTextSegment> {
     val blocks = mutableListOf<List<DictionaryTextSegment>>()
+    val groupedSenses = wordResult.effectiveSenses()
 
     val metadata = buildList {
         if (wordResult.phonetic.isNotBlank()) {
             add(DictionaryTextSegment("${labels.phonetic}  ", DictionaryTextRole.LABEL))
             add(DictionaryTextSegment(wordResult.phonetic, DictionaryTextRole.MONOSPACE))
         }
-        if (wordResult.pos.isNotEmpty()) {
+        if (groupedSenses.isEmpty() && wordResult.pos.isNotEmpty()) {
             if (isNotEmpty()) add(DictionaryTextSegment("\n", DictionaryTextRole.BODY))
             add(DictionaryTextSegment("${labels.partOfSpeech}  ", DictionaryTextRole.LABEL))
             add(DictionaryTextSegment(wordResult.pos.joinToString(" / "), DictionaryTextRole.BODY))
@@ -43,7 +44,27 @@ internal fun dictionaryTextSegments(
     }
     if (metadata.isNotEmpty()) blocks.add(metadata)
 
-    if (wordResult.definitions.isNotEmpty()) {
+    if (groupedSenses.isNotEmpty()) {
+        groupedSenses.forEach { sense ->
+            blocks.add(buildList {
+                if (sense.partOfSpeech.isNotBlank()) {
+                    add(DictionaryTextSegment(sense.partOfSpeech, DictionaryTextRole.LABEL))
+                }
+                add(DictionaryTextSegment(
+                    sense.definitions.mapIndexed { index, definition ->
+                        "${index + 1}. $definition"
+                    }.joinToString(separator = "\n", prefix = "\n"),
+                    DictionaryTextRole.BODY,
+                ))
+                if (sense.formNote.isNotBlank()) {
+                    add(DictionaryTextSegment(
+                        "\n${labels.inflections}  ${sense.formNote}",
+                        DictionaryTextRole.MUTED,
+                    ))
+                }
+            })
+        }
+    } else if (wordResult.definitions.isNotEmpty()) {
         blocks.add(listOf(
             DictionaryTextSegment(labels.definitions, DictionaryTextRole.LABEL),
             DictionaryTextSegment(

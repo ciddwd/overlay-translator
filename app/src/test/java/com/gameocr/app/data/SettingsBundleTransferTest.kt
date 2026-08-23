@@ -316,6 +316,9 @@ class SettingsBundleTransferTest {
             targetLang = "zh-TW",
             promptTemplate = "portable prompt",
             openAiRequestOptions = OpenAiRequestOptions(
+                sendScreenImage = true,
+                imageDetail = RemoteImageDetail.CUSTOM,
+                customImageDetail = "original",
                 thinkingModeEnabled = true,
                 reasoningEffort = RemoteReasoningEffort.CUSTOM,
                 thinkingParameterFormat = RemoteThinkingParameterFormat.CUSTOM_JSON,

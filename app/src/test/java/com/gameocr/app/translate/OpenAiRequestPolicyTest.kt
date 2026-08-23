@@ -310,6 +310,50 @@ class OpenAiRequestPolicyTest {
                 expectedFields = "{}",
             ),
             Case(
+                name = "Qwen 3_7 behind a proxy is explicitly disabled by default",
+                baseUrl = "https://gateway.example/v1/",
+                model = "qwen3.7-plus",
+                options = OpenAiRequestOptions(),
+                style = OpenAiThinkingWireStyle.ENABLE_THINKING,
+                expectedFields = """{"enable_thinking":false}""",
+            ),
+            Case(
+                name = "namespaced Qwen 3_6 behind a proxy is explicitly enabled",
+                baseUrl = "https://proxy.example/v1/",
+                model = "alibaba/qwen3.6-flash",
+                options = OpenAiRequestOptions(thinkingModeEnabled = true),
+                style = OpenAiThinkingWireStyle.ENABLE_THINKING,
+                expectedFields = """{"enable_thinking":true}""",
+            ),
+            Case(
+                name = "Qwen 2_5 does not receive an unsupported thinking field",
+                baseUrl = "https://gateway.example/v1/",
+                model = "qwen2.5-14b-instruct",
+                options = OpenAiRequestOptions(),
+                style = OpenAiThinkingWireStyle.OMIT,
+                expectedFields = "{}",
+            ),
+            Case(
+                name = "Qwen 3 thinking-only model does not pretend it can be disabled",
+                baseUrl = "https://gateway.example/v1/",
+                model = "qwen3-235b-a22b-thinking-2507",
+                options = OpenAiRequestOptions(),
+                style = OpenAiThinkingWireStyle.OMIT,
+                expectedFields = "{}",
+            ),
+            Case(
+                name = "explicit format overrides Qwen automatic field selection",
+                baseUrl = "https://gateway.example/v1/",
+                model = "qwen3.7-plus",
+                options = OpenAiRequestOptions(
+                    thinkingModeEnabled = true,
+                    reasoningEffort = RemoteReasoningEffort.LOW,
+                    thinkingParameterFormat = RemoteThinkingParameterFormat.OPENAI_RESPONSES,
+                ),
+                style = OpenAiThinkingWireStyle.RESPONSES_REASONING,
+                expectedFields = """{"reasoning":{"effort":"low"}}""",
+            ),
+            Case(
                 name = "official OpenAI model that supports none is explicitly disabled",
                 baseUrl = "https://api.openai.com/v1/",
                 model = "gpt-5.6",
@@ -450,6 +494,7 @@ class OpenAiRequestPolicyTest {
             val baseUrl: String,
             val options: OpenAiRequestOptions,
             val expectedField: String?,
+            val model: String = "model",
         )
 
         listOf(
@@ -478,13 +523,20 @@ class OpenAiRequestPolicyTest {
                 ),
                 "provider_thinking",
             ),
+            Case(
+                name = "Qwen proxy request carries explicit disabled field",
+                baseUrl = "https://gateway.example/v1/",
+                model = "qwen3.7-plus",
+                options = OpenAiRequestOptions(),
+                expectedField = "enable_thinking",
+            ),
         ).forEach { case ->
             val serializer = Json { explicitNulls = false }
             val merged = RemoteThinkingPolicy.mergeIntoPayload(
                 payload = """{"model":"model","messages":[],"stream":false}""",
                 control = RemoteThinkingPolicy.openAi(
                     case.baseUrl,
-                    "model",
+                    case.model,
                     case.options,
                 ),
                 serializer = serializer,
@@ -497,6 +549,13 @@ class OpenAiRequestPolicyTest {
                 assertEquals(case.name, setOf("model", "messages", "stream"), body.keys)
             } else {
                 assertTrue(case.name, case.expectedField in body)
+                if (case.expectedField == "enable_thinking") {
+                    assertEquals(
+                        case.name,
+                        false,
+                        body.getValue("enable_thinking").jsonPrimitive.content.toBoolean(),
+                    )
+                }
             }
         }
     }

@@ -23,11 +23,11 @@ class GlossaryScreenUiAuditTest {
         data class Case(val name: String, val marker: String)
         val editor = source.substring(
             source.indexOf("private fun GlossaryTermEditor("),
-            source.indexOf("private fun GlossaryAppPickerDialog("),
+            source.indexOf("internal fun GlossaryAppPickerDialog("),
         )
 
         listOf(
-            Case("system back handling", "BackHandler(onBack = onBack)"),
+            Case("system back handling", "if (addMenuExpanded) addMenuExpanded = false else onBack()"),
             Case("matching top app bar", "TopAppBarDefaults.topAppBarColors"),
             Case("term card", "private fun GlossaryTermCard"),
             Case("compact card radius", "RoundedCornerShape(8.dp)"),
@@ -48,7 +48,7 @@ class GlossaryScreenUiAuditTest {
             ),
             Case("duplicate confirmation", "R.string.glossary_duplicate_title"),
             Case("transactional duplicate overwrite", "viewModel.overwriteConflict(conflict.pending)"),
-            Case("searchable app picker", "private fun GlossaryAppPickerDialog"),
+            Case("searchable app picker", "internal fun GlossaryAppPickerDialog"),
             Case("app name and package search", "SelectableAppPolicy.filter(apps, query)"),
             Case("virtualized app list", "items(filteredApps, key = SelectableApp::packageName)"),
             Case("cached application icon", "remember(icon) { icon.asImageBitmap() }"),
@@ -72,6 +72,47 @@ class GlossaryScreenUiAuditTest {
         )
         assertFalse("stock alert dialog would reintroduce a non-zinc container", source.contains("AlertDialog("))
         assertFalse("raw switches would drift from settings styling", source.contains("Switch("))
+    }
+
+    @Test
+    fun glossaryTermStatus_tableDriven_isCenteredInTheWholeCard() {
+        val termCard = source.substring(
+            source.indexOf("private fun GlossaryTermCard("),
+            source.indexOf("private fun GlossaryTermStatus("),
+        )
+        val status = source.substring(
+            source.indexOf("private fun GlossaryTermStatus("),
+            source.indexOf("@OptIn(ExperimentalLayoutApi::class)", source.indexOf("private fun GlossaryTermStatus(")),
+        )
+        data class Case(val name: String, val marker: String)
+
+        listOf(
+            Case("status has a dedicated row", "Row("),
+            Case("icon and label are vertically centered", "verticalAlignment = Alignment.CenterVertically"),
+            Case("status uses the same body text metrics", "style = MaterialTheme.typography.bodySmall"),
+            Case("status stays on one line", "maxLines = 1"),
+            Case("status icon has a stable size", "modifier = Modifier.size(16.dp)"),
+            Case("status has spacing from metadata", "modifier = Modifier.padding(start = 8.dp)"),
+        ).forEach { case -> assertTrue(case.name, status.contains(case.marker)) }
+
+        assertTrue(
+            "the card main row must vertically center the status with the whole card",
+            "verticalAlignment = Alignment.CenterVertically" in termCard,
+        )
+        assertTrue(
+            "status must sit outside the text column and before the edit action",
+            termCard.indexOf("text = \"\$sourceLanguage -> \$targetLanguage\"") <
+                termCard.indexOf("GlossaryTermStatus(term.enabled)") &&
+                termCard.indexOf("GlossaryTermStatus(term.enabled)") <
+                termCard.indexOf("IconButton(onClick = onEdit)"),
+        )
+        val metadataStart = termCard.indexOf("text = \"\$scopeLabel | \$categoryLabel\"")
+        val metadataLine = termCard.substring(
+            metadataStart,
+            termCard.indexOf("if (sourcePreservation)", metadataStart),
+        )
+        assertFalse("status must not remain in the lower metadata line", metadataLine.contains("GlossaryTermStatus"))
+        assertFalse("the smaller label baseline must not pull status downward", status.contains("labelSmall"))
     }
 
     @Test

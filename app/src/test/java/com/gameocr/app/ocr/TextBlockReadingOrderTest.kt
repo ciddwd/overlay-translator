@@ -268,6 +268,131 @@ class TextBlockReadingOrderTest {
         }
     }
 
+    @Test
+    fun sortMergedPage_tableDrivenUsesGeometryOnlyAndIsScaleInvariant() {
+        data class Box(
+            val id: String,
+            val left: Int,
+            val top: Int,
+            val right: Int,
+            val bottom: Int,
+        )
+        data class Case(
+            val name: String,
+            val boxes: List<Box>,
+            val orientation: TextOrientation,
+            val expected: List<String>,
+        )
+
+        val twoTiers = listOf(
+            Box("top-left", 20, 10, 50, 80),
+            Box("bottom-right", 120, 140, 150, 210),
+            Box("top-right", 120, 10, 150, 80),
+            Box("bottom-left", 20, 140, 50, 210),
+        )
+        val observedPageGeometry = listOf(
+            Box("1", 924, 422, 958, 536),
+            Box("2", 863, 53, 904, 172),
+            Box("3", 849, 463, 882, 628),
+            Box("4", 878, 463, 911, 577),
+            Box("5", 836, 55, 872, 120),
+            Box("6", 824, 465, 853, 651),
+            Box("7", 792, 463, 826, 628),
+            Box("8", 635, 397, 670, 588),
+            Box("9", 605, 395, 639, 536),
+            Box("10", 353, 40, 388, 201),
+            Box("11", 292, 70, 325, 232),
+            Box("12", 266, 72, 296, 282),
+            Box("13", 282, 386, 317, 577),
+            Box("14", 258, 389, 287, 525),
+            Box("15", 223, 386, 262, 551),
+            Box("16", 179, 455, 212, 595),
+            Box("17", 129, 114, 162, 277),
+            Box("18", 148, 453, 184, 696),
+            Box("19", 121, 455, 156, 545),
+        )
+        val observedExpected = listOf(
+            "2", "5", "10", "11", "12", "17",
+            "1", "4", "3", "6", "7", "8", "9", "13", "14", "15", "16", "18", "19",
+        )
+        val cases = listOf(
+            Case(
+                "unknown regions use a full-width whitespace tier before columns",
+                twoTiers,
+                TextOrientation.VERTICAL_RTL,
+                listOf("top-right", "top-left", "bottom-right", "bottom-left"),
+            ),
+            Case(
+                "close vertical columns do not invent a page tier",
+                listOf(
+                    Box("right-top", 120, 10, 150, 80),
+                    Box("left-top", 20, 10, 50, 80),
+                    Box("right-next", 120, 90, 150, 160),
+                    Box("left-next", 20, 90, 50, 160),
+                ),
+                TextOrientation.VERTICAL_RTL,
+                listOf("right-top", "right-next", "left-top", "left-next"),
+            ),
+            Case(
+                "a spanning region prevents an unsupported horizontal cut",
+                listOf(
+                    Box("right-bridge", 120, 0, 150, 220),
+                    Box("left-top", 20, 10, 50, 80),
+                    Box("left-bottom", 20, 140, 50, 210),
+                ),
+                TextOrientation.VERTICAL_RTL,
+                listOf("right-bridge", "left-top", "left-bottom"),
+            ),
+            Case(
+                "captured nineteen-box geometry puts every upper section before lower section",
+                observedPageGeometry.reversed(),
+                TextOrientation.VERTICAL_RTL,
+                observedExpected,
+            ),
+            Case(
+                "same geometry at three times the resolution keeps the same order",
+                observedPageGeometry.shuffled(kotlin.random.Random(7)).map { box ->
+                    box.copy(
+                        left = box.left * 3,
+                        top = box.top * 3,
+                        right = box.right * 3,
+                        bottom = box.bottom * 3,
+                    )
+                },
+                TextOrientation.VERTICAL_RTL,
+                observedExpected,
+            ),
+            Case(
+                "horizontal text keeps ordinary line order",
+                listOf(
+                    Box("line-two", 10, 70, 90, 100),
+                    Box("line-one-right", 100, 10, 180, 40),
+                    Box("line-one-left", 10, 10, 90, 40),
+                ),
+                TextOrientation.HORIZONTAL_LTR,
+                listOf("line-one-left", "line-one-right", "line-two"),
+            ),
+        )
+
+        cases.forEach { case ->
+            val actual = sortTextBlocksForMergedPage(
+                blocks = case.boxes.map { box ->
+                    block(
+                        text = box.id,
+                        left = box.left,
+                        top = box.top,
+                        right = box.right,
+                        bottom = box.bottom,
+                        orientation = case.orientation,
+                        granularity = TextRegionGranularity.UNKNOWN,
+                    )
+                },
+                orientationHint = case.orientation,
+            ).map(TextBlock::text)
+            assertEquals(case.name, case.expected, actual)
+        }
+    }
+
     private fun block(
         text: String,
         left: Int,

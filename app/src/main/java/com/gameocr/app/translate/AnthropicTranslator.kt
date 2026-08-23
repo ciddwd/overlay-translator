@@ -154,19 +154,27 @@ class AnthropicTranslator @Inject constructor(
         settings: Settings,
         allowVisualFallback: Boolean = true,
     ): String {
+        val visualContext = settings.runtimeTranslationVisualContext
         val resolvedRequest = resolveRequest(
-            text = settings.runtimeTranslationVisualContext?.let { visual ->
+            text = visualContext?.let { visual ->
                 VisualTranslationPromptPolicy.buildUserPayload(visual, attempt.activeIds)
             } ?: StructuredBatchPromptPolicy.buildUserPayload(
                 attempt,
                 settings.openAiRequestOptions,
             ),
             settings = settings,
-            runtimeContext = StructuredBatchPromptPolicy.buildSystemSuffix(
-                settings.runtimeTranslationPromptContext,
-                settings.openAiRequestOptions,
-                activeSources = attempt.allSources,
-            ),
+            runtimeContext = visualContext?.let { visual ->
+                VisualTranslationPromptPolicy.buildSystemSuffix(
+                    visual = visual,
+                    context = settings.runtimeTranslationPromptContext,
+                    options = settings.openAiRequestOptions,
+                    activeSources = attempt.allSources,
+                )
+            } ?: StructuredBatchPromptPolicy.buildSystemSuffix(
+                    settings.runtimeTranslationPromptContext,
+                    settings.openAiRequestOptions,
+                    activeSources = attempt.allSources,
+                ),
             textAlreadyPrepared = true,
         )
         val stream = settings.streamingTranslate
@@ -260,11 +268,28 @@ class AnthropicTranslator @Inject constructor(
             )
             throw error
         }
-        val visualResponseComplete = StructuredBatchResponseParser.parse(
+        val visualResult = visualContext?.let { visual ->
+            VisualTranslationResponsePolicy.validateAndNormalize(
                 raw = translated,
+                context = visual,
                 expectedIndexes = attempt.activeIndexes,
                 json = json,
-            ).batchComplete
+            ).also { result ->
+                Timber.i(
+                    "Anthropic request=%s visualAnalysis complete=%s orderedIds=%s ocrCorrections=%s",
+                    requestId,
+                    result.complete,
+                    result.orderedIds,
+                    result.ocrCorrections.map(VisualOcrCorrection::id),
+                )
+            }
+        }
+        val normalizedTranslated = visualResult?.normalizedPayload ?: translated
+        val visualResponseComplete = visualResult?.complete ?: StructuredBatchResponseParser.parse(
+            raw = translated,
+            expectedIndexes = attempt.activeIndexes,
+            json = json,
+        ).batchComplete
         if (VisualResponseFallbackPolicy.shouldRetryWithoutImage(
                 visualContextPresent = settings.runtimeTranslationVisualContext != null,
                 fallbackAllowed = allowVisualFallback,
@@ -281,7 +306,7 @@ class AnthropicTranslator @Inject constructor(
                 allowVisualFallback = false,
             )
         }
-        return translated
+        return normalizedTranslated
     }
 
     private fun shouldUseStructuredBatch(settings: Settings): Boolean =
@@ -567,32 +592,48 @@ class AnthropicTranslator @Inject constructor(
         }
     }
 
-    override suspend fun translateWord(source: String, settings: Settings): WordResult? {
+    override suspend fun translateWord(source: String, settings: Settings): WordResult? =
+        requestWordResult(source, settings, compact = false)
+
+    override suspend fun translateWordCompact(source: String, settings: Settings): WordResult? =
+        requestWordResult(source, settings, compact = true)
+
+    private suspend fun requestWordResult(
+        source: String,
+        settings: Settings,
+        compact: Boolean,
+    ): WordResult? {
         val trimmed = source.trim()
         if (trimmed.isEmpty() || validationMessage(settings) != null) return null
 
         val targetDisplay = Languages.nameOf(appContext, settings.targetLang)
         val sourceDisplay = Languages.nameOf(appContext, settings.sourceLang)
-        val systemPrompt = settings.dictionaryPrompt
-            .replace("{source}", sourceDisplay)
-            .replace("{source_lang}", sourceDisplay)
-            .replace("{target}", targetDisplay)
-            .replace("{target_lang}", targetDisplay)
-            .withDifficultyNotesContract(targetDisplay)
-            .withLexicalDetailsContract(sourceDisplay) + settings.runtimeTranslationContext
+        val systemPrompt = if (compact) {
+            compactDictionaryPrompt(sourceDisplay, targetDisplay)
+        } else {
+            settings.dictionaryPrompt
+                .replace("{source}", sourceDisplay)
+                .replace("{source_lang}", sourceDisplay)
+                .replace("{target}", targetDisplay)
+                .replace("{target_lang}", targetDisplay)
+                .withDifficultyNotesContract(targetDisplay)
+                .withLexicalDetailsContract(sourceDisplay)
+                .withGroupedSensesContract(sourceDisplay, targetDisplay) + settings.runtimeTranslationContext
+        }
         val request = buildAnthropicMessageRequest(
             settings = settings,
             systemPrompt = systemPrompt,
             userText = trimmed,
-            maxTokens = DICTIONARY_MAX_TOKENS,
+            maxTokens = if (compact) COMPACT_DICTIONARY_MAX_TOKENS else DICTIONARY_MAX_TOKENS,
             temperature = 0.0,
             stream = false,
             json = json,
             thinkingControl = RemoteThinkingPolicy.anthropic(settings.openAiRequestOptions),
+            visualContext = settings.runtimeTranslationVisualContext,
         )
         val requestId = UUID.randomUUID().toString().take(8)
         TranslationRequestAudit.log(
-            requestId, "ANTHROPIC", "dictionary", false, request,
+            requestId, "ANTHROPIC", if (compact) "dictionary_compact" else "dictionary", false, request,
         )
         val raw = runCatching {
             withContext(Dispatchers.IO) {
@@ -657,6 +698,7 @@ class AnthropicTranslator @Inject constructor(
     private companion object {
         const val TRANSLATION_MAX_TOKENS = 4096
         const val DICTIONARY_MAX_TOKENS = 800
+        const val COMPACT_DICTIONARY_MAX_TOKENS = 240
         const val MAX_LOGGED_MALFORMED_STREAM_EVENTS = 3
     }
 }

@@ -120,7 +120,14 @@ class SettingsFieldPolicyTest {
             Case("disabled", OpenAiRequestOptions()),
             Case("Base64", OpenAiRequestOptions(encodeUserTextBase64 = true)),
             Case("Unicode", OpenAiRequestOptions(encodeUserTextUnicode = true)),
-            Case("visual context", OpenAiRequestOptions(sendScreenImage = true)),
+            Case(
+                "visual context with custom detail",
+                OpenAiRequestOptions(
+                    sendScreenImage = true,
+                    imageDetail = RemoteImageDetail.CUSTOM,
+                    customImageDetail = "original",
+                ),
+            ),
             Case(
                 "custom thinking configuration",
                 OpenAiRequestOptions(

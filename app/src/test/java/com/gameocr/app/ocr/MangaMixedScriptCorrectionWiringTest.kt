@@ -42,9 +42,14 @@ class MangaMixedScriptCorrectionWiringTest {
                 "recognizedChunks[plan.sourceBubbleIndex] += text",
             ),
             Case(
-                "Paddle reuses the already detected quad",
+                "Paddle batches only requested detected quads",
                 paddle,
-                "quads.getOrNull(memberIndex)",
+                "indexedQuads = distinctIndices.mapNotNull",
+            ),
+            Case(
+                "Paddle maps each batch result back by member index",
+                paddle,
+                "recognizedByIndex[memberIndex]",
             ),
             Case(
                 "Paddle does line recognition instead of whole-bubble CTC",

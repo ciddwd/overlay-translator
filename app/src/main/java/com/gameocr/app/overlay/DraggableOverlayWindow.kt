@@ -6,6 +6,7 @@ import android.content.Context
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Rect
+import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
@@ -30,6 +31,7 @@ import androidx.core.view.WindowCompat
 import com.gameocr.app.R
 import com.gameocr.app.data.BorderStyle
 import com.gameocr.app.data.OverlayTheme
+import com.gameocr.app.data.OverlayTextStyle
 import com.gameocr.app.data.Settings
 import com.gameocr.app.data.SettingsRepository
 import java.util.WeakHashMap
@@ -114,6 +116,7 @@ class DraggableOverlayWindow(
     private var contentSlot: FrameLayout? = null
     private var transientLayer: FrameLayout? = null
     private var wordPreviewView: View? = null
+    private var wordPreviewDismissAction: (() -> Unit)? = null
     private var activeSelectionActionMode: ActionMode? = null
     private val selectableTextViews: MutableMap<TextView, () -> Boolean> = WeakHashMap()
     /** show / 旋转后缓存的屏幕尺寸——给 onConfigurationChanged 做 ratio 重算的基准。
@@ -270,18 +273,32 @@ class DraggableOverlayWindow(
         content: FloatingWordPreviewContent,
         onSpeak: (() -> Unit)?,
         onOpenDetails: (() -> Unit)?,
+        textSizeSp: Float,
+        textStyle: OverlayTextStyle,
+        typeface: Typeface?,
+        accentColor: Int,
+        onPreviewDismissed: () -> Unit,
     ) {
         val layer = transientLayer ?: return
-        dismissWordPreview()
+        removeWordPreview(notifyDismissed = false)
         val density = context.resources.displayMetrics.density
         val horizontalMargin = (10 * density).roundToInt()
         val verticalGap = (6 * density).roundToInt()
-        val card = buildWordPreviewCard(content, onSpeak) {
-            if (onOpenDetails != null) {
+        val openDetails = onOpenDetails?.let { action ->
+            {
                 dismissWordPreview()
-                onOpenDetails()
+                action()
             }
         }
+        val card = buildWordPreviewCard(
+            content = content,
+            onSpeak = onSpeak,
+            onOpenDetails = openDetails,
+            textSizeSp = textSizeSp,
+            textStyle = textStyle,
+            typeface = typeface,
+            accentColor = accentColor,
+        )
         val params = FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.WRAP_CONTENT,
@@ -291,6 +308,7 @@ class DraggableOverlayWindow(
         }
         layer.addView(card, params)
         wordPreviewView = card
+        wordPreviewDismissAction = onPreviewDismissed
         card.post {
             if (wordPreviewView !== card || layer.width <= 0 || layer.height <= 0) return@post
             val layerLocation = IntArray(2)
@@ -308,9 +326,16 @@ class DraggableOverlayWindow(
     }
 
     fun dismissWordPreview() {
-        val preview = wordPreviewView ?: return
+        removeWordPreview(notifyDismissed = true)
+    }
+
+    private fun removeWordPreview(notifyDismissed: Boolean) {
+        val preview = wordPreviewView
+        val dismissAction = wordPreviewDismissAction
         wordPreviewView = null
-        (preview.parent as? FrameLayout)?.removeView(preview)
+        wordPreviewDismissAction = null
+        (preview?.parent as? FrameLayout)?.removeView(preview)
+        if (notifyDismissed) dismissAction?.invoke()
     }
 
     /**
@@ -680,7 +705,11 @@ class DraggableOverlayWindow(
     private fun buildWordPreviewCard(
         content: FloatingWordPreviewContent,
         onSpeak: (() -> Unit)?,
-        onOpenDetails: () -> Unit,
+        onOpenDetails: (() -> Unit)?,
+        textSizeSp: Float,
+        textStyle: OverlayTextStyle,
+        typeface: Typeface?,
+        accentColor: Int,
     ): View {
         val density = context.resources.displayMetrics.density
         val horizontalPadding = (12 * density).roundToInt()
@@ -688,15 +717,18 @@ class DraggableOverlayWindow(
         val foreground = themeFgColor()
         val muted = themeFgMutedColor()
         val stroke = themeStroke().takeIf { it.first > 0 }?.second ?: muted
+        val baseTextSizeSp = textSizeSp.coerceIn(10f, 32f)
 
         fun oneLineText(
             value: String,
             sizeSp: Float,
             color: Int,
-        ) = TextView(context).apply {
+            style: OverlayTextStyle = textStyle,
+        ) = StyledTranslationTextView(context).apply {
             text = value
             setTextColor(color)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp)
+            applyOverlayTextStyle(style, typeface)
             maxLines = 1
             minLines = 1
             ellipsize = TextUtils.TruncateAt.END
@@ -706,19 +738,21 @@ class DraggableOverlayWindow(
         val card = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             elevation = 8 * density
-            isClickable = true
-            isFocusable = true
             setPadding(horizontalPadding, verticalPadding, horizontalPadding, verticalPadding)
             background = GradientDrawable().apply {
                 cornerRadius = 10 * density
                 setColor(themeBgColor())
                 setStroke((1 * density).roundToInt().coerceAtLeast(1), stroke)
             }
-            contentDescription = context.getString(
-                R.string.floating_word_open_details,
-                content.word,
-            )
-            setOnClickListener { onOpenDetails() }
+            if (onOpenDetails != null) {
+                isClickable = true
+                isFocusable = true
+                contentDescription = context.getString(
+                    R.string.floating_word_open_details,
+                    content.word,
+                )
+                setOnClickListener { onOpenDetails() }
+            }
         }
 
         val wordRow = LinearLayout(context).apply {
@@ -726,31 +760,94 @@ class DraggableOverlayWindow(
             gravity = Gravity.CENTER_VERTICAL
         }
         wordRow.addView(
-            oneLineText(content.word, 15f, foreground).apply {
-                setTypeface(typeface, android.graphics.Typeface.BOLD)
-            },
+            oneLineText(
+                value = content.word,
+                sizeSp = baseTextSizeSp + 1f,
+                color = foreground,
+                style = textStyle.copy(bold = true),
+            ),
             LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
         )
         onSpeak?.let { speak ->
-            val size = (30 * density).roundToInt()
+            val metrics = translationCardSpeechButtonMetrics(density)
             wordRow.addView(
                 ImageView(context).apply {
                     setImageResource(R.drawable.ic_volume_up)
-                    imageTintList = android.content.res.ColorStateList.valueOf(foreground)
-                    val padding = (6 * density).roundToInt()
-                    setPadding(padding, padding, padding, padding)
+                    imageTintList = android.content.res.ColorStateList.valueOf(accentColor)
+                    setPadding(
+                        metrics.paddingPx,
+                        metrics.paddingPx,
+                        metrics.paddingPx,
+                        metrics.paddingPx,
+                    )
+                    applyBorderlessSelectableBackground()
                     isClickable = true
                     isFocusable = true
                     contentDescription = context.getString(R.string.word_card_speak_source)
                     setOnClickListener { speak() }
                 },
-                LinearLayout.LayoutParams(size, size),
+                LinearLayout.LayoutParams(metrics.sizePx, metrics.sizePx),
             )
         }
         card.addView(wordRow)
-        card.addView(oneLineText(content.translation, 14f, foreground))
-        card.addView(oneLineText(content.partOfSpeech, 12f, muted))
+        content.lines.forEachIndexed { index, line ->
+            card.addView(
+                oneLineText(
+                    line,
+                    if (index == 0) baseTextSizeSp else (baseTextSizeSp - 1f).coerceAtLeast(10f),
+                    foreground,
+                )
+            )
+        }
+        onOpenDetails?.let { openDetails ->
+            card.addView(
+                TextView(context).apply {
+                    text = context.getString(R.string.floating_word_view_details)
+                    setTextColor(accentColor)
+                    setTextSize(
+                        TypedValue.COMPLEX_UNIT_SP,
+                        (baseTextSizeSp - 1f).coerceAtLeast(11f),
+                    )
+                    maxLines = 1
+                    ellipsize = TextUtils.TruncateAt.END
+                    gravity = Gravity.CENTER
+                    val horizontal = (10 * density).roundToInt()
+                    val vertical = (5 * density).roundToInt()
+                    setPadding(horizontal, vertical, horizontal, vertical)
+                    applyBorderlessSelectableBackground()
+                    isClickable = true
+                    isFocusable = true
+                    contentDescription = context.getString(
+                        R.string.floating_word_open_details,
+                        content.word,
+                    )
+                    setOnClickListener { openDetails() }
+                },
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ).apply {
+                    gravity = Gravity.END
+                    topMargin = (2 * density).roundToInt()
+                },
+            )
+        }
         return card
+    }
+
+    private fun View.applyBorderlessSelectableBackground() {
+        val backgroundValue = TypedValue()
+        if (
+            context.theme.resolveAttribute(
+                android.R.attr.selectableItemBackgroundBorderless,
+                backgroundValue,
+                true,
+            )
+        ) {
+            setBackgroundResource(backgroundValue.resourceId)
+        } else {
+            setBackgroundColor(Color.TRANSPARENT)
+        }
     }
 
     private fun lockIconRes(locked: Boolean): Int =

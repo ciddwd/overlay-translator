@@ -10,6 +10,7 @@ import com.gameocr.app.data.RenderMode
 import com.gameocr.app.data.Settings
 import com.gameocr.app.data.TranslationOutputDirection
 import com.gameocr.app.data.TranslationOutputLayout
+import com.gameocr.app.data.TranslationContextMode
 import com.gameocr.app.data.TranslatorEngine
 import com.gameocr.app.data.TtsProvider
 import com.gameocr.app.ocr.OcrLanguageCapability
@@ -138,7 +139,10 @@ data class OnboardingDraft(
 )
 
 object OnboardingPolicy {
-    fun stepsFor(draft: OnboardingDraft): List<OnboardingStep> = buildList {
+    fun stepsFor(
+        draft: OnboardingDraft,
+        localLlmSupported: Boolean = true,
+    ): List<OnboardingStep> = buildList {
         add(OnboardingStep.WELCOME)
         add(OnboardingStep.SOURCE_LANGUAGE)
         add(OnboardingStep.TARGET_LANGUAGE)
@@ -152,13 +156,15 @@ object OnboardingPolicy {
         val usesJapaneseMangaOcr = usesJapaneseMangaOcr(draft)
         if (usesJapaneseMangaOcr) {
             add(OnboardingStep.MANGA_OFFLINE_DOWNLOAD)
-        } else if (needsRecommendedModelsDownload(draft)) {
+        } else if (needsRecommendedModelsDownload(draft, localLlmSupported)) {
             add(OnboardingStep.RECOMMENDED_MODELS_DOWNLOAD)
         }
         when (draft.translationMethod) {
-            OnboardingTranslationMethod.OFFLINE -> when {
-                usesSakuraMangaTranslation(draft) -> Unit // Included with Manga OCR above.
-                usesHyMt2MangaTranslation(draft) -> Unit // Included with recommended models above.
+            OnboardingTranslationMethod.OFFLINE -> when (
+                offlineTranslatorEngine(draft, localLlmSupported)
+            ) {
+                TranslatorEngine.LOCAL_SAKURA,
+                TranslatorEngine.LOCAL_HY_MT2 -> Unit // Included with the model page above.
                 else -> add(OnboardingStep.OFFLINE_LANGUAGE_DOWNLOAD)
             }
             OnboardingTranslationMethod.CLOUD_LLM -> add(OnboardingStep.CLOUD_CONFIG)
@@ -188,6 +194,25 @@ object OnboardingPolicy {
         draft.usage == OnboardingUsage.MANGA &&
             draft.translationMethod == OnboardingTranslationMethod.OFFLINE &&
             !usesSakuraMangaTranslation(draft)
+
+    fun offlineTranslatorEngine(
+        draft: OnboardingDraft,
+        localLlmSupported: Boolean,
+    ): TranslatorEngine = when {
+        draft.usage != OnboardingUsage.MANGA || !localLlmSupported ->
+            TranslatorEngine.GOOGLE_ML_KIT
+        usesSakuraMangaTranslation(draft) -> TranslatorEngine.LOCAL_SAKURA
+        else -> TranslatorEngine.LOCAL_HY_MT2
+    }
+
+    fun canUseOfflineTranslation(
+        draft: OnboardingDraft,
+        localLlmSupported: Boolean,
+    ): Boolean = when (offlineTranslatorEngine(draft, localLlmSupported)) {
+        TranslatorEngine.GOOGLE_ML_KIT ->
+            isMlKitPairSupported(draft.sourceLang, draft.targetLang)
+        else -> true
+    }
 
     private fun normalizedSourceLanguage(sourceLang: String): String =
         sourceLang.trim().replace('_', '-')
@@ -234,8 +259,12 @@ object OnboardingPolicy {
     fun shouldRecommendPaddleOcr(draft: OnboardingDraft): Boolean =
         recommendedOcrEngine(draft) == OcrEngineKind.PADDLE_ONNX
 
-    fun needsRecommendedModelsDownload(draft: OnboardingDraft): Boolean =
-        shouldRecommendPaddleOcr(draft) || usesHyMt2MangaTranslation(draft)
+    fun needsRecommendedModelsDownload(
+        draft: OnboardingDraft,
+        localLlmSupported: Boolean = true,
+    ): Boolean =
+        shouldRecommendPaddleOcr(draft) ||
+            (localLlmSupported && usesHyMt2MangaTranslation(draft))
 
     fun recommendedPaddleModelVersion(draft: OnboardingDraft): PaddleModelVersion? =
         when (recommendedOcrEngine(draft)) {
@@ -352,7 +381,11 @@ object OnboardingPolicy {
         )
     }
 
-    fun apply(settings: Settings, draft: OnboardingDraft): Settings {
+    fun apply(
+        settings: Settings,
+        draft: OnboardingDraft,
+        localLlmSupported: Boolean = true,
+    ): Settings {
         val displaySettings = when (draft.displayMode) {
             OnboardingDisplayMode.ADAPTIVE_OVERLAY -> Triple(
                 RenderMode.BLOCKS,
@@ -376,15 +409,13 @@ object OnboardingPolicy {
             renderMode = displaySettings.first,
             overlayStyleMode = displaySettings.second,
             overlayPlacement = displaySettings.third,
+            translationContextMode = when (draft.translationMethod) {
+                OnboardingTranslationMethod.CLOUD_LLM -> TranslationContextMode.PAGE_CONTEXT
+                OnboardingTranslationMethod.OFFLINE -> TranslationContextMode.FAST_PER_SEGMENT
+            },
             translatorEngine = when (draft.translationMethod) {
                 OnboardingTranslationMethod.OFFLINE ->
-                    if (usesSakuraMangaTranslation(draft)) {
-                        TranslatorEngine.LOCAL_SAKURA
-                    } else if (draft.usage == OnboardingUsage.MANGA) {
-                        TranslatorEngine.LOCAL_HY_MT2
-                    } else {
-                        TranslatorEngine.GOOGLE_ML_KIT
-                    }
+                    offlineTranslatorEngine(draft, localLlmSupported)
                 OnboardingTranslationMethod.CLOUD_LLM ->
                     if (draft.cloudProvider.protocol == CloudApiProtocol.ANTHROPIC) {
                         TranslatorEngine.ANTHROPIC

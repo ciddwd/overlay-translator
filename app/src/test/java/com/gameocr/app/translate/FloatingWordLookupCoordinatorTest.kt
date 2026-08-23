@@ -4,6 +4,8 @@ import com.gameocr.app.data.RuntimeTranslationPromptContext
 import com.gameocr.app.data.Settings
 import com.gameocr.app.data.TranslationContextMode
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.runBlocking
@@ -134,6 +136,56 @@ class FloatingWordLookupCoordinatorTest {
         assertEquals(0, translator.translateCalls)
     }
 
+    @Test
+    fun compactLookupCache_tableDriven_reusesOnlyEquivalentRequests() = runBlocking {
+        data class Step(val word: String, val settings: Settings, val expectedCalls: Int)
+        val translator = TrackingTranslator(
+            wordResult = WordResult(
+                lemma = "display",
+                senses = listOf(WordSense("v.", listOf("展示"))),
+            ),
+            translation = null,
+        )
+        val coordinator = FloatingWordLookupCoordinator(translator)
+
+        listOf(
+            Step("displayed", Settings(targetLang = "zh-CN", model = "model-a"), 1),
+            Step("DISPLAYED", Settings(targetLang = "zh-CN", model = "model-a"), 1),
+            Step("supporters", Settings(targetLang = "zh-CN", model = "model-a"), 2),
+            Step("displayed", Settings(targetLang = "zh-TW", model = "model-a"), 3),
+            Step("displayed", Settings(targetLang = "zh-CN", model = "model-b"), 4),
+        ).forEach { step ->
+            coordinator.execute(step.word, step.settings)
+            assertEquals(step.word, step.expectedCalls, translator.dictionaryCalls)
+        }
+    }
+
+    @Test
+    fun concurrentSameWord_reusesTheInFlightCompactRequest() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var calls = 0
+        val translator = object : Translator {
+            override suspend fun translate(source: String, settings: Settings): String? = null
+            override fun translateStream(source: String, settings: Settings): Flow<String> = emptyFlow()
+            override suspend fun translateWordCompact(source: String, settings: Settings): WordResult {
+                calls += 1
+                started.complete(Unit)
+                release.await()
+                return WordResult(senses = listOf(WordSense("n.", listOf("支持者"))))
+            }
+        }
+        val coordinator = FloatingWordLookupCoordinator(translator)
+
+        val first = async { coordinator.execute("supporters", Settings()) }
+        started.await()
+        val second = async { coordinator.execute("SUPPORTERS", Settings()) }
+        release.complete(Unit)
+
+        assertEquals(first.await(), second.await())
+        assertEquals(1, calls)
+    }
+
     private class TrackingTranslator(
         private val wordResult: WordResult?,
         private val translation: String?,
@@ -154,7 +206,7 @@ class FloatingWordLookupCoordinatorTest {
 
         override fun translateStream(source: String, settings: Settings): Flow<String> = emptyFlow()
 
-        override suspend fun translateWord(source: String, settings: Settings): WordResult? {
+        override suspend fun translateWordCompact(source: String, settings: Settings): WordResult? {
             dictionaryCalls += 1
             receivedSettings += settings
             if (dictionaryCancellation) throw CancellationException("cancelled")

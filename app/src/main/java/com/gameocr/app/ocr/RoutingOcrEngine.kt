@@ -55,7 +55,7 @@ class RoutingOcrEngine @Inject constructor(
             OcrEngineKind.PADDLE_AI_STUDIO -> paddleAiStudio.recognize(bitmap, kind)
             OcrEngineKind.PADDLE_ONNX -> paddle.recognize(bitmap, kind, settings)
             OcrEngineKind.MANGA_OCR_JA -> manga.recognize(bitmap, kind, settings)
-            else -> mlKit.recognize(bitmap, kind)
+            else -> mlKit.recognize(bitmap, kind, settings)
         }
         Timber.tag("OcrMerge").i(
             "engine=%s raw=%d merge=%s strength=%s",

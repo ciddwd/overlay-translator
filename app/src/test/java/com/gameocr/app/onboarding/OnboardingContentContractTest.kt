@@ -263,9 +263,9 @@ class OnboardingContentContractTest {
         assertTrue(
             "OCR and Hy-MT2 must be submitted through one download plan",
             viewModelSource.contains("recommendedModelsDownloadSpecs(") &&
-                viewModelSource.contains("ModelDownloadSpec.paddle(it)") &&
+                viewModelSource.contains("modelReadinessChecker::paddle") &&
                 viewModelSource.contains(
-                    "ModelDownloadSpec.llm(LlmModelKind.HY_MT2_1_8B_Q4_K_M)"
+                    "modelReadinessChecker.llm(LlmModelKind.HY_MT2_1_8B_Q4_K_M)"
                 ) &&
                 viewModelSource.contains("enqueueIndependentlyAndAwait(specs, onProgress)"),
         )
@@ -281,15 +281,19 @@ class OnboardingContentContractTest {
         ).readText()
         assertTrue(
             "Japanese manga offline download must include Sakura",
-            viewModelSource.contains("ModelDownloadSpec.llm(LlmModelKind.SAKURA_1_5B_Q4)"),
+            viewModelSource.contains(
+                "modelReadinessChecker.llm(LlmModelKind.SAKURA_1_5B_Q4)"
+            ),
         )
         assertTrue(
             "Manga model step must include the PP-OCRv6 Small detector",
-            viewModelSource.contains("ModelDownloadSpec.paddle(PaddleModelVersion.V6_SMALL)"),
+            viewModelSource.contains(
+                "modelReadinessChecker.paddle(PaddleModelVersion.V6_SMALL)"
+            ),
         )
         assertTrue(
             "Manga model step must include the Manga OCR recognizer",
-            viewModelSource.contains("ModelDownloadSpec.mangaOcr()"),
+            viewModelSource.contains("modelReadinessChecker.mangaOcr()"),
         )
         val mangaPage = screenSource
             .substringAfter("private fun MangaOfflineDownloadPage(")
@@ -305,6 +309,40 @@ class OnboardingContentContractTest {
             "The internal Paddle dependency must not have its own visible row",
             !mangaPage.contains("readiness.paddleReady") &&
                 !mangaPage.contains("onboarding_manga_offline_paddle"),
+        )
+    }
+
+    @Test
+    fun unsupportedLocalLlm_usesMlKitFallbackAcrossPlanningAndSave() {
+        val screenSource = sourceFile(
+            "src/main/java/com/gameocr/app/onboarding/OnboardingScreen.kt"
+        ).readText()
+        val viewModelSource = sourceFile(
+            "src/main/java/com/gameocr/app/onboarding/OnboardingViewModel.kt"
+        ).readText()
+        val policySource = sourceFile(
+            "src/main/java/com/gameocr/app/onboarding/OnboardingModels.kt"
+        ).readText()
+
+        listOf(
+            "OnboardingPolicy.stepsFor(currentDraft, localLlmSupported)",
+            "includeSakura = localLlmSupported &&",
+            "OnboardingPolicy.canUseOfflineTranslation(draft, localLlmSupported)",
+            "SummaryPage(draft, localLlmSupported)",
+        ).forEach { marker ->
+            assertTrue("onboarding capability wiring is missing: $marker", screenSource.contains(marker))
+        }
+        assertTrue(
+            "saved settings must use the same local-LLM capability",
+            viewModelSource.contains(
+                "localLlmSupported = modelReadinessChecker.isLocalLlmSupported()"
+            ),
+        )
+        assertTrue(
+            "unsupported local LLM must resolve to ML Kit",
+            policySource.contains(
+                "draft.usage != OnboardingUsage.MANGA || !localLlmSupported"
+            ) && policySource.contains("TranslatorEngine.GOOGLE_ML_KIT"),
         )
     }
 

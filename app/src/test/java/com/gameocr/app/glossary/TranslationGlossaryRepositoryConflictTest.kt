@@ -80,6 +80,54 @@ class TranslationGlossaryRepositoryConflictTest {
         }
     }
 
+    @Test
+    fun userImportConflictPolicy_tableDriven_rechecksInsideTransaction() = runBlocking {
+        data class Case(
+            val name: String,
+            val policy: GlossaryImportConflictPolicy,
+            val expectedResult: GlossaryImportCommitResult,
+            val expectedBob: String,
+        )
+        listOf(
+            Case(
+                name = "skip keeps existing changed translation",
+                policy = GlossaryImportConflictPolicy.SKIP,
+                expectedResult = GlossaryImportCommitResult(inserted = 1, overwritten = 0, skipped = 2),
+                expectedBob = "鲍勃",
+            ),
+            Case(
+                name = "overwrite reapplies every matching imported row",
+                policy = GlossaryImportConflictPolicy.OVERWRITE,
+                expectedResult = GlossaryImportCommitResult(inserted = 1, overwritten = 2, skipped = 0),
+                expectedBob = "罗伯特",
+            ),
+        ).forEach { case ->
+            val dao = FakeGlossaryDao(
+                listOf(
+                    term(id = 1, source = "Alice", target = "爱丽丝"),
+                    term(id = 2, source = "Bob", target = "鲍勃"),
+                )
+            )
+            val repository = TranslationGlossaryRepository(dao)
+            val result = repository.importUserTerms(
+                terms = listOf(
+                    term(source = "Alice", target = "爱丽丝"),
+                    term(source = "Bob", target = "罗伯特"),
+                    term(source = "Carol", target = "卡萝尔"),
+                ),
+                conflictPolicy = case.policy,
+            )
+
+            assertEquals(case.name, case.expectedResult, result)
+            assertEquals(
+                case.name,
+                case.expectedBob,
+                dao.listAll().single { it.sourceTerm == "Bob" }.targetTerm,
+            )
+            assertEquals(case.name, 3, dao.listAll().size)
+        }
+    }
+
     private fun term(
         id: Long = 0,
         source: String,

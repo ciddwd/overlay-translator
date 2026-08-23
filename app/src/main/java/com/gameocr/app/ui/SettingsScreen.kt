@@ -192,6 +192,7 @@ import com.gameocr.app.download.ModelDownloadWorkPolicy
 import com.gameocr.app.download.latestUnresolvedModelDownloadFailure
 import com.gameocr.app.data.PreprocessOptions
 import com.gameocr.app.data.RenderMode
+import com.gameocr.app.data.RemoteImageDetail
 import com.gameocr.app.data.RemoteReasoningEffort
 import com.gameocr.app.data.RemoteThinkingParameterFormat
 import com.gameocr.app.data.Settings
@@ -7068,6 +7069,26 @@ private fun reasoningEffortLabelRes(effort: RemoteReasoningEffort): Int = when (
     RemoteReasoningEffort.CUSTOM -> R.string.settings_reasoning_effort_custom
 }
 
+@androidx.annotation.StringRes
+private fun imageDetailLabelRes(detail: RemoteImageDetail): Int = when (detail) {
+    RemoteImageDetail.OMIT -> R.string.settings_image_detail_omit
+    RemoteImageDetail.LOW -> R.string.settings_image_detail_low
+    RemoteImageDetail.AUTO -> R.string.settings_image_detail_auto
+    RemoteImageDetail.HIGH -> R.string.settings_image_detail_high
+    RemoteImageDetail.CUSTOM -> R.string.settings_image_detail_custom
+}
+
+internal fun imageDetailStep(detail: RemoteImageDetail): Float =
+    RemoteImageDetail.entries.indexOf(detail).toFloat()
+
+internal fun imageDetailAtStep(step: Float): RemoteImageDetail {
+    val details = RemoteImageDetail.entries
+    return details[step.roundToInt().coerceIn(details.indices)]
+}
+
+internal val imageDetailSliderSteps: Int
+    get() = (RemoteImageDetail.entries.size - 2).coerceAtLeast(0)
+
 internal fun reasoningEffortStep(effort: RemoteReasoningEffort): Float =
     RemoteReasoningEffort.entries.indexOf(effort).toFloat()
 
@@ -7139,6 +7160,62 @@ private fun TranslationAssistanceSettings(
             },
         )
         }
+        if (requestOptions.sendScreenImage && translatorEngine == TranslatorEngine.OPENAI) {
+            SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_image_detail) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    val selectedDetailLabel =
+                        stringResource(imageDetailLabelRes(requestOptions.imageDetail))
+                    val selectedDetailValue = requestOptions.imageDetailWireValue()
+                        ?: stringResource(R.string.settings_request_value_omitted)
+                    Text(
+                        text = stringResource(
+                            R.string.settings_image_detail_value,
+                            selectedDetailLabel,
+                            selectedDetailValue,
+                        ),
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                    Slider(
+                        value = imageDetailStep(requestOptions.imageDetail),
+                        onValueChange = { step ->
+                            val detail = imageDetailAtStep(step)
+                            if (detail != requestOptions.imageDetail) {
+                                onRequestOptionsChange(requestOptions.copy(imageDetail = detail))
+                            }
+                        },
+                        valueRange = 0f..RemoteImageDetail.entries.lastIndex.toFloat(),
+                        steps = imageDetailSliderSteps,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .semantics { stateDescription = selectedDetailLabel },
+                    )
+                    Text(
+                        text = stringResource(R.string.settings_image_detail_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (requestOptions.imageDetail == RemoteImageDetail.CUSTOM) {
+                        OutlinedTextField(
+                            value = requestOptions.customImageDetail,
+                            onValueChange = { raw ->
+                                val sanitized = raw.filter { character ->
+                                    character.isLetterOrDigit() || character in "._-"
+                                }.take(64)
+                                onRequestOptionsChange(
+                                    requestOptions.copy(customImageDetail = sanitized)
+                                )
+                            },
+                            label = { Text(stringResource(R.string.settings_image_detail_custom)) },
+                            placeholder = {
+                                Text(stringResource(R.string.settings_image_detail_custom_hint))
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                        )
+                    }
+                }
+            }
+        }
         SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_thinking_mode) {
         SwitchRow(
             label = stringResource(R.string.settings_thinking_mode),
@@ -7154,8 +7231,19 @@ private fun TranslationAssistanceSettings(
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     val selectedEffortLabel =
                         stringResource(reasoningEffortLabelRes(requestOptions.reasoningEffort))
+                    val selectedEffortValue = when (requestOptions.reasoningEffort) {
+                        RemoteReasoningEffort.CUSTOM ->
+                            requestOptions.customReasoningEffort.trim().ifBlank { null }
+                        else -> requestOptions.reasoningEffort.wireValue
+                    }
                     Text(
-                        text = stringResource(
+                        text = selectedEffortValue?.let { wireValue ->
+                            stringResource(
+                                R.string.settings_reasoning_effort_value_with_wire,
+                                selectedEffortLabel,
+                                wireValue,
+                            )
+                        } ?: stringResource(
                             R.string.settings_reasoning_effort_value,
                             selectedEffortLabel,
                         ),

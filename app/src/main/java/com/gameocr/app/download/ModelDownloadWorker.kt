@@ -33,6 +33,7 @@ class ModelDownloadWorker @AssistedInject constructor(
     private val paddleInstaller: PaddleModelInstaller,
     private val mangaOcrInstaller: MangaOcrModelInstaller,
     private val orientationModelInstaller: OrientationModelInstaller,
+    private val modelReadinessChecker: ModelReadinessChecker,
 ) : CoroutineWorker(appContext, workerParams) {
 
     private var lastProgressUpdateAt = 0L
@@ -110,6 +111,14 @@ class ModelDownloadWorker @AssistedInject constructor(
             batchIndex = index + 1,
             batchCount = count,
         )
+        val initialReadiness = modelReadinessChecker.check(spec)
+        check(initialReadiness.supported) {
+            applicationContext.getString(R.string.err_llm_device_unsupported)
+        }
+        if (initialReadiness.installed) {
+            Timber.i("Model download skipped because shared check is ready spec=%s", spec.encode())
+            return
+        }
 
         when (spec.type) {
             ModelDownloadType.LLM -> {
@@ -134,6 +143,9 @@ class ModelDownloadWorker @AssistedInject constructor(
                     publishProgress(spec, label, index, count, progress.file, progress.downloaded, progress.total, progress.done, progress.error)
                 }
             }
+        }
+        check(modelReadinessChecker.check(spec).installed) {
+            "Downloaded model did not pass the shared installation check: ${spec.encode()}"
         }
     }
 

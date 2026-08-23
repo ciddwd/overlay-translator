@@ -22,6 +22,31 @@ internal fun sortTextBlocksForReading(
 }
 
 /**
+ * Resolves a whole-page sequence before the floating-window "merge all" presentation collapses
+ * every region into one translation unit.
+ *
+ * Ordinary OCR rendering deliberately keeps [sortTextBlocksForReading]'s conservative behavior.
+ * A whole-page unit has stronger spatial evidence available: a blank horizontal tier separates
+ * page sections, while a blank vertical tier separates columns inside a section. The cuts are
+ * recursive and normalized by the median source-box thickness, so no device pixels, OCR text, or
+ * model-specific region labels participate in the decision.
+ */
+internal fun sortTextBlocksForMergedPage(
+    blocks: List<TextBlock>,
+    orientationHint: TextOrientation? = null,
+): List<TextBlock> {
+    if (blocks.size <= 1) return blocks
+    return when (val orientation = resolveTextBlockReadingOrientation(blocks, orientationHint)) {
+        TextOrientation.VERTICAL_RTL -> sortVerticalPageByWhitespace(blocks, leftToRight = false)
+        TextOrientation.VERTICAL_LTR -> sortVerticalPageByWhitespace(blocks, leftToRight = true)
+        TextOrientation.HORIZONTAL_RTL -> sortHorizontal(blocks, leftToRight = false)
+        TextOrientation.HORIZONTAL_LTR,
+        TextOrientation.STACKED,
+        TextOrientation.UNKNOWN -> sortHorizontal(blocks, leftToRight = true)
+    }
+}
+
+/**
  * Manga pages commonly place right-to-left panels in horizontal tiers. A global X sort can
  * therefore consume a lower-right panel before the upper-left panel. Infer only unambiguous
  * horizontal whitespace tiers, then preserve the existing vertical RTL order inside each tier.
@@ -32,24 +57,73 @@ private fun sortMangaVerticalRtl(blocks: List<TextBlock>): List<TextBlock> =
         sortVertical(band, leftToRight = false)
     }
 
+private fun sortVerticalPageByWhitespace(
+    blocks: List<TextBlock>,
+    leftToRight: Boolean,
+): List<TextBlock> {
+    if (blocks.size <= 1) return blocks
+    val gapThreshold = mangaHorizontalBandGapThresholdPx(blocks)
+    val horizontalSections = splitByWhitespace(
+        blocks = blocks,
+        gapThreshold = gapThreshold,
+        start = { it.boundingBox.top },
+        end = { it.boundingBox.bottom },
+        secondary = { it.boundingBox.left },
+    )
+    if (horizontalSections.size > 1) {
+        return horizontalSections.flatMap { section ->
+            sortVerticalPageByWhitespace(section, leftToRight)
+        }
+    }
+
+    val verticalSections = splitByWhitespace(
+        blocks = blocks,
+        gapThreshold = gapThreshold,
+        start = { it.boundingBox.left },
+        end = { it.boundingBox.right },
+        secondary = { it.boundingBox.top },
+    )
+    if (verticalSections.size > 1) {
+        val ordered = if (leftToRight) verticalSections else verticalSections.asReversed()
+        return ordered.flatMap { section ->
+            sortVerticalPageByWhitespace(section, leftToRight)
+        }
+    }
+    return sortVertical(blocks, leftToRight)
+}
+
 internal fun splitMangaHorizontalBands(blocks: List<TextBlock>): List<List<TextBlock>> {
     if (blocks.size <= 1) return listOf(blocks)
-    val gapThreshold = mangaHorizontalBandGapThresholdPx(blocks)
-    val sorted = blocks.sortedWith(
-        compareBy<TextBlock>({ it.boundingBox.top }, { it.boundingBox.left })
+    return splitByWhitespace(
+        blocks = blocks,
+        gapThreshold = mangaHorizontalBandGapThresholdPx(blocks),
+        start = { it.boundingBox.top },
+        end = { it.boundingBox.bottom },
+        secondary = { it.boundingBox.left },
     )
+}
+
+private fun splitByWhitespace(
+    blocks: List<TextBlock>,
+    gapThreshold: Int,
+    start: (TextBlock) -> Int,
+    end: (TextBlock) -> Int,
+    secondary: (TextBlock) -> Int,
+): List<List<TextBlock>> {
+    if (blocks.size <= 1) return listOf(blocks)
+    val sorted = blocks.sortedWith(compareBy(start, secondary))
     val bands = mutableListOf<MutableList<TextBlock>>()
     var current = mutableListOf(sorted.first())
-    var currentBottom = sorted.first().boundingBox.bottom
+    var currentEnd = end(sorted.first())
     sorted.drop(1).forEach { block ->
-        val gap = block.boundingBox.top - currentBottom
+        val gap = start(block) - currentEnd
         if (gap >= gapThreshold) {
             bands += current
             current = mutableListOf(block)
-            currentBottom = block.boundingBox.bottom
+            currentEnd = end(block)
         } else {
             current += block
-            currentBottom = maxOf(currentBottom, block.boundingBox.bottom)
+            currentEnd = maxOf(currentEnd, end(block))
         }
     }
     bands += current

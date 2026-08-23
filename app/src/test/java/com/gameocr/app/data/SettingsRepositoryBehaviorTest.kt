@@ -66,9 +66,17 @@ class SettingsRepositoryBehaviorTest {
                 OpenAiRequestOptions(encodeUserTextUnicode = true),
             ),
             Case(
-                "visual context",
-                OpenAiRequestOptions(sendScreenImage = true),
-                OpenAiRequestOptions(sendScreenImage = true),
+                "visual context custom detail is trimmed",
+                OpenAiRequestOptions(
+                    sendScreenImage = true,
+                    imageDetail = RemoteImageDetail.CUSTOM,
+                    customImageDetail = "  original  ",
+                ),
+                OpenAiRequestOptions(
+                    sendScreenImage = true,
+                    imageDetail = RemoteImageDetail.CUSTOM,
+                    customImageDetail = "original",
+                ),
             ),
             Case(
                 "conflict prefers Base64",

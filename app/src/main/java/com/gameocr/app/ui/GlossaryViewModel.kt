@@ -8,6 +8,8 @@ import com.gameocr.app.appcontext.InstalledAppCatalog
 import com.gameocr.app.appcontext.SelectableApp
 import com.gameocr.app.data.SettingsRepository
 import com.gameocr.app.glossary.GlossaryTermEntity
+import com.gameocr.app.glossary.GlossaryImportCommitResult
+import com.gameocr.app.glossary.GlossaryImportConflictPolicy
 import com.gameocr.app.glossary.TranslationGlossaryRepository
 import com.gameocr.app.translate.TranslationMemoryRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -71,6 +73,11 @@ class GlossaryViewModel @Inject constructor(
 
     suspend fun overwriteConflict(term: GlossaryTermEntity): Long =
         glossaryRepository.overwriteConflict(term)
+
+    suspend fun importTerms(
+        terms: List<GlossaryTermEntity>,
+        conflictPolicy: GlossaryImportConflictPolicy,
+    ): GlossaryImportCommitResult = glossaryRepository.importUserTerms(terms, conflictPolicy)
 
     suspend fun delete(id: Long) = glossaryRepository.delete(id)
 

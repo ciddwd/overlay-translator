@@ -4,19 +4,25 @@ import android.app.Dialog
 import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.Rect
+import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.LayerDrawable
 import android.os.Build
 import android.text.SpannableStringBuilder
+import android.text.Spannable
 import android.text.Spanned
 import android.text.style.ForegroundColorSpan
+import android.text.style.BackgroundColorSpan
 import android.text.style.RelativeSizeSpan
 import android.text.style.StyleSpan
 import android.text.style.TypefaceSpan
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.Window
 import android.view.WindowInsets
 import android.view.WindowManager
@@ -25,6 +31,7 @@ import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.ImageView
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.gameocr.app.R
@@ -41,6 +48,22 @@ private data class TranslationCardWindowArea(
     val safeInsets: TranslationCardSafeInsets,
 )
 
+internal fun shouldShowTranslationCardTranslationSection(
+    translation: String?,
+    wordResult: WordResult?,
+    loading: Boolean,
+): Boolean = when {
+    loading -> true
+    wordResult != null && !wordResult.isEmpty() -> false
+    else -> !translation.isNullOrBlank()
+}
+
+internal fun translationCardSectionDividerCount(
+    hasSourceContent: Boolean,
+    showTranslationSection: Boolean,
+    hasDictionaryContent: Boolean,
+): Int = if (hasSourceContent && (showTranslationSection || hasDictionaryContent)) 1 else 0
+
 /**
  * 划词翻译结果浮卡。屏幕中下方居中弹出，**不**自动消失（卡片可能含多行释义，用户需要时间阅读）。
  *
@@ -50,7 +73,7 @@ private data class TranslationCardWindowArea(
  *
  * 渲染分区：
  *  - 标题：原文（小字、单行）
- *  - 主区：译文（大字、可折行）
+ *  - 主区：句子译文（大字、可折行）；结构化单词结果直接使用字典区，不重复显示译文
  *  - 字典区（仅 [show] 传入的 wordResult 非空时）：音标 / 词性 / 释义 / 难点解释 / 例句
  *  - 动作行：复制原文 / 复制译文 按钮 + 点击短暂反馈
  *
@@ -74,6 +97,8 @@ class TranslationCardOverlay(
     private var dialog: Dialog? = null
     private var rootView: View? = null
     private var sourceView: StyledTranslationTextView? = null
+    private var sourceDividerView: View? = null
+    private var translationSectionView: View? = null
     private var translationView: StyledTranslationTextView? = null
     private var copySourceButton: TextView? = null
     private var copyTranslationButton: TextView? = null
@@ -81,8 +106,12 @@ class TranslationCardOverlay(
     private var speakTranslationButton: View? = null
     private var currentSource: String = ""
     private var currentTranslation: String = ""
+    private var currentWordResult: WordResult? = null
+    private var translationLoading: Boolean = false
     private var translationFinal: Boolean = false
     private var renderWordResult: ((WordResult?) -> Unit)? = null
+    private var wordPreviewView: View? = null
+    private var sourceWordHighlight: BackgroundColorSpan? = null
 
     fun isShown(): Boolean = rootView != null
 
@@ -100,6 +129,8 @@ class TranslationCardOverlay(
         }
         rootView = null
         sourceView = null
+        sourceDividerView = null
+        translationSectionView = null
         translationView = null
         copySourceButton = null
         copyTranslationButton = null
@@ -107,12 +138,17 @@ class TranslationCardOverlay(
         speakTranslationButton = null
         currentSource = ""
         currentTranslation = ""
+        currentWordResult = null
+        translationLoading = false
         translationFinal = false
         renderWordResult = null
+        wordPreviewView = null
+        sourceWordHighlight = null
     }
 
     fun updateSource(sourceText: String) {
         currentSource = sourceText
+        sourceWordHighlight = null
         sourceView?.apply {
             text = sourceText
             visibility = if (sourceText.isBlank()) View.GONE else View.VISIBLE
@@ -126,25 +162,19 @@ class TranslationCardOverlay(
         } else {
             View.GONE
         }
+        refreshTranslationSectionVisibility()
         rootView?.requestLayout()
     }
 
     fun updateTranslation(translation: String?, final: Boolean = false) {
         val normalized = translation.orEmpty()
         currentTranslation = normalized
+        translationLoading = false
         translationFinal = final && normalized.isNotBlank()
         translationView?.apply {
             text = normalized
-            visibility = if (normalized.isBlank()) View.GONE else View.VISIBLE
         }
-        copyTranslationButton?.visibility = if (normalized.isBlank()) View.GONE else View.VISIBLE
-        speakTranslationButton?.visibility = if (
-            shouldShowTranslationCardSpeechButton(speechEnabled = true, text = normalized)
-        ) {
-            View.VISIBLE
-        } else {
-            View.GONE
-        }
+        refreshTranslationSectionVisibility()
     }
 
     fun applyTranslationCorrection(draft: TranslationCorrectionDraft) {
@@ -155,7 +185,271 @@ class TranslationCardOverlay(
     }
 
     fun updateWordResult(wordResult: WordResult?) {
+        currentWordResult = wordResult
         renderWordResult?.invoke(wordResult)
+        refreshTranslationSectionVisibility()
+    }
+
+    fun updateWordResultForSource(sourceText: String, wordResult: WordResult?) {
+        if (rootView == null || currentSource != sourceText) return
+        updateWordResult(wordResult)
+    }
+
+    internal fun updateWordDetailsForSource(
+        sourceText: String,
+        content: FloatingWordDetailsContent,
+    ) {
+        if (rootView == null || currentSource != sourceText) return
+        translationLoading = content.loading
+        updateTranslation(content.translation, final = false)
+        updateWordResult(content.wordResult)
+    }
+
+    private fun refreshTranslationSectionVisibility() {
+        val showSection = shouldShowTranslationCardTranslationSection(
+            translation = currentTranslation,
+            wordResult = currentWordResult,
+            loading = translationLoading,
+        )
+        translationSectionView?.visibility = if (showSection) View.VISIBLE else View.GONE
+        val hasDictionaryContent = currentWordResult?.let { !it.isEmpty() } == true
+        sourceDividerView?.visibility = if (
+            translationCardSectionDividerCount(
+                hasSourceContent = currentSource.isNotBlank(),
+                showTranslationSection = showSection,
+                hasDictionaryContent = hasDictionaryContent,
+            ) == 1
+        ) {
+            View.VISIBLE
+        } else {
+            View.GONE
+        }
+        translationView?.visibility = if (
+            showSection && (translationLoading || currentTranslation.isNotBlank())
+        ) {
+            View.VISIBLE
+        } else {
+            View.GONE
+        }
+        copyTranslationButton?.visibility = if (
+            showSection && currentTranslation.isNotBlank()
+        ) {
+            View.VISIBLE
+        } else {
+            View.GONE
+        }
+        speakTranslationButton?.visibility = if (
+            showSection && shouldShowTranslationCardSpeechButton(
+                speechEnabled = true,
+                text = currentTranslation,
+            )
+        ) {
+            View.VISIBLE
+        } else {
+            View.GONE
+        }
+        rootView?.requestLayout()
+    }
+
+    internal fun showEnglishWordPreview(
+        anchorInWindow: Rect,
+        content: FloatingWordPreviewContent,
+        settings: Settings,
+        onSpeak: (() -> Unit)?,
+        onOpenDetails: (() -> Unit)?,
+    ) {
+        val layer = rootView as? FrameLayout ?: return
+        wordPreviewView?.let(layer::removeView)
+        val density = context.resources.displayMetrics.density
+        val foreground = themeFgColor(settings.overlayTheme, settings)
+        val muted = themeFgMutedColor(settings.overlayTheme, settings)
+        val accent = themeAccentColor(settings.overlayTheme, settings)
+        val backgroundColor = themeBgColor(settings.overlayTheme, settings)
+        val typeface = settingsTypeface(settings)
+        val textSizeSp = settings.overlayTextSizeSp.coerceIn(10, 32).toFloat()
+
+        fun oneLine(value: String, sizeSp: Float, color: Int, bold: Boolean = false) =
+            StyledTranslationTextView(context).apply {
+                text = value
+                setTextColor(color)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp)
+                applyOverlayTextStyle(
+                    settings.overlayTextStyle.copy(bold = settings.overlayTextStyle.bold || bold),
+                    typeface,
+                )
+                maxLines = 1
+                minLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                setHorizontallyScrolling(false)
+            }
+
+        val openDetails = onOpenDetails?.let { action ->
+            {
+                dismissEnglishWordPreview()
+                action()
+            }
+        }
+        val preview = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            elevation = 8 * density
+            val horizontal = (12 * density).toInt()
+            val vertical = (8 * density).toInt()
+            setPadding(horizontal, vertical, horizontal, vertical)
+            background = GradientDrawable().apply {
+                cornerRadius = 10 * density
+                setColor(backgroundColor)
+                setStroke((1 * density).toInt().coerceAtLeast(1), muted)
+            }
+            if (openDetails != null) {
+                isClickable = true
+                isFocusable = true
+                setOnClickListener { openDetails() }
+            }
+        }
+        val wordRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        wordRow.addView(
+            oneLine(content.word, textSizeSp + 1f, foreground, bold = true),
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+        )
+        onSpeak?.let { speak ->
+            val metrics = translationCardSpeechButtonMetrics(density)
+            wordRow.addView(
+                ImageView(context).apply {
+                    setImageResource(R.drawable.ic_volume_up)
+                    imageTintList = ColorStateList.valueOf(accent)
+                    setPadding(metrics.paddingPx, metrics.paddingPx, metrics.paddingPx, metrics.paddingPx)
+                    isClickable = true
+                    isFocusable = true
+                    contentDescription = context.getString(R.string.word_card_speak_source)
+                    setOnClickListener { speak() }
+                },
+                LinearLayout.LayoutParams(metrics.sizePx, metrics.sizePx),
+            )
+        }
+        preview.addView(wordRow)
+        content.lines.forEachIndexed { index, line ->
+            preview.addView(oneLine(
+                value = line,
+                sizeSp = if (index == 0) textSizeSp else (textSizeSp - 1f).coerceAtLeast(10f),
+                color = foreground,
+            ))
+        }
+        openDetails?.let { action ->
+            preview.addView(TextView(context).apply {
+                text = context.getString(R.string.floating_word_view_details)
+                setTextColor(accent)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, (textSizeSp - 1f).coerceAtLeast(11f))
+                maxLines = 1
+                gravity = Gravity.END
+                isClickable = true
+                isFocusable = true
+                setPadding(0, (5 * density).toInt(), 0, 0)
+                setOnClickListener { action() }
+            })
+        }
+
+        val margin = (10 * density).toInt()
+        val params = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+        ).apply {
+            leftMargin = margin
+            rightMargin = margin
+        }
+        layer.addView(preview, params)
+        wordPreviewView = preview
+        preview.post {
+            if (wordPreviewView !== preview || layer.height <= 0) return@post
+            val location = IntArray(2)
+            layer.getLocationInWindow(location)
+            val gap = (6 * density).toInt()
+            val minimumTop = (8 * density).toInt()
+            val maximumTop = (layer.height - preview.height - minimumTop).coerceAtLeast(minimumTop)
+            val above = anchorInWindow.top - location[1] - preview.height - gap
+            val below = anchorInWindow.bottom - location[1] + gap
+            params.topMargin = (if (above >= minimumTop) above else below)
+                .coerceIn(minimumTop, maximumTop)
+            preview.layoutParams = params
+        }
+    }
+
+    fun dismissEnglishWordPreview() {
+        val preview = wordPreviewView ?: return
+        wordPreviewView = null
+        (preview.parent as? FrameLayout)?.removeView(preview)
+        clearSourceWordHighlight()
+    }
+
+    private fun StyledTranslationTextView.attachEnglishWordTapListener(
+        onTapped: (word: String, anchorInWindow: Rect) -> Unit,
+        markerColor: Int,
+    ) {
+        val slop = ViewConfiguration.get(context).scaledTouchSlop
+        var downX = 0f
+        var downY = 0f
+        setOnTouchListener { view, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downX = event.x
+                    downY = event.y
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (
+                        kotlin.math.abs(event.x - downX) <= slop &&
+                        kotlin.math.abs(event.y - downY) <= slop
+                    ) {
+                        val textView = view as TextView
+                        val offset = textView.getOffsetForPosition(event.x, event.y)
+                        val hit = floatingEnglishWordAt(textView.text, offset)
+                        val layout = textView.layout
+                        if (hit != null && layout != null) {
+                            showSourceWordHighlight(textView, hit, markerColor)
+                            val line = layout.getLineForOffset(hit.start.coerceIn(0, textView.text.length))
+                            val start = maxOf(hit.start, layout.getLineStart(line))
+                            val end = minOf(hit.end, layout.getLineEnd(line))
+                            val location = IntArray(2)
+                            textView.getLocationInWindow(location)
+                            val left = minOf(layout.getPrimaryHorizontal(start), layout.getPrimaryHorizontal(end))
+                            val right = maxOf(layout.getPrimaryHorizontal(start), layout.getPrimaryHorizontal(end))
+                            onTapped(
+                                hit.word,
+                                Rect(
+                                    location[0] + left.toInt(),
+                                    location[1] + layout.getLineTop(line),
+                                    location[0] + right.toInt(),
+                                    location[1] + layout.getLineBottom(line),
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+            false
+        }
+    }
+
+    private fun showSourceWordHighlight(
+        textView: TextView,
+        hit: FloatingEnglishWordHit,
+        markerColor: Int,
+    ) {
+        clearSourceWordHighlight()
+        val spannable = (textView.text as? Spannable) ?: SpannableStringBuilder(textView.text).also {
+            textView.text = it
+        }
+        val span = BackgroundColorSpan(markerColor)
+        spannable.setSpan(span, hit.start, hit.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        sourceWordHighlight = span
+    }
+
+    private fun clearSourceWordHighlight() {
+        val span = sourceWordHighlight ?: return
+        sourceWordHighlight = null
+        (sourceView?.text as? Spannable)?.removeSpan(span)
+        sourceView?.invalidate()
     }
 
     /**
@@ -177,9 +471,12 @@ class TranslationCardOverlay(
         onSpeakTranslation: TtsPlaybackAction? = null,
         onSpeakDictionary: TtsPlaybackAction? = null,
         onCorrectTranslation: ((source: String, translation: String) -> Unit)? = null,
+        onEnglishWordTapped: ((word: String, anchorInWindow: Rect) -> Unit)? = null,
     ) {
         dismiss()
         currentSource = sourceText
+        currentWordResult = wordResult
+        translationLoading = loading
         val density = context.resources.displayMetrics.density
         val padH = (16 * density).toInt()
         val padV = (12 * density).toInt()
@@ -299,10 +596,35 @@ class TranslationCardOverlay(
                     onSpeak = action.onStart,
                 )
             }
+            onEnglishWordTapped?.let { callback ->
+                attachEnglishWordTapListener(
+                    callback,
+                    translationActionMarkerColor(accentColor),
+                )
+            }
         }
         sourceView = sourceTv
         scrollContent.addView(sourceTv)
-        scrollContent.addView(buildDivider(density, mutedColor))
+        val sourceDivider = buildDivider(density, mutedColor).apply {
+            val showTranslationSection = shouldShowTranslationCardTranslationSection(
+                translation = translation,
+                wordResult = wordResult,
+                loading = loading,
+            )
+            visibility = if (
+                translationCardSectionDividerCount(
+                    hasSourceContent = sourceText.isNotBlank(),
+                    showTranslationSection = showTranslationSection,
+                    hasDictionaryContent = wordResult?.let { !it.isEmpty() } == true,
+                ) == 1
+            ) {
+                View.VISIBLE
+            } else {
+                View.GONE
+            }
+        }
+        sourceDividerView = sourceDivider
+        scrollContent.addView(sourceDivider)
 
         // 主区始终创建一次，流式分片只更新文字，不重建 Dialog。
         currentTranslation = translation.orEmpty()
@@ -343,7 +665,22 @@ class TranslationCardOverlay(
                 addView(speakButton)
             }
         }
-        scrollContent.addView(translationHeader)
+        val translationSection = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = if (
+                shouldShowTranslationCardTranslationSection(
+                    translation = translation,
+                    wordResult = wordResult,
+                    loading = loading,
+                )
+            ) {
+                View.VISIBLE
+            } else {
+                View.GONE
+            }
+            addView(translationHeader)
+        }
+        translationSectionView = translationSection
         val translationTv = StyledTranslationTextView(context).apply {
             text = translation ?: if (loading) context.getString(R.string.word_card_loading) else ""
             visibility = if (text.isBlank()) View.GONE else View.VISIBLE
@@ -378,7 +715,8 @@ class TranslationCardOverlay(
             }
         }
         translationView = translationTv
-        scrollContent.addView(translationTv)
+        translationSection.addView(translationTv)
+        scrollContent.addView(translationSection)
 
         val dictionarySection = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -457,7 +795,17 @@ class TranslationCardOverlay(
         })
         val copyDstLabel = context.getString(R.string.word_card_btn_copy_translation)
         val copyDstBtn = buildPillButton(copyDstLabel, accentColor, density).apply {
-            visibility = if (currentTranslation.isBlank()) View.GONE else View.VISIBLE
+            visibility = if (
+                shouldShowTranslationCardTranslationSection(
+                    translation = currentTranslation,
+                    wordResult = currentWordResult,
+                    loading = translationLoading,
+                ) && currentTranslation.isNotBlank()
+            ) {
+                View.VISIBLE
+            } else {
+                View.GONE
+            }
         }
         copyDstBtn.setOnClickListener {
             currentTranslation.takeIf { it.isNotBlank() }?.let(::copyToClipboard)
@@ -633,7 +981,6 @@ class TranslationCardOverlay(
         if (wordResult == null || wordResult.isEmpty()) return
         val labels = dictionaryTextLabels()
         val speechText = dictionaryPlainText(wordResult, labels)
-        container.addView(buildDivider(density, mutedColor))
         container.addView(LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -830,13 +1177,12 @@ class TranslationCardOverlay(
     }
 
     /** label / 复制按钮色——主题强调色。默认主题用 stroke 颜色；CLASSIC_DARK / CUSTOM 用 fg 派生。 */
-    private fun themeAccentColor(theme: OverlayTheme, s: Settings): Int = when (theme) {
-        OverlayTheme.CLASSIC_DARK -> 0xFF90CAF9.toInt()
-        OverlayTheme.AMBER_GOLD -> 0xFFB8860B.toInt()
-        OverlayTheme.PAPER_LIGHT -> 0xFFB68850.toInt()
-        OverlayTheme.FROST_GLASS -> 0xFF60A5FA.toInt()
-        OverlayTheme.CUSTOM -> if (s.customBorderColor != 0) s.customBorderColor else s.customFgColor
-    }
+    private fun themeAccentColor(theme: OverlayTheme, s: Settings): Int =
+        translationActionAccentColor(
+            theme = theme,
+            customBorderColor = s.customBorderColor,
+            customForegroundColor = s.customFgColor,
+        )
 
     /** 主题边框：(widthDp, color)。widthDp = 0 表示无边。 */
     private fun themeStroke(theme: OverlayTheme, s: Settings): Pair<Int, Int> = when (theme) {

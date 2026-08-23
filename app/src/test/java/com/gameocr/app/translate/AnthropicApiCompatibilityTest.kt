@@ -61,6 +61,7 @@ class AnthropicApiCompatibilityTest {
             .getValue("media_type").jsonPrimitive.content)
         assertEquals("YWJj", content[0].jsonObject.getValue("source").jsonObject
             .getValue("data").jsonPrimitive.content)
+        assertFalse(content[0].jsonObject.getValue("source").jsonObject.containsKey("detail"))
         assertEquals("text", content[1].jsonObject.getValue("type").jsonPrimitive.content)
         assertEquals("numbered text", content[1].jsonObject.getValue("text").jsonPrimitive.content)
     }

@@ -81,9 +81,7 @@ static std::string gameocr_format_independent_user_prompt(const std::string & pr
 }
 
 static jobjectArray gameocr_multi_fail(const char * reason, const int sequence_count) {
-    __android_log_print(
-            ANDROID_LOG_ERROR,
-            "LocalLlmPerf",
+    LOGe(
             "MULTI failed reason=%s sequences=%d",
             reason,
             sequence_count);
@@ -460,9 +458,7 @@ Java_com_gameocr_app_llm_LlamaMultiSequence_generateNative(
         }
     }
 
-    __android_log_print(
-            ANDROID_LOG_INFO,
-            "LocalLlmPerf",
+    LOGi(
             "MULTI STATS sequences=%d promptTokens=%d decodedPromptTokens=%d sharedPrefixTokens=%zu "
             "generatedTokens=%d perSequence=%s lineLimitStops=%d tokenLimitStops=%d "
             "initMs=%.1f prefillMs=%.1f firstTokenMs=%.1f decodeMs=%.1f "

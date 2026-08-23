@@ -40,9 +40,9 @@ import com.gameocr.app.data.MimoTtsModel
 import com.gameocr.app.data.MAX_TTS_PLAYBACK_GAIN_DB
 import com.gameocr.app.data.MIN_TTS_PLAYBACK_GAIN_DB
 import com.gameocr.app.download.ModelDownloadManager
+import com.gameocr.app.download.ModelReadinessChecker
 import com.gameocr.app.download.ModelDownloadSpec
 import com.gameocr.app.glossary.TranslationGlossaryRepository
-import com.gameocr.app.llm.LlamaEngineHolder
 import com.gameocr.app.llm.LlmModelInstaller
 import com.gameocr.app.llm.LlmModelKind
 import com.gameocr.app.ocr.OrientationModelInstaller
@@ -83,7 +83,7 @@ class SettingsViewModel @Inject constructor(
     private val orientationModelInstaller: OrientationModelInstaller,
     private val routingTranslator: RoutingTranslator,
     private val llmInstaller: LlmModelInstaller,
-    private val llamaEngineHolder: LlamaEngineHolder,
+    private val modelReadinessChecker: ModelReadinessChecker,
     private val overlayFontManager: OverlayFontManager,
     private val glossaryRepository: TranslationGlossaryRepository,
     private val modelDownloadManager: ModelDownloadManager,
@@ -815,9 +815,9 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun paddleModelUiState(version: com.gameocr.app.data.PaddleModelVersion): DownloadableModelUiState {
-        val files = paddleInstaller.checkInstalled(version)
-        return if (files != null) {
-            val total = (files.det.length() + files.rec.length() + files.keys.length()) / 1024
+        val readiness = modelReadinessChecker.paddle(version)
+        return if (readiness.installed) {
+            val total = readiness.totalBytes / 1024
             DownloadableModelUiState(
                 status = appContext.getString(R.string.settings_paddle_status_ready_format, total.toInt()),
                 ready = true,
@@ -864,11 +864,9 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun mangaOcrModelUiState(): DownloadableModelUiState {
-        val files = mangaOcrInstaller.checkInstalled()
-        return if (files != null) {
-            val totalMb = (files.encoder.length() + files.decoder.length() +
-                files.vocab.length() + files.config.length() + files.generationConfig.length() +
-                files.preprocessorConfig.length() + files.specialTokensMap.length()) / (1024 * 1024)
+        val readiness = modelReadinessChecker.mangaOcr()
+        return if (readiness.installed) {
+            val totalMb = readiness.totalBytes / (1024 * 1024)
             DownloadableModelUiState(
                 status = appContext.getString(R.string.settings_manga_ocr_status_ready_format, totalMb.toInt()),
                 ready = true,
@@ -901,12 +899,12 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun orientationModelUiState(): DownloadableModelUiState {
-        val files = orientationModelInstaller.checkFullyInstalled()
-        return if (files != null) {
+        val readiness = modelReadinessChecker.orientation()
+        return if (readiness.installed) {
             DownloadableModelUiState(
                 status = appContext.getString(
                     R.string.settings_orientation_model_status_ready_format,
-                    (files.totalBytes / 1024).toInt()
+                    (readiness.totalBytes / 1024).toInt()
                 ),
                 ready = true,
             )
@@ -933,7 +931,7 @@ class SettingsViewModel @Inject constructor(
 
     // —— 端侧 LLM 翻译 ——
 
-    fun llmDeviceCapable(): Boolean = llamaEngineHolder.isDeviceCapable()
+    fun llmDeviceCapable(): Boolean = modelReadinessChecker.isLocalLlmSupported()
 
     data class LlmModelUiState(
         val status: String,
@@ -941,9 +939,9 @@ class SettingsViewModel @Inject constructor(
     )
 
     fun llmModelUiState(kind: LlmModelKind): LlmModelUiState {
-        val file = llmInstaller.checkInstalled(kind)
-        return if (file != null) {
-            val mb = (file.length() / 1024 / 1024).toInt()
+        val readiness = modelReadinessChecker.llm(kind)
+        return if (readiness.installed) {
+            val mb = (readiness.totalBytes / 1024 / 1024).toInt()
             LlmModelUiState(
                 status = appContext.getString(R.string.llm_status_ready, "${kind.displayName} · $mb"),
                 ready = true,

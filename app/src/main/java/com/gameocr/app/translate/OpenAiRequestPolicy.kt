@@ -56,9 +56,10 @@ internal data class OpenAiThinkingControl(
 )
 
 /**
- * Maps the explicit compatibility setting, or a small set of official endpoint families, to the
- * documented thinking fields. Unknown OpenAI-compatible endpoints omit all thinking fields in
- * AUTO mode so a nominally compatible server cannot fail on an unsupported extension.
+ * Maps the explicit compatibility setting, documented model families, or official endpoint
+ * families to their thinking fields. Explicit user selection always wins. In AUTO mode, Qwen 3
+ * hybrid-thinking model names use their documented `enable_thinking` field even behind an
+ * OpenAI-compatible proxy; other unknown models still omit provider extensions.
  */
 internal object RemoteThinkingPolicy {
     private val json = Json { explicitNulls = false }
@@ -83,7 +84,7 @@ internal object RemoteThinkingPolicy {
         val normalized = options.normalized()
         val requestedFormat = normalized.thinkingParameterFormat
         val resolvedFormat = if (requestedFormat == RemoteThinkingParameterFormat.AUTO) {
-            automaticOpenAiFormat(baseUrl)
+            automaticOpenAiFormat(baseUrl, model)
         } else {
             requestedFormat
         }
@@ -201,7 +202,11 @@ internal object RemoteThinkingPolicy {
         )
     }
 
-    private fun automaticOpenAiFormat(baseUrl: String): RemoteThinkingParameterFormat? {
+    private fun automaticOpenAiFormat(
+        baseUrl: String,
+        model: String,
+    ): RemoteThinkingParameterFormat? {
+        if (qwenHybridThinkingModel(model)) return RemoteThinkingParameterFormat.DASHSCOPE
         val host = runCatching { java.net.URI(baseUrl.trim()).host.orEmpty().lowercase() }
             .getOrDefault("")
         return when {
@@ -211,6 +216,12 @@ internal object RemoteThinkingPolicy {
             host == "api.openai.com" -> RemoteThinkingParameterFormat.OPENAI_CHAT_COMPLETIONS
             else -> null
         }
+    }
+
+    /** Qwen 3 hybrid models use enable_thinking; `thinking`-only variants cannot be disabled. */
+    private fun qwenHybridThinkingModel(model: String): Boolean {
+        val modelId = model.trim().lowercase().substringAfterLast('/')
+        return modelId.startsWith("qwen3") && !modelId.contains("thinking")
     }
 
     private fun effortValue(options: OpenAiRequestOptions): String? = when (options.reasoningEffort) {
