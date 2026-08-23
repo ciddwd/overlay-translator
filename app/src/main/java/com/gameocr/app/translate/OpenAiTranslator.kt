@@ -6,7 +6,6 @@ import com.gameocr.app.data.Languages
 import com.gameocr.app.data.Settings
 import com.gameocr.app.data.withApiTimeout
 import dagger.hilt.android.qualifiers.ApplicationContext
-import java.net.URI
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -82,7 +81,10 @@ class OpenAiTranslator @Inject constructor(
         if (sources.isEmpty()) return emptyList()
         validate(settings)
         val capabilityKey = RemoteStructuredOutputCapability.openAiKey(settings)
-        if (!RemoteStructuredOutputCapability.tracker.shouldAttemptStructured(capabilityKey)) {
+        if (
+            settings.runtimeTranslationVisualContext == null &&
+            !RemoteStructuredOutputCapability.tracker.shouldAttemptStructured(capabilityKey)
+        ) {
             Timber.w(
                 "OpenAI structuredBatch bypassed count=%d model=%s reason=capability_cooldown",
                 sources.size,
@@ -90,7 +92,7 @@ class OpenAiTranslator @Inject constructor(
             )
             return translateStructuredFallbackIndividually(
                 sources = sources,
-                settings = settings,
+                settings = settings.copy(runtimeTranslationVisualContext = null),
                 onUpdate = onUpdate,
                 translateOne = ::translate,
             )
@@ -138,7 +140,7 @@ class OpenAiTranslator @Inject constructor(
             )
             return translateStructuredFallbackIndividually(
                 sources = sources,
-                settings = settings,
+                settings = settings.copy(runtimeTranslationVisualContext = null),
                 onUpdate = onUpdate,
                 translateOne = ::translate,
             )
@@ -155,7 +157,7 @@ class OpenAiTranslator @Inject constructor(
         )
         return translateStructuredFallbackIndividually(
             sources = sources,
-            settings = settings,
+            settings = settings.copy(runtimeTranslationVisualContext = null),
             onUpdate = onUpdate,
             translateOne = ::translate,
         )
@@ -164,28 +166,44 @@ class OpenAiTranslator @Inject constructor(
     private suspend fun executeStructuredBatchAttempt(
         attempt: StructuredBatchAttempt,
         settings: Settings,
+        allowVisualFallback: Boolean = true,
+        allowResponseFormatFallback: Boolean = true,
     ): String {
+        val visualContext = settings.runtimeTranslationVisualContext
         val resolvedRequest = resolveRequest(
-            text = StructuredBatchPromptPolicy.buildUserPayload(
+            text = visualContext?.let { visual ->
+                VisualTranslationPromptPolicy.buildUserPayload(visual, attempt.activeIds)
+            } ?: StructuredBatchPromptPolicy.buildUserPayload(
                 attempt,
                 settings.openAiRequestOptions,
             ),
             settings = settings,
-            runtimeContext = StructuredBatchPromptPolicy.buildSystemSuffix(
-                settings.runtimeTranslationPromptContext,
-                settings.openAiRequestOptions,
-                activeSources = attempt.allSources,
-            ),
+            runtimeContext = visualContext?.let { visual ->
+                VisualTranslationPromptPolicy.buildSystemSuffix(
+                    visual = visual,
+                    context = settings.runtimeTranslationPromptContext,
+                    options = settings.openAiRequestOptions,
+                    activeSources = attempt.allSources,
+                )
+            } ?: StructuredBatchPromptPolicy.buildSystemSuffix(
+                    settings.runtimeTranslationPromptContext,
+                    settings.openAiRequestOptions,
+                    activeSources = attempt.allSources,
+                ),
             textAlreadyPrepared = true,
         )
         val requestId = UUID.randomUUID().toString().take(8)
         val startedAt = System.currentTimeMillis()
         val stream = settings.streamingTranslate
+        val responseFormatCapabilityKey = RemoteJsonResponseFormatCapability.openAiKey(settings)
+        val responseFormat = jsonObjectResponseFormatOrNull(
+            RemoteJsonResponseFormatCapability.tracker.shouldSend(responseFormatCapabilityKey)
+        )
         val request = buildRequest(
             resolved = resolvedRequest,
             settings = settings,
             stream = stream,
-            responseFormat = deepSeekJsonObjectResponseFormatOrNull(settings.baseUrl),
+            responseFormat = responseFormat,
         )
         TranslationRequestAudit.log(
             requestId, "OPENAI", "translation_batch", stream, request,
@@ -196,12 +214,33 @@ class OpenAiTranslator @Inject constructor(
             attempt.activeIds,
             settings.model,
         )
-        return try {
+        val translated = try {
             withContext(Dispatchers.IO) {
                 client.withApiTimeout(resolvedRequest.timeoutSeconds).newCall(request).execute().use { response ->
                     if (!response.isSuccessful) {
                         val raw = response.body?.string().orEmpty()
+                        if (
+                            responseFormat != null &&
+                            JsonResponseFormatRejectionPolicy.isExplicitRejection(response.code, raw)
+                        ) {
+                            throw JsonResponseFormatRejectedException(
+                                "HTTP ${response.code}: ${raw.take(200)}"
+                            )
+                        }
+                        if (
+                            settings.runtimeTranslationVisualContext != null &&
+                            VisualRequestFallbackPolicy.shouldRetryWithoutImage(response.code)
+                        ) {
+                            throw VisualContextRejectedException(
+                                "HTTP ${response.code}: ${raw.take(200)}"
+                            )
+                        }
                         throw TranslationException("HTTP ${response.code}: ${raw.take(200)}")
+                    }
+                    if (responseFormat != null) {
+                        RemoteJsonResponseFormatCapability.tracker.recordSupported(
+                            responseFormatCapabilityKey
+                        )
                     }
                     if (stream) {
                         readStructuredOpenAiStream(response, requestId, startedAt)
@@ -238,6 +277,39 @@ class OpenAiTranslator @Inject constructor(
                 System.currentTimeMillis() - startedAt,
             )
             throw error
+        } catch (error: JsonResponseFormatRejectedException) {
+            RemoteJsonResponseFormatCapability.tracker.recordUnsupported(
+                responseFormatCapabilityKey
+            )
+            if (allowResponseFormatFallback && responseFormat != null) {
+                Timber.w(
+                    error,
+                    "OpenAI request=%s rejected response_format; retry once without field",
+                    requestId,
+                )
+                return executeStructuredBatchAttempt(
+                    attempt = attempt,
+                    settings = settings,
+                    allowVisualFallback = allowVisualFallback,
+                    allowResponseFormatFallback = false,
+                )
+            }
+            throw error
+        } catch (error: VisualContextRejectedException) {
+            if (allowVisualFallback && settings.runtimeTranslationVisualContext != null) {
+                Timber.w(
+                    error,
+                    "OpenAI request=%s rejected visual context; retry once with text only",
+                    requestId,
+                )
+                return executeStructuredBatchAttempt(
+                    attempt = attempt,
+                    settings = settings.copy(runtimeTranslationVisualContext = null),
+                    allowVisualFallback = false,
+                    allowResponseFormatFallback = allowResponseFormatFallback,
+                )
+            }
+            throw error
         } catch (error: Throwable) {
             Timber.w(
                 error,
@@ -247,10 +319,51 @@ class OpenAiTranslator @Inject constructor(
             )
             throw error
         }
+        val visualResult = visualContext?.let { visual ->
+            VisualTranslationResponsePolicy.validateAndNormalize(
+                raw = translated,
+                context = visual,
+                expectedIndexes = attempt.activeIndexes,
+                json = json,
+            ).also { result ->
+                Timber.i(
+                    "OpenAI request=%s visualAnalysis complete=%s orderedIds=%s ocrCorrections=%s",
+                    requestId,
+                    result.complete,
+                    result.orderedIds,
+                    result.ocrCorrections.map(VisualOcrCorrection::id),
+                )
+            }
+        }
+        val normalizedTranslated = visualResult?.normalizedPayload ?: translated
+        val visualResponseComplete = visualResult?.complete ?: StructuredBatchResponseParser.parse(
+            raw = translated,
+            expectedIndexes = attempt.activeIndexes,
+            json = json,
+        ).batchComplete
+        if (VisualResponseFallbackPolicy.shouldRetryWithoutImage(
+                visualContextPresent = settings.runtimeTranslationVisualContext != null,
+                fallbackAllowed = allowVisualFallback,
+                structuredResponseComplete = visualResponseComplete,
+            )
+        ) {
+            Timber.w(
+                "OpenAI request=%s visual response invalid; retry once with text only",
+                requestId,
+            )
+            return executeStructuredBatchAttempt(
+                attempt = attempt,
+                settings = settings.copy(runtimeTranslationVisualContext = null),
+                allowVisualFallback = false,
+                allowResponseFormatFallback = allowResponseFormatFallback,
+            )
+        }
+        return normalizedTranslated
     }
 
     private fun shouldUseStructuredBatch(settings: Settings): Boolean =
-        settings.runtimeTranslationPromptContext.currentPage.isNotEmpty()
+        settings.runtimeTranslationPromptContext.currentPage.isNotEmpty() ||
+            settings.runtimeTranslationVisualContext != null
 
     private fun readStructuredOpenAiStream(
         response: okhttp3.Response,
@@ -549,7 +662,9 @@ class OpenAiTranslator @Inject constructor(
         return runCatching {
             val body = ChatRequest(
                 model = settings.model,
-                messages = listOf(ChatMessage(role = "user", content = "ping")),
+                messages = listOf(
+                    OpenAiRequestMessage(role = "user", content = kotlinx.serialization.json.JsonPrimitive("ping"))
+                ),
                 temperature = 0.0,
                 stream = false,
                 maxTokens = 1
@@ -600,86 +715,162 @@ class OpenAiTranslator @Inject constructor(
      * 3) 容错地从响应里抽 JSON（部分模型会包 ```json 代码块或多余前后缀），解析失败回退 null
      * 4) 解析成功但所有字段都空 → 也回 null，让调用方走纯 [translate]
      */
-    override suspend fun translateWord(source: String, settings: Settings): WordResult? {
+    override suspend fun translateWord(source: String, settings: Settings): WordResult? =
+        requestWordResult(source, settings, compact = false)
+
+    override suspend fun translateWordCompact(source: String, settings: Settings): WordResult? =
+        requestWordResult(source, settings, compact = true)
+
+    private suspend fun requestWordResult(
+        source: String,
+        settings: Settings,
+        compact: Boolean,
+    ): WordResult? {
         val trimmed = source.trim()
         if (trimmed.isEmpty()) return null
         if (settings.apiKey.isBlank()) return null
 
         val targetDisplay = Languages.nameOf(appContext, settings.targetLang)
         val sourceDisplay = Languages.nameOf(appContext, settings.sourceLang)
-        val systemPrompt = settings.dictionaryPrompt
-            .replace("{source}", sourceDisplay)
-            .replace("{source_lang}", sourceDisplay)
-            .replace("{target}", targetDisplay)
-            .replace("{target_lang}", targetDisplay)
-            .withDifficultyNotesContract(targetDisplay)
-            .withLexicalDetailsContract(sourceDisplay) + settings.runtimeTranslationContext
-
-        val reqBody = ChatRequest(
+        val systemPrompt = if (compact) {
+            compactDictionaryPrompt(sourceDisplay, targetDisplay)
+        } else {
+            settings.dictionaryPrompt
+                .replace("{source}", sourceDisplay)
+                .replace("{source_lang}", sourceDisplay)
+                .replace("{target}", targetDisplay)
+                .replace("{target_lang}", targetDisplay)
+                .withDifficultyNotesContract(targetDisplay)
+                .withLexicalDetailsContract(sourceDisplay)
+                .withGroupedSensesContract(sourceDisplay, targetDisplay) + settings.runtimeTranslationContext
+        }
+        val thinking = RemoteThinkingPolicy.openAi(
+            baseUrl = settings.baseUrl,
             model = settings.model,
-            messages = listOf(
-                ChatMessage(role = "system", content = systemPrompt),
-                ChatMessage(role = "user", content = trimmed)
-            ),
-            temperature = 0.0,
-            stream = false,
-            maxTokens = DICTIONARY_MAX_TOKENS,
-            responseFormat = dictionaryJsonResponseFormatOrNull(settings.baseUrl),
-            reasoningEffort = RemoteThinkingPolicy.openAi(
-                settings.baseUrl,
-                settings.openAiRequestOptions.thinkingModeEnabled,
-            ).reasoningEffort,
-            thinking = RemoteThinkingPolicy.openAi(
-                settings.baseUrl,
-                settings.openAiRequestOptions.thinkingModeEnabled,
-            ).thinking,
-            enableThinking = RemoteThinkingPolicy.openAi(
-                settings.baseUrl,
-                settings.openAiRequestOptions.thinkingModeEnabled,
-            ).enableThinking,
+            options = settings.openAiRequestOptions,
         )
-        val payload = json.encodeToString(reqBody)
-        val request = Request.Builder()
-            .url(ensureSlash(settings.baseUrl) + "chat/completions")
-            .header("Authorization", "Bearer ${settings.apiKey}")
-            .header("Content-Type", "application/json")
-            .header("Accept", "application/json")
-            .post(payload.toRequestBody("application/json".toMediaType()))
-            .build()
-        val requestId = UUID.randomUUID().toString().take(8)
-        TranslationRequestAudit.log(
-            requestId, "OPENAI", "dictionary", false, request,
-        )
+
         val timedClient = client.withApiTimeout(settings.apiTimeoutSeconds)
+        val responseFormatCapabilityKey = RemoteJsonResponseFormatCapability.openAiKey(settings)
+        var useResponseFormat =
+            RemoteJsonResponseFormatCapability.tracker.shouldSend(responseFormatCapabilityKey)
+        var responseFormatFallbackAvailable = useResponseFormat
 
-        val raw = runCatching {
-            withContext(Dispatchers.IO) {
-                timedClient.newCall(request).execute().use { resp ->
-                    val body = resp.body?.string().orEmpty()
-                    if (!resp.isSuccessful) {
-                        Timber.w("translateWord HTTP ${resp.code}: ${body.take(200)}")
-                        return@use null
-                    }
-                    runCatching { json.decodeFromString<ChatResponse>(body) }
-                        .getOrNull()
-                        ?.choices?.firstOrNull()?.message?.content?.trim()
-                }
-            }
-        }.getOrNull() ?: return null
-
-        return parseWordResult(raw, json).also { result ->
-            Timber.i(
-                "translateWord parsed=%s rawLength=%d phonetic=%s pos=%d definitions=%d inflections=%d synonyms=%d notes=%d examples=%d",
-                result != null,
-                raw.length,
-                result?.phonetic?.isNotBlank() == true,
-                result?.pos?.size ?: 0,
-                result?.definitions?.size ?: 0,
-                result?.inflections?.size ?: 0,
-                result?.synonyms?.size ?: 0,
-                result?.difficultyNotes?.size ?: 0,
-                result?.examples?.size ?: 0,
+        while (true) {
+            val responseFormat = jsonObjectResponseFormatOrNull(useResponseFormat)
+            val reqBody = ChatRequest(
+                model = settings.model,
+                messages = listOf(
+                    OpenAiRequestMessage(
+                        role = "system",
+                        content = kotlinx.serialization.json.JsonPrimitive(systemPrompt),
+                    ),
+                    OpenAiRequestMessage(
+                        role = "user",
+                        content = buildOpenAiUserContent(
+                            text = trimmed,
+                            visualContext = settings.runtimeTranslationVisualContext,
+                            imageDetail = settings.openAiRequestOptions.imageDetailWireValue(),
+                        ),
+                    )
+                ),
+                temperature = 0.0,
+                stream = false,
+                maxTokens = if (compact) COMPACT_DICTIONARY_MAX_TOKENS else DICTIONARY_MAX_TOKENS,
+                responseFormat = responseFormat,
             )
+            val payload = RemoteThinkingPolicy.mergeIntoPayload(
+                payload = json.encodeToString(reqBody),
+                control = thinking,
+                serializer = json,
+            )
+            val request = Request.Builder()
+                .url(ensureSlash(settings.baseUrl) + "chat/completions")
+                .header("Authorization", "Bearer ${settings.apiKey}")
+                .header("Content-Type", "application/json")
+                .header("Accept", "application/json")
+                .post(payload.toRequestBody("application/json".toMediaType()))
+                .build()
+            val requestId = UUID.randomUUID().toString().take(8)
+            TranslationRequestAudit.log(
+                requestId,
+                "OPENAI",
+                if (compact) "dictionary_compact" else "dictionary",
+                false,
+                request,
+            )
+
+            var retryWithoutResponseFormat = false
+            val raw = try {
+                withContext(Dispatchers.IO) {
+                    timedClient.newCall(request).execute().use { resp ->
+                        val body = resp.body?.string().orEmpty()
+                        if (!resp.isSuccessful) {
+                            if (
+                                responseFormat != null &&
+                                JsonResponseFormatRejectionPolicy.isExplicitRejection(resp.code, body)
+                            ) {
+                                throw JsonResponseFormatRejectedException(
+                                    "HTTP ${resp.code}: ${body.take(200)}"
+                                )
+                            }
+                            Timber.w("translateWord HTTP ${resp.code}: ${body.take(200)}")
+                            return@use null
+                        }
+                        if (responseFormat != null) {
+                            RemoteJsonResponseFormatCapability.tracker.recordSupported(
+                                responseFormatCapabilityKey
+                            )
+                        }
+                        runCatching { json.decodeFromString<ChatResponse>(body) }
+                            .getOrNull()
+                            ?.choices?.firstOrNull()?.message?.content?.trim()
+                    }
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: JsonResponseFormatRejectedException) {
+                RemoteJsonResponseFormatCapability.tracker.recordUnsupported(
+                    responseFormatCapabilityKey
+                )
+                if (responseFormatFallbackAvailable && responseFormat != null) {
+                    Timber.w(
+                        error,
+                        "OpenAI request=%s rejected dictionary response_format; retry once without field",
+                        requestId,
+                    )
+                    retryWithoutResponseFormat = true
+                    null
+                } else {
+                    Timber.w(error, "translateWord response_format fallback exhausted")
+                    return null
+                }
+            } catch (error: Throwable) {
+                Timber.w(error, "translateWord request failed")
+                return null
+            }
+            if (retryWithoutResponseFormat) {
+                useResponseFormat = false
+                responseFormatFallbackAvailable = false
+                continue
+            }
+            raw ?: return null
+            return parseWordResult(raw, json).also { result ->
+                Timber.i(
+                    "translateWord compact=%s parsed=%s rawLength=%d phonetic=%s senses=%d pos=%d definitions=%d inflections=%d synonyms=%d notes=%d examples=%d",
+                    compact,
+                    result != null,
+                    raw.length,
+                    result?.phonetic?.isNotBlank() == true,
+                    result?.senses?.size ?: 0,
+                    result?.pos?.size ?: 0,
+                    result?.definitions?.size ?: 0,
+                    result?.inflections?.size ?: 0,
+                    result?.synonyms?.size ?: 0,
+                    result?.difficultyNotes?.size ?: 0,
+                    result?.examples?.size ?: 0,
+                )
+            }
         }
     }
 
@@ -700,6 +891,15 @@ class OpenAiTranslator @Inject constructor(
             options = settings.openAiRequestOptions,
             networkRequestTimeoutSeconds = settings.apiTimeoutSeconds,
             textAlreadyPrepared = textAlreadyPrepared,
+            conversationHistory = settings.runtimeTranslationPromptContext
+                .takeIf { it.currentPage.isEmpty() }
+                ?.previousFrame
+                .orEmpty(),
+        ).copy(
+            visualContextFingerprint = settings.runtimeTranslationVisualContext?.let { visual ->
+                "visual:v${visual.promptVersion}:${visual.sha256}:${visual.combineIntoSingleOutput}:" +
+                    settings.openAiRequestOptions.imageDetailWireValue().orEmpty()
+            }.orEmpty(),
         )
     }
 
@@ -710,25 +910,28 @@ class OpenAiTranslator @Inject constructor(
         responseFormat: ChatResponseFormat? = null,
     ): Request {
         val thinking = RemoteThinkingPolicy.openAi(
-            settings.baseUrl,
-            resolved.thinkingModeEnabled,
+            baseUrl = settings.baseUrl,
+            model = settings.model,
+            options = settings.openAiRequestOptions,
         )
         val body = ChatRequest(
             model = settings.model,
-            messages = listOf(
-                ChatMessage(role = "system", content = resolved.systemMessage),
-                ChatMessage(role = "user", content = resolved.userMessage),
+            messages = buildOpenAiChatMessages(
+                resolved = resolved,
+                visualContext = settings.runtimeTranslationVisualContext,
+                imageDetail = settings.openAiRequestOptions.imageDetailWireValue(),
             ),
             temperature = resolved.temperature,
             topP = resolved.topP,
             stream = stream,
             maxTokens = resolved.maxTokens,
             responseFormat = responseFormat,
-            reasoningEffort = thinking.reasoningEffort,
-            thinking = thinking.thinking,
-            enableThinking = thinking.enableThinking,
         )
-        val payload = json.encodeToString(body)
+        val payload = RemoteThinkingPolicy.mergeIntoPayload(
+            payload = json.encodeToString(body),
+            control = thinking,
+            serializer = json,
+        )
         val url = ensureSlash(settings.baseUrl) + "chat/completions"
         return Request.Builder()
             .url(url)
@@ -743,6 +946,7 @@ class OpenAiTranslator @Inject constructor(
 
     private companion object {
         const val DICTIONARY_MAX_TOKENS = 800
+        const val COMPACT_DICTIONARY_MAX_TOKENS = 240
         const val MAX_LOGGED_MALFORMED_STREAM_EVENTS = 3
     }
 }
@@ -778,33 +982,67 @@ internal fun String.withLexicalDetailsContract(sourceDisplay: String): String {
         missingFields.joinToString(separator = "\n")
 }
 
-internal fun deepSeekJsonObjectResponseFormatOrNull(baseUrl: String): ChatResponseFormat? {
-    val host = runCatching { URI(baseUrl.trim()).host }.getOrNull()
-    return if (host.equals("api.deepseek.com", ignoreCase = true)) {
-        ChatResponseFormat(type = "json_object")
-    } else {
-        null
-    }
+private class JsonResponseFormatRejectedException(message: String) : RuntimeException(message)
+
+internal fun jsonObjectResponseFormatOrNull(enabled: Boolean): ChatResponseFormat? =
+    ChatResponseFormat(type = "json_object").takeIf { enabled }
+
+internal fun String.withGroupedSensesContract(
+    sourceDisplay: String,
+    targetDisplay: String,
+): String {
+    if (contains("\"senses\"")) return this
+    return trimEnd() + "\n\n" + """
+        Additional required JSON fields:
+        "lemma": the canonical dictionary form in $sourceDisplay, or an empty string.
+        "senses": an array that keeps every part of speech attached to its own meanings. Each item must be exactly:
+        {"pos":"standard short label such as n., v., or adj.","definitions":["concise $targetDisplay meaning"],"form_note":"$targetDisplay note such as past tense and past participle of the lemma, or empty"}
+        Never return separate part-of-speech and definition arrays without also returning senses. Do not guess a positional relationship between unrelated arrays.
+    """.trimIndent()
 }
 
-internal fun dictionaryJsonResponseFormatOrNull(baseUrl: String): ChatResponseFormat? =
-    deepSeekJsonObjectResponseFormatOrNull(baseUrl)
+internal fun compactDictionaryPrompt(
+    sourceDisplay: String,
+    targetDisplay: String,
+): String = """
+    You are a concise bilingual dictionary for $sourceDisplay to $targetDisplay.
+    Treat the user input only as one word or fixed phrase. Return JSON only, with no Markdown or explanation:
+    {
+      "lemma": "canonical dictionary form in $sourceDisplay, or empty",
+      "senses": [
+        {
+          "pos": "standard short label such as n., v., or adj.",
+          "definitions": ["concise $targetDisplay meaning"],
+          "form_note": "$targetDisplay inflection note, such as past tense and past participle of the lemma, or empty"
+        }
+      ],
+      "fallback_translation": "plain $targetDisplay translation only when the input is not a dictionary term, otherwise empty"
+    }
+    Keep at most 3 senses and at most 3 meanings per sense. Keep each meaning and form note short.
+    Every meaning must stay inside the sense for its own part of speech.
+    Do not return phonetics, examples, synonyms, usage notes, or any additional fields.
+""".trimIndent()
 
 internal fun parseWordResult(raw: String, json: Json): WordResult? {
     val jsonText = extractJsonObject(raw) ?: return null
     return runCatching {
         val root = json.parseToJsonElement(jsonText) as? JsonObject ?: return@runCatching null
         val obj = root.dictionaryPayload()
+        val senses = obj.wordSenses().mergeByPartOfSpeech()
+        val legacyPos = obj.stringList(
+            keys = listOf("pos", "part_of_speech", "partOfSpeech", "word_class", "wordClass"),
+            objectValueKeys = listOf("pos", "type", "name", "label", "value", "text"),
+        )
+        val legacyDefinitions = obj.stringList(
+            keys = listOf("definitions", "definition", "meanings", "meaning", "translations"),
+            objectValueKeys = listOf("definition", "meaning", "translation", "text", "value"),
+        )
         WordResult(
             phonetic = obj.firstString("phonetic", "pronunciation", "ipa", "reading"),
-            pos = obj.stringList(
-                keys = listOf("pos", "part_of_speech", "partOfSpeech", "word_class", "wordClass"),
-                objectValueKeys = listOf("pos", "type", "name", "label", "value", "text"),
-            ),
-            definitions = obj.stringList(
-                keys = listOf("definitions", "definition", "meanings", "meaning", "translations"),
-                objectValueKeys = listOf("definition", "meaning", "translation", "text", "value"),
-            ),
+            pos = senses.map(WordSense::partOfSpeech).filter(String::isNotBlank).distinct()
+                .ifEmpty { legacyPos },
+            definitions = senses.flatMap(WordSense::definitions).distinct()
+                .ifEmpty { legacyDefinitions },
             inflections = obj.stringList(
                 keys = listOf(
                     "inflections",
@@ -844,6 +1082,8 @@ internal fun parseWordResult(raw: String, json: Json): WordResult? {
                 "fallbackTranslation",
                 "translation",
             ).takeIf(String::isNotBlank),
+            lemma = obj.firstString("lemma", "base_form", "baseForm", "headword"),
+            senses = senses,
         ).takeUnless(WordResult::isEmpty)
     }.getOrNull()
 }
@@ -869,11 +1109,35 @@ private fun JsonObject.dictionaryPayload(): JsonObject {
         "synonym",
         "similar_words",
         "similarWords",
+        "lemma",
+        "senses",
     )
     if (keys.any { it in directKeys }) return this
     return listOf("data", "result", "word", "entry")
         .firstNotNullOfOrNull { key -> this[key] as? JsonObject }
         ?: this
+}
+
+private fun JsonObject.wordSenses(): List<WordSense> {
+    val value = this["senses"] ?: return emptyList()
+    val items = value as? JsonArray ?: return emptyList()
+    return items.mapNotNull { element ->
+        val sense = element as? JsonObject ?: return@mapNotNull null
+        WordSense(
+            partOfSpeech = sense.firstString(
+                "pos",
+                "part_of_speech",
+                "partOfSpeech",
+                "word_class",
+                "wordClass",
+            ),
+            definitions = sense.stringList(
+                keys = listOf("definitions", "definition", "meanings", "meaning", "translations"),
+                objectValueKeys = listOf("definition", "meaning", "translation", "text", "value"),
+            ),
+            formNote = sense.firstString("form_note", "formNote", "form", "inflection_note"),
+        ).normalizedOrNull()
+    }
 }
 
 private fun JsonObject.firstString(vararg keys: String): String = keys

@@ -73,6 +73,7 @@ internal class WordSelectTranslationCoordinator(
         try {
             if (settings.streamingTranslate) {
                 translator.translateStream(source, settings).collect { partial ->
+                    if (partial.isBlank()) return@collect
                     val isFirst = firstChunkLatencyMs == null
                     if (isFirst) firstChunkLatencyMs = nowMs() - startedAt
                     chunkCount += 1
@@ -83,7 +84,7 @@ internal class WordSelectTranslationCoordinator(
                     }
                 }
             } else {
-                translation = translator.translate(source, settings)
+                translation = translator.translate(source, settings)?.takeIf { it.isNotBlank() }
                 translation?.let {
                     chunkCount = 1
                     firstChunkLatencyMs = nowMs() - startedAt

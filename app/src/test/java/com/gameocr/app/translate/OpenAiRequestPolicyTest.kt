@@ -1,6 +1,9 @@
 package com.gameocr.app.translate
 
 import com.gameocr.app.data.OpenAiRequestOptions
+import com.gameocr.app.data.RemoteReasoningEffort
+import com.gameocr.app.data.RemoteThinkingParameterFormat
+import com.gameocr.app.data.RuntimeDialogueTurn
 import com.gameocr.app.data.RuntimeTranslationPromptContext
 import com.gameocr.app.data.TranslationContextMode
 import kotlinx.serialization.decodeFromString
@@ -199,6 +202,71 @@ class OpenAiRequestPolicyTest {
     }
 
     @Test
+    fun `single text conversation history uses native messages without dialogue JSON_tableDriven`() {
+        data class Case(
+            val name: String,
+            val options: OpenAiRequestOptions,
+            val expectedPreviousUser: String,
+            val expectedCurrentUser: String,
+        )
+        listOf(
+            Case("plain", OpenAiRequestOptions(), "前の原文", "今の原文"),
+            Case(
+                "Base64 applies to historical and current user text",
+                OpenAiRequestOptions(encodeUserTextBase64 = true),
+                "5YmN44Gu5Y6f5paH",
+                "5LuK44Gu5Y6f5paH",
+            ),
+        ).forEach { case ->
+            val resolved = OpenAiRequestPolicy.resolve(
+                text = "今の原文",
+                systemPromptTemplate = "translate",
+                sourceDisplay = "Japanese",
+                targetDisplay = "Chinese",
+                runtimeContext = "",
+                options = case.options.copy(
+                    userMessageTemplate = "{text}",
+                    systemPromptSuffix = "",
+                ),
+                networkRequestTimeoutSeconds = 30,
+                conversationHistory = listOf(
+                    RuntimeDialogueTurn("前の原文", "上一句"),
+                    RuntimeDialogueTurn("翻译失败的原文", null),
+                ),
+            )
+
+            assertEquals(case.name, case.expectedCurrentUser, resolved.userMessage)
+            assertEquals(case.name, listOf("user", "assistant"),
+                resolved.conversationMessages.map(ResolvedConversationMessage::role))
+            assertEquals(case.name, case.expectedPreviousUser, resolved.conversationMessages[0].content)
+            assertEquals(case.name, "上一句", resolved.conversationMessages[1].content)
+            assertTrue(case.name, resolved.systemMessage.contains("翻译失败的原文"))
+            assertFalse(case.name, resolved.systemMessage.contains("dialogue_context_json"))
+            assertEquals(
+                case.name,
+                listOf("system", "user", "assistant", "user"),
+                buildOpenAiChatMessages(resolved).map(OpenAiRequestMessage::role),
+            )
+        }
+    }
+
+    @Test
+    fun `conversation history participates in the translation cache fingerprint`() {
+        fun resolve(historyTranslation: String) = OpenAiRequestPolicy.resolve(
+            text = "current",
+            systemPromptTemplate = "translate",
+            sourceDisplay = "Japanese",
+            targetDisplay = "Chinese",
+            runtimeContext = "",
+            options = OpenAiRequestOptions(userMessageTemplate = "{text}", systemPromptSuffix = ""),
+            networkRequestTimeoutSeconds = 30,
+            conversationHistory = listOf(RuntimeDialogueTurn("previous", historyTranslation)),
+        )
+
+        assertFalse(resolve("A").cacheFingerprint == resolve("B").cacheFingerprint)
+    }
+
+    @Test
     fun `legacy serialized request options default both text encodings off`() {
         val decoded = Json { ignoreUnknownKeys = true }
             .decodeFromString<OpenAiRequestOptions>("""{"userMessageTemplate":"{text}"}""")
@@ -206,82 +274,333 @@ class OpenAiRequestPolicyTest {
         assertFalse(decoded.encodeUserTextBase64)
         assertFalse(decoded.encodeUserTextUnicode)
         assertFalse(decoded.thinkingModeEnabled)
+        assertEquals(RemoteReasoningEffort.AUTO, decoded.reasoningEffort)
+        assertEquals(RemoteThinkingParameterFormat.AUTO, decoded.thinkingParameterFormat)
+        assertEquals("{}", decoded.customThinkingEnabledJson)
+        assertEquals("{}", decoded.customThinkingDisabledJson)
     }
 
     @Test
-    fun `thinking control maps endpoint families without model-name guessing_tableDriven`() {
+    fun `thinking control maps explicit formats and official endpoint families_tableDriven`() {
         data class Case(
             val name: String,
             val baseUrl: String,
-            val enabled: Boolean,
+            val model: String = "model",
+            val options: OpenAiRequestOptions,
             val style: OpenAiThinkingWireStyle,
-            val reasoningEffort: String? = null,
-            val thinkingType: String? = null,
-            val enableThinking: Boolean? = null,
+            val expectedFields: String,
         )
 
         listOf(
             Case(
-                "generic compatible endpoint defaults to no reasoning",
-                "http://192.168.0.159:1234/v1/",
-                false,
-                OpenAiThinkingWireStyle.REASONING_EFFORT,
-                reasoningEffort = "none",
+                name = "unknown compatible endpoint omits unsupported fields when off",
+                baseUrl = "http://192.168.0.159:1234/v1/",
+                options = OpenAiRequestOptions(),
+                style = OpenAiThinkingWireStyle.OMIT,
+                expectedFields = "{}",
             ),
             Case(
-                "generic compatible endpoint enables high reasoning",
-                "https://gateway.example/v1",
-                true,
-                OpenAiThinkingWireStyle.REASONING_EFFORT,
-                reasoningEffort = "high",
+                name = "unknown compatible endpoint omits unsupported fields when on",
+                baseUrl = "https://gateway.example/v1",
+                options = OpenAiRequestOptions(
+                    thinkingModeEnabled = true,
+                    reasoningEffort = RemoteReasoningEffort.HIGH,
+                ),
+                style = OpenAiThinkingWireStyle.OMIT,
+                expectedFields = "{}",
             ),
             Case(
-                "DeepSeek disables thinking with its documented object",
-                "https://api.deepseek.com/v1/",
-                false,
-                OpenAiThinkingWireStyle.THINKING_OBJECT,
-                thinkingType = "disabled",
+                name = "Qwen 3_7 behind a proxy is explicitly disabled by default",
+                baseUrl = "https://gateway.example/v1/",
+                model = "qwen3.7-plus",
+                options = OpenAiRequestOptions(),
+                style = OpenAiThinkingWireStyle.ENABLE_THINKING,
+                expectedFields = """{"enable_thinking":false}""",
             ),
             Case(
-                "DeepSeek enables thinking with its documented object",
-                "https://api.deepseek.com/v1/",
-                true,
-                OpenAiThinkingWireStyle.THINKING_OBJECT,
-                thinkingType = "enabled",
+                name = "namespaced Qwen 3_6 behind a proxy is explicitly enabled",
+                baseUrl = "https://proxy.example/v1/",
+                model = "alibaba/qwen3.6-flash",
+                options = OpenAiRequestOptions(thinkingModeEnabled = true),
+                style = OpenAiThinkingWireStyle.ENABLE_THINKING,
+                expectedFields = """{"enable_thinking":true}""",
             ),
             Case(
-                "DashScope uses enable_thinking",
-                "https://dashscope.aliyuncs.com/compatible-mode/v1",
-                false,
-                OpenAiThinkingWireStyle.ENABLE_THINKING,
-                enableThinking = false,
+                name = "Qwen 2_5 does not receive an unsupported thinking field",
+                baseUrl = "https://gateway.example/v1/",
+                model = "qwen2.5-14b-instruct",
+                options = OpenAiRequestOptions(),
+                style = OpenAiThinkingWireStyle.OMIT,
+                expectedFields = "{}",
+            ),
+            Case(
+                name = "Qwen 3 thinking-only model does not pretend it can be disabled",
+                baseUrl = "https://gateway.example/v1/",
+                model = "qwen3-235b-a22b-thinking-2507",
+                options = OpenAiRequestOptions(),
+                style = OpenAiThinkingWireStyle.OMIT,
+                expectedFields = "{}",
+            ),
+            Case(
+                name = "explicit format overrides Qwen automatic field selection",
+                baseUrl = "https://gateway.example/v1/",
+                model = "qwen3.7-plus",
+                options = OpenAiRequestOptions(
+                    thinkingModeEnabled = true,
+                    reasoningEffort = RemoteReasoningEffort.LOW,
+                    thinkingParameterFormat = RemoteThinkingParameterFormat.OPENAI_RESPONSES,
+                ),
+                style = OpenAiThinkingWireStyle.RESPONSES_REASONING,
+                expectedFields = """{"reasoning":{"effort":"low"}}""",
+            ),
+            Case(
+                name = "official OpenAI model that supports none is explicitly disabled",
+                baseUrl = "https://api.openai.com/v1/",
+                model = "gpt-5.6",
+                options = OpenAiRequestOptions(),
+                style = OpenAiThinkingWireStyle.REASONING_EFFORT,
+                expectedFields = """{"reasoning_effort":"none"}""",
+            ),
+            Case(
+                name = "unknown official OpenAI model avoids unsupported none",
+                baseUrl = "https://api.openai.com/v1/",
+                model = "third-party-model",
+                options = OpenAiRequestOptions(),
+                style = OpenAiThinkingWireStyle.REASONING_EFFORT,
+                expectedFields = "{}",
+            ),
+            Case(
+                name = "DeepSeek disables thinking with its documented object",
+                baseUrl = "https://api.deepseek.com/v1/",
+                options = OpenAiRequestOptions(),
+                style = OpenAiThinkingWireStyle.THINKING_OBJECT,
+                expectedFields = """{"thinking":{"type":"disabled"}}""",
+            ),
+            Case(
+                name = "DeepSeek sends its toggle and selected effort",
+                baseUrl = "https://api.deepseek.com/v1/",
+                options = OpenAiRequestOptions(
+                    thinkingModeEnabled = true,
+                    reasoningEffort = RemoteReasoningEffort.LOW,
+                ),
+                style = OpenAiThinkingWireStyle.THINKING_OBJECT,
+                expectedFields =
+                    """{"thinking":{"type":"enabled"},"reasoning_effort":"low"}""",
+            ),
+            Case(
+                name = "DashScope uses enable_thinking",
+                baseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                options = OpenAiRequestOptions(thinkingModeEnabled = true),
+                style = OpenAiThinkingWireStyle.ENABLE_THINKING,
+                expectedFields = """{"enable_thinking":true}""",
+            ),
+            Case(
+                name = "explicit Responses shape uses a nested reasoning object",
+                baseUrl = "https://gateway.example/v1/",
+                options = OpenAiRequestOptions(
+                    thinkingModeEnabled = true,
+                    reasoningEffort = RemoteReasoningEffort.XHIGH,
+                    thinkingParameterFormat = RemoteThinkingParameterFormat.OPENAI_RESPONSES,
+                ),
+                style = OpenAiThinkingWireStyle.RESPONSES_REASONING,
+                expectedFields = """{"reasoning":{"effort":"xhigh"}}""",
+            ),
+            Case(
+                name = "custom JSON substitutes the selected custom effort",
+                baseUrl = "https://gateway.example/v1/",
+                options = OpenAiRequestOptions(
+                    thinkingModeEnabled = true,
+                    reasoningEffort = RemoteReasoningEffort.CUSTOM,
+                    customReasoningEffort = "fast_plus",
+                    thinkingParameterFormat = RemoteThinkingParameterFormat.CUSTOM_JSON,
+                    customThinkingEnabledJson =
+                        """{"custom_thinking":true,"level":"{effort}"}""",
+                ),
+                style = OpenAiThinkingWireStyle.CUSTOM_JSON,
+                expectedFields = """{"custom_thinking":true,"level":"fast_plus"}""",
             ),
         ).forEach { case ->
-            val actual = RemoteThinkingPolicy.openAi(case.baseUrl, case.enabled)
+            val actual = RemoteThinkingPolicy.openAi(case.baseUrl, case.model, case.options)
             assertEquals(case.name, case.style, actual.style)
-            assertEquals(case.name, case.reasoningEffort, actual.reasoningEffort)
-            assertEquals(case.name, case.thinkingType, actual.thinking?.type)
-            assertEquals(case.name, case.enableThinking, actual.enableThinking)
+            assertEquals(case.name, case.expectedFields, actual.fields.toString())
         }
     }
 
     @Test
-    fun `Anthropic thinking control is explicit for both switch states_tableDriven`() {
+    fun `Anthropic thinking control separates the switch and effort_tableDriven`() {
         data class Case(
             val name: String,
-            val enabled: Boolean,
-            val expectedType: String,
-            val expectedDisplay: String?,
+            val options: OpenAiRequestOptions,
+            val expectedFields: String,
         )
 
         listOf(
-            Case("disabled is explicit", false, "disabled", null),
-            Case("enabled uses current adaptive mode and hides reasoning text", true, "adaptive", "omitted"),
+            Case(
+                "disabled is explicit",
+                OpenAiRequestOptions(),
+                """{"thinking":{"type":"disabled"}}""",
+            ),
+            Case(
+                "enabled auto uses provider default effort",
+                OpenAiRequestOptions(thinkingModeEnabled = true),
+                """{"thinking":{"type":"adaptive","display":"omitted"}}""",
+            ),
+            Case(
+                "enabled medium sends output_config effort",
+                OpenAiRequestOptions(
+                    thinkingModeEnabled = true,
+                    reasoningEffort = RemoteReasoningEffort.MEDIUM,
+                ),
+                """{"thinking":{"type":"adaptive","display":"omitted"},"output_config":{"effort":"medium"}}""",
+            ),
         ).forEach { case ->
-            val actual = RemoteThinkingPolicy.anthropic(case.enabled)
-            assertEquals(case.name, case.expectedType, actual.type)
-            assertEquals(case.name, case.expectedDisplay, actual.display)
+            val actual = RemoteThinkingPolicy.anthropic(case.options)
+            assertEquals(case.name, OpenAiThinkingWireStyle.ANTHROPIC_OUTPUT_CONFIG, actual.style)
+            assertEquals(case.name, case.expectedFields, actual.fields.toString())
         }
+    }
+
+    @Test
+    fun `custom thinking JSON rejects invalid shapes and protected request fields_tableDriven`() {
+        data class Case(val name: String, val customJson: String)
+
+        listOf(
+            Case("array is not a root object", "[]"),
+            Case("malformed JSON", "{"),
+            Case("model is protected", """{"model":"replacement"}"""),
+            Case("messages are protected", """{"messages":[]}"""),
+            Case("system is protected", """{"system":"replacement"}"""),
+            Case("stream is protected", """{"stream":true}"""),
+        ).forEach { case ->
+            val result = runCatching {
+                RemoteThinkingPolicy.openAi(
+                    baseUrl = "https://gateway.example/v1/",
+                    model = "model",
+                    options = OpenAiRequestOptions(
+                        thinkingModeEnabled = true,
+                        thinkingParameterFormat = RemoteThinkingParameterFormat.CUSTOM_JSON,
+                        customThinkingEnabledJson = case.customJson,
+                    ),
+                )
+            }
+            assertTrue(case.name, result.isFailure)
+        }
+    }
+
+    @Test
+    fun `thinking fields merge into request body without changing core fields_tableDriven`() {
+        data class Case(
+            val name: String,
+            val baseUrl: String,
+            val options: OpenAiRequestOptions,
+            val expectedField: String?,
+            val model: String = "model",
+        )
+
+        listOf(
+            Case(
+                "unknown auto endpoint adds nothing",
+                "https://gateway.example/v1/",
+                OpenAiRequestOptions(thinkingModeEnabled = true),
+                null,
+            ),
+            Case(
+                "DeepSeek adds thinking and effort",
+                "https://api.deepseek.com/v1/",
+                OpenAiRequestOptions(
+                    thinkingModeEnabled = true,
+                    reasoningEffort = RemoteReasoningEffort.HIGH,
+                ),
+                "reasoning_effort",
+            ),
+            Case(
+                "custom format adds provider field",
+                "https://gateway.example/v1/",
+                OpenAiRequestOptions(
+                    thinkingModeEnabled = true,
+                    thinkingParameterFormat = RemoteThinkingParameterFormat.CUSTOM_JSON,
+                    customThinkingEnabledJson = """{"provider_thinking":true}""",
+                ),
+                "provider_thinking",
+            ),
+            Case(
+                name = "Qwen proxy request carries explicit disabled field",
+                baseUrl = "https://gateway.example/v1/",
+                model = "qwen3.7-plus",
+                options = OpenAiRequestOptions(),
+                expectedField = "enable_thinking",
+            ),
+        ).forEach { case ->
+            val serializer = Json { explicitNulls = false }
+            val merged = RemoteThinkingPolicy.mergeIntoPayload(
+                payload = """{"model":"model","messages":[],"stream":false}""",
+                control = RemoteThinkingPolicy.openAi(
+                    case.baseUrl,
+                    case.model,
+                    case.options,
+                ),
+                serializer = serializer,
+            )
+            val body = serializer.parseToJsonElement(merged).jsonObject
+
+            assertEquals(case.name, "model", body.getValue("model").jsonPrimitive.content)
+            assertEquals(case.name, false, body.getValue("stream").jsonPrimitive.content.toBoolean())
+            if (case.expectedField == null) {
+                assertEquals(case.name, setOf("model", "messages", "stream"), body.keys)
+            } else {
+                assertTrue(case.name, case.expectedField in body)
+                if (case.expectedField == "enable_thinking") {
+                    assertEquals(
+                        case.name,
+                        false,
+                        body.getValue("enable_thinking").jsonPrimitive.content.toBoolean(),
+                    )
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `thinking configuration participates in translation cache fingerprint_tableDriven`() {
+        data class Case(val name: String, val options: OpenAiRequestOptions)
+
+        val fingerprints = listOf(
+            Case("thinking off", OpenAiRequestOptions()),
+            Case(
+                "low effort",
+                OpenAiRequestOptions(
+                    thinkingModeEnabled = true,
+                    reasoningEffort = RemoteReasoningEffort.LOW,
+                ),
+            ),
+            Case(
+                "high effort",
+                OpenAiRequestOptions(
+                    thinkingModeEnabled = true,
+                    reasoningEffort = RemoteReasoningEffort.HIGH,
+                ),
+            ),
+            Case(
+                "custom format",
+                OpenAiRequestOptions(
+                    thinkingModeEnabled = true,
+                    thinkingParameterFormat = RemoteThinkingParameterFormat.CUSTOM_JSON,
+                    customThinkingEnabledJson = """{"provider_thinking":true}""",
+                ),
+            ),
+        ).associate { case ->
+            case.name to OpenAiRequestPolicy.resolve(
+                text = "text",
+                systemPromptTemplate = "system",
+                sourceDisplay = "Japanese",
+                targetDisplay = "Chinese",
+                runtimeContext = "",
+                options = case.options,
+                networkRequestTimeoutSeconds = 30,
+            ).cacheFingerprint
+        }
+
+        assertEquals(fingerprints.keys.size, fingerprints.values.distinct().size)
     }
 
     @Test

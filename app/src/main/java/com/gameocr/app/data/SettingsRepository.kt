@@ -1086,6 +1086,7 @@ class SettingsRepository @Inject constructor(
             bubbleClusterGap = MangaOcrAdvancedSettingsPolicy.BUBBLE_CLUSTER_GAP,
             mangaOcrCropPaddingPx = MangaOcrAdvancedSettingsPolicy.CROP_PADDING_PX
             // runtimeTranslationContext, runtimeTranslationPromptContext,
+            // runtimeTranslationVisualContext,
             // runtimeTranslationScopePackage, and runtimeTranslationScopeLabel are request-scoped
             // and deliberately never persisted.
         ))

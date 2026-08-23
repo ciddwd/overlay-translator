@@ -7,76 +7,99 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 internal data class ShizukuAvailabilitySnapshot(
-    val installed: Boolean,
+    val knownBackendInstalled: Boolean,
+    val shizukuPlusCompatibilityRequired: Boolean,
     val serviceRunning: Boolean,
     val permissionGranted: Boolean,
     val shellPrivilegeOk: Boolean,
 )
 
+internal enum class ShizukuBackendPackage(
+    val packageName: String,
+) {
+    SHIZUKU("moe.shizuku.privileged.api"),
+    LEGACY_SHIZUKU("moe.shizuku.api"),
+    NIGHTZUKU("kerneldroid.nightzuku"),
+    SHIZUKU_PLUS("af.shizuku.plus.api"),
+}
+
+internal data class InstalledShizukuBackends(
+    val packages: Set<ShizukuBackendPackage>,
+) {
+    val anyKnownBackendInstalled: Boolean
+        get() = packages.isNotEmpty()
+
+    val shizukuPlusCompatibilityRequired: Boolean
+        get() = ShizukuBackendPackage.SHIZUKU_PLUS in packages &&
+            ShizukuBackendPackage.SHIZUKU !in packages &&
+            ShizukuBackendPackage.LEGACY_SHIZUKU !in packages &&
+            ShizukuBackendPackage.NIGHTZUKU !in packages
+}
+
+internal fun resolveInstalledShizukuBackends(
+    installedPackageNames: Set<String>,
+): InstalledShizukuBackends = InstalledShizukuBackends(
+    packages = ShizukuBackendPackage.entries
+        .filterTo(mutableSetOf()) { it.packageName in installedPackageNames },
+)
+
 internal fun resolveShizukuAvailability(
-    snapshot: ShizukuAvailabilitySnapshot
+    snapshot: ShizukuAvailabilitySnapshot,
 ): ShizukuCapabilities.Availability = when {
-    !snapshot.installed -> ShizukuCapabilities.Availability.NOT_INSTALLED
-    !snapshot.serviceRunning -> ShizukuCapabilities.Availability.NOT_RUNNING
+    !snapshot.serviceRunning && snapshot.shizukuPlusCompatibilityRequired ->
+        ShizukuCapabilities.Availability.INSTALLED_COMPATIBILITY_REQUIRED
+    !snapshot.serviceRunning && snapshot.knownBackendInstalled ->
+        ShizukuCapabilities.Availability.NOT_RUNNING
+    !snapshot.serviceRunning -> ShizukuCapabilities.Availability.NOT_INSTALLED
     !snapshot.permissionGranted -> ShizukuCapabilities.Availability.INSTALLED_NOT_GRANTED
     !snapshot.shellPrivilegeOk -> ShizukuCapabilities.Availability.INSTALLED_NOT_PAIRED
     else -> ShizukuCapabilities.Availability.READY
 }
 
-internal fun shouldRefreshShizukuShellPrivilege(snapshot: ShizukuAvailabilitySnapshot): Boolean {
-    return snapshot.installed &&
-        snapshot.serviceRunning &&
+internal fun shouldRefreshShizukuShellPrivilege(snapshot: ShizukuAvailabilitySnapshot): Boolean =
+    snapshot.serviceRunning &&
         snapshot.permissionGranted &&
         !snapshot.shellPrivilegeOk
-}
 
-/**
- * Shizuku 能力探测。把"包是否装、服务是否运行、是否已授权"三个状态合并成 [Availability]。
- */
+/** Resolves all supported Shizuku-compatible providers into one capability state. */
 @Singleton
 class ShizukuCapabilities @Inject constructor(
-    private val manager: ShizukuManager
+    private val manager: ShizukuManager,
 ) {
 
-    fun isShizukuInstalled(context: Context): Boolean = listOf(
-        "moe.shizuku.privileged.api",  // 当前 GitHub 版
-        "moe.shizuku.api"              // 旧版
-    ).any { pkg ->
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                context.packageManager.getPackageInfo(pkg, PackageManager.PackageInfoFlags.of(0))
-            } else {
-                @Suppress("DEPRECATION") context.packageManager.getPackageInfo(pkg, 0)
-            }
-            true
-        } catch (e: PackageManager.NameNotFoundException) {
-            false
-        } catch (t: Throwable) {
-            false
-        }
-    }
+    internal fun installedBackends(context: Context): InstalledShizukuBackends =
+        resolveInstalledShizukuBackends(
+            ShizukuBackendPackage.entries
+                .mapNotNullTo(mutableSetOf()) { backend ->
+                    backend.packageName.takeIf { isPackageInstalled(context, it) }
+                },
+        )
+
+    fun isShizukuInstalled(context: Context): Boolean =
+        installedBackends(context).anyKnownBackendInstalled
 
     fun isShizukuReady(context: Context): Boolean =
         manager.isServiceRunning() && manager.hasPermission() && manager.shellPrivilegeOk.value
 
-    /**
-     * Shizuku 可用性：
-     * - NOT_INSTALLED：根本没装
-     * - NOT_RUNNING：装了但 Shizuku 进程没跑（binder 死）
-     * - INSTALLED_NOT_GRANTED：跑着但屏译还没拿到 Shizuku 权限
-     * - **INSTALLED_NOT_PAIRED**：权限有但**没经过 ADB / root 启动配对**——`pingBinder` 和
-     *   `checkSelfPermission` 都通过，但 newProcess(screencap) 跑不动。CaptureService 走 Shizuku
-     *   路径会立刻 screencap exit=1。
-     * - READY：以上都通过
-     */
-    enum class Availability { READY, INSTALLED_NOT_GRANTED, INSTALLED_NOT_PAIRED, NOT_INSTALLED, NOT_RUNNING }
+    enum class Availability {
+        READY,
+        INSTALLED_NOT_GRANTED,
+        INSTALLED_NOT_PAIRED,
+        INSTALLED_COMPATIBILITY_REQUIRED,
+        NOT_INSTALLED,
+        NOT_RUNNING,
+    }
 
     fun availability(context: Context): Availability {
-        val installed = isShizukuInstalled(context)
-        val serviceRunning = installed && manager.isServiceRunning()
+        // A live Binder is authoritative. Sui intentionally has no manager APK, and compatible
+        // providers may use a different package name, so package discovery must never gate IPC.
+        val installedBackends = installedBackends(context)
+        val serviceRunning = manager.isServiceRunning()
         val permissionGranted = serviceRunning && manager.hasPermission()
         val snapshot = ShizukuAvailabilitySnapshot(
-            installed = installed,
+            knownBackendInstalled = installedBackends.anyKnownBackendInstalled,
+            shizukuPlusCompatibilityRequired =
+                installedBackends.shizukuPlusCompatibilityRequired,
             serviceRunning = serviceRunning,
             permissionGranted = permissionGranted,
             shellPrivilegeOk = permissionGranted && manager.shellPrivilegeOk.value,
@@ -85,5 +108,22 @@ class ShizukuCapabilities @Inject constructor(
             manager.refreshShellPrivilege()
         }
         return resolveShizukuAvailability(snapshot)
+    }
+
+    private fun isPackageInstalled(context: Context, packageName: String): Boolean = try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.packageManager.getPackageInfo(
+                packageName,
+                PackageManager.PackageInfoFlags.of(0),
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            context.packageManager.getPackageInfo(packageName, 0)
+        }
+        true
+    } catch (_: PackageManager.NameNotFoundException) {
+        false
+    } catch (_: Throwable) {
+        false
     }
 }

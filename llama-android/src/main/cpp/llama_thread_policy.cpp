@@ -21,6 +21,7 @@
 #include "common.h"
 #include "ggml-backend.h"
 #include "llama.h"
+#include "logging.h"
 #include "sampling.h"
 
 namespace {
@@ -47,9 +48,7 @@ int thread_value_from_environment(
     if (end != raw_value && *end == '\0' && value >= 1 && value <= maximum) {
         return static_cast<int>(value);
     }
-    __android_log_print(
-            ANDROID_LOG_WARN,
-            "LocalLlmPerf",
+    LOGw(
             "invalid thread environment %s=%s; keeping %d",
             name,
             raw_value,
@@ -99,9 +98,7 @@ float sampler_value_from_environment(
             value >= minimum && value <= maximum) {
         return value;
     }
-    __android_log_print(
-            ANDROID_LOG_WARN,
-            "LocalLlmPerf",
+    LOGw(
             "invalid sampler environment %s=%s; keeping %.2f",
             name,
             raw_value,
@@ -122,9 +119,7 @@ int sampler_integer_from_environment(
     if (end != raw_value && *end == '\0' && value >= minimum && value <= maximum) {
         return static_cast<int>(value);
     }
-    __android_log_print(
-            ANDROID_LOG_WARN,
-            "LocalLlmPerf",
+    LOGw(
             "invalid sampler environment %s=%s; keeping %d",
             name,
             raw_value,
@@ -147,9 +142,7 @@ common_sampler * gameocr_common_sampler_init(
             "GAMEOCR_SAMPLER_REPEAT_PENALTY", params.penalty_repeat, 0.0f, 4.0f);
     params.penalty_freq = sampler_value_from_environment(
             "GAMEOCR_SAMPLER_FREQUENCY_PENALTY", params.penalty_freq, 0.0f, 2.0f);
-    __android_log_print(
-            ANDROID_LOG_INFO,
-            "LocalLlmPerf",
+    LOGi(
             "sampler native temperature=%.2f topP=%.2f topK=%d repeatPenalty=%.2f frequencyPenalty=%.2f",
             params.temp,
             params.top_p,
@@ -167,9 +160,7 @@ extern "C" llama_model * gameocr_llama_model_load_from_file(
     const bool use_vulkan = requested && available;
     configure_model_acceleration(params, use_vulkan);
 
-    __android_log_print(
-            ANDROID_LOG_INFO,
-            "LocalLlmPerf",
+    LOGi(
             "acceleration native requestedVulkan=%s backendAvailable=%s nGpuLayers=%d devices=%s",
             requested ? "true" : "false",
             available ? "true" : "false",
@@ -179,17 +170,14 @@ extern "C" llama_model * gameocr_llama_model_load_from_file(
     llama_model * model = llama_model_load_from_file(path_model, params);
     if (model != nullptr || !use_vulkan) return model;
 
-    __android_log_print(
-            ANDROID_LOG_WARN,
-            "LocalLlmPerf",
-            "Vulkan model load failed; retrying on CPU");
+    LOGw("Vulkan model load failed; retrying on CPU");
     configure_model_acceleration(params, false);
     model = llama_model_load_from_file(path_model, params);
-    __android_log_print(
-            model == nullptr ? ANDROID_LOG_ERROR : ANDROID_LOG_INFO,
-            "LocalLlmPerf",
-            "CPU fallback model load success=%s",
-            model != nullptr ? "true" : "false");
+    if (model == nullptr) {
+        LOGe("CPU fallback model load success=false");
+    } else {
+        LOGi("CPU fallback model load success=true");
+    }
     return model;
 }
 
@@ -212,9 +200,7 @@ extern "C" llama_context * gameocr_llama_init_from_model(
     // Unified KV preserves the full per-sequence context while sharing the system prefix.
     params.n_seq_max = 9;
     params.kv_unified = true;
-    __android_log_print(
-            ANDROID_LOG_INFO,
-            "LocalLlmPerf",
+    LOGi(
             "thread policy native availableProcessors=%d upstreamTG=%d upstreamPP=%d "
             "TG=%d PP=%d max=6 nSeqMax=%u kvUnified=%s",
             available_processors,

@@ -153,8 +153,9 @@ fun OnboardingScreen(
         }
         return
     }
+    val localLlmSupported = remember { viewModel.isLocalLlmSupported() }
 
-    val steps = OnboardingPolicy.stepsFor(currentDraft)
+    val steps = OnboardingPolicy.stepsFor(currentDraft, localLlmSupported)
     if (stepIndex > steps.lastIndex) stepIndex = steps.lastIndex
     val currentStep = steps[stepIndex]
 
@@ -189,7 +190,8 @@ fun OnboardingScreen(
             OnboardingStep.MANGA_OFFLINE_DOWNLOAD -> {
                 mangaDownloadState = MangaOfflineDownloadState.Ready(
                     viewModel.mangaOfflineModelReadiness(
-                        includeSakura = OnboardingPolicy.usesSakuraMangaTranslation(currentDraft)
+                        includeSakura = localLlmSupported &&
+                            OnboardingPolicy.usesSakuraMangaTranslation(currentDraft)
                     )
                 )
             }
@@ -224,7 +226,8 @@ fun OnboardingScreen(
     }
 
     fun downloadMangaOfflineModels() {
-        val includeSakura = OnboardingPolicy.usesSakuraMangaTranslation(currentDraft)
+        val includeSakura = localLlmSupported &&
+            OnboardingPolicy.usesSakuraMangaTranslation(currentDraft)
         val readiness = viewModel.mangaOfflineModelReadiness(includeSakura)
         mangaDownloadState = MangaOfflineDownloadState.Downloading(readiness, "")
         scope.launch {
@@ -329,6 +332,7 @@ fun OnboardingScreen(
                         downloadState = downloadState,
                         mangaDownloadState = mangaDownloadState,
                         recommendedModelsDownloadState = recommendedModelsDownloadState,
+                        localLlmSupported = localLlmSupported,
                         saving = saving,
                         onDraftChange = { draft = it },
                         onDownload = {
@@ -373,6 +377,7 @@ fun OnboardingScreen(
                         downloadState = downloadState,
                         mangaDownloadState = mangaDownloadState,
                         recommendedModelsDownloadState = recommendedModelsDownloadState,
+                        localLlmSupported = localLlmSupported,
                         saving = saving,
                         onDraftChange = { draft = it },
                         onDownload = {
@@ -532,6 +537,7 @@ private fun OnboardingPageSurface(
     downloadState: MlKitDownloadState,
     mangaDownloadState: MangaOfflineDownloadState,
     recommendedModelsDownloadState: RecommendedModelsDownloadState,
+    localLlmSupported: Boolean,
     saving: Boolean,
     onDraftChange: (OnboardingDraft) -> Unit,
     onDownload: () -> Unit,
@@ -599,6 +605,7 @@ private fun OnboardingPageSurface(
                         )
                         OnboardingStep.TRANSLATION_METHOD -> TranslationMethodPage(
                             draft,
+                            localLlmSupported,
                             onDraftChange,
                         )
                         OnboardingStep.RECOMMENDED_MODELS_DOWNLOAD ->
@@ -613,7 +620,8 @@ private fun OnboardingPageSurface(
                         )
                         OnboardingStep.MANGA_OFFLINE_DOWNLOAD -> MangaOfflineDownloadPage(
                             state = mangaDownloadState,
-                            includeSakura = OnboardingPolicy.usesSakuraMangaTranslation(draft),
+                            includeSakura = localLlmSupported &&
+                                OnboardingPolicy.usesSakuraMangaTranslation(draft),
                             onDownload = onDownloadMangaModels,
                         )
                         OnboardingStep.CLOUD_CONFIG -> CloudConfigPage(
@@ -621,7 +629,7 @@ private fun OnboardingPageSurface(
                             onDraftChange,
                         )
                         OnboardingStep.TTS -> TtsPage(draft, onDraftChange)
-                        OnboardingStep.SUMMARY -> SummaryPage(draft)
+                        OnboardingStep.SUMMARY -> SummaryPage(draft, localLlmSupported)
                     }
                     HorizontalDivider()
                     Button(
@@ -631,6 +639,7 @@ private fun OnboardingPageSurface(
                             draft,
                             downloadState,
                             recommendedModelsDownloadState,
+                            localLlmSupported,
                         ) && !saving,
                         modifier = Modifier
                             .fillMaxWidth()
@@ -885,6 +894,7 @@ private fun MangaDirectionPage(
 @Composable
 private fun TranslationMethodPage(
     draft: OnboardingDraft,
+    localLlmSupported: Boolean,
     onDraftChange: (OnboardingDraft) -> Unit,
 ) {
     PageHeading(
@@ -897,6 +907,10 @@ private fun TranslationMethodPage(
         title = stringResource(R.string.onboarding_method_offline),
         description = stringResource(
             if (
+                !localLlmSupported && draft.usage == OnboardingUsage.MANGA
+            ) {
+                R.string.onboarding_method_offline_mlkit_fallback_desc
+            } else if (
                 draft.usage == OnboardingUsage.MANGA &&
                     OnboardingPolicy.isSakuraPairSupported(draft.sourceLang, draft.targetLang)
             ) {
@@ -925,13 +939,7 @@ private fun TranslationMethodPage(
     )
     if (
         draft.translationMethod == OnboardingTranslationMethod.OFFLINE &&
-        (
-            draft.usage == OnboardingUsage.DAILY &&
-                !OnboardingPolicy.isMlKitPairSupported(
-                    draft.sourceLang,
-                    draft.targetLang,
-                )
-            )
+        !OnboardingPolicy.canUseOfflineTranslation(draft, localLlmSupported)
     ) {
         Text(
             stringResource(
@@ -975,7 +983,13 @@ private fun RecommendedModelsDownloadPage(
             if (readiness.includeHyMt2) {
                 ModelRecommendationRow(
                     title = "Hy-MT2",
-                    detail = stringResource(R.string.onboarding_recommended_models_translation_desc),
+                    detail = stringResource(
+                        if (readiness.hyMt2Supported) {
+                            R.string.onboarding_recommended_models_translation_desc
+                        } else {
+                            R.string.err_llm_device_unsupported
+                        }
+                    ),
                     ready = readiness.hyMt2Ready,
                 )
             }
@@ -999,7 +1013,14 @@ private fun RecommendedModelsDownloadPage(
                 }
                 RecommendedModelsDownloadState.Checking -> Unit
             }
-            if (!readiness.allReady) {
+            if (!readiness.hyMt2Supported) {
+                Text(
+                    stringResource(R.string.onboarding_local_llm_fallback_mlkit),
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            if (readiness.hasDownloadableModels) {
                 OutlinedButton(
                     onClick = onDownload,
                     enabled = state !is RecommendedModelsDownloadState.Downloading,
@@ -1127,7 +1148,13 @@ private fun MangaOfflineDownloadPage(
             if (includeSakura) {
                 ModelRecommendationRow(
                     title = stringResource(R.string.onboarding_manga_offline_sakura),
-                    detail = stringResource(R.string.onboarding_manga_offline_sakura_desc),
+                    detail = stringResource(
+                        if (readiness.sakuraSupported) {
+                            R.string.onboarding_manga_offline_sakura_desc
+                        } else {
+                            R.string.err_llm_device_unsupported
+                        }
+                    ),
                     ready = readiness.sakuraReady,
                 )
             }
@@ -1160,7 +1187,14 @@ private fun MangaOfflineDownloadPage(
                 }
                 MangaOfflineDownloadState.Checking -> Unit
             }
-            if (!readiness.allReady) {
+            if (!readiness.sakuraSupported) {
+                Text(
+                    stringResource(R.string.onboarding_local_llm_fallback_mlkit),
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            if (readiness.hasDownloadableModels) {
                 OutlinedButton(
                     onClick = onDownload,
                     enabled = state !is MangaOfflineDownloadState.Downloading,
@@ -1293,7 +1327,10 @@ private fun TtsPage(
 }
 
 @Composable
-private fun SummaryPage(draft: OnboardingDraft) {
+private fun SummaryPage(
+    draft: OnboardingDraft,
+    localLlmSupported: Boolean,
+) {
     val context = androidx.compose.ui.platform.LocalContext.current
     PageHeading(
         icon = Icons.Default.CheckCircle,
@@ -1336,7 +1373,9 @@ private fun SummaryPage(draft: OnboardingDraft) {
         stringResource(R.string.onboarding_summary_translation),
         if (draft.translationMethod == OnboardingTranslationMethod.OFFLINE) {
             stringResource(
-                if (OnboardingPolicy.usesSakuraMangaTranslation(draft)) {
+                if (draft.usage != OnboardingUsage.MANGA || !localLlmSupported) {
+                    R.string.onboarding_summary_mlkit_offline
+                } else if (OnboardingPolicy.usesSakuraMangaTranslation(draft)) {
                     R.string.onboarding_summary_manga_offline
                 } else if (draft.usage == OnboardingUsage.MANGA) {
                     R.string.onboarding_summary_manga_multilingual_offline
@@ -1579,6 +1618,7 @@ private fun canContinue(
     draft: OnboardingDraft,
     downloadState: MlKitDownloadState,
     recommendedModelsDownloadState: RecommendedModelsDownloadState,
+    localLlmSupported: Boolean,
 ): Boolean = when (step) {
     OnboardingStep.SOURCE_LANGUAGE -> draft.sourceLang.isNotBlank() &&
         draft.sourceLang != Languages.AUTO.code
@@ -1587,8 +1627,7 @@ private fun canContinue(
         draft.targetLang != draft.sourceLang
     OnboardingStep.TRANSLATION_METHOD -> when {
         draft.translationMethod != OnboardingTranslationMethod.OFFLINE -> true
-        draft.usage == OnboardingUsage.MANGA -> true
-        else -> OnboardingPolicy.isMlKitPairSupported(draft.sourceLang, draft.targetLang)
+        else -> OnboardingPolicy.canUseOfflineTranslation(draft, localLlmSupported)
     }
     OnboardingStep.OFFLINE_LANGUAGE_DOWNLOAD ->
         downloadState == MlKitDownloadState.Ready

@@ -490,7 +490,7 @@ class SettingsScreenModelStatusTest {
     }
 
     @Test
-    fun orientationAutoDetectHelp_mentionsNonHorizontalUseAndStorageTradeoff() {
+    fun orientationAutoDetectHelp_mentionsNonHorizontalUseWithoutHiddenModelPackage() {
         data class Case(
             val name: String,
             val resourcePath: String,
@@ -504,7 +504,6 @@ class SettingsScreenModelStatusTest {
                 expectedParts = listOf(
                     "improves non-horizontal text",
                     "vertical layouts",
-                    "delete the orientation model package",
                     "improve translation speed",
                 ),
             ),
@@ -514,7 +513,6 @@ class SettingsScreenModelStatusTest {
                 expectedParts = listOf(
                     "横排以外文字",
                     "竖排文字增强",
-                    "删除方向模型包",
                     "提升翻译速度",
                 ),
             ),
@@ -525,6 +523,10 @@ class SettingsScreenModelStatusTest {
             case.expectedParts.forEach { expected ->
                 assertTrue("${case.name}: expected '$expected' in '$summary'", summary.contains(expected))
             }
+            assertFalse(
+                "${case.name}: hidden model package must not be mentioned",
+                summary.contains("orientation model package") || summary.contains("方向模型包"),
+            )
         }
     }
 
@@ -1575,7 +1577,6 @@ class SettingsScreenModelStatusTest {
             listOf(
                 TranslationPresetModelIssueKind.LOCAL_LLM_MISSING,
                 TranslationPresetModelIssueKind.PADDLE_MISSING,
-                TranslationPresetModelIssueKind.ORIENTATION_MISSING,
             ),
             issues.map { it.kind }
         )

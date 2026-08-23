@@ -49,12 +49,14 @@ class SettingsSingleChoiceSegmentedControlsUiTest {
             Case(
                 name = "merge strength",
                 startMarker = "val mergeStrengthOptions =",
-                endMarker = "stringResource(when (mergeStrength)",
+                endMarker = "stringResource(when (shownMergeStrength)",
                 requiredMarkers = listOf(
                     "MergeStrength.CONSERVATIVE",
                     "MergeStrength.STANDARD",
                     "MergeStrength.AGGRESSIVE",
-                    "selected = mergeStrength == strength",
+                    "MergeStrength.ALL",
+                    "mergeStrengthOptionsFor(renderMode)",
+                    "selected = shownMergeStrength == strength",
                     "if (mergeStrength != strength)",
                 ),
             ),

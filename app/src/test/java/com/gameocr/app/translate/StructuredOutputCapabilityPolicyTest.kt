@@ -46,6 +46,115 @@ class StructuredOutputCapabilityPolicyTest {
     }
 
     @Test
+    fun jsonResponseFormatTracker_tableDriven_cachesByEndpointAndModelAndReprobesAfterTtl() {
+        var now = 10_000L
+        val tracker = JsonResponseFormatCapabilityTracker(
+            cacheTtlMs = 1_000L,
+            nowMs = { now },
+        )
+        data class Step(
+            val name: String,
+            val key: String,
+            val action: String? = null,
+            val advanceMs: Long = 0L,
+            val expectedSend: Boolean,
+        )
+
+        listOf(
+            Step("unknown capability is probed", "endpoint-a/model-a", expectedSend = true),
+            Step(
+                "explicit rejection is cached",
+                "endpoint-a/model-a",
+                action = "unsupported",
+                expectedSend = false,
+            ),
+            Step("different model remains independent", "endpoint-a/model-b", expectedSend = true),
+            Step("different endpoint remains independent", "endpoint-b/model-a", expectedSend = true),
+            Step(
+                "unsupported cache remains active before ttl",
+                "endpoint-a/model-a",
+                advanceMs = 999L,
+                expectedSend = false,
+            ),
+            Step(
+                "expired unsupported cache is probed again",
+                "endpoint-a/model-a",
+                advanceMs = 1L,
+                expectedSend = true,
+            ),
+            Step(
+                "successful probe records support",
+                "endpoint-a/model-a",
+                action = "supported",
+                expectedSend = true,
+            ),
+        ).forEach { step ->
+            now += step.advanceMs
+            when (step.action) {
+                "supported" -> tracker.recordSupported(step.key)
+                "unsupported" -> tracker.recordUnsupported(step.key)
+            }
+            assertEquals(step.name, step.expectedSend, tracker.shouldSend(step.key))
+        }
+    }
+
+    @Test
+    fun jsonResponseFormatRejection_tableDriven_onlyAcceptsExplicitFieldRejections() {
+        data class Case(
+            val name: String,
+            val statusCode: Int,
+            val body: String,
+            val expected: Boolean,
+        )
+
+        listOf(
+            Case(
+                "unknown response_format parameter",
+                400,
+                "Unknown parameter: response_format",
+                true,
+            ),
+            Case(
+                "pydantic extra field rejection",
+                422,
+                "{\"loc\":[\"body\",\"response_format\"],\"type\":\"extra_forbidden\"}",
+                true,
+            ),
+            Case(
+                "json object unavailable for model",
+                400,
+                "response format json_object is not supported for this model",
+                true,
+            ),
+            Case(
+                "provider uses does not support wording",
+                400,
+                "This endpoint does not support response_format",
+                true,
+            ),
+            Case(
+                "authentication errors never change capability",
+                401,
+                "response_format is not allowed for this account",
+                false,
+            ),
+            Case("unrelated bad request", 400, "invalid model name", false),
+            Case(
+                "server errors never change capability",
+                500,
+                "response_format unsupported",
+                false,
+            ),
+        ).forEach { case ->
+            assertEquals(
+                case.name,
+                case.expected,
+                JsonResponseFormatRejectionPolicy.isExplicitRejection(case.statusCode, case.body),
+            )
+        }
+    }
+
+    @Test
     fun individualFallback_tableDriven_preservesOrderAndLimitsPeakConcurrency() = runBlocking {
         data class Case(
             val name: String,

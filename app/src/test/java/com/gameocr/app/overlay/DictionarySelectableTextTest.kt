@@ -2,6 +2,7 @@ package com.gameocr.app.overlay
 
 import com.gameocr.app.translate.ExamplePair
 import com.gameocr.app.translate.WordResult
+import com.gameocr.app.translate.WordSense
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -74,12 +75,46 @@ class DictionarySelectableTextTest {
                     difficultyNotes = listOf("note"),
                     examples = listOf(ExamplePair("source", "target")),
                 ),
-                "Phonetic  /all/\nPart of speech  adj.\n\n" +
-                    "Definitions\n1. definition\n\n" +
+                "Phonetic  /all/\n\nadj.\n1. definition\n\n" +
                     "Inflections\n・comparative: better\n\n" +
                     "Synonyms\nfine / excellent\n\n" +
                     "Notes\n・note\n\n" +
                     "Examples\n・source\n  target",
+            ),
+        ).forEach { case ->
+            assertEquals(case.name, case.expected, dictionaryPlainText(case.result, labels))
+        }
+    }
+
+    @Test
+    fun groupedSenses_tableDriven_keepDefinitionsUnderTheCorrectPartOfSpeech() {
+        data class Case(val name: String, val result: WordResult, val expected: String)
+
+        listOf(
+            Case(
+                "displayed adjective and verb",
+                WordResult(
+                    lemma = "display",
+                    senses = listOf(
+                        WordSense("adj.", listOf("显示的")),
+                        WordSense(
+                            "v.",
+                            listOf("表现", "展示", "陈列"),
+                            "display 的过去式和过去分词",
+                        ),
+                    ),
+                ),
+                "adj.\n1. 显示的\n\nv.\n1. 表现\n2. 展示\n3. 陈列\nInflections  display 的过去式和过去分词",
+            ),
+            Case(
+                "legacy single POS safely groups all meanings",
+                WordResult(pos = listOf("v."), definitions = listOf("更新", "升级")),
+                "v.\n1. 更新\n2. 升级",
+            ),
+            Case(
+                "legacy multiple POS remains ungrouped",
+                WordResult(pos = listOf("n.", "v."), definitions = listOf("记录", "记下")),
+                "Part of speech  n. / v.\n\nDefinitions\n1. 记录\n2. 记下",
             ),
         ).forEach { case ->
             assertEquals(case.name, case.expected, dictionaryPlainText(case.result, labels))

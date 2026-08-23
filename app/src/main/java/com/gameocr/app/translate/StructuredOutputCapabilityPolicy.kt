@@ -37,6 +37,64 @@ internal class StructuredOutputCapabilityTracker(
     }
 }
 
+internal class JsonResponseFormatCapabilityTracker(
+    private val cacheTtlMs: Long = 10 * 60_000L,
+    private val nowMs: () -> Long = System::currentTimeMillis,
+) {
+    private data class State(
+        val supported: Boolean,
+        val expiresAtMs: Long,
+    )
+
+    private val states = mutableMapOf<String, State>()
+
+    @Synchronized
+    fun shouldSend(key: String): Boolean {
+        val state = states[key] ?: return true
+        if (state.expiresAtMs <= nowMs()) {
+            states.remove(key)
+            return true
+        }
+        return state.supported
+    }
+
+    @Synchronized
+    fun recordSupported(key: String) {
+        states[key] = State(supported = true, expiresAtMs = nowMs() + cacheTtlMs)
+    }
+
+    @Synchronized
+    fun recordUnsupported(key: String) {
+        states[key] = State(supported = false, expiresAtMs = nowMs() + cacheTtlMs)
+    }
+}
+
+internal object JsonResponseFormatRejectionPolicy {
+    private val fieldMarkers = listOf(
+        "response_format",
+        "response format",
+        "json_object",
+    )
+    private val rejectionMarkers = listOf(
+        "unsupported",
+        "not supported",
+        "does not support",
+        "unknown",
+        "unrecognized",
+        "invalid",
+        "not allowed",
+        "unexpected",
+        "extra inputs",
+        "extra_forbidden",
+    )
+
+    fun isExplicitRejection(statusCode: Int, responseBody: String): Boolean {
+        if (statusCode != 400 && statusCode != 422) return false
+        val normalized = responseBody.lowercase()
+        return fieldMarkers.any(normalized::contains) && rejectionMarkers.any(normalized::contains)
+    }
+}
+
 internal suspend fun translateStructuredFallbackIndividually(
     sources: List<String>,
     settings: Settings,
@@ -74,4 +132,11 @@ internal object RemoteStructuredOutputCapability {
 
     fun anthropicKey(settings: Settings): String =
         "anthropic|${settings.anthropicBaseUrl.trim().trimEnd('/')}|${settings.anthropicModel.trim()}"
+}
+
+internal object RemoteJsonResponseFormatCapability {
+    val tracker = JsonResponseFormatCapabilityTracker()
+
+    fun openAiKey(settings: Settings): String =
+        "openai|${settings.baseUrl.trim().trimEnd('/')}|${settings.model.trim()}"
 }

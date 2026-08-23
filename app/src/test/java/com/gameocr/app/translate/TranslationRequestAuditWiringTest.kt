@@ -25,11 +25,11 @@ class TranslationRequestAuditWiringTest {
             Case("OpenAI normal translation", openAi, "\"OPENAI\", \"translation\", false"),
             Case("OpenAI streaming translation", openAi, "\"OPENAI\", \"translation\", true"),
             Case("OpenAI contextual batch follows the streaming switch", openAi, "\"OPENAI\", \"translation_batch\", stream"),
-            Case("OpenAI dictionary", openAi, "\"OPENAI\", \"dictionary\", false"),
+            Case("OpenAI dictionary distinguishes compact requests", openAi, "if (compact) \"dictionary_compact\" else \"dictionary\""),
             Case("Anthropic normal translation", anthropic, "\"ANTHROPIC\", \"translation\", false"),
             Case("Anthropic streaming translation", anthropic, "\"ANTHROPIC\", \"translation\", true"),
             Case("Anthropic contextual batch follows the streaming switch", anthropic, "\"ANTHROPIC\", \"translation_batch\", stream"),
-            Case("Anthropic dictionary", anthropic, "\"ANTHROPIC\", \"dictionary\", false"),
+            Case("Anthropic dictionary distinguishes compact requests", anthropic, "if (compact) \"dictionary_compact\" else \"dictionary\""),
         ).forEach { case -> assertTrue(case.name, case.content.contains(case.marker)) }
 
         assertEquals("OpenAI has exactly four audited translation paths", 4, openAi.count("TranslationRequestAudit.log("))

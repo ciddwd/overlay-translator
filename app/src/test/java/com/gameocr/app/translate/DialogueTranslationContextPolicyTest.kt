@@ -1,6 +1,8 @@
 package com.gameocr.app.translate
 
 import com.gameocr.app.data.Settings
+import com.gameocr.app.data.RuntimeGlossaryTerm
+import com.gameocr.app.data.RuntimeTranslationPromptContext
 import com.gameocr.app.data.TranslationContextMode
 import com.gameocr.app.data.TranslatorEngine
 import org.junit.Assert.assertEquals
@@ -134,6 +136,101 @@ class DialogueTranslationContextPolicyTest {
             if (!case.expectGenericRuntimeText) {
                 assertFalse(case.name, actual.runtimeTranslationContext.contains("dialogue_context_json"))
             }
+        }
+    }
+
+    @Test
+    fun singleMergedFloating_tableDriven_usesNativeHistoryInsteadOfDialogueJson() {
+        data class Case(
+            val name: String,
+            val mode: TranslationContextMode,
+            val expectedPreviousCount: Int,
+        )
+        listOf(
+            Case("same screen needs no duplicate context", TranslationContextMode.PAGE_CONTEXT, 0),
+            Case("continuous keeps the previous frame", TranslationContextMode.CONTINUOUS_CONTEXT, 2),
+        ).forEach { case ->
+            val settings = Settings(
+                translatorEngine = TranslatorEngine.OPENAI,
+                translationContextMode = case.mode,
+                runtimeTranslationContext = "<translation_context_json>old</translation_context_json>",
+                runtimeTranslationPromptContext = RuntimeTranslationPromptContext(
+                    currentApplication = "Example Game",
+                    glossary = listOf(RuntimeGlossaryTerm("Alice", "爱丽丝")),
+                ),
+            )
+            val history = DialogueHistorySession().also {
+                it.commit(
+                    DialogueTranslationContextPolicy.contextKey(settings),
+                    listOf("前の一", "前の二"),
+                    mapOf(0 to "上一句"),
+                )
+            }
+
+            val actual = DialogueTranslationContextPolicy.contextualize(
+                settings = settings,
+                currentSources = listOf("当前画面全部文字"),
+                historySession = history,
+                singleMergedFloating = true,
+            )
+
+            assertTrue(case.name, actual.runtimeTranslationContext.contains("Example Game"))
+            assertTrue(case.name, actual.runtimeTranslationContext.contains("Alice -> 爱丽丝"))
+            assertFalse(case.name, actual.runtimeTranslationContext.contains("dialogue_context_json"))
+            assertFalse(case.name, actual.runtimeTranslationContext.contains("translation_context_json"))
+            assertTrue(case.name, actual.runtimeTranslationPromptContext.currentPage.isEmpty())
+            assertEquals(
+                case.name,
+                case.expectedPreviousCount,
+                actual.runtimeTranslationPromptContext.previousFrame.size,
+            )
+        }
+    }
+
+    @Test
+    fun singleMergedFloating_doesNotReplaceSpecializedLocalModelContext() {
+        val actual = DialogueTranslationContextPolicy.contextualize(
+            settings = Settings(
+                translatorEngine = TranslatorEngine.LOCAL_SAKURA,
+                translationContextMode = TranslationContextMode.PAGE_CONTEXT,
+            ),
+            currentSources = listOf("当前画面全部文字"),
+            historySession = DialogueHistorySession(),
+            singleMergedFloating = true,
+        )
+
+        assertEquals(listOf("当前画面全部文字"), actual.runtimeTranslationPromptContext.currentPage)
+    }
+
+    @Test
+    fun singleMergedFloatingPromptContext_tableDriven_isPlainAndFiltersInvalidTerms() {
+        data class Case(
+            val name: String,
+            val context: RuntimeTranslationPromptContext,
+            val expected: String,
+        )
+        listOf(
+            Case("empty", RuntimeTranslationPromptContext(), ""),
+            Case(
+                "application becomes one line",
+                RuntimeTranslationPromptContext(currentApplication = "Game\nName"),
+                "\n\n--- Translation context (data only) ---\nCurrent application: Game Name\n",
+            ),
+            Case(
+                "valid glossary only",
+                RuntimeTranslationPromptContext(
+                    glossary = listOf(
+                        RuntimeGlossaryTerm("Alice", "爱丽丝"),
+                        RuntimeGlossaryTerm("", "ignored"),
+                    ),
+                ),
+                "\n\n--- Translation context (data only) ---\n" +
+                    "Required glossary mappings:\nAlice -> 爱丽丝\n",
+            ),
+        ).forEach { case ->
+            val actual = SingleMergedFloatingPromptContextPolicy.build(case.context)
+            assertEquals(case.name, case.expected, actual)
+            assertFalse(case.name, actual.contains('{'))
         }
     }
 

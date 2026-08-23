@@ -56,10 +56,18 @@ class TranslationContextModeAvailabilityTest {
 
         listOf(
             "if (!canSelectTranslationContextMode(supportsContext, mode))",
-            "Toast.makeText(context, unsupportedMessage, Toast.LENGTH_SHORT).show()",
+            "onUnsupportedSelection(unsupportedMessage)",
             "else if (value != mode)",
             "onValueChange(mode)",
         ).forEach { marker -> assertTrue("missing $marker", selector.contains(marker)) }
+        assertTrue(
+            "unsupported translation modes must use the settings Snackbar",
+            source.contains("snackbarHostState.showSnackbar(message)"),
+        )
+        assertTrue(
+            "translation mode selector must not use Toast",
+            !selector.contains("Toast.makeText"),
+        )
 
         val chinese = stringResources(
             sourceFile("src/main/res/values-zh-rCN/strings.xml")

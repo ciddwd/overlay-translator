@@ -5,6 +5,11 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -20,19 +25,12 @@ internal data class AnthropicMessageRequest(
     val temperature: Double,
     @SerialName("top_p") val topP: Double? = null,
     val stream: Boolean,
-    val thinking: AnthropicThinkingConfig? = null,
-)
-
-@Serializable
-internal data class AnthropicThinkingConfig(
-    val type: String,
-    val display: String? = null,
 )
 
 @Serializable
 internal data class AnthropicInputMessage(
     val role: String,
-    val content: String,
+    val content: JsonElement,
 )
 
 @Serializable
@@ -100,20 +98,49 @@ internal fun buildAnthropicMessageRequest(
     stream: Boolean,
     json: Json,
     topP: Double? = null,
-    thinking: AnthropicThinkingConfig? = null,
+    thinkingControl: OpenAiThinkingControl? = null,
+    conversationMessages: List<ResolvedConversationMessage> = emptyList(),
+    visualContext: com.gameocr.app.data.RuntimeTranslationVisualContext? = null,
 ): Request {
-    val payload = json.encodeToString(
+    val basePayload = json.encodeToString(
         AnthropicMessageRequest(
             model = settings.anthropicModel,
             maxTokens = maxTokens,
-            messages = listOf(AnthropicInputMessage(role = "user", content = userText)),
+            messages = buildList {
+                conversationMessages.forEach { message ->
+                    add(AnthropicInputMessage(role = message.role, content = JsonPrimitive(message.content)))
+                }
+                add(
+                    AnthropicInputMessage(
+                        role = "user",
+                        content = visualContext?.let { visual ->
+                            buildJsonArray {
+                                add(buildJsonObject {
+                                    put("type", "image")
+                                    put("source", buildJsonObject {
+                                        put("type", "base64")
+                                        put("media_type", visual.mimeType)
+                                        put("data", visual.base64Data)
+                                    })
+                                })
+                                add(buildJsonObject {
+                                    put("type", "text")
+                                    put("text", userText)
+                                })
+                            }
+                        } ?: JsonPrimitive(userText),
+                    )
+                )
+            },
             system = systemPrompt,
             temperature = temperature,
             topP = topP,
             stream = stream,
-            thinking = thinking,
         )
     )
+    val payload = thinkingControl?.let { control ->
+        RemoteThinkingPolicy.mergeIntoPayload(basePayload, control, json)
+    } ?: basePayload
     return Request.Builder()
         .url(anthropicApiUrl(settings.anthropicBaseUrl, "messages"))
         .header("x-api-key", settings.anthropicApiKey)

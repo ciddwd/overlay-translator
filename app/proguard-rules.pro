@@ -34,6 +34,42 @@
 # Timber
 -dontwarn org.jetbrains.annotations.**
 
+# Release has no planted Timber tree. Remove log calls and their side-effect-free argument work
+# during R8 optimization so diagnostics cannot consume hot-path time or write to logcat.
+-assumenosideeffects class timber.log.Timber {
+    public static *** v(...);
+    public static *** d(...);
+    public static *** i(...);
+    public static *** w(...);
+    public static *** e(...);
+    public static *** wtf(...);
+}
+-assumenosideeffects class timber.log.Timber$Forest {
+    public timber.log.Timber$Tree tag(...);
+    public *** v(...);
+    public *** d(...);
+    public *** i(...);
+    public *** w(...);
+    public *** e(...);
+    public *** wtf(...);
+}
+-assumenosideeffects class timber.log.Timber$Tree {
+    public *** v(...);
+    public *** d(...);
+    public *** i(...);
+    public *** w(...);
+    public *** e(...);
+    public *** wtf(...);
+}
+-assumenosideeffects class android.util.Log {
+    public static int v(...);
+    public static int d(...);
+    public static int i(...);
+    public static int w(...);
+    public static int e(...);
+    public static int wtf(...);
+}
+
 # Shizuku：ShizukuScreenshotter 用反射调 hidden API `Shizuku.newProcess`，R8 不能 rename/strip
 -keep class rikka.shizuku.Shizuku { *; }
 -keep class rikka.shizuku.** { *; }

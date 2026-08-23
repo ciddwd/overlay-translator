@@ -1,6 +1,10 @@
 package com.gameocr.app.translate
 
+import com.gameocr.app.data.OpenAiRequestOptions
+import com.gameocr.app.data.RemoteReasoningEffort
 import com.gameocr.app.data.Settings
+import com.gameocr.app.data.RuntimeTranslationVisualContext
+import com.gameocr.app.data.RuntimeVisualTextItem
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.int
@@ -18,6 +22,48 @@ class AnthropicApiCompatibilityTest {
     private val json = Json {
         ignoreUnknownKeys = true
         explicitNulls = false
+    }
+
+    @Test
+    fun messageRequest_visualContextUsesNativeImageBlockBeforeText() {
+        val request = buildAnthropicMessageRequest(
+            settings = Settings(
+                anthropicBaseUrl = "https://api.anthropic.com/v1",
+                anthropicApiKey = "key",
+                anthropicModel = "model",
+            ),
+            systemPrompt = "system",
+            userText = "numbered text",
+            maxTokens = 128,
+            temperature = 0.3,
+            stream = false,
+            json = json,
+            visualContext = RuntimeTranslationVisualContext(
+                mimeType = "image/jpeg",
+                base64Data = "YWJj",
+                width = 10,
+                height = 20,
+                byteCount = 3,
+                sha256 = "hash",
+                items = listOf(RuntimeVisualTextItem(1, "source", 0, 0, 1000, 1000)),
+                combineIntoSingleOutput = false,
+            ),
+        )
+        val content = json.parseToJsonElement(requireNotNull(request.body).utf8())
+            .jsonObject.getValue("messages").jsonArray.single().jsonObject
+            .getValue("content").jsonArray
+
+        assertEquals(2, content.size)
+        assertEquals("image", content[0].jsonObject.getValue("type").jsonPrimitive.content)
+        assertEquals("base64", content[0].jsonObject.getValue("source").jsonObject
+            .getValue("type").jsonPrimitive.content)
+        assertEquals("image/jpeg", content[0].jsonObject.getValue("source").jsonObject
+            .getValue("media_type").jsonPrimitive.content)
+        assertEquals("YWJj", content[0].jsonObject.getValue("source").jsonObject
+            .getValue("data").jsonPrimitive.content)
+        assertFalse(content[0].jsonObject.getValue("source").jsonObject.containsKey("detail"))
+        assertEquals("text", content[1].jsonObject.getValue("type").jsonPrimitive.content)
+        assertEquals("numbered text", content[1].jsonObject.getValue("text").jsonPrimitive.content)
     }
 
     @Test
@@ -90,6 +136,36 @@ class AnthropicApiCompatibilityTest {
     }
 
     @Test
+    fun messageRequest_preservesNativeHistoryBeforeCurrentUser() {
+        val request = buildAnthropicMessageRequest(
+            settings = Settings(
+                anthropicBaseUrl = "https://api.anthropic.com/v1",
+                anthropicApiKey = "key",
+                anthropicModel = "model",
+            ),
+            systemPrompt = "system",
+            userText = "current frame",
+            maxTokens = 128,
+            temperature = 0.3,
+            stream = false,
+            json = json,
+            conversationMessages = listOf(
+                ResolvedConversationMessage("user", "previous source"),
+                ResolvedConversationMessage("assistant", "previous translation"),
+            ),
+        )
+        val messages = json.parseToJsonElement(requireNotNull(request.body).utf8())
+            .jsonObject.getValue("messages").jsonArray
+
+        assertEquals(listOf("user", "assistant", "user"), messages.map {
+            it.jsonObject.getValue("role").jsonPrimitive.content
+        })
+        assertEquals(listOf("previous source", "previous translation", "current frame"), messages.map {
+            it.jsonObject.getValue("content").jsonPrimitive.content
+        })
+    }
+
+    @Test
     fun messageRequest_tableDrivenIncludesTopPOnlyWhenConfigured() {
         data class Case(val name: String, val topP: Double?, val expected: Double?)
 
@@ -122,18 +198,30 @@ class AnthropicApiCompatibilityTest {
     fun messageRequest_tableDrivenIncludesExplicitThinkingControl() {
         data class Case(
             val name: String,
-            val thinking: AnthropicThinkingConfig,
+            val options: OpenAiRequestOptions,
             val expectedType: String,
             val expectedDisplay: String?,
+            val expectedEffort: String?,
         )
 
         listOf(
-            Case("off", AnthropicThinkingConfig(type = "disabled"), "disabled", null),
+            Case("off", OpenAiRequestOptions(), "disabled", null, null),
             Case(
-                "on",
-                AnthropicThinkingConfig(type = "adaptive", display = "omitted"),
+                "on with provider default effort",
+                OpenAiRequestOptions(thinkingModeEnabled = true),
                 "adaptive",
                 "omitted",
+                null,
+            ),
+            Case(
+                "on with explicit low effort",
+                OpenAiRequestOptions(
+                    thinkingModeEnabled = true,
+                    reasoningEffort = RemoteReasoningEffort.LOW,
+                ),
+                "adaptive",
+                "omitted",
+                "low",
             ),
         ).forEach { case ->
             val request = buildAnthropicMessageRequest(
@@ -148,15 +236,18 @@ class AnthropicApiCompatibilityTest {
                 temperature = 0.3,
                 stream = false,
                 json = json,
-                thinking = case.thinking,
+                thinkingControl = RemoteThinkingPolicy.anthropic(case.options),
             )
-            val thinking = json.parseToJsonElement(requireNotNull(request.body).utf8())
-                .jsonObject
-                .getValue("thinking")
-                .jsonObject
+            val body = json.parseToJsonElement(requireNotNull(request.body).utf8()).jsonObject
+            val thinking = body.getValue("thinking").jsonObject
 
             assertEquals(case.name, case.expectedType, thinking.getValue("type").jsonPrimitive.content)
             assertEquals(case.name, case.expectedDisplay, thinking["display"]?.jsonPrimitive?.content)
+            assertEquals(
+                case.name,
+                case.expectedEffort,
+                body["output_config"]?.jsonObject?.get("effort")?.jsonPrimitive?.content,
+            )
         }
     }
 

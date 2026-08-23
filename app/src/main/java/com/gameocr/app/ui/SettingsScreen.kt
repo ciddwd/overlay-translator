@@ -112,6 +112,8 @@ import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Surface
@@ -190,6 +192,9 @@ import com.gameocr.app.download.ModelDownloadWorkPolicy
 import com.gameocr.app.download.latestUnresolvedModelDownloadFailure
 import com.gameocr.app.data.PreprocessOptions
 import com.gameocr.app.data.RenderMode
+import com.gameocr.app.data.RemoteImageDetail
+import com.gameocr.app.data.RemoteReasoningEffort
+import com.gameocr.app.data.RemoteThinkingParameterFormat
 import com.gameocr.app.data.Settings
 import com.gameocr.app.data.SettingsBundlePreview
 import com.gameocr.app.data.SettingsBundleTransfer
@@ -322,6 +327,26 @@ internal fun adjacentBoxMergeAvailableIn(renderMode: RenderMode): Boolean = when
     RenderMode.FLOATING_WINDOW -> true
 }
 
+internal fun mergeStrengthOptionsFor(renderMode: RenderMode): List<com.gameocr.app.data.MergeStrength> =
+    buildList {
+        add(com.gameocr.app.data.MergeStrength.CONSERVATIVE)
+        add(com.gameocr.app.data.MergeStrength.STANDARD)
+        add(com.gameocr.app.data.MergeStrength.AGGRESSIVE)
+        if (renderMode == RenderMode.FLOATING_WINDOW) {
+            add(com.gameocr.app.data.MergeStrength.ALL)
+        }
+    }
+
+internal fun displayedMergeStrength(
+    renderMode: RenderMode,
+    stored: com.gameocr.app.data.MergeStrength,
+): com.gameocr.app.data.MergeStrength =
+    if (renderMode == RenderMode.BLOCKS && stored == com.gameocr.app.data.MergeStrength.ALL) {
+        com.gameocr.app.data.MergeStrength.STANDARD
+    } else {
+        stored
+    }
+
 private fun openExternalBrowser(context: Context, url: String) {
     runCatching {
         context.startActivity(
@@ -350,6 +375,7 @@ fun SettingsScreen(
     val context = LocalContext.current
     val defaultTtsTestText = stringResource(R.string.settings_tts_test_text_default)
     val scope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
     val modelDownloadWorkInfos by viewModel.modelDownloadWorkInfos.collectAsState(initial = emptyList())
     val unfinishedModelDownloads = modelDownloadWorkInfos.filterNot { it.state.isFinished }
     val activeModelDownloads = unfinishedModelDownloads
@@ -501,7 +527,7 @@ fun SettingsScreen(
     var showOverlayFontDeleteTip by remember { mutableStateOf(false) }
     var overlayFontDeleteTipCountdown by remember { mutableStateOf(0) }
     var loopInterval by remember { mutableStateOf("1000") }
-    var loopTriggerMode by remember { mutableStateOf(LoopTriggerMode.WAIT_FOR_TEXT_COMPLETE) }
+    var loopTriggerMode by remember { mutableStateOf(LoopTriggerMode.FIXED_INTERVAL) }
     var loopTextStableDurationMs by remember {
         mutableStateOf(LoopFrameStabilityPolicy.DEFAULT_STABLE_DURATION_MS)
     }
@@ -1710,8 +1736,11 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                HorizontalDivider()
-                OrientationModelSection(
+                // Keep the complete optional-model UI implementation available for a future
+                // opt-in flow, while hiding the package from current user-facing settings.
+                if (OrientationModelVisibilityPolicy.userManagementVisible) {
+                    HorizontalDivider()
+                    OrientationModelSection(
                     status = statusDuringBackgroundDownload(
                         ModelDownloadSpec.orientation(),
                         orientationModelStatus,
@@ -1761,7 +1790,8 @@ fun SettingsScreen(
                             refreshOrientationModelState()
                         }
                     }
-                )
+                    )
+                }
             }
             }
             }
@@ -2770,6 +2800,7 @@ fun SettingsScreen(
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             Column {
                 TopAppBar(
@@ -3718,6 +3749,12 @@ fun SettingsScreen(
                     onRequestOptionsChange = { openAiRequestOptions = it },
                     translationContextMode = translationContextMode,
                     onTranslationContextModeChange = { translationContextMode = it },
+                    onUnsupportedTranslationContextMode = { message ->
+                        scope.launch {
+                            snackbarHostState.currentSnackbarData?.dismiss()
+                            snackbarHostState.showSnackbar(message)
+                        }
+                    },
                     glossaryEnabled = translationGlossaryEnabled,
                     onGlossaryEnabledChange = { enabled ->
                         translationGlossaryEnabled = enabled
@@ -5143,18 +5180,23 @@ fun SettingsScreen(
                             stringResource(R.string.settings_merge_strength_label),
                             style = MaterialTheme.typography.labelLarge
                         )
-                        val mergeStrengthOptions = listOf(
-                            com.gameocr.app.data.MergeStrength.CONSERVATIVE to
-                                R.string.settings_merge_strength_conservative,
-                            com.gameocr.app.data.MergeStrength.STANDARD to
-                                R.string.settings_merge_strength_standard,
-                            com.gameocr.app.data.MergeStrength.AGGRESSIVE to
-                                R.string.settings_merge_strength_aggressive,
-                        )
+                        val shownMergeStrength = displayedMergeStrength(renderMode, mergeStrength)
+                        val mergeStrengthOptions = mergeStrengthOptionsFor(renderMode).map { strength ->
+                            strength to when (strength) {
+                                com.gameocr.app.data.MergeStrength.CONSERVATIVE ->
+                                    R.string.settings_merge_strength_conservative
+                                com.gameocr.app.data.MergeStrength.STANDARD ->
+                                    R.string.settings_merge_strength_standard
+                                com.gameocr.app.data.MergeStrength.AGGRESSIVE ->
+                                    R.string.settings_merge_strength_aggressive
+                                com.gameocr.app.data.MergeStrength.ALL ->
+                                    R.string.settings_merge_strength_all
+                            }
+                        }
                         SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                             mergeStrengthOptions.forEachIndexed { index, (strength, labelRes) ->
                                 SegmentedButton(
-                                    selected = mergeStrength == strength,
+                                    selected = shownMergeStrength == strength,
                                     onClick = {
                                         if (mergeStrength != strength) {
                                             mergeStrength = strength
@@ -5170,10 +5212,11 @@ fun SettingsScreen(
                             }
                         }
                         Text(
-                            stringResource(when (mergeStrength) {
+                            stringResource(when (shownMergeStrength) {
                                 com.gameocr.app.data.MergeStrength.CONSERVATIVE -> R.string.settings_merge_strength_conservative_hint
                                 com.gameocr.app.data.MergeStrength.STANDARD -> R.string.settings_merge_strength_standard_hint
                                 com.gameocr.app.data.MergeStrength.AGGRESSIVE -> R.string.settings_merge_strength_aggressive_hint
+                                com.gameocr.app.data.MergeStrength.ALL -> R.string.settings_merge_strength_all_hint
                             }),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -6075,7 +6118,7 @@ private fun TtsSettings(
                     VolcengineTtsResource.VOICE_CLONE_2_0 to
                         stringResource(R.string.settings_tts_volcengine_clone_resource),
                 )
-                TtsOptionDropdown(
+                SettingsOptionDropdown(
                     label = stringResource(R.string.settings_tts_volcengine_resource),
                     value = volcengineResource,
                     options = VolcengineTtsResource.entries,
@@ -6150,11 +6193,11 @@ private fun TtsSettings(
                 )
             }
             TtsProvider.MINIMAX -> {
-                TtsOptionDropdown(
+                SettingsOptionDropdown(
                     label = stringResource(R.string.settings_tts_model),
                     value = miniMaxModel,
                     options = MiniMaxTtsModel.entries,
-                    optionLabel = MiniMaxTtsModel::apiId,
+                    optionLabel = { model -> model.apiId },
                     onValueChange = onMiniMaxModelChange,
                 )
                 TtsApiBaseUrlSelector(
@@ -6286,7 +6329,7 @@ private fun TtsSettings(
                 )
                 when (mimoModel) {
                     MimoTtsModel.PRESET -> {
-                        TtsOptionDropdown(
+                        SettingsOptionDropdown(
                             label = stringResource(R.string.settings_tts_voice),
                             value = mimoVoice.ifBlank { "mimo_default" },
                             options = MIMO_PRESET_VOICES,
@@ -6387,7 +6430,7 @@ private fun TtsSettings(
                         MIMO_CUSTOM_VOICE_REFERENCE to
                             stringResource(R.string.settings_tts_mimo_custom_sample),
                     )
-                    TtsOptionDropdown(
+                    SettingsOptionDropdown(
                         label = stringResource(R.string.settings_tts_mimo_sample_source),
                         value = selectedReference,
                         options = MIMO_VOICE_REFERENCE_OPTIONS,
@@ -6888,11 +6931,11 @@ private fun TtsApiBaseUrlSelector(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun <T> TtsOptionDropdown(
+private fun <T> SettingsOptionDropdown(
     label: String,
     value: T,
     options: List<T>,
-    optionLabel: (T) -> String,
+    optionLabel: @Composable (T) -> String,
     onValueChange: (T) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -6935,8 +6978,8 @@ private fun TranslationContextModeSelector(
     value: TranslationContextMode,
     translatorEngine: TranslatorEngine,
     onValueChange: (TranslationContextMode) -> Unit,
+    onUnsupportedSelection: (String) -> Unit,
 ) {
-    val context = LocalContext.current
     val supportsContext = supportsTranslationPromptContext(translatorEngine)
     val unsupportedMessage = stringResource(
         R.string.settings_translation_mode_unsupported,
@@ -6954,7 +6997,7 @@ private fun TranslationContextModeSelector(
                     selected = value == mode,
                     onClick = {
                         if (!canSelectTranslationContextMode(supportsContext, mode)) {
-                            Toast.makeText(context, unsupportedMessage, Toast.LENGTH_SHORT).show()
+                            onUnsupportedSelection(unsupportedMessage)
                         } else if (value != mode) {
                             onValueChange(mode)
                         }
@@ -7015,6 +7058,62 @@ private fun translationContextModeLabelRes(mode: TranslationContextMode): Int = 
     TranslationContextMode.CONTINUOUS_CONTEXT -> R.string.settings_translation_mode_continuous
 }
 
+@androidx.annotation.StringRes
+private fun reasoningEffortLabelRes(effort: RemoteReasoningEffort): Int = when (effort) {
+    RemoteReasoningEffort.AUTO -> R.string.settings_reasoning_effort_auto
+    RemoteReasoningEffort.LOW -> R.string.settings_reasoning_effort_low
+    RemoteReasoningEffort.MEDIUM -> R.string.settings_reasoning_effort_medium
+    RemoteReasoningEffort.HIGH -> R.string.settings_reasoning_effort_high
+    RemoteReasoningEffort.XHIGH -> R.string.settings_reasoning_effort_xhigh
+    RemoteReasoningEffort.MAX -> R.string.settings_reasoning_effort_max
+    RemoteReasoningEffort.CUSTOM -> R.string.settings_reasoning_effort_custom
+}
+
+@androidx.annotation.StringRes
+private fun imageDetailLabelRes(detail: RemoteImageDetail): Int = when (detail) {
+    RemoteImageDetail.OMIT -> R.string.settings_image_detail_omit
+    RemoteImageDetail.LOW -> R.string.settings_image_detail_low
+    RemoteImageDetail.AUTO -> R.string.settings_image_detail_auto
+    RemoteImageDetail.HIGH -> R.string.settings_image_detail_high
+    RemoteImageDetail.CUSTOM -> R.string.settings_image_detail_custom
+}
+
+internal fun imageDetailStep(detail: RemoteImageDetail): Float =
+    RemoteImageDetail.entries.indexOf(detail).toFloat()
+
+internal fun imageDetailAtStep(step: Float): RemoteImageDetail {
+    val details = RemoteImageDetail.entries
+    return details[step.roundToInt().coerceIn(details.indices)]
+}
+
+internal val imageDetailSliderSteps: Int
+    get() = (RemoteImageDetail.entries.size - 2).coerceAtLeast(0)
+
+internal fun reasoningEffortStep(effort: RemoteReasoningEffort): Float =
+    RemoteReasoningEffort.entries.indexOf(effort).toFloat()
+
+internal fun reasoningEffortAtStep(step: Float): RemoteReasoningEffort {
+    val efforts = RemoteReasoningEffort.entries
+    return efforts[step.roundToInt().coerceIn(efforts.indices)]
+}
+
+internal val reasoningEffortSliderSteps: Int
+    get() = (RemoteReasoningEffort.entries.size - 2).coerceAtLeast(0)
+
+@androidx.annotation.StringRes
+private fun thinkingParameterFormatLabelRes(format: RemoteThinkingParameterFormat): Int =
+    when (format) {
+        RemoteThinkingParameterFormat.AUTO -> R.string.settings_thinking_format_auto
+        RemoteThinkingParameterFormat.OPENAI_CHAT_COMPLETIONS ->
+            R.string.settings_thinking_format_openai_chat
+        RemoteThinkingParameterFormat.OPENAI_RESPONSES ->
+            R.string.settings_thinking_format_openai_responses
+        RemoteThinkingParameterFormat.DEEPSEEK -> R.string.settings_thinking_format_deepseek
+        RemoteThinkingParameterFormat.ANTHROPIC -> R.string.settings_thinking_format_anthropic
+        RemoteThinkingParameterFormat.DASHSCOPE -> R.string.settings_thinking_format_dashscope
+        RemoteThinkingParameterFormat.CUSTOM_JSON -> R.string.settings_thinking_format_custom_json
+    }
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun TranslationAssistanceSettings(
@@ -7026,6 +7125,7 @@ private fun TranslationAssistanceSettings(
     onRequestOptionsChange: (OpenAiRequestOptions) -> Unit,
     translationContextMode: TranslationContextMode,
     onTranslationContextModeChange: (TranslationContextMode) -> Unit,
+    onUnsupportedTranslationContextMode: (String) -> Unit,
     glossaryEnabled: Boolean,
     onGlossaryEnabledChange: (Boolean) -> Unit,
     foregroundAppDetectionMode: com.gameocr.app.data.ForegroundAppDetectionMode,
@@ -7042,12 +7142,79 @@ private fun TranslationAssistanceSettings(
         value = translationContextMode,
         translatorEngine = translatorEngine,
         onValueChange = onTranslationContextModeChange,
+        onUnsupportedSelection = onUnsupportedTranslationContextMode,
     )
     if (translatorEngine == TranslatorEngine.OPENAI ||
         translatorEngine == TranslatorEngine.ANTHROPIC
     ) {
         SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_streaming) {
         SwitchRow(stringResource(R.string.settings_streaming), streaming, onChange = onStreamingChange)
+        }
+        SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_send_screen_image) {
+        SwitchRow(
+            label = stringResource(R.string.settings_send_screen_image),
+            checked = requestOptions.sendScreenImage,
+            helpText = stringResource(R.string.settings_send_screen_image_hint),
+            onChange = { enabled ->
+                onRequestOptionsChange(requestOptions.copy(sendScreenImage = enabled))
+            },
+        )
+        }
+        if (requestOptions.sendScreenImage && translatorEngine == TranslatorEngine.OPENAI) {
+            SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_image_detail) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    val selectedDetailLabel =
+                        stringResource(imageDetailLabelRes(requestOptions.imageDetail))
+                    val selectedDetailValue = requestOptions.imageDetailWireValue()
+                        ?: stringResource(R.string.settings_request_value_omitted)
+                    Text(
+                        text = stringResource(
+                            R.string.settings_image_detail_value,
+                            selectedDetailLabel,
+                            selectedDetailValue,
+                        ),
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                    Slider(
+                        value = imageDetailStep(requestOptions.imageDetail),
+                        onValueChange = { step ->
+                            val detail = imageDetailAtStep(step)
+                            if (detail != requestOptions.imageDetail) {
+                                onRequestOptionsChange(requestOptions.copy(imageDetail = detail))
+                            }
+                        },
+                        valueRange = 0f..RemoteImageDetail.entries.lastIndex.toFloat(),
+                        steps = imageDetailSliderSteps,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .semantics { stateDescription = selectedDetailLabel },
+                    )
+                    Text(
+                        text = stringResource(R.string.settings_image_detail_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (requestOptions.imageDetail == RemoteImageDetail.CUSTOM) {
+                        OutlinedTextField(
+                            value = requestOptions.customImageDetail,
+                            onValueChange = { raw ->
+                                val sanitized = raw.filter { character ->
+                                    character.isLetterOrDigit() || character in "._-"
+                                }.take(64)
+                                onRequestOptionsChange(
+                                    requestOptions.copy(customImageDetail = sanitized)
+                                )
+                            },
+                            label = { Text(stringResource(R.string.settings_image_detail_custom)) },
+                            placeholder = {
+                                Text(stringResource(R.string.settings_image_detail_custom_hint))
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                        )
+                    }
+                }
+            }
         }
         SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_thinking_mode) {
         SwitchRow(
@@ -7058,6 +7225,72 @@ private fun TranslationAssistanceSettings(
                 onRequestOptionsChange(requestOptions.copy(thinkingModeEnabled = enabled))
             },
         )
+        }
+        if (requestOptions.thinkingModeEnabled) {
+            SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_reasoning_effort) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    val selectedEffortLabel =
+                        stringResource(reasoningEffortLabelRes(requestOptions.reasoningEffort))
+                    val selectedEffortValue = when (requestOptions.reasoningEffort) {
+                        RemoteReasoningEffort.CUSTOM ->
+                            requestOptions.customReasoningEffort.trim().ifBlank { null }
+                        else -> requestOptions.reasoningEffort.wireValue
+                    }
+                    Text(
+                        text = selectedEffortValue?.let { wireValue ->
+                            stringResource(
+                                R.string.settings_reasoning_effort_value_with_wire,
+                                selectedEffortLabel,
+                                wireValue,
+                            )
+                        } ?: stringResource(
+                            R.string.settings_reasoning_effort_value,
+                            selectedEffortLabel,
+                        ),
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                    Slider(
+                        value = reasoningEffortStep(requestOptions.reasoningEffort),
+                        onValueChange = { step ->
+                            val effort = reasoningEffortAtStep(step)
+                            if (effort != requestOptions.reasoningEffort) {
+                                onRequestOptionsChange(requestOptions.copy(reasoningEffort = effort))
+                            }
+                        },
+                        valueRange = 0f..RemoteReasoningEffort.entries.lastIndex.toFloat(),
+                        steps = reasoningEffortSliderSteps,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .semantics { stateDescription = selectedEffortLabel },
+                    )
+                    Text(
+                        text = stringResource(R.string.settings_reasoning_effort_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (requestOptions.reasoningEffort == RemoteReasoningEffort.CUSTOM) {
+                        OutlinedTextField(
+                            value = requestOptions.customReasoningEffort,
+                            onValueChange = { raw ->
+                                val sanitized = raw.filter { character ->
+                                    character.isLetterOrDigit() || character in "._-"
+                                }.take(64)
+                                onRequestOptionsChange(
+                                    requestOptions.copy(customReasoningEffort = sanitized)
+                                )
+                            },
+                            label = {
+                                Text(stringResource(R.string.settings_reasoning_effort_custom))
+                            },
+                            placeholder = {
+                                Text(stringResource(R.string.settings_reasoning_effort_custom_hint))
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                        )
+                    }
+                }
+            }
         }
     }
     SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_failed_translation_retry) {
@@ -7318,6 +7551,60 @@ private fun OpenAiPromptSettings(
         minLines = 2,
         maxLines = 8,
     )
+    SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_thinking_parameter_format) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            SettingsOptionDropdown(
+                label = stringResource(R.string.settings_thinking_parameter_format),
+                value = requestOptions.thinkingParameterFormat,
+                options = RemoteThinkingParameterFormat.entries,
+                optionLabel = { format ->
+                    stringResource(thinkingParameterFormatLabelRes(format))
+                },
+                onValueChange = { format ->
+                    onRequestOptionsChange(requestOptions.copy(thinkingParameterFormat = format))
+                },
+            )
+            Text(
+                text = stringResource(R.string.settings_thinking_parameter_format_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (requestOptions.thinkingParameterFormat ==
+                RemoteThinkingParameterFormat.CUSTOM_JSON
+            ) {
+                OutlinedTextField(
+                    value = requestOptions.customThinkingEnabledJson,
+                    onValueChange = { raw ->
+                        onRequestOptionsChange(requestOptions.copy(customThinkingEnabledJson = raw))
+                    },
+                    label = {
+                        Text(stringResource(R.string.settings_thinking_custom_enabled_json))
+                    },
+                    supportingText = {
+                        Text(stringResource(R.string.settings_thinking_custom_json_hint))
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 2,
+                    maxLines = 6,
+                )
+                OutlinedTextField(
+                    value = requestOptions.customThinkingDisabledJson,
+                    onValueChange = { raw ->
+                        onRequestOptionsChange(requestOptions.copy(customThinkingDisabledJson = raw))
+                    },
+                    label = {
+                        Text(stringResource(R.string.settings_thinking_custom_disabled_json))
+                    },
+                    supportingText = {
+                        Text(stringResource(R.string.settings_thinking_custom_json_hint))
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 2,
+                    maxLines = 6,
+                )
+            }
+        }
+    }
     Text(
         stringResource(
             R.string.settings_openai_temperature_format,
@@ -7943,6 +8230,7 @@ private val SEARCH_TARGET_TARGET_LANGUAGE = intArrayOf(R.string.settings_search_
 private val SEARCH_TARGET_TRANSLATION_ASSISTANCE = intArrayOf(
     R.string.settings_translation_mode,
     R.string.settings_search_item_streaming,
+    R.string.settings_search_item_send_screen_image,
     R.string.settings_search_item_thinking_mode,
     R.string.settings_search_item_failed_translation_retry,
     R.string.settings_glossary_enabled,
@@ -7982,11 +8270,13 @@ private val SEARCH_TARGET_OCR_ENGINE = intArrayOf(
     R.string.settings_search_item_invert,
     R.string.settings_search_item_binarize,
 )
-private val SEARCH_TARGET_ORIENTATION_DETECTION = intArrayOf(
-    R.string.settings_orient_auto_detect_title,
-    R.string.settings_search_item_manual_orientation,
-    R.string.settings_search_item_orientation_model,
-)
+private val SEARCH_TARGET_ORIENTATION_DETECTION = buildList {
+    add(R.string.settings_orient_auto_detect_title)
+    add(R.string.settings_search_item_manual_orientation)
+    if (OrientationModelVisibilityPolicy.userManagementVisible) {
+        add(R.string.settings_search_item_orientation_model)
+    }
+}.toIntArray()
 private val SEARCH_TARGET_ORIENTATION_OUTPUT = intArrayOf(
     R.string.settings_translation_output_follow_title,
     R.string.settings_translation_output_layout_label,
@@ -8224,7 +8514,7 @@ internal val SETTINGS_SEARCH_DEVELOPER_OCR_KEYWORDS = listOf(
     "原文", "译文", "截图保存", "翻译缓存", "禁用缓存",
 )
 
-private val SETTING_ITEMS: List<SearchEntry> = listOf(
+private val SETTING_ITEMS: List<SearchEntry> = listOfNotNull(
     SearchEntry(
         SectionKeys.TRANSLATE,
         R.string.settings_section_translator,
@@ -8307,6 +8597,7 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
     ),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_dictionary_prompt, listOf("dictionary", "词典", "划词", "word select", "phonetic", "音标", "释义", "definition", "prompt")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_streaming, listOf("streaming", "流式")),
+    SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_send_screen_image, listOf("vision", "image", "multimodal", "画面", "图片", "多模态", "发送画面")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_search_item_thinking_mode, listOf("thinking", "reasoning", "思考", "推理")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_translation_mode, listOf("translation mode", "context", "翻译模式", "上下文", "同屏", "连续")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_glossary_enabled, listOf("name consistency", "term memory", "译名一致性", "人名", "专名")),
@@ -8375,7 +8666,11 @@ private val SETTING_ITEMS: List<SearchEntry> = listOf(
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_dbnet_advanced, listOf("dbnet", "threshold", "prob", "box score", "unclip", "bubble", "cluster", "gap", "advanced", "阈值", "二值化", "连通域", "外扩", "气泡", "聚类", "高级")),
     SearchEntry(SectionKeys.TEXT_ORIENTATION, R.string.settings_text_orientation_section_title, R.string.settings_orient_auto_detect_title, listOf("orientation", "text orientation", "direction", "vertical", "horizontal", "自动判别", "方向", "文本方向", "竖排", "横排")),
     SearchEntry(SectionKeys.TEXT_ORIENTATION, R.string.settings_text_orientation_section_title, R.string.settings_search_item_manual_orientation, listOf("manual", "lock", "orientation", "vertical", "horizontal", "stacked", "手动", "锁定", "方向", "竖排", "横排", "逐字")),
-    SearchEntry(SectionKeys.TEXT_ORIENTATION, R.string.settings_text_orientation_section_title, R.string.settings_search_item_orientation_model, listOf("orientation model", "doc orientation", "direction model", "ONNX", "方向模型", "文本方向模型", "模型", "download", "下载", "本地导入", "local import", "导入", "delete", "删除")),
+    if (OrientationModelVisibilityPolicy.userManagementVisible) {
+        SearchEntry(SectionKeys.TEXT_ORIENTATION, R.string.settings_text_orientation_section_title, R.string.settings_search_item_orientation_model, listOf("orientation model", "doc orientation", "direction model", "ONNX", "方向模型", "文本方向模型", "模型", "download", "下载", "本地导入", "local import", "导入", "delete", "删除"))
+    } else {
+        null
+    },
 
     // —— 图像预处理（在 OCR section 内）——
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_upscale, listOf("upscale", "放大", "上采样", "preprocess", "图像预处理")),
@@ -9823,7 +10118,13 @@ internal fun translationPresetModelIssues(
         OcrEngineKind.UMI_OCR,
         OcrEngineKind.LUNA_OCR -> Unit
     }
-    if (preset.textOrientationAutoDetect && !orientationModelReady) {
+    // Preserve the optional model readiness implementation without surfacing a hidden package as
+    // a required preset download. Geometry-based orientation fallback remains available.
+    if (OrientationModelVisibilityPolicy.shouldReportMissingForPreset(
+            textOrientationAutoDetect = preset.textOrientationAutoDetect,
+            modelReady = orientationModelReady,
+        )
+    ) {
         add(TranslationPresetModelIssue(TranslationPresetModelIssueKind.ORIENTATION_MISSING))
     }
 }

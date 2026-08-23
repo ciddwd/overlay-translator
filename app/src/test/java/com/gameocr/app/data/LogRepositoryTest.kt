@@ -7,6 +7,41 @@ import org.junit.Test
 class LogRepositoryTest {
 
     @Test
+    fun verbosePolicy_tableDriven_enablesOnlyDebugOrExplicitDeveloperDiagnostics() {
+        data class Case(
+            val name: String,
+            val debugBuild: Boolean,
+            val developerOptions: Boolean,
+            val expected: Boolean,
+        )
+
+        listOf(
+            Case("normal release", debugBuild = false, developerOptions = false, expected = false),
+            Case("release developer diagnostics", debugBuild = false, developerOptions = true, expected = true),
+            Case("debug default", debugBuild = true, developerOptions = false, expected = true),
+            Case("debug developer diagnostics", debugBuild = true, developerOptions = true, expected = true),
+        ).forEach { case ->
+            assertEquals(
+                case.name,
+                case.expected,
+                RuntimeLogPolicy.verboseEnabled(case.debugBuild, case.developerOptions),
+            )
+        }
+    }
+
+    @Test
+    fun disabledVerboseLogging_dropsInfoAndPairs_butKeepsWarningsAndErrors() {
+        val repo = LogRepository().apply { verboseEnabled = false }
+
+        repo.info(LogRepository.Category.OCR, "normal result")
+        repo.pair(LogRepository.Category.TRANSLATE, "source", "translation")
+        repo.warn(LogRepository.Category.OCR, "warning")
+        repo.error(LogRepository.Category.TRANSLATE, "failure")
+
+        assertEquals(listOf(LogRepository.Level.WARN, LogRepository.Level.ERROR), repo.entries.value.map { it.level })
+    }
+
+    @Test
     fun entries_preserveOptionalElapsedTime() {
         val repo = LogRepository()
 

@@ -9,6 +9,10 @@ cmake_minimum_required(VERSION 3.22)
 
 project("ai-chat" VERSION 1.0.0 LANGUAGES C CXX)
 
+# Android log priorities: VERBOSE=2, ERROR=6. Gradle sets 2 for Debug and 6 for
+# Release so native model diagnostics do not spend time formatting normal logs in production.
+set(GAMEOCR_NATIVE_LOG_MIN_LEVEL "6" CACHE STRING "Minimum Android log priority")
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED true)
 
@@ -433,6 +437,7 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
         llama_thread_policy.cpp)
 
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
+        LOG_MIN_LEVEL=${GAMEOCR_NATIVE_LOG_MIN_LEVEL}
         GGML_SYSTEM_ARCH=${GGML_SYSTEM_ARCH}
         GGML_CPU_KLEIDIAI=$<BOOL:${GGML_CPU_KLEIDIAI}>
         GGML_OPENMP=$<BOOL:${GGML_OPENMP}>

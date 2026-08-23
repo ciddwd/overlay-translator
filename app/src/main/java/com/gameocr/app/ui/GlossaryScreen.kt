@@ -1,9 +1,16 @@
 package com.gameocr.app.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,12 +38,14 @@ import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -98,6 +107,11 @@ private enum class TranslationLibraryTab {
     MEMORY,
 }
 
+private enum class GlossaryAddRoute {
+    SINGLE,
+    BATCH,
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GlossaryScreen(
@@ -125,6 +139,8 @@ fun GlossaryScreen(
     var pendingDelete by remember { mutableStateOf<GlossaryTermEntity?>(null) }
     var pendingConflict by remember { mutableStateOf<PendingGlossaryConflict?>(null) }
     var saveInProgress by remember { mutableStateOf(false) }
+    var addRoute by rememberSaveable { mutableStateOf<GlossaryAddRoute?>(null) }
+    var addMenuExpanded by rememberSaveable { mutableStateOf(false) }
 
     val categoryLabels = mapOf(
         GlossaryTermCategory.PERSON to stringResource(R.string.glossary_category_person),
@@ -169,7 +185,38 @@ fun GlossaryScreen(
         selectableApps = runCatching { viewModel.selectableApps() }.getOrDefault(emptyList())
         appsLoading = false
     }
-    BackHandler(onBack = onBack)
+    LaunchedEffect(selectedTab) {
+        addMenuExpanded = false
+    }
+    if (addRoute == GlossaryAddRoute.SINGLE) {
+        GlossaryAddScreen(
+            currentApp = currentApp,
+            selectableApps = selectableApps,
+            appsLoading = appsLoading,
+            defaultSourceLang = defaultLanguages.first,
+            defaultTargetLang = defaultLanguages.second,
+            viewModel = viewModel,
+            onBack = { addRoute = null },
+        )
+        return
+    }
+    if (addRoute == GlossaryAddRoute.BATCH) {
+        GlossaryImportScreen(
+            existingTerms = glossaryTerms,
+            currentApp = currentApp,
+            selectableApps = selectableApps,
+            appsLoading = appsLoading,
+            defaultSourceLang = defaultLanguages.first,
+            defaultTargetLang = defaultLanguages.second,
+            viewModel = viewModel,
+            onBack = { addRoute = null },
+        )
+        return
+    }
+
+    BackHandler {
+        if (addMenuExpanded) addMenuExpanded = false else onBack()
+    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -231,18 +278,34 @@ fun GlossaryScreen(
             )
         },
         floatingActionButton = {
-            if (selectedTab != TranslationLibraryTab.MEMORY) {
-                FloatingActionButton(onClick = {
-                    editing = null
-                    editingPreservation = selectedTab == TranslationLibraryTab.PRESERVE_SOURCE
-                    showEditor = true
-                }) {
-                    Icon(Icons.Default.Add, stringResource(R.string.glossary_add))
+            when (selectedTab) {
+                TranslationLibraryTab.TERMS -> GlossaryAddFabMenu(
+                    expanded = addMenuExpanded,
+                    onExpandedChange = { addMenuExpanded = it },
+                    onSingleAdd = {
+                        addMenuExpanded = false
+                        addRoute = GlossaryAddRoute.SINGLE
+                    },
+                    onBatchImport = {
+                        addMenuExpanded = false
+                        addRoute = GlossaryAddRoute.BATCH
+                    },
+                )
+                TranslationLibraryTab.PRESERVE_SOURCE -> {
+                    FloatingActionButton(onClick = {
+                        editing = null
+                        editingPreservation = true
+                        showEditor = true
+                    }) {
+                        Icon(Icons.Default.Add, stringResource(R.string.glossary_add))
+                    }
                 }
+                TranslationLibraryTab.MEMORY -> Unit
             }
         },
     ) { padding ->
-        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+            Column(modifier = Modifier.fillMaxSize()) {
             SecondaryTabRow(selectedTabIndex = selectedTab.ordinal) {
                 Tab(
                     selected = selectedTab == TranslationLibraryTab.TERMS,
@@ -346,6 +409,17 @@ fun GlossaryScreen(
                     onDelete = { id ->
                         scope.launch { viewModel.deleteMemory(id) }
                     },
+                )
+            }
+            }
+            if (addMenuExpanded) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                        ) { addMenuExpanded = false },
                 )
             }
         }
@@ -471,6 +545,49 @@ fun GlossaryScreen(
                 }
             },
         )
+    }
+}
+
+@Composable
+private fun GlossaryAddFabMenu(
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    onSingleAdd: () -> Unit,
+    onBatchImport: () -> Unit,
+) {
+    Column(
+        horizontalAlignment = Alignment.End,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        AnimatedVisibility(
+            visible = expanded,
+            enter = fadeIn() + slideInVertically(initialOffsetY = { it / 2 }),
+            exit = fadeOut() + slideOutVertically(targetOffsetY = { it / 2 }),
+        ) {
+            Column(
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                ExtendedFloatingActionButton(
+                    text = { Text(stringResource(R.string.glossary_add_mode_batch)) },
+                    icon = { Icon(Icons.Default.Description, contentDescription = null) },
+                    onClick = onBatchImport,
+                )
+                ExtendedFloatingActionButton(
+                    text = { Text(stringResource(R.string.glossary_add_mode_single)) },
+                    icon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                    onClick = onSingleAdd,
+                )
+            }
+        }
+        FloatingActionButton(onClick = { onExpandedChange(!expanded) }) {
+            Icon(
+                imageVector = if (expanded) Icons.Default.Close else Icons.Default.Add,
+                contentDescription = stringResource(
+                    if (expanded) R.string.glossary_add_menu_close else R.string.glossary_add
+                ),
+            )
+        }
     }
 }
 
@@ -893,7 +1010,7 @@ private fun GlossaryFilterDialog(
 }
 
 @Composable
-private fun GlossaryConfirmationDialog(
+internal fun GlossaryConfirmationDialog(
     title: String,
     message: String,
     confirmLabel: String,
@@ -1030,31 +1147,13 @@ private fun GlossaryTermCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "$scopeLabel | $categoryLabel",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.weight(1f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Icon(
-                        imageVector = if (term.enabled) Icons.Default.Check else Icons.Default.Close,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                        tint = if (term.enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                    )
-                    Text(
-                        text = stringResource(
-                            if (term.enabled) R.string.glossary_status_enabled
-                            else R.string.glossary_status_disabled
-                        ),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (term.enabled) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.error,
-                    )
-                }
+                Text(
+                    text = "$scopeLabel | $categoryLabel",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
                 if (sourcePreservation) {
                     Text(
                         text = sourceLanguage,
@@ -1073,6 +1172,7 @@ private fun GlossaryTermCard(
                     )
                 }
             }
+            GlossaryTermStatus(term.enabled)
             IconButton(onClick = onEdit) {
                 Icon(Icons.Default.Edit, stringResource(R.string.glossary_edit))
             }
@@ -1080,6 +1180,31 @@ private fun GlossaryTermCard(
                 Icon(Icons.Default.Delete, stringResource(R.string.glossary_delete))
             }
         }
+    }
+}
+
+@Composable
+private fun GlossaryTermStatus(enabled: Boolean) {
+    val color = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+    Row(
+        modifier = Modifier.padding(start = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = if (enabled) Icons.Default.Check else Icons.Default.Close,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+            tint = color,
+        )
+        Text(
+            text = stringResource(
+                if (enabled) R.string.glossary_status_enabled else R.string.glossary_status_disabled
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            color = color,
+            maxLines = 1,
+        )
     }
 }
 
@@ -1362,7 +1487,7 @@ private fun GlossaryTermEditor(
 }
 
 @Composable
-private fun GlossaryAppPickerDialog(
+internal fun GlossaryAppPickerDialog(
     apps: List<SelectableApp>,
     isLoading: Boolean,
     selectedPackage: String?,

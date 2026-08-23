@@ -55,7 +55,7 @@ class RoutingOcrEngine @Inject constructor(
             OcrEngineKind.PADDLE_AI_STUDIO -> paddleAiStudio.recognize(bitmap, kind)
             OcrEngineKind.PADDLE_ONNX -> paddle.recognize(bitmap, kind, settings)
             OcrEngineKind.MANGA_OCR_JA -> manga.recognize(bitmap, kind, settings)
-            else -> mlKit.recognize(bitmap, kind)
+            else -> mlKit.recognize(bitmap, kind, settings)
         }
         Timber.tag("OcrMerge").i(
             "engine=%s raw=%d merge=%s strength=%s",
@@ -63,6 +63,19 @@ class RoutingOcrEngine @Inject constructor(
         )
         if (!settings.mergeAdjacentBlocks) {
             logBoxes("raw-no-merge", raw)
+            return raw
+        }
+        if (OcrMergePresentationPolicy.deferGeometricMerge(
+                renderMode = settings.renderMode,
+                mergeAdjacentBlocks = settings.mergeAdjacentBlocks,
+                mergeStrength = settings.mergeStrength,
+            )
+        ) {
+            Timber.tag("OcrMerge").i(
+                "defer geometric merge for floating ALL; preserve %d atomic regions for reading order",
+                raw.size,
+            )
+            logBoxes("raw-floating-all", raw)
             return raw
         }
         // 详细日志：打 box 坐标，用于诊断"为什么这两段没合"。仅 Timber（logcat），不写 LogRepository
@@ -610,7 +623,10 @@ class RoutingOcrEngine @Inject constructor(
                     horizontalOverlapRatio = 0.5f,
                     heightRatioLimit = 1.4f
                 )
-                MergeStrength.STANDARD -> MergeParams(
+                MergeStrength.STANDARD,
+                // ALL is a floating-window translation-unit policy. Keep OCR geometry on the
+                // stable standard thresholds so switching to Blocks cannot change OCR grouping.
+                MergeStrength.ALL -> MergeParams(
                     sameLineTopTolerance = 0.5f,
                     adjacentGapRatio = 1.2f,
                     verticalGapRatio = 0.8f,

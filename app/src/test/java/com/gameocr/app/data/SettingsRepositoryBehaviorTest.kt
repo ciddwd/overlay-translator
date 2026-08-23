@@ -13,6 +13,39 @@ import org.junit.Test
 class SettingsRepositoryBehaviorTest {
 
     @Test
+    fun loopTriggerMode_freshInstallDefaultsToFixedAndSavedChoiceIsPreserved_tableDriven() =
+        runBlocking {
+            data class Case(
+                val name: String,
+                val savedMode: LoopTriggerMode?,
+                val expected: LoopTriggerMode,
+            )
+
+            listOf(
+                Case("fresh install", null, LoopTriggerMode.FIXED_INTERVAL),
+                Case(
+                    "saved smart trigger",
+                    LoopTriggerMode.WAIT_FOR_TEXT_COMPLETE,
+                    LoopTriggerMode.WAIT_FOR_TEXT_COMPLETE,
+                ),
+                Case(
+                    "saved fixed trigger",
+                    LoopTriggerMode.FIXED_INTERVAL,
+                    LoopTriggerMode.FIXED_INTERVAL,
+                ),
+            ).forEach { case ->
+                val repository = fileBackedRepository(
+                    Files.createTempDirectory("settings-loop-trigger-default-test").toFile()
+                )
+                case.savedMode?.let { mode ->
+                    repository.update { settings -> settings.copy(loopTriggerMode = mode) }
+                }
+
+                assertEquals(case.name, case.expected, repository.get().loopTriggerMode)
+            }
+        }
+
+    @Test
     fun llmOutboundEncoding_tableDriven_roundTripsNormalizedState() = runBlocking {
         data class Case(
             val name: String,
@@ -31,6 +64,19 @@ class SettingsRepositoryBehaviorTest {
                 "Unicode",
                 OpenAiRequestOptions(encodeUserTextUnicode = true),
                 OpenAiRequestOptions(encodeUserTextUnicode = true),
+            ),
+            Case(
+                "visual context custom detail is trimmed",
+                OpenAiRequestOptions(
+                    sendScreenImage = true,
+                    imageDetail = RemoteImageDetail.CUSTOM,
+                    customImageDetail = "  original  ",
+                ),
+                OpenAiRequestOptions(
+                    sendScreenImage = true,
+                    imageDetail = RemoteImageDetail.CUSTOM,
+                    customImageDetail = "original",
+                ),
             ),
             Case(
                 "conflict prefers Base64",
@@ -250,6 +296,14 @@ class SettingsRepositoryBehaviorTest {
             sourceLang = "ja",
             targetLang = "zh-TW",
             promptTemplate = "roundtrip prompt",
+            openAiRequestOptions = OpenAiRequestOptions(
+                thinkingModeEnabled = true,
+                reasoningEffort = RemoteReasoningEffort.CUSTOM,
+                thinkingParameterFormat = RemoteThinkingParameterFormat.CUSTOM_JSON,
+                customReasoningEffort = "fast_plus",
+                customThinkingEnabledJson = """{"thinking_level":"{effort}"}""",
+                customThinkingDisabledJson = """{"thinking_level":"off"}""",
+            ),
             ocrEngine = OcrEngineKind.PADDLE_ONNX,
             captureLoopIntervalMs = 4321L,
             loopTriggerMode = LoopTriggerMode.FIXED_INTERVAL,
@@ -352,7 +406,7 @@ class SettingsRepositoryBehaviorTest {
             overlayAvoidCollision = false,
             apiTimeoutSeconds = 47,
             mergeAdjacentBlocks = true,
-            mergeStrength = MergeStrength.CONSERVATIVE,
+            mergeStrength = MergeStrength.ALL,
             pinnedLanguages = listOf("ja", "zh-TW", "en"),
             mlKitRecentSourceLanguages = listOf("ru", "en", "ja", "ko"),
             cleartextAllowedHosts = listOf("192.168.0.2", "localhost"),

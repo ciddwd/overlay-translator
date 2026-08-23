@@ -79,6 +79,23 @@ android {
         }
     }
 
+    buildTypes {
+        getByName("debug") {
+            externalNativeBuild {
+                cmake {
+                    arguments += "-DGAMEOCR_NATIVE_LOG_MIN_LEVEL=2"
+                }
+            }
+        }
+        getByName("release") {
+            externalNativeBuild {
+                cmake {
+                    arguments += "-DGAMEOCR_NATIVE_LOG_MIN_LEVEL=6"
+                }
+            }
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

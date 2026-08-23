@@ -726,6 +726,7 @@ fun MainScreen(
                         shizukuAvail == ShizukuCapabilities.Availability.READY -> R.string.main_hint_shizuku_ready
                         shizukuAvail == ShizukuCapabilities.Availability.INSTALLED_NOT_GRANTED -> R.string.main_hint_shizuku_not_granted
                         shizukuAvail == ShizukuCapabilities.Availability.INSTALLED_NOT_PAIRED -> R.string.main_hint_shizuku_not_paired
+                        shizukuAvail == ShizukuCapabilities.Availability.INSTALLED_COMPATIBILITY_REQUIRED -> R.string.main_hint_shizuku_compatibility_required
                         shizukuAvail == ShizukuCapabilities.Availability.NOT_RUNNING -> R.string.main_hint_shizuku_not_running
                         else -> R.string.main_hint_shizuku_not_installed
                     }
@@ -1938,6 +1939,7 @@ private fun StatusCard(
                         ShizukuCapabilities.Availability.READY -> R.string.main_status_shizuku_ready
                         ShizukuCapabilities.Availability.INSTALLED_NOT_GRANTED -> R.string.main_status_shizuku_not_granted
                         ShizukuCapabilities.Availability.INSTALLED_NOT_PAIRED -> R.string.main_status_shizuku_not_paired
+                        ShizukuCapabilities.Availability.INSTALLED_COMPATIBILITY_REQUIRED -> R.string.main_status_shizuku_compatibility_required
                         ShizukuCapabilities.Availability.NOT_RUNNING -> R.string.main_status_shizuku_not_running
                         ShizukuCapabilities.Availability.NOT_INSTALLED -> R.string.main_status_shizuku_not_installed
                     }

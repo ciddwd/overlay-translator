@@ -82,6 +82,10 @@ class TranslationCardOverlayCopySupportTest {
     @Test
     fun dictionaryResult_tableDriven_reflowsTheAlreadyVisibleCard() {
         val source = sourceFile().readText()
+        val dictionaryRenderer = source.substring(
+            source.indexOf("private fun populateWordResult("),
+            source.indexOf("private fun dictionaryTextLabels("),
+        )
         data class Case(
             val name: String,
             val requiredSource: String,
@@ -91,6 +95,10 @@ class TranslationCardOverlayCopySupportTest {
             Case(
                 "empty dictionary section is removed from layout",
                 "dictionarySection.visibility = if (hasDictionaryContent) View.VISIBLE else View.GONE",
+            ),
+            Case(
+                "structured word hides the duplicate translation section",
+                "refreshTranslationSectionVisibility()",
             ),
             Case("dictionary section requests measurement", "dictionarySection.requestLayout()"),
             Case("scroll content requests measurement", "scrollContent.requestLayout()"),
@@ -102,6 +110,10 @@ class TranslationCardOverlayCopySupportTest {
         cases.forEach { case ->
             assertTrue(case.name, source.contains(case.requiredSource))
         }
+        assertFalse(
+            "dictionary section reuses the source divider instead of adding a second line",
+            dictionaryRenderer.contains("buildDivider("),
+        )
     }
 
     private fun sourceFile(): File =

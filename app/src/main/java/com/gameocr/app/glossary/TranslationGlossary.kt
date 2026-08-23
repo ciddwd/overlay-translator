@@ -140,6 +140,59 @@ interface TranslationGlossaryDao {
     }
 
     @Transaction
+    suspend fun importUserTermsAtomically(
+        terms: List<GlossaryTermEntity>,
+        conflictPolicy: GlossaryImportConflictPolicy,
+    ): GlossaryImportCommitResult {
+        var inserted = 0
+        var overwritten = 0
+        var skipped = 0
+        terms.forEach { term ->
+            val now = System.currentTimeMillis()
+            val normalizedSource = normalizeGlossaryTerm(term.sourceTerm, term.caseSensitive)
+            require(normalizedSource.isNotBlank()) { "Source term is empty." }
+            require(term.targetTerm.isNotBlank()) { "Target term is empty." }
+            require(term.sourceTerm.trim().length <= GLOSSARY_IMPORT_MAX_SOURCE_LENGTH) {
+                "Source term is too long."
+            }
+            require(term.targetTerm.trim().length <= GLOSSARY_IMPORT_MAX_TARGET_LENGTH) {
+                "Target term is too long."
+            }
+            val existing = findTerm(
+                scopePackage = term.scopePackage,
+                sourceLang = term.sourceLang,
+                targetLang = term.targetLang,
+                normalizedSourceTerm = normalizedSource,
+                caseSensitive = term.caseSensitive,
+            )
+            val normalized = term.copy(
+                id = existing?.id ?: 0,
+                sourceTerm = term.sourceTerm.trim(),
+                normalizedSourceTerm = normalizedSource,
+                targetTerm = term.targetTerm.trim(),
+                createdAtMs = existing?.createdAtMs ?: now,
+                updatedAtMs = now,
+            )
+            when {
+                existing == null -> {
+                    insert(normalized)
+                    inserted++
+                }
+                conflictPolicy == GlossaryImportConflictPolicy.SKIP -> skipped++
+                else -> {
+                    update(normalized)
+                    overwritten++
+                }
+            }
+        }
+        return GlossaryImportCommitResult(
+            inserted = inserted,
+            overwritten = overwritten,
+            skipped = skipped,
+        )
+    }
+
+    @Transaction
     suspend fun replaceAllAtomically(terms: List<GlossaryTermEntity>) {
         deleteAll()
         if (terms.isNotEmpty()) insertAll(terms)
@@ -340,6 +393,14 @@ class TranslationGlossaryRepository @Inject constructor(
 
     suspend fun importTerms(terms: List<GlossaryTermEntity>): Int =
         dao.importTermsAtomically(terms.map { it.copy(id = 0) })
+
+    suspend fun importUserTerms(
+        terms: List<GlossaryTermEntity>,
+        conflictPolicy: GlossaryImportConflictPolicy,
+    ): GlossaryImportCommitResult = dao.importUserTermsAtomically(
+        terms = terms.map { it.copy(id = 0) },
+        conflictPolicy = conflictPolicy,
+    )
 
     suspend fun restoreTerms(terms: List<GlossaryTermEntity>) = dao.replaceAllAtomically(terms)
 

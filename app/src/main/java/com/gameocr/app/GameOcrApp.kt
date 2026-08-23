@@ -82,6 +82,7 @@ class GameOcrApp : Application(), Configuration.Provider {
                 }
                 .onFailure { Timber.w(it, "Failed to migrate Manga OCR detector") }
             settingsRepository.settings.collect { settings ->
+                logRepository.configureVerbose(settings.developerOptionsEnabled)
                 CrashRecorder.updateSettingsSummary(CrashRecorder.formatSettings(settings))
                 cleartextInterceptor.allowedHosts = settings.cleartextAllowedHosts.toSet()
             }

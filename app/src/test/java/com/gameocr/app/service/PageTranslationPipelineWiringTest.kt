@@ -46,8 +46,17 @@ class PageTranslationPipelineWiringTest {
             source.contains("launchTranslationBatch(diagId)"),
         )
         assertTrue(
-            "floating rows use the same OCR block list as block rendering",
-            source.contains("overlay?.prepareFloatingWindow(blocks.map(TextBlock::text))"),
+            "floating rows use the presentation-shaped sources from the shared page plan",
+            source.contains("overlay?.prepareFloatingWindow(sourceTexts)"),
+        )
+        assertTrue(
+            "the shared executor applies the presentation policy before rendering and history",
+            source.contains("PageTranslationPresentationTextPolicy.normalize(pagePlan.presentation, text)"),
+        )
+        assertTrue(
+            "the planner gates merge-all by presentation before building units",
+            source.contains("PageTranslationGroupingPolicy.shouldMergeAll(") &&
+                source.contains("singleMergedFloating = mergeAllFloating"),
         )
 
         val sakura = source("app/src/main/java/com/gameocr/app/translate/SakuraGalTranslator.kt")

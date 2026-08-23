@@ -67,6 +67,33 @@ class OrientationRoutingTest {
                 expected = null
             ),
             Case(
+                name = "explicit-japanese-mlkit-is-never-replaced-by-manga",
+                orientation = TextOrientation.VERTICAL_RTL,
+                lang = "ja",
+                userEngine = OcrEngineKind.ML_KIT_JAPANESE,
+                hasManga = true,
+                baiduConfigured = false,
+                expected = null
+            ),
+            Case(
+                name = "explicit-korean-mlkit-is-not-replaced-on-mismatched-source-setting",
+                orientation = TextOrientation.VERTICAL_RTL,
+                lang = "ja",
+                userEngine = OcrEngineKind.ML_KIT_KOREAN,
+                hasManga = true,
+                baiduConfigured = false,
+                expected = null
+            ),
+            Case(
+                name = "explicit-latin-mlkit-is-not-replaced",
+                orientation = TextOrientation.VERTICAL_RTL,
+                lang = "ja",
+                userEngine = OcrEngineKind.ML_KIT_LATIN,
+                hasManga = true,
+                baiduConfigured = false,
+                expected = null
+            ),
+            Case(
                 name = "zh-vertical-uses-offline-mlkit-even-when-baidu-configured",
                 orientation = TextOrientation.VERTICAL_RTL,
                 lang = "zh-CN",

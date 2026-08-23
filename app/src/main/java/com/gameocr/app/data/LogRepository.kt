@@ -1,5 +1,6 @@
 package com.gameocr.app.data
 
+import com.gameocr.app.BuildConfig
 import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -43,13 +44,30 @@ class LogRepository @Inject constructor() {
     private val _entries = MutableStateFlow<List<Entry>>(emptyList())
     val entries: StateFlow<List<Entry>> = _entries.asStateFlow()
 
+    /**
+     * Normal release sessions do not build or copy verbose OCR/translation log entries. Users can
+     * explicitly opt into that diagnostic cost by enabling developer options.
+     */
+    @Volatile
+    internal var verboseEnabled: Boolean = BuildConfig.DEBUG
+
+    internal fun configureVerbose(developerOptionsEnabled: Boolean) {
+        verboseEnabled = RuntimeLogPolicy.verboseEnabled(
+            debugBuild = BuildConfig.DEBUG,
+            developerOptionsEnabled = developerOptionsEnabled,
+        )
+    }
+
     fun info(
         category: Category,
         message: String,
         elapsedMs: Long? = null,
         imagePath: String? = null,
         timestamp: Long = System.currentTimeMillis(),
-    ) = add(Level.INFO, category, message, elapsedMs, imagePath, timestamp)
+    ) {
+        if (!verboseEnabled) return
+        add(Level.INFO, category, message, elapsedMs, imagePath, timestamp)
+    }
 
     fun warn(
         category: Category,
@@ -72,6 +90,7 @@ class LogRepository @Inject constructor() {
 
     /** 记录一对"原文 → 译文"（翻译场景）。 */
     fun pair(category: Category, source: String, translated: String, elapsedMs: Long? = null) {
+        if (!verboseEnabled) return
         val e = Entry(
             id = idGen.incrementAndGet(),
             timestamp = System.currentTimeMillis(),
@@ -124,4 +143,11 @@ class LogRepository @Inject constructor() {
     companion object {
         private const val CAPACITY = 200
     }
+}
+
+internal object RuntimeLogPolicy {
+    fun verboseEnabled(
+        debugBuild: Boolean,
+        developerOptionsEnabled: Boolean,
+    ): Boolean = debugBuild || developerOptionsEnabled
 }

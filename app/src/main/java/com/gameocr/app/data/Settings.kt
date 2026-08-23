@@ -37,7 +37,7 @@ data class Settings(
     val openAiRequestOptions: OpenAiRequestOptions = OpenAiRequestOptions(),
     val ocrEngine: OcrEngineKind = OcrEngineKind.ML_KIT_AUTO,
     val captureLoopIntervalMs: Long = 2000L,
-    val loopTriggerMode: LoopTriggerMode = LoopTriggerMode.WAIT_FOR_TEXT_COMPLETE,
+    val loopTriggerMode: LoopTriggerMode = LoopTriggerMode.FIXED_INTERVAL,
     val loopTextStableDurationMs: Long = DEFAULT_LOOP_TEXT_STABLE_DURATION_MS,
     val loopSkipSimilarFrames: Boolean = true,
     val loopFrameSimilarityThreshold: Float = 0.95f,
@@ -271,7 +271,8 @@ data class Settings(
      * box 取 union。漫画 / 字幕场景百度等引擎经常把一句话拆成多段，开启后能让译文
      * 不再分裂成多个互相重叠的小框。默认关，按需在设置里开启。
      *
-     * 阈值由 [mergeStrength] 选择：保守 / 标准 / 激进。
+     * 阈值由 [mergeStrength] 选择：保守 / 标准 / 激进。悬浮窗口还可选择“全部”，
+     * 将当前画面的最终 OCR 结果组成一个翻译单元；Blocks 始终忽略该专用档位。
      */
     val mergeAdjacentBlocks: Boolean = false,
     /** 合并相邻 box 的强度档位，仅在 [mergeAdjacentBlocks] = true 时生效。 */
@@ -368,6 +369,8 @@ data class Settings(
     @kotlinx.serialization.Transient
     val runtimeTranslationPromptContext: RuntimeTranslationPromptContext =
         RuntimeTranslationPromptContext(),
+    @kotlinx.serialization.Transient
+    val runtimeTranslationVisualContext: RuntimeTranslationVisualContext? = null,
     /**
      * Request-scoped glossary/memory override. null resolves the foreground app as before;
      * an empty string explicitly selects global glossary entries and disables app memory.
@@ -402,9 +405,15 @@ data class Settings(
          */
         const val DEFAULT_DICTIONARY_PROMPT: String = """你是一名{source}→{target}的双语词典助手。请把用户输入当作一个单词或固定短语来处理，**只输出**下面格式的 JSON，不要加 markdown、代码块、解释。
 {
+  "lemma": "{source}原形（无则空串）",
   "phonetic": "音标或读音（{source}; 无则空串）",
-  "pos": ["词性，{target}缩写，如 名/动/形 或 n./v./adj.; 无则空数组"],
-  "definitions": ["{target}释义 1", "{target}释义 2"],
+  "senses": [
+    {
+      "pos": "词性缩写，如 n./v./adj.",
+      "definitions": ["只属于该词性的{target}释义 1", "只属于该词性的{target}释义 2"],
+      "form_note": "用{target}说明与原形的关系，如 display 的过去式和过去分词；无则空串"
+    }
+  ],
   "inflections": ["词形标签: {source}词形，如过去式、过去分词、复数、比较级或适用的变位；无则空数组"],
   "synonyms": ["{source}常用同义词或近义词；无则空数组"],
   "difficulty_notes": ["用{target}解释生僻含义、专业领域、缩写全称或易混淆用法；普通词为空数组"],
@@ -413,7 +422,7 @@ data class Settings(
   ]
 }
 要求：
-1. 必须是合法 JSON，键名与上面完全一致；
+1. 必须是合法 JSON，键名与上面完全一致；每条释义必须放在对应词性的 senses 项内；
 2. 没有信息的字段用空串或空数组占位；
 3. 词形变化最多 6 项、同义词最多 5 项、例句最多 2 条；
 4. 生僻词、专业名词、缩写、文化专名或易混淆用法必须给出难点解释，最多 3 条，不要重复释义；普通词用空数组；
@@ -427,6 +436,37 @@ data class OverlayFontEntry(
     val fileName: String,
     val displayName: String
 )
+
+@Serializable
+enum class RemoteReasoningEffort(val wireValue: String?) {
+    AUTO(null),
+    LOW("low"),
+    MEDIUM("medium"),
+    HIGH("high"),
+    XHIGH("xhigh"),
+    MAX("max"),
+    CUSTOM(null),
+}
+
+@Serializable
+enum class RemoteImageDetail(val wireValue: String?) {
+    OMIT(null),
+    LOW("low"),
+    AUTO("auto"),
+    HIGH("high"),
+    CUSTOM(null),
+}
+
+@Serializable
+enum class RemoteThinkingParameterFormat {
+    AUTO,
+    OPENAI_CHAT_COMPLETIONS,
+    OPENAI_RESPONSES,
+    DEEPSEEK,
+    ANTHROPIC,
+    DASHSCOPE,
+    CUSTOM_JSON,
+}
 
 /**
  * Remote LLM request options shared by OpenAI-compatible and Anthropic-compatible engines.
@@ -442,8 +482,25 @@ data class OpenAiRequestOptions(
     /** Escape only the `{text}` value sent to a remote LLM as UTF-16 `\uXXXX` units. */
     val encodeUserTextUnicode: Boolean = false,
     val systemPromptSuffix: String = DEFAULT_SYSTEM_PROMPT_SUFFIX,
+    /** Send the current capture to remote multimodal LLMs as request-scoped visual context. */
+    val sendScreenImage: Boolean = false,
+    /** OpenAI-compatible image detail value. Anthropic image blocks do not expose this field. */
+    val imageDetail: RemoteImageDetail = RemoteImageDetail.AUTO,
+    /** Provider-specific OpenAI-compatible image detail value used by [RemoteImageDetail.CUSTOM]. */
+    val customImageDetail: String = "",
     /** Explicitly controls model reasoning for supported remote LLM protocols. */
     val thinkingModeEnabled: Boolean = false,
+    /** Reasoning depth is independent from the thinking on/off switch. */
+    val reasoningEffort: RemoteReasoningEffort = RemoteReasoningEffort.AUTO,
+    /** Selects only the thinking-field shape; it never changes the configured API endpoint. */
+    val thinkingParameterFormat: RemoteThinkingParameterFormat =
+        RemoteThinkingParameterFormat.AUTO,
+    /** Provider-specific value used when [reasoningEffort] is [RemoteReasoningEffort.CUSTOM]. */
+    val customReasoningEffort: String = "",
+    /** Root JSON fields merged only when custom thinking format is selected and thinking is on. */
+    val customThinkingEnabledJson: String = "{}",
+    /** Root JSON fields merged only when custom thinking format is selected and thinking is off. */
+    val customThinkingDisabledJson: String = "{}",
     val temperature: Double = 0.3,
     val topP: Double? = null,
     val maxTokens: Int? = null,
@@ -457,10 +514,19 @@ data class OpenAiRequestOptions(
     fun normalized(): OpenAiRequestOptions = copy(
         // The two wire encodings are alternatives. Base64 wins for malformed imported presets.
         encodeUserTextUnicode = encodeUserTextUnicode && !encodeUserTextBase64,
+        customImageDetail = customImageDetail.trim().take(64),
+        customReasoningEffort = customReasoningEffort.trim().take(64),
+        customThinkingEnabledJson = customThinkingEnabledJson.trim().ifBlank { "{}" },
+        customThinkingDisabledJson = customThinkingDisabledJson.trim().ifBlank { "{}" },
         temperature = temperature.takeIf(Double::isFinite)?.coerceIn(0.0, 2.0) ?: 0.3,
         topP = topP?.takeIf(Double::isFinite)?.coerceIn(0.0, 1.0),
         maxTokens = maxTokens?.takeIf { it > 0 }?.coerceAtMost(16_384),
     )
+
+    fun imageDetailWireValue(): String? = when (imageDetail) {
+        RemoteImageDetail.CUSTOM -> customImageDetail.trim().take(64).ifBlank { null }
+        else -> imageDetail.wireValue
+    }
 
     companion object {
         const val DEFAULT_USER_MESSAGE_TEMPLATE: String =
@@ -994,7 +1060,8 @@ object FloatingMenu {
 
 /**
  * OCR 合并相邻 box 的强度档位。从保守到激进——保守宁可让 OCR 输出散一些不误合，
- * 激进容忍更大间距 / 行高差，适合漫画气泡内多行被切碎的情形。
+ * 激进容忍更大间距 / 行高差，适合漫画气泡内多行被切碎的情形。“全部”是悬浮窗口
+ * 的展示与请求策略，不作为几何合并阈值，也不改变 Blocks 的 OCR 结果。
  */
 @Serializable
 enum class MergeStrength {
@@ -1003,7 +1070,9 @@ enum class MergeStrength {
     /** 默认：当前调优好的中间值（gap 1.2x、垂直 0.8x、相交 30%）。 */
     STANDARD,
     /** 视觉小说 / 长段密集场景：严格阈值（gap 0.8x、垂直 0.5x、相交 50%），少误合但段落易拆开。 */
-    CONSERVATIVE
+    CONSERVATIVE,
+    /** 仅悬浮窗口：忽略距离，把当前画面的最终文字按现有阅读顺序组成一个翻译单元。 */
+    ALL,
 }
 
 @Serializable
@@ -1495,14 +1564,14 @@ enum class LoopTextRegionMode {
 
 /**
  * 此引擎是否要求 [CaptureService] 跳过 [PreprocessOptions.invert] / [PreprocessOptions.binarize]
- * 预处理，传入接近原图的 bitmap。MANGA_OCR_JA 训练时见的是漫画原图（含网点、灰阶），
- * 二值化后效果显著下降，因此走 raw 路径。其它引擎默认走完整预处理链。
+ * 预处理，保留原图的颜色、灰阶和抗锯齿边缘。MANGA_OCR_JA 依赖漫画原图细节；ML Kit
+ * Japanese 的字符识别也会被全屏 Otsu 二值化破坏细笔画和描边，因此两者走保真输入路径。
  *
  * 注：[PreprocessOptions.upscale2x] 仍会应用——DBNet 对小字检测有帮助，对 manga-ocr 224×224
  * squash resize 后无副作用。
  */
 val OcrEngineKind.needsRawBitmap: Boolean
-    get() = this == OcrEngineKind.MANGA_OCR_JA
+    get() = this == OcrEngineKind.MANGA_OCR_JA || this == OcrEngineKind.ML_KIT_JAPANESE
 
 fun Settings.dbnetUnclipRatioFor(engine: OcrEngineKind): Float =
     if (engine == OcrEngineKind.MANGA_OCR_JA) mangaOcrDbnetUnclipRatio else dbnetUnclipRatio

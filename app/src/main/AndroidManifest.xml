@@ -25,6 +25,8 @@
         <package android:name="com.google.android.gms" />
         <package android:name="moe.shizuku.privileged.api" />
         <package android:name="moe.shizuku.api" />
+        <package android:name="kerneldroid.nightzuku" />
+        <package android:name="af.shizuku.plus.api" />
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>

@@ -4,6 +4,7 @@ import com.gameocr.app.data.Settings
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -12,6 +13,129 @@ import org.junit.Test
 class WordResultPromptTest {
 
     private val json = Json { ignoreUnknownKeys = true }
+
+    @Test
+    fun groupedSenseParser_tableDriven_preservesMeaningRelationships() {
+        data class Case(
+            val name: String,
+            val raw: String,
+            val expectedLemma: String,
+            val expectedSenses: List<WordSense>,
+            val expectedDefinitions: List<String>,
+        )
+
+        listOf(
+            Case(
+                "displayed has adjective and verb senses",
+                """{
+                    "lemma":"display",
+                    "senses":[
+                      {"pos":"adj.","definitions":["显示的"],"form_note":""},
+                      {"pos":"v.","definitions":["表现","展示","陈列"],"form_note":"display 的过去式和过去分词"}
+                    ]
+                }""".trimIndent(),
+                "display",
+                listOf(
+                    WordSense("adj.", listOf("显示的")),
+                    WordSense("v.", listOf("表现", "展示", "陈列"), "display 的过去式和过去分词"),
+                ),
+                listOf("显示的", "表现", "展示", "陈列"),
+            ),
+            Case(
+                "blank and duplicate meanings are normalized",
+                """{"lemma":"update","senses":[{"part_of_speech":"v.","meanings":["更新"," 更新 ",""]}]}""",
+                "update",
+                listOf(WordSense("v.", listOf("更新"))),
+                listOf("更新"),
+            ),
+            Case(
+                "malformed senses retain compatible legacy fields",
+                """{"pos":["n.","v."],"definitions":["记录","记下"],"senses":[{"pos":"adj.","definitions":[]}]}""",
+                "",
+                emptyList(),
+                listOf("记录", "记下"),
+            ),
+        ).forEach { case ->
+            val result = parseWordResult(case.raw, json)
+            assertEquals("${case.name} lemma", case.expectedLemma, result?.lemma)
+            assertEquals("${case.name} senses", case.expectedSenses, result?.senses)
+            assertEquals("${case.name} definitions", case.expectedDefinitions, result?.effectiveDefinitions())
+        }
+    }
+
+    @Test
+    fun groupedSenseParser_tableDriven_mergesRepeatedPartOfSpeechLocally() {
+        data class Case(
+            val name: String,
+            val raw: String,
+            val expected: List<WordSense>,
+        )
+
+        listOf(
+            Case(
+                "three noun objects become one noun group",
+                """{
+                    "senses":[
+                      {"pos":"n.","definitions":["姐妹"]},
+                      {"pos":"n.","definitions":["修女"]},
+                      {"pos":"n.","definitions":["护士长"]}
+                    ]
+                }""".trimIndent(),
+                listOf(WordSense("n.", listOf("姐妹", "修女", "护士长"))),
+            ),
+            Case(
+                "case whitespace meanings and notes are normalized",
+                """{
+                    "senses":[
+                      {"pos":" N. ","definitions":["姐妹","姐妹"],"form_note":"单数"},
+                      {"pos":"n.","definitions":["姊妹舰"],"form_note":"集合用法"}
+                    ]
+                }""".trimIndent(),
+                listOf(WordSense("N.", listOf("姐妹", "姊妹舰"), "单数；集合用法")),
+            ),
+            Case(
+                "different parts of speech remain separate",
+                """{
+                    "senses":[
+                      {"pos":"n.","definitions":["显示"]},
+                      {"pos":"v.","definitions":["展示"]},
+                      {"pos":"n.","definitions":["陈列品"]}
+                    ]
+                }""".trimIndent(),
+                listOf(
+                    WordSense("n.", listOf("显示", "陈列品")),
+                    WordSense("v.", listOf("展示")),
+                ),
+            ),
+            Case(
+                "invalid empty sense is discarded",
+                """{
+                    "senses":[
+                      {"pos":"n.","definitions":[]},
+                      {"pos":"n.","definitions":["有效释义"]}
+                    ]
+                }""".trimIndent(),
+                listOf(WordSense("n.", listOf("有效释义"))),
+            ),
+        ).forEach { case ->
+            assertEquals(case.name, case.expected, parseWordResult(case.raw, json)?.senses)
+        }
+    }
+
+    @Test
+    fun groupedSenseContracts_tableDriven_requireCompactAndFullRelationships() {
+        val full = "Return dictionary JSON."
+            .withGroupedSensesContract("English", "Chinese")
+        assertTrue(full.contains("\"senses\""))
+        assertTrue(full.contains("\"lemma\""))
+        assertSame(full, full.withGroupedSensesContract("English", "Chinese"))
+
+        val compact = compactDictionaryPrompt("English", "Chinese")
+        listOf("\"lemma\"", "\"senses\"", "\"pos\"", "\"definitions\"", "\"form_note\"")
+            .forEach { field -> assertTrue(field, compact.contains(field)) }
+        listOf("phonetic", "examples", "synonyms", "difficulty_notes")
+            .forEach { omitted -> assertFalse(omitted, compact.contains("\"$omitted\"")) }
+    }
 
     @Test
     fun difficultyContractSupportsLegacyAndCurrentPrompts() {
@@ -232,29 +356,29 @@ class WordResultPromptTest {
     }
 
     @Test
-    fun dictionaryJsonOutput_tableDriven_onlyTargetsVerifiedDeepSeekHost() {
-        data class Case(val name: String, val baseUrl: String, val expected: Boolean)
+    fun dictionaryJsonOutput_tableDriven_isControlledByNegotiatedCapability() {
+        data class Case(val name: String, val enabled: Boolean, val expected: Boolean)
 
         val cases = listOf(
-            Case("DeepSeek v1", "https://api.deepseek.com/v1/", true),
-            Case("DeepSeek root", "https://api.deepseek.com", true),
-            Case("case insensitive host", "https://API.DEEPSEEK.COM/v1", true),
-            Case("spoofed suffix", "https://api.deepseek.com.example.org/v1", false),
-            Case("SiliconFlow compatible", "https://api.siliconflow.cn/v1", false),
-            Case("local compatible server", "http://192.168.0.10:8000/v1", false),
-            Case("invalid URL", "not a URL", false),
+            Case("unknown or supported capability sends field", true, true),
+            Case("cached unsupported capability omits field", false, false),
         )
 
         cases.forEach { case ->
-            val format = dictionaryJsonResponseFormatOrNull(case.baseUrl)
+            val format = jsonObjectResponseFormatOrNull(case.enabled)
             assertEquals(case.name, case.expected, format?.type == "json_object")
         }
 
         val encoded = json.encodeToString(
             ChatRequest(
                 model = "deepseek-chat",
-                messages = listOf(ChatMessage("user", "json")),
-                responseFormat = dictionaryJsonResponseFormatOrNull("https://api.deepseek.com/v1/"),
+                messages = listOf(
+                    OpenAiRequestMessage(
+                        "user",
+                        kotlinx.serialization.json.JsonPrimitive("json"),
+                    )
+                ),
+                responseFormat = jsonObjectResponseFormatOrNull(enabled = true),
             )
         )
         assertTrue(encoded.contains("\"response_format\":{\"type\":\"json_object\"}"))
