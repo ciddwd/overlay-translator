@@ -5,6 +5,8 @@ import android.graphics.Typeface
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import com.gameocr.app.R
+import com.gameocr.app.capture.CaptureRegionBorderStyle
+import com.gameocr.app.capture.normalizedCaptureRegionBorderWidthDp
 import com.gameocr.app.data.FloatingMenu
 import com.gameocr.app.data.MangaOcrAdvancedSettingsPolicy
 import com.gameocr.app.data.OcrEngineKind
@@ -575,6 +577,24 @@ class SettingsViewModel @Inject constructor(
     /** CUSTOM 主题的边框样式（SOLID / DASHED / DOTTED / DOUBLE / GROOVE），立即生效。 */
     suspend fun saveCustomBorderStyle(style: com.gameocr.app.data.BorderStyle) {
         repo.update { it.copy(customBorderStyle = style) }
+    }
+
+    suspend fun saveCaptureRegionBorderEnabled(enabled: Boolean) {
+        repo.update { it.copy(captureRegionBorderEnabled = enabled) }
+    }
+
+    suspend fun saveCaptureRegionBorderColor(color: Int) {
+        repo.update { it.copy(captureRegionBorderColor = color) }
+    }
+
+    suspend fun saveCaptureRegionBorderWidth(widthDp: Int) {
+        repo.update {
+            it.copy(captureRegionBorderWidthDp = normalizedCaptureRegionBorderWidthDp(widthDp))
+        }
+    }
+
+    suspend fun saveCaptureRegionBorderStyle(style: CaptureRegionBorderStyle) {
+        repo.update { it.copy(captureRegionBorderStyle = style) }
     }
 
     suspend fun saveWordSelectPreciseAdjust(enabled: Boolean) {

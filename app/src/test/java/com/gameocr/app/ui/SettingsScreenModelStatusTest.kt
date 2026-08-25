@@ -95,7 +95,7 @@ class SettingsScreenModelStatusTest {
         )
 
         listOf(
-            Case("engine before source language", "R.string.settings_label_translator_engine", "R.string.settings_source_lang"),
+            Case("engine choices before source language", "R.string.settings_translator_group_local_llm", "R.string.settings_source_lang"),
             Case("model before source language", "R.string.settings_model)", "R.string.settings_source_lang"),
             Case("connection test before source language", "R.string.settings_test_connection", "R.string.settings_source_lang"),
             Case("source language before target language", "R.string.settings_source_lang", "R.string.settings_target_lang"),
@@ -107,6 +107,26 @@ class SettingsScreenModelStatusTest {
             assertTrue("${case.name}: missing earlier marker", earlierIndex >= 0)
             assertTrue("${case.name}: missing later marker", laterIndex >= 0)
             assertTrue(case.name, earlierIndex < laterIndex)
+        }
+        assertFalse(
+            "translator card must not repeat its title as a secondary heading",
+            section.contains("R.string.settings_label_translator_engine"),
+        )
+    }
+
+    @Test
+    fun translatorSectionTitle_usesApprovedEngineCopy_tableDriven() {
+        data class Case(val name: String, val resourcePath: String, val expected: String)
+
+        listOf(
+            Case("English", "src/main/res/values/strings.xml", "Translator engine"),
+            Case("Simplified Chinese", "src/main/res/values-zh-rCN/strings.xml", "翻译引擎"),
+        ).forEach { case ->
+            assertEquals(
+                case.name,
+                case.expected,
+                stringResourceValue(case.resourcePath, "settings_section_translator"),
+            )
         }
     }
 
@@ -218,31 +238,37 @@ class SettingsScreenModelStatusTest {
     }
 
     @Test
-    fun translationDisplayPreview_isFirstAndStickyOnlyInsideItsSection() {
+    fun translationDisplayPreview_isSecondaryWhileDisplayModeStaysPrimary() {
         val source = File("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
         data class Case(val name: String, val expected: Boolean)
 
-        val sectionStart = source.indexOf("title = stringResource(R.string.settings_section_overlay)")
-        val preview = source.indexOf("OverlayPreviewCard(", startIndex = sectionStart)
-        val colors = source.indexOf("R.string.settings_overlay_theme_label", startIndex = sectionStart)
-        val displayMode = source.indexOf("R.string.settings_render_mode_label", startIndex = sectionStart)
-        val displaySegments = source.indexOf("SingleChoiceSegmentedButtonRow(", startIndex = displayMode)
-        val blocks = source.indexOf("R.string.settings_render_blocks_chip", startIndex = displayMode)
-        val floating = source.indexOf("R.string.settings_render_floating_window_chip", startIndex = displayMode)
-        val adaptive = source.indexOf("R.string.settings_overlay_style_adaptive", startIndex = displayMode)
-        val floatingContent = source.indexOf("R.string.settings_floating_window_content_label", startIndex = displayMode)
-        val renderModeClick = source.substring(
-            source.indexOf("onClick = {", startIndex = displaySegments),
-            source.indexOf("shape = SegmentedButtonDefaults.itemShape", startIndex = displaySegments),
+        val pageStart = source.indexOf("val overlayRenderingContent: @Composable () -> Unit = {")
+        val pageEnd = source.indexOf("\n\n    Scaffold(", startIndex = pageStart)
+        val renderingPage = source.substring(pageStart, pageEnd)
+        val mainPage = source
+            .substringAfter("item(key = SectionKeys.OVERLAY)")
+            .substringBefore("item(key = SectionKeys.WORD_SELECT)")
+        val preview = renderingPage.indexOf("OverlayPreviewCard(")
+        val colors = renderingPage.indexOf("R.string.settings_overlay_theme_label")
+        val displayMode = mainPage.indexOf("R.string.settings_render_mode_label")
+        val displaySegments = mainPage.indexOf("SingleChoiceSegmentedButtonRow(", startIndex = displayMode)
+        val blocks = mainPage.indexOf("R.string.settings_render_blocks_chip", startIndex = displayMode)
+        val floating = mainPage.indexOf("R.string.settings_render_floating_window_chip", startIndex = displayMode)
+        val floatingContent = mainPage.indexOf("R.string.settings_floating_window_content_label", startIndex = displayMode)
+        val renderModeClick = mainPage.substring(
+            mainPage.indexOf("onClick = {", startIndex = displaySegments),
+            mainPage.indexOf("shape = SegmentedButtonDefaults.itemShape", startIndex = displaySegments),
         )
         val cases = listOf(
-            Case("translation display section exists", sectionStart >= 0),
-            Case("preview exists inside section", preview > sectionStart),
-            Case("preview precedes color controls", preview in (sectionStart + 1)..<colors),
-            Case("display mode follows color controls", displayMode > colors),
+            Case("rendering secondary page exists", pageStart >= 0 && pageEnd > pageStart),
+            Case("preview exists inside secondary page", preview >= 0),
+            Case("preview precedes secondary color controls", preview in 0..<colors),
+            Case("display mode is absent from secondary page", !renderingPage.contains("R.string.settings_render_mode_label")),
+            Case("display mode exists on primary page", displayMode >= 0),
             Case("block display is the first option", blocks in (displayMode + 1)..<floating),
-            Case("display mode options use the approved segmented control", displaySegments in (floating + 1)..<adaptive),
-            Case("floating window is followed by adaptive switch", adaptive in (floating + 1)..<floatingContent),
+            Case("display mode options use the approved segmented control", displaySegments > floating),
+            Case("floating content follows display mode", floatingContent > floating),
+            Case("floating content is absent from secondary page", !renderingPage.contains("R.string.settings_floating_window_content_label")),
             Case("adaptive switch uses the compact labelled control", source.contains("InlineSwitchLabel(")),
             Case(
                 "both display modes stay selectable while adaptive is remembered",
@@ -258,11 +284,33 @@ class SettingsScreenModelStatusTest {
             ),
             Case("translation style mode label is removed", !source.contains("R.string.settings_overlay_style_mode_label")),
             Case("style controls are not dimmed by adaptive mode", !source.contains("manualStyleEnabled")),
-            Case("section reports window bounds", source.contains("onBoundsInWindow = { _, bottom -> overlaySectionBottomInWindow = bottom }")),
+            Case("secondary page reports window bounds", renderingPage.contains("onBoundsInWindow = { _, bottom -> overlaySectionBottomInWindow = bottom }")),
             Case("sticky state uses section-aware policy", source.contains("StickyOverlayPreviewPolicy.shouldStick(")),
+            Case("sticky preview is limited to the secondary page", source.contains("if (overlayPreviewSticky && overlayRenderingOpen)")),
         )
 
         cases.forEach { case -> assertTrue(case.name, case.expected) }
+    }
+
+    @Test
+    fun inlineSwitchHelpIcon_isTrailingAligned_tableDriven() {
+        val source = File("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
+        val function = source.substring(
+            source.indexOf("private fun InlineSwitchLabel("),
+            source.indexOf("private fun SettingsLinkCell(", source.indexOf("private fun InlineSwitchLabel(")),
+        )
+        data class Case(val name: String, val marker: String)
+
+        listOf(
+            Case("row consumes the available width", "modifier = Modifier.fillMaxWidth()"),
+            Case("label consumes space before the trailing action", ".weight(1f)"),
+            Case("help tooltip remains the final row child", "helpText?.let { SettingHelpTooltip(text = it) }"),
+        ).forEach { case -> assertTrue(case.name, function.contains(case.marker)) }
+
+        assertTrue(
+            "help tooltip must follow the weighted label",
+            function.indexOf(".weight(1f)") < function.indexOf("helpText?.let"),
+        )
     }
 
     @Test
@@ -361,6 +409,20 @@ class SettingsScreenModelStatusTest {
             Regex(
                 """settings_translation_block_interaction_label[\s\S]*?SettingHelpTooltip\([\s\S]*?settings_translation_block_interaction_vertical_help"""
             ).containsMatchIn(source),
+        )
+        val titleRow = source.substring(
+            source.lastIndexOf("Row(", source.indexOf("R.string.settings_translation_block_interaction_label")),
+            source.indexOf("val translationBlockCopyOptions ="),
+        )
+        data class LayoutCase(val name: String, val marker: String)
+        listOf(
+            LayoutCase("title row consumes the available width", "modifier = Modifier.fillMaxWidth()"),
+            LayoutCase("title consumes space before the trailing action", "modifier = Modifier.weight(1f)"),
+            LayoutCase("help tooltip remains after the title", "SettingHelpTooltip("),
+        ).forEach { case -> assertTrue(case.name, titleRow.contains(case.marker)) }
+        assertTrue(
+            "translation block help tooltip must follow the weighted title",
+            titleRow.indexOf("Modifier.weight(1f)") < titleRow.indexOf("SettingHelpTooltip("),
         )
     }
 

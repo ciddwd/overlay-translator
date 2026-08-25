@@ -62,6 +62,8 @@ import androidx.compose.material.icons.automirrored.filled.FormatAlignRight
 import androidx.compose.material.icons.filled.FormatBold
 import androidx.compose.material.icons.filled.FormatItalic
 import androidx.compose.material.icons.filled.FormatUnderlined
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
@@ -131,6 +133,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.setValue
@@ -162,6 +165,11 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.work.WorkInfo
 import com.gameocr.app.R
+import com.gameocr.app.capture.CaptureRegionBorderStyle
+import com.gameocr.app.capture.DEFAULT_CAPTURE_REGION_BORDER_COLOR
+import com.gameocr.app.capture.DEFAULT_CAPTURE_REGION_BORDER_WIDTH_DP
+import com.gameocr.app.capture.MAX_CAPTURE_REGION_BORDER_WIDTH_DP
+import com.gameocr.app.capture.MIN_CAPTURE_REGION_BORDER_WIDTH_DP
 import com.gameocr.app.capture.LoopFrameChangePolicy
 import com.gameocr.app.capture.LoopFrameStabilityPolicy
 import com.gameocr.app.appcontext.isUsageAccessGranted
@@ -253,6 +261,7 @@ import com.gameocr.app.llm.LlmModelKind
 import com.gameocr.app.overlay.StyledTranslationTextView
 import com.gameocr.app.overlay.MenuItemRegistry
 import com.gameocr.app.overlay.applyOverlayTextStyle
+import com.gameocr.app.overlay.styledFloatingWindowText
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -614,6 +623,16 @@ fun SettingsScreen(
     var customFg by remember { mutableStateOf(0xFFFFFFFF.toInt()) }
     var customBorder by remember { mutableStateOf(0) }
     var customBorderW by remember { mutableStateOf(0f) }
+    var captureRegionBorderEnabled by remember { mutableStateOf(true) }
+    var captureRegionBorderColor by remember {
+        mutableStateOf(DEFAULT_CAPTURE_REGION_BORDER_COLOR)
+    }
+    var captureRegionBorderWidth by remember {
+        mutableStateOf(DEFAULT_CAPTURE_REGION_BORDER_WIDTH_DP.toFloat())
+    }
+    var captureRegionBorderStyle by remember {
+        mutableStateOf(CaptureRegionBorderStyle.SOLID)
+    }
     var offsetX by remember { mutableStateOf(0f) }
     var offsetY by remember { mutableStateOf(0f) }
     var ocrEngine by remember { mutableStateOf(OcrEngineKind.ML_KIT_AUTO) }
@@ -701,6 +720,7 @@ fun SettingsScreen(
     }
     var dbnetAdvancedExpanded by remember { mutableStateOf(false) }
     var preprocessExpanded by remember { mutableStateOf(false) }
+    var textOrientationExpanded by remember { mutableStateOf(false) }
     var showDbnetResetConfirm by remember { mutableStateOf(false) }
     var manualTextOrient by remember { mutableStateOf<com.gameocr.app.ocr.TextOrientation?>(null) }
     var translationOutputFollowRecognition by remember { mutableStateOf(true) }
@@ -1242,6 +1262,8 @@ fun SettingsScreen(
 
     var searchActive by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
+    var overlayRenderingOpen by rememberSaveable { mutableStateOf(false) }
+    var pendingOverlayRenderingSearchTarget by remember { mutableStateOf<Int?>(null) }
     val searchFocusRequester = remember { FocusRequester() }
     val searchTargetRegistry = remember { SettingsSearchTargetRegistry() }
 
@@ -1688,10 +1710,8 @@ fun SettingsScreen(
         }
     }
 
-    val textOrientationSection: @Composable () -> Unit = {
-        SectionCard(
-            title = stringResource(R.string.settings_text_orientation_section_title),
-        ) {
+    val textOrientationContent: @Composable () -> Unit = {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_ORIENTATION_DETECTION) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             SwitchRow(
@@ -1867,7 +1887,9 @@ fun SettingsScreen(
         if (dirty) showUnsavedDialog = true else onBack()
     }
 
-    BackHandler { tryBack() }
+    BackHandler {
+        if (overlayRenderingOpen) overlayRenderingOpen = false else tryBack()
+    }
 
     val currentTranslationPresetHash = currentTranslationPresetHash()
     val matchingTranslationPresetId = currentMatchingTranslationPresetId(currentTranslationPresetHash)
@@ -2607,6 +2629,10 @@ fun SettingsScreen(
             customFg = s.customFgColor
             customBorder = s.customBorderColor
             customBorderW = s.customBorderWidth.toFloat()
+            captureRegionBorderEnabled = s.captureRegionBorderEnabled
+            captureRegionBorderColor = s.captureRegionBorderColor
+            captureRegionBorderWidth = s.captureRegionBorderWidthDp.toFloat()
+            captureRegionBorderStyle = s.captureRegionBorderStyle
             offsetX = s.overlayOffsetX.toFloat()
             offsetY = s.overlayOffsetY.toFloat()
             ocrEngine = s.ocrEngine
@@ -2797,6 +2823,218 @@ fun SettingsScreen(
         searchActive = false
         searchQuery = ""
     }
+    LaunchedEffect(overlayRenderingOpen, pendingOverlayRenderingSearchTarget) {
+        val targetId = pendingOverlayRenderingSearchTarget ?: return@LaunchedEffect
+        if (!overlayRenderingOpen) return@LaunchedEffect
+        repeat(6) {
+            withFrameNanos { }
+            val requester = searchTargetRegistry.latest(targetId)
+            if (requester != null) {
+                requester.bringIntoView()
+                pendingOverlayRenderingSearchTarget = null
+                return@LaunchedEffect
+            }
+        }
+        pendingOverlayRenderingSearchTarget = null
+    }
+    val overlayRenderingContent: @Composable () -> Unit = {
+        SectionCard(
+            title = stringResource(R.string.settings_overlay_rendering_title),
+            onBoundsInWindow = { _, bottom -> overlaySectionBottomInWindow = bottom },
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onGloballyPositioned { coordinates ->
+                        overlayPreviewTopInWindow = coordinates.positionInWindow().y
+                        overlayPreviewHeightPx = coordinates.size.height
+                    }
+            ) {
+                OverlayPreviewCard(
+                    renderMode = renderMode,
+                    floatingWindowContentMode = floatingWindowContentMode,
+                    floatingWindowLocked = floatingWindowLocked,
+                    theme = overlayTheme,
+                    customBg = customBg,
+                    customFg = customFg,
+                    customBorder = customBorder,
+                    customBorderW = customBorderW,
+                    customBorderStyle = customBorderStyle,
+                    textSize = textSize,
+                    alpha = alpha,
+                    overlayTypeface = overlayFontTypeface,
+                    textStyle = overlayTextStyle,
+                )
+            }
+
+            SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_OVERLAY_THEME) {
+                Text(
+                    stringResource(R.string.settings_overlay_theme_label),
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    EngineChip(overlayTheme, OverlayTheme.CLASSIC_DARK, stringResource(R.string.settings_theme_classic_dark)) { overlayTheme = it }
+                    EngineChip(overlayTheme, OverlayTheme.AMBER_GOLD, stringResource(R.string.settings_theme_amber_gold)) { overlayTheme = it }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    EngineChip(overlayTheme, OverlayTheme.PAPER_LIGHT, stringResource(R.string.settings_theme_paper_light)) { overlayTheme = it }
+                    EngineChip(overlayTheme, OverlayTheme.FROST_GLASS, stringResource(R.string.settings_theme_frost_glass)) { overlayTheme = it }
+                    EngineChip(overlayTheme, OverlayTheme.CUSTOM, stringResource(R.string.settings_theme_custom)) { overlayTheme = it }
+                }
+                if (overlayTheme == OverlayTheme.CUSTOM) {
+                    CustomThemeEditor(
+                        bg = customBg,
+                        onBgChange = { customBg = it },
+                        fg = customFg,
+                        onFgChange = { customFg = it },
+                        border = customBorder,
+                        onBorderChange = { customBorder = it },
+                        borderW = customBorderW,
+                        onBorderWChange = { customBorderW = it },
+                    )
+                    Text(
+                        stringResource(R.string.settings_floating_window_border_style_label),
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        EngineChip(customBorderStyle, com.gameocr.app.data.BorderStyle.SOLID, stringResource(R.string.settings_border_style_solid)) {
+                            customBorderStyle = it
+                            scope.launch { viewModel.saveCustomBorderStyle(it) }
+                        }
+                        EngineChip(customBorderStyle, com.gameocr.app.data.BorderStyle.DASHED, stringResource(R.string.settings_border_style_dashed)) {
+                            customBorderStyle = it
+                            scope.launch { viewModel.saveCustomBorderStyle(it) }
+                        }
+                        EngineChip(customBorderStyle, com.gameocr.app.data.BorderStyle.DOTTED, stringResource(R.string.settings_border_style_dotted)) {
+                            customBorderStyle = it
+                            scope.launch { viewModel.saveCustomBorderStyle(it) }
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        EngineChip(customBorderStyle, com.gameocr.app.data.BorderStyle.DOUBLE, stringResource(R.string.settings_border_style_double)) {
+                            customBorderStyle = it
+                            scope.launch { viewModel.saveCustomBorderStyle(it) }
+                        }
+                        EngineChip(customBorderStyle, com.gameocr.app.data.BorderStyle.GROOVE, stringResource(R.string.settings_border_style_groove)) {
+                            customBorderStyle = it
+                            scope.launch { viewModel.saveCustomBorderStyle(it) }
+                        }
+                    }
+                }
+            }
+
+            SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_OVERLAY_TEXT) {
+                Text(
+                    stringResource(R.string.settings_textsize_label_format, textSize.toInt()),
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                Slider(
+                    value = textSize,
+                    onValueChange = { textSize = it },
+                    valueRange = 10f..28f,
+                    steps = 17,
+                )
+                Text(
+                    stringResource(R.string.settings_overlay_font_label),
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                val defaultOverlayFontName = stringResource(R.string.settings_overlay_font_default)
+                val overlayFontChipEntries = OverlayFontPolicy.upsertImportedFont(
+                    overlayFontEntries,
+                    overlayFontFileName,
+                    overlayFontDisplayName,
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                ) {
+                    OverlayFontChip(
+                        selected = overlayFontFileName.isBlank(),
+                        onClick = {
+                            scope.launch {
+                                withContext(Dispatchers.IO) { viewModel.resetOverlayFont() }
+                                overlayFontFileName = ""
+                                overlayFontDisplayName = ""
+                                overlayFontTypeface = null
+                                overlayFontMessage = context.getString(R.string.settings_overlay_font_reset_success)
+                                overlayFontMessageIsError = false
+                            }
+                        },
+                        label = defaultOverlayFontName,
+                        onLongClick = {},
+                    )
+                    overlayFontChipEntries.forEach { font ->
+                        OverlayFontChip(
+                            selected = overlayFontFileName == font.fileName,
+                            label = font.displayName,
+                            onClick = {
+                                scope.launch {
+                                    val selected = withContext(Dispatchers.IO) {
+                                        viewModel.selectOverlayFont(font.fileName, font.displayName)
+                                    }
+                                    if (selected) {
+                                        overlayFontFileName = font.fileName
+                                        overlayFontDisplayName = font.displayName
+                                        overlayFontEntries = OverlayFontPolicy.upsertImportedFont(
+                                            overlayFontEntries,
+                                            font.fileName,
+                                            font.displayName,
+                                        )
+                                        overlayFontTypeface = withContext(Dispatchers.IO) {
+                                            viewModel.overlayTypefaceFor(font.fileName)
+                                        }
+                                        overlayFontMessage = null
+                                        overlayFontMessageIsError = false
+                                    } else {
+                                        overlayFontMessage = context.getString(R.string.settings_overlay_font_error_invalid)
+                                        overlayFontMessageIsError = true
+                                    }
+                                }
+                            },
+                            onLongClick = { pendingOverlayFontDelete = font },
+                        )
+                    }
+                }
+                OutlinedButton(
+                    onClick = {
+                        overlayFontMessage = null
+                        overlayFontImportLauncher.launch(OverlayFontPolicy.OPEN_DOCUMENT_MIME_TYPES)
+                    }
+                ) {
+                    Text(stringResource(R.string.settings_overlay_font_import))
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 20.dp)
+                ) {
+                    overlayFontMessage?.let { message ->
+                        Text(
+                            message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (overlayFontMessageIsError) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.primary
+                            },
+                        )
+                    }
+                }
+                OverlayTextStyleEditor(
+                    style = overlayTextStyle,
+                    onChange = { overlayTextStyle = it.normalized() },
+                )
+                Text(
+                    stringResource(R.string.settings_alpha_label_format, (alpha * 100).toInt()),
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                Slider(value = alpha, onValueChange = { alpha = it }, valueRange = 0.3f..1f)
+            }
+        }
+    }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -2823,11 +3061,22 @@ fun SettingsScreen(
                             )
                             LaunchedEffect(Unit) { searchFocusRequester.requestFocus() }
                         } else {
-                            Text(stringResource(R.string.settings_title))
+                            Text(
+                                stringResource(
+                                    if (overlayRenderingOpen) {
+                                        R.string.settings_overlay_rendering_title
+                                    } else {
+                                        R.string.settings_title
+                                    }
+                                )
+                            )
                         }
                     },
                     navigationIcon = {
-                        IconButton(onClick = if (searchActive) closeSearch else tryBack) {
+                        val navigateBack = {
+                            if (overlayRenderingOpen) overlayRenderingOpen = false else tryBack()
+                        }
+                        IconButton(onClick = if (searchActive) closeSearch else navigateBack) {
                             Icon(
                                 if (searchActive) Icons.Default.Close else Icons.AutoMirrored.Filled.ArrowBack,
                                 contentDescription = stringResource(
@@ -2837,7 +3086,7 @@ fun SettingsScreen(
                         }
                     },
                     actions = {
-                        if (!searchActive) {
+                        if (!searchActive && !overlayRenderingOpen) {
                             IconButton(onClick = { searchActive = true }) {
                                 Icon(
                                     Icons.Default.Search,
@@ -2901,7 +3150,10 @@ fun SettingsScreen(
                     // 写入 DataStore，覆盖用户实际数据。LaunchedEffect 完成（~13ms）才把
                     // initialSettings 设值，那之后才允许保存。
                     if (initialSettings == null) return@ExtendedFloatingActionButton
-                    scope.launch { doSave(); onBack() }
+                    scope.launch {
+                        doSave()
+                        if (overlayRenderingOpen) overlayRenderingOpen = false else onBack()
+                    }
                 },
                 icon = { Icon(Icons.Default.Save, contentDescription = null) },
                 text = { Text(stringResource(if (dirty) R.string.settings_save_btn else R.string.settings_saved_btn)) },
@@ -2918,6 +3170,18 @@ fun SettingsScreen(
                     settingsViewportTopInWindow = coordinates.positionInWindow().y
                 }
         ) {
+            if (overlayRenderingOpen) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    item(key = "overlay_rendering") { overlayRenderingContent() }
+                    item(key = "overlay_rendering_bottom_spacer") {
+                        Box(modifier = Modifier.size(80.dp))
+                    }
+                }
+            } else {
             // 直接 inflate Column——不显示 spinner，避免"按下设置 → spinner → UI"那段空白卡顿感。
             // state 默认值（空字符串 / 默认 enum）会先短暂显示，LaunchedEffect 在 ~13ms 内 Snapshot
             // 原子更新所有 state 到实际保存值——肉眼几乎不察觉闪烁。代价：用户在 initialSettings
@@ -2929,21 +3193,26 @@ fun SettingsScreen(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-            // —— 应用语言 ——
-            item(key = SectionKeys.APP_LANG) {
-                SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_APP_LANGUAGE) {
-                SectionCard(title = stringResource(R.string.settings_section_app_lang)) {
-                    AppLanguageSelector()
-                }
-                }
-            }
-
-            // —— 主题模式 ——
-            item(key = SectionKeys.THEME_MODE) {
-                SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_THEME_MODE) {
-                SectionCard(title = stringResource(R.string.settings_section_theme_mode)) {
-                    ThemeModeSelector()
-                }
+            // —— 通用 ——
+            item(key = SectionKeys.GENERAL) {
+                SectionCard(title = null) {
+                    SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_APP_LANGUAGE) {
+                        Text(
+                            text = stringResource(R.string.settings_section_app_lang),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        AppLanguageSelector()
+                    }
+                    HorizontalDivider()
+                    SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_THEME_MODE) {
+                        Text(
+                            text = stringResource(R.string.settings_section_theme_mode),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        ThemeModeSelector()
+                    }
                 }
             }
 
@@ -2953,13 +3222,11 @@ fun SettingsScreen(
                 }
             }
 
-            // —— 翻译后端 ——
+            // —— 翻译引擎 ——
             item(key = SectionKeys.TRANSLATE) {
             SectionCard(title = stringResource(R.string.settings_section_translator)) {
                 SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_TRANSLATOR_ENGINE) {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(stringResource(R.string.settings_label_translator_engine), style = MaterialTheme.typography.labelLarge)
-
                 // All on-device options share one group; cloud engines remain split by API type.
                 Text(
                     stringResource(R.string.settings_translator_group_local_llm),
@@ -4784,196 +5051,103 @@ fun SettingsScreen(
                     ) { preBinarize = it }
                 }
                 } // 关闭 OCR section 内的"灰显 Column"（ocrSectionDisabled 控制 alpha）
-            }
-            }
 
-            }
-
-            item(key = SectionKeys.TEXT_ORIENTATION) {
-                textOrientationSection()
-            }
-
-            // —— 显示 ——
-            // 预览是本 section 第一项；滚过页面顶部后吸附，section 离开时自动解除。
-            item(key = SectionKeys.OVERLAY) {
-            SectionCard(
-                title = stringResource(R.string.settings_section_overlay),
-                onBoundsInWindow = { _, bottom -> overlaySectionBottomInWindow = bottom },
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .onGloballyPositioned { coordinates ->
-                            overlayPreviewTopInWindow = coordinates.positionInWindow().y
-                            overlayPreviewHeightPx = coordinates.size.height
-                        }
-                ) {
-                    OverlayPreviewCard(
-                        theme = overlayTheme,
-                        customBg = customBg,
-                        customFg = customFg,
-                        customBorder = customBorder,
-                        customBorderW = customBorderW,
-                        customBorderStyle = customBorderStyle,
-                        textSize = textSize,
-                        alpha = alpha,
-                        overlayTypeface = overlayFontTypeface,
-                        textStyle = overlayTextStyle
-                    )
-                }
-
-                // —— 影响预览的样式项 ——
-                SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_OVERLAY_THEME) {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(stringResource(R.string.settings_overlay_theme_label), style = MaterialTheme.typography.labelLarge)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    EngineChip(overlayTheme, OverlayTheme.CLASSIC_DARK, stringResource(R.string.settings_theme_classic_dark)) { overlayTheme = it }
-                    EngineChip(overlayTheme, OverlayTheme.AMBER_GOLD, stringResource(R.string.settings_theme_amber_gold)) { overlayTheme = it }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    EngineChip(overlayTheme, OverlayTheme.PAPER_LIGHT, stringResource(R.string.settings_theme_paper_light)) { overlayTheme = it }
-                    EngineChip(overlayTheme, OverlayTheme.FROST_GLASS, stringResource(R.string.settings_theme_frost_glass)) { overlayTheme = it }
-                    EngineChip(overlayTheme, OverlayTheme.CUSTOM, stringResource(R.string.settings_theme_custom)) { overlayTheme = it }
-                }
-
-                if (overlayTheme == OverlayTheme.CUSTOM) {
-                    CustomThemeEditor(
-                        bg = customBg, onBgChange = { customBg = it },
-                        fg = customFg, onFgChange = { customFg = it },
-                        border = customBorder, onBorderChange = { customBorder = it },
-                        borderW = customBorderW, onBorderWChange = { customBorderW = it }
-                    )
-                    // 边框样式：仅在 CUSTOM 主题下显示。SOLID/DASHED/DOTTED 一行，DOUBLE/GROOVE 一行（避开 ExperimentalLayoutApi）。
-                    Text(stringResource(R.string.settings_floating_window_border_style_label), style = MaterialTheme.typography.labelLarge)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        EngineChip(customBorderStyle, com.gameocr.app.data.BorderStyle.SOLID, stringResource(R.string.settings_border_style_solid)) {
-                            customBorderStyle = it
-                            scope.launch { viewModel.saveCustomBorderStyle(it) }
-                        }
-                        EngineChip(customBorderStyle, com.gameocr.app.data.BorderStyle.DASHED, stringResource(R.string.settings_border_style_dashed)) {
-                            customBorderStyle = it
-                            scope.launch { viewModel.saveCustomBorderStyle(it) }
-                        }
-                        EngineChip(customBorderStyle, com.gameocr.app.data.BorderStyle.DOTTED, stringResource(R.string.settings_border_style_dotted)) {
-                            customBorderStyle = it
-                            scope.launch { viewModel.saveCustomBorderStyle(it) }
-                        }
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        EngineChip(customBorderStyle, com.gameocr.app.data.BorderStyle.DOUBLE, stringResource(R.string.settings_border_style_double)) {
-                            customBorderStyle = it
-                            scope.launch { viewModel.saveCustomBorderStyle(it) }
-                        }
-                        EngineChip(customBorderStyle, com.gameocr.app.data.BorderStyle.GROOVE, stringResource(R.string.settings_border_style_groove)) {
-                            customBorderStyle = it
-                            scope.launch { viewModel.saveCustomBorderStyle(it) }
-                        }
-                    }
-                }
-
-                }
-                }
-
-                SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_OVERLAY_TEXT) {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(stringResource(R.string.settings_textsize_label_format, textSize.toInt()), style = MaterialTheme.typography.labelLarge)
-                Slider(value = textSize, onValueChange = { textSize = it }, valueRange = 10f..28f, steps = 17)
-
-                Text(stringResource(R.string.settings_overlay_font_label), style = MaterialTheme.typography.labelLarge)
-                val defaultOverlayFontName = stringResource(R.string.settings_overlay_font_default)
-                val overlayFontChipEntries = OverlayFontPolicy.upsertImportedFont(
-                    overlayFontEntries,
-                    overlayFontFileName,
-                    overlayFontDisplayName
-                )
+                HorizontalDivider()
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { textOrientationExpanded = !textOrientationExpanded }
+                        .padding(vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
                 ) {
-                    OverlayFontChip(
-                        selected = overlayFontFileName.isBlank(),
-                        onClick = {
-                            scope.launch {
-                                withContext(Dispatchers.IO) { viewModel.resetOverlayFont() }
-                                overlayFontFileName = ""
-                                overlayFontDisplayName = ""
-                                overlayFontTypeface = null
-                                overlayFontMessage = context.getString(R.string.settings_overlay_font_reset_success)
-                                overlayFontMessageIsError = false
-                            }
-                        },
-                        label = defaultOverlayFontName,
-                        onLongClick = {}
+                    Text(
+                        (if (textOrientationExpanded) "▼ " else "▶ ") +
+                            stringResource(R.string.settings_text_orientation_section_title),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
                     )
-                    overlayFontChipEntries.forEach { font ->
-                        OverlayFontChip(
-                            selected = overlayFontFileName == font.fileName,
-                            label = font.displayName,
-                            onClick = {
-                                scope.launch {
-                                    val selected = withContext(Dispatchers.IO) {
-                                        viewModel.selectOverlayFont(font.fileName, font.displayName)
-                                    }
-                                    if (selected) {
-                                        overlayFontFileName = font.fileName
-                                        overlayFontDisplayName = font.displayName
-                                        overlayFontEntries = OverlayFontPolicy.upsertImportedFont(
-                                            overlayFontEntries,
-                                            font.fileName,
-                                            font.displayName
-                                        )
-                                        overlayFontTypeface = withContext(Dispatchers.IO) {
-                                            viewModel.overlayTypefaceFor(font.fileName)
-                                        }
-                                        overlayFontMessage = null
-                                        overlayFontMessageIsError = false
-                                    } else {
-                                        overlayFontMessage = context.getString(R.string.settings_overlay_font_error_invalid)
-                                        overlayFontMessageIsError = true
-                                    }
-                                }
-                            },
-                            onLongClick = { pendingOverlayFontDelete = font }
-                        )
-                    }
                 }
-                OutlinedButton(
-                    onClick = {
-                        overlayFontMessage = null
-                        overlayFontImportLauncher.launch(OverlayFontPolicy.OPEN_DOCUMENT_MIME_TYPES)
-                    }
-                ) {
-                    Text(stringResource(R.string.settings_overlay_font_import))
+                if (textOrientationExpanded) {
+                    textOrientationContent()
                 }
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 20.dp)
-                ) {
-                    overlayFontMessage?.let { message ->
-                        Text(
-                            message,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (overlayFontMessageIsError) {
-                                MaterialTheme.colorScheme.error
-                            } else {
-                                MaterialTheme.colorScheme.primary
-                            }
-                        )
-                    }
-                }
+            }
+            }
 
-                OverlayTextStyleEditor(
-                    style = overlayTextStyle,
-                    onChange = { overlayTextStyle = it.normalized() }
+            }
+
+            // —— 译文显示 ——
+            item(key = SectionKeys.OVERLAY) {
+            SectionCard(title = stringResource(R.string.settings_section_overlay)) {
+                val overlayThemeLabel = stringResource(
+                    when (overlayTheme) {
+                        OverlayTheme.CLASSIC_DARK -> R.string.settings_theme_classic_dark
+                        OverlayTheme.AMBER_GOLD -> R.string.settings_theme_amber_gold
+                        OverlayTheme.PAPER_LIGHT -> R.string.settings_theme_paper_light
+                        OverlayTheme.FROST_GLASS -> R.string.settings_theme_frost_glass
+                        OverlayTheme.CUSTOM -> R.string.settings_theme_custom
+                    }
+                )
+                ListItem(
+                    headlineContent = {
+                        Text(stringResource(R.string.settings_overlay_rendering_title))
+                    },
+                    supportingContent = { Text(overlayThemeLabel) },
+                    trailingContent = {
+                        Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null)
+                    },
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .clickable { overlayRenderingOpen = true },
                 )
 
-                Text(stringResource(R.string.settings_alpha_label_format, (alpha * 100).toInt()), style = MaterialTheme.typography.labelLarge)
-                Slider(value = alpha, onValueChange = { alpha = it }, valueRange = 0.3f..1f)
-                }
+                SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_OVERLAY_MODE) {
+                    Text(
+                        stringResource(R.string.settings_render_mode_label),
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                    val renderModeOptions = listOf(
+                        RenderMode.BLOCKS to R.string.settings_render_blocks_chip,
+                        RenderMode.FLOATING_WINDOW to R.string.settings_render_floating_window_chip,
+                    )
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                        renderModeOptions.forEachIndexed { index, (mode, labelRes) ->
+                            SegmentedButton(
+                                selected = renderMode == mode,
+                                onClick = { if (renderMode != mode) renderMode = mode },
+                                shape = SegmentedButtonDefaults.itemShape(
+                                    index = index,
+                                    count = renderModeOptions.size,
+                                ),
+                                icon = {},
+                                label = { Text(stringResource(labelRes)) },
+                            )
+                        }
+                    }
+                    if (renderMode == RenderMode.FLOATING_WINDOW) {
+                        Text(
+                            stringResource(R.string.settings_floating_window_content_label),
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            EngineChip(
+                                floatingWindowContentMode,
+                                com.gameocr.app.data.FloatingWindowContentMode.SRC_AND_DST,
+                                stringResource(R.string.settings_floating_window_content_src_and_dst),
+                            ) {
+                                floatingWindowContentMode = it
+                                scope.launch { viewModel.saveFloatingWindowContentMode(it) }
+                            }
+                            EngineChip(
+                                floatingWindowContentMode,
+                                com.gameocr.app.data.FloatingWindowContentMode.DST_ONLY,
+                                stringResource(R.string.settings_floating_window_content_dst_only),
+                            ) {
+                                floatingWindowContentMode = it
+                                scope.launch { viewModel.saveFloatingWindowContentMode(it) }
+                            }
+                        }
+                    }
                 }
 
                 // —— 几何项（预览看不到，只能实际触发翻译时看到效果）——
@@ -4984,29 +5158,6 @@ fun SettingsScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 val layoutControlsEnabled =
                     manualOverlayLayoutControlsEnabled(overlayStyleMode, renderMode)
-                Text(stringResource(R.string.settings_render_mode_label), style = MaterialTheme.typography.labelLarge)
-                val renderModeOptions = listOf(
-                    RenderMode.BLOCKS to R.string.settings_render_blocks_chip,
-                    RenderMode.FLOATING_WINDOW to R.string.settings_render_floating_window_chip,
-                )
-                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                    renderModeOptions.forEachIndexed { index, (mode, labelRes) ->
-                        SegmentedButton(
-                            selected = renderMode == mode,
-                            onClick = {
-                                if (renderMode != mode) {
-                                    renderMode = mode
-                                }
-                            },
-                            shape = SegmentedButtonDefaults.itemShape(
-                                index = index,
-                                count = renderModeOptions.size,
-                            ),
-                            icon = {},
-                            label = { Text(stringResource(labelRes)) },
-                        )
-                    }
-                }
                 InlineSwitchLabel(
                     label = stringResource(R.string.settings_overlay_style_adaptive),
                     checked = overlayStyleMode == OverlayStyleMode.ADAPTIVE,
@@ -5028,26 +5179,6 @@ fun SettingsScreen(
                 }
 
                 if (renderMode == RenderMode.FLOATING_WINDOW) {
-                    // 悬浮窗口内容形态：原文+译文 / 仅译文。立即生效，不进 save 流程。
-                    Text(stringResource(R.string.settings_floating_window_content_label), style = MaterialTheme.typography.labelLarge)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        EngineChip(
-                            floatingWindowContentMode,
-                            com.gameocr.app.data.FloatingWindowContentMode.SRC_AND_DST,
-                            stringResource(R.string.settings_floating_window_content_src_and_dst)
-                        ) {
-                            floatingWindowContentMode = it
-                            scope.launch { viewModel.saveFloatingWindowContentMode(it) }
-                        }
-                        EngineChip(
-                            floatingWindowContentMode,
-                            com.gameocr.app.data.FloatingWindowContentMode.DST_ONLY,
-                            stringResource(R.string.settings_floating_window_content_dst_only)
-                        ) {
-                            floatingWindowContentMode = it
-                            scope.launch { viewModel.saveFloatingWindowContentMode(it) }
-                        }
-                    }
                     SwitchRow(stringResource(R.string.settings_floating_window_locked), floatingWindowLocked) {
                         floatingWindowLocked = it
                         scope.launch { viewModel.saveFloatingWindowLocked(it) }
@@ -5065,10 +5196,14 @@ fun SettingsScreen(
                 }
 
                 if (renderMode == RenderMode.BLOCKS) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Text(
                             stringResource(R.string.settings_translation_block_interaction_label),
                             style = MaterialTheme.typography.labelLarge,
+                            modifier = Modifier.weight(1f),
                         )
                         SettingHelpTooltip(
                             text = stringResource(
@@ -5270,6 +5405,79 @@ fun SettingsScreen(
                 ) {
                     floatingWindowAutoHideWhenObstructing = it
                     scope.launch { viewModel.saveFloatingWindowAutoHideWhenObstructing(it) }
+                }
+            }
+            }
+            }
+
+            item(key = SectionKeys.CAPTURE_REGION) {
+            SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_CAPTURE_REGION) {
+            SectionCard(title = stringResource(R.string.settings_section_capture_region)) {
+                SwitchRow(
+                    stringResource(R.string.settings_capture_region_border_enabled),
+                    captureRegionBorderEnabled,
+                ) { enabled ->
+                    captureRegionBorderEnabled = enabled
+                    scope.launch { viewModel.saveCaptureRegionBorderEnabled(enabled) }
+                }
+                VisualColorPickerRow(
+                    stringResource(R.string.settings_capture_region_border_color),
+                    captureRegionBorderColor,
+                ) { color ->
+                    captureRegionBorderColor = color
+                    scope.launch { viewModel.saveCaptureRegionBorderColor(color) }
+                }
+                Text(
+                    stringResource(
+                        R.string.settings_capture_region_border_width_format,
+                        captureRegionBorderWidth.roundToInt(),
+                    ),
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                Slider(
+                    value = captureRegionBorderWidth,
+                    onValueChange = { captureRegionBorderWidth = it },
+                    onValueChangeFinished = {
+                        scope.launch {
+                            viewModel.saveCaptureRegionBorderWidth(
+                                captureRegionBorderWidth.roundToInt()
+                            )
+                        }
+                    },
+                    valueRange = MIN_CAPTURE_REGION_BORDER_WIDTH_DP.toFloat()..
+                        MAX_CAPTURE_REGION_BORDER_WIDTH_DP.toFloat(),
+                    steps = MAX_CAPTURE_REGION_BORDER_WIDTH_DP -
+                        MIN_CAPTURE_REGION_BORDER_WIDTH_DP - 1,
+                )
+                Text(
+                    stringResource(R.string.settings_floating_window_border_style_label),
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    EngineChip(
+                        captureRegionBorderStyle,
+                        CaptureRegionBorderStyle.SOLID,
+                        stringResource(R.string.settings_border_style_solid),
+                    ) { style ->
+                        captureRegionBorderStyle = style
+                        scope.launch { viewModel.saveCaptureRegionBorderStyle(style) }
+                    }
+                    EngineChip(
+                        captureRegionBorderStyle,
+                        CaptureRegionBorderStyle.DASHED,
+                        stringResource(R.string.settings_border_style_dashed),
+                    ) { style ->
+                        captureRegionBorderStyle = style
+                        scope.launch { viewModel.saveCaptureRegionBorderStyle(style) }
+                    }
+                    EngineChip(
+                        captureRegionBorderStyle,
+                        CaptureRegionBorderStyle.DOTTED,
+                        stringResource(R.string.settings_border_style_dotted),
+                    ) { style ->
+                        captureRegionBorderStyle = style
+                        scope.launch { viewModel.saveCaptureRegionBorderStyle(style) }
+                    }
                 }
             }
             }
@@ -5753,8 +5961,9 @@ fun SettingsScreen(
                 Box(modifier = Modifier.size(80.dp))
             }
             }
+            }
 
-            if (overlayPreviewSticky && !searchActive) {
+            if (overlayPreviewSticky && overlayRenderingOpen) {
                 Surface(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
@@ -5766,6 +5975,9 @@ fun SettingsScreen(
                 ) {
                     Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
                         OverlayPreviewCard(
+                            renderMode = renderMode,
+                            floatingWindowContentMode = floatingWindowContentMode,
+                            floatingWindowLocked = floatingWindowLocked,
                             theme = overlayTheme,
                             customBg = customBg,
                             customFg = customFg,
@@ -5839,7 +6051,15 @@ fun SettingsScreen(
                                         if (entry.targetId == R.string.settings_openai_request_options_title) {
                                             promptAdvancedExpanded = true
                                         }
+                                        if (entry.targetId in ORIENTATION_SEARCH_TARGET_RES_IDS) {
+                                            textOrientationExpanded = true
+                                        }
                                         closeSearch()
+                                        if (entry.targetId in OVERLAY_RENDERING_SEARCH_TARGET_RES_IDS) {
+                                            pendingOverlayRenderingSearchTarget = entry.targetId
+                                            overlayRenderingOpen = true
+                                            return@clickable
+                                        }
                                         scope.launch {
                                             settingsSectionIndex(entry.sectionKey)?.let { index ->
                                                 listState.scrollToItem(index)
@@ -7929,6 +8149,9 @@ private fun StyleIconToggle(
 
 @Composable
 private fun OverlayPreviewCard(
+    renderMode: RenderMode,
+    floatingWindowContentMode: com.gameocr.app.data.FloatingWindowContentMode,
+    floatingWindowLocked: Boolean,
     theme: OverlayTheme,
     customBg: Int,
     customFg: Int,
@@ -7938,7 +8161,7 @@ private fun OverlayPreviewCard(
     textSize: Float,
     alpha: Float,
     overlayTypeface: android.graphics.Typeface?,
-    textStyle: OverlayTextStyle
+    textStyle: OverlayTextStyle,
 ) {
     val colors = overlayThemeColors(theme, customBg, customFg, customBorder, customBorderW.toInt())
     // 仅 CUSTOM 主题 + borderDp > 0 时让用户选的 borderStyle 生效；与 DraggableOverlayWindow 一致
@@ -7962,42 +8185,173 @@ private fun OverlayPreviewCard(
                 .padding(16.dp),
             contentAlignment = Alignment.Center
         ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .alpha(alpha)
-                    .background(
-                        Color(colors.bg),
-                        shape = RoundedCornerShape(6.dp)
-                    )
-                    .borderStyleOverlay(
-                        borderDp = colors.borderDp,
-                        borderColor = colors.border,
-                        borderStyle = effectiveBorderStyle,
-                        cornerRadiusDp = 6f
-                    )
-                    .padding(horizontal = 12.dp, vertical = 10.dp)
-            ) {
-                val previewText = stringResource(R.string.settings_overlay_preview_sample)
-                AndroidView(
+            if (overlayPreviewUsesFloatingWindow(renderMode)) {
+                FloatingWindowPreview(
+                    colors = colors,
+                    borderStyle = effectiveBorderStyle,
+                    contentMode = floatingWindowContentMode,
+                    locked = floatingWindowLocked,
+                    textSize = textSize,
+                    alpha = alpha,
+                    overlayTypeface = overlayTypeface,
+                    textStyle = textStyle,
+                )
+            } else {
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(80.dp),
-                    factory = { ctx ->
-                        StyledTranslationTextView(ctx).apply {
-                            setIncludeFontPadding(true)
-                            gravity = android.view.Gravity.CENTER_VERTICAL
+                        .alpha(alpha)
+                        .background(
+                            Color(colors.bg),
+                            shape = RoundedCornerShape(6.dp)
+                        )
+                        .borderStyleOverlay(
+                            borderDp = colors.borderDp,
+                            borderColor = colors.border,
+                            borderStyle = effectiveBorderStyle,
+                            cornerRadiusDp = 6f
+                        )
+                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                ) {
+                    val previewText = stringResource(R.string.settings_overlay_preview_sample)
+                    AndroidView(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(80.dp),
+                        factory = { ctx ->
+                            StyledTranslationTextView(ctx).apply {
+                                setIncludeFontPadding(true)
+                                gravity = android.view.Gravity.CENTER_VERTICAL
+                            }
+                        },
+                        update = { view ->
+                            view.text = previewText
+                            view.setTextColor(colors.fg)
+                            view.setTextSize(TypedValue.COMPLEX_UNIT_SP, textSize)
+                            view.applyOverlayTextStyle(textStyle, overlayTypeface)
                         }
-                    },
-                    update = { view ->
-                        view.text = previewText
-                        view.setTextColor(colors.fg)
-                        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, textSize)
-                        view.applyOverlayTextStyle(textStyle, overlayTypeface)
-                    }
-                )
+                    )
+                }
             }
         }
+    }
+}
+
+internal fun overlayPreviewUsesFloatingWindow(renderMode: RenderMode): Boolean =
+    renderMode == RenderMode.FLOATING_WINDOW
+
+@Composable
+private fun FloatingWindowPreview(
+    colors: ThemeColors,
+    borderStyle: com.gameocr.app.data.BorderStyle,
+    contentMode: com.gameocr.app.data.FloatingWindowContentMode,
+    locked: Boolean,
+    textSize: Float,
+    alpha: Float,
+    overlayTypeface: android.graphics.Typeface?,
+    textStyle: OverlayTextStyle,
+) {
+    val previewText = stringResource(R.string.settings_overlay_preview_sample)
+    val previewLines = previewText.lines()
+    val sourceText = previewLines.firstOrNull().orEmpty()
+    val translationText = previewLines.drop(1).joinToString("\n").ifBlank { previewText }
+    val mutedColor = android.graphics.Color.argb(
+        0x99,
+        android.graphics.Color.red(colors.fg),
+        android.graphics.Color.green(colors.fg),
+        android.graphics.Color.blue(colors.fg),
+    )
+    val renderedText = styledFloatingWindowText(
+        pairs = listOf(sourceText to translationText),
+        mode = contentMode,
+        textSizeSp = textSize,
+        foregroundColor = colors.fg,
+        mutedColor = mutedColor,
+    )
+    Box(
+        modifier = Modifier
+            .fillMaxWidth(0.86f)
+            .alpha(alpha)
+            .clip(RoundedCornerShape(6.dp))
+            .background(Color(colors.bg), RoundedCornerShape(6.dp))
+            .borderStyleOverlay(
+                borderDp = colors.borderDp,
+                borderColor = colors.border,
+                borderStyle = borderStyle,
+                cornerRadiusDp = 6f,
+            )
+    ) {
+        Column {
+            if (!locked) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(28.dp)
+                        .background(Color.Black.copy(alpha = 0.16f)),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .size(width = 32.dp, height = 4.dp)
+                            .background(Color(mutedColor), RoundedCornerShape(99.dp))
+                    )
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = null,
+                        tint = Color(colors.fg),
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .padding(end = 6.dp)
+                            .size(18.dp),
+                    )
+                }
+            }
+            AndroidView(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(96.dp),
+                factory = { ctx ->
+                    StyledTranslationTextView(ctx).apply {
+                        setIncludeFontPadding(true)
+                        gravity = android.view.Gravity.CENTER_VERTICAL
+                        val horizontal = (16 * resources.displayMetrics.density).roundToInt()
+                        val vertical = (12 * resources.displayMetrics.density).roundToInt()
+                        setPadding(horizontal, vertical, horizontal, vertical)
+                    }
+                },
+                update = { view ->
+                    view.text = renderedText
+                    view.setTextColor(colors.fg)
+                    view.setTextSize(TypedValue.COMPLEX_UNIT_SP, textSize)
+                    view.applyOverlayTextStyle(textStyle, overlayTypeface)
+                },
+            )
+            if (!locked) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(20.dp)
+                        .background(Color.Black.copy(alpha = 0.12f)),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .padding(end = 8.dp)
+                            .size(width = 40.dp, height = 5.dp)
+                            .background(Color(mutedColor), RoundedCornerShape(99.dp))
+                    )
+                }
+            }
+        }
+        Icon(
+            imageVector = if (locked) Icons.Default.Lock else Icons.Default.LockOpen,
+            contentDescription = null,
+            tint = Color(colors.fg),
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(5.dp)
+                .size(18.dp),
+        )
     }
 }
 
@@ -8166,7 +8520,7 @@ private object SectionKeys {
     const val TTS = "tts"
     const val PRESETS = "presets"
     const val OCR = "ocr"
-    const val TEXT_ORIENTATION = "text_orientation"
+    const val CAPTURE_REGION = "capture_region"
     const val OVERLAY = "overlay"
     const val WORD_SELECT = "word_select"
     const val FLOATING = "floating"
@@ -8174,20 +8528,18 @@ private object SectionKeys {
     const val TRIGGER = "trigger"
     const val DEVELOPER = "developer"
     const val NETWORK = "network"
-    const val APP_LANG = "app_lang"
-    const val THEME_MODE = "theme_mode"
+    const val GENERAL = "general"
 }
 
 internal val SETTINGS_SECTION_KEYS_IN_ORDER = listOf(
-    SectionKeys.APP_LANG,
-    SectionKeys.THEME_MODE,
+    SectionKeys.GENERAL,
     SectionKeys.PRESETS,
     SectionKeys.TRANSLATE,
     SectionKeys.TTS,
     SectionKeys.OCR,
-    SectionKeys.TEXT_ORIENTATION,
     SectionKeys.OVERLAY,
     SectionKeys.WORD_SELECT,
+    SectionKeys.CAPTURE_REGION,
     SectionKeys.TRIGGER,
     SectionKeys.FLOATING,
     SectionKeys.ARC_MENU,
@@ -8200,6 +8552,13 @@ internal fun settingsSectionIndex(sectionKey: String): Int? =
 
 private val SEARCH_TARGET_APP_LANGUAGE = intArrayOf(R.string.settings_section_app_lang)
 private val SEARCH_TARGET_THEME_MODE = intArrayOf(R.string.settings_section_theme_mode)
+private val SEARCH_TARGET_CAPTURE_REGION = intArrayOf(
+    R.string.settings_section_capture_region,
+    R.string.settings_capture_region_border_enabled,
+    R.string.settings_capture_region_border_color,
+    R.string.settings_capture_region_border_width_format,
+    R.string.settings_floating_window_border_style_label,
+)
 private val SEARCH_TARGET_PRESETS = intArrayOf(
     R.string.settings_section_translation_presets,
     R.string.settings_search_item_preset_transfer,
@@ -8281,11 +8640,18 @@ private val SEARCH_TARGET_ORIENTATION_OUTPUT = intArrayOf(
     R.string.settings_translation_output_follow_title,
     R.string.settings_translation_output_layout_label,
 )
+internal val ORIENTATION_SEARCH_TARGET_RES_IDS: Set<Int> = listOf(
+    SEARCH_TARGET_ORIENTATION_DETECTION,
+    SEARCH_TARGET_ORIENTATION_OUTPUT,
+).flatMap { it.asIterable() }.toSet()
 private val SEARCH_TARGET_OVERLAY_DISPLAY = intArrayOf(
-    R.string.settings_search_item_render_mode,
     R.string.settings_search_item_translation_block_interaction,
     R.string.settings_search_item_placement,
     R.string.settings_search_item_offset,
+)
+private val SEARCH_TARGET_OVERLAY_MODE = intArrayOf(
+    R.string.settings_search_item_render_mode,
+    R.string.settings_search_item_floating_window_content,
 )
 private val SEARCH_TARGET_OVERLAY_THEME = intArrayOf(
     R.string.settings_search_item_overlay_theme,
@@ -8299,10 +8665,13 @@ private val SEARCH_TARGET_OVERLAY_TEXT = intArrayOf(
     R.string.settings_search_item_alpha,
 )
 private val SEARCH_TARGET_OVERLAY_WINDOW = intArrayOf(
-    R.string.settings_search_item_floating_window_content,
     R.string.settings_search_item_floating_window_locked,
     R.string.settings_search_item_floating_window_reset,
 )
+internal val OVERLAY_RENDERING_SEARCH_TARGET_RES_IDS: Set<Int> = listOf(
+    SEARCH_TARGET_OVERLAY_THEME,
+    SEARCH_TARGET_OVERLAY_TEXT,
+).flatMap { it.asIterable() }.toSet()
 private val SEARCH_TARGET_OVERLAY_LAYOUT = intArrayOf(
     R.string.settings_search_item_allow_wrap,
     R.string.settings_search_item_avoid_collision,
@@ -8352,7 +8721,9 @@ internal val SETTINGS_SEARCH_TARGET_RES_IDS: Set<Int> = listOf(
     SEARCH_TARGET_OCR_ENGINE,
     SEARCH_TARGET_ORIENTATION_DETECTION,
     SEARCH_TARGET_ORIENTATION_OUTPUT,
+    SEARCH_TARGET_CAPTURE_REGION,
     SEARCH_TARGET_OVERLAY_DISPLAY,
+    SEARCH_TARGET_OVERLAY_MODE,
     SEARCH_TARGET_OVERLAY_THEME,
     SEARCH_TARGET_OVERLAY_TEXT,
     SEARCH_TARGET_OVERLAY_WINDOW,
@@ -8548,7 +8919,7 @@ private val SETTING_ITEMS: List<SearchEntry> = listOfNotNull(
     SearchEntry(SectionKeys.PRESETS, R.string.settings_section_translation_presets, R.string.settings_section_translation_presets, listOf("preset", "presets", "profile", "mode", "系统预设方案", "翻译预设", "预设", "模式")),
     SearchEntry(SectionKeys.PRESETS, R.string.settings_section_translation_presets, R.string.settings_search_item_preset_transfer, SETTINGS_SEARCH_TRANSFER_KEYWORDS),
 
-    // —— 翻译后端 ——
+    // —— 翻译引擎 ——
     SearchEntry(
         SectionKeys.TRANSLATE,
         R.string.settings_section_translator,
@@ -8606,15 +8977,15 @@ private val SETTING_ITEMS: List<SearchEntry> = listOfNotNull(
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_grant_usage_access, listOf("usage permission", "usage access", "permission", "使用情况权限", "使用情况访问", "授权")),
     SearchEntry(SectionKeys.TRANSLATE, R.string.settings_section_translator, R.string.settings_manage_glossary, listOf("translation library", "glossary", "terminology", "translation memory", "翻译库", "术语库", "翻译记忆", "专业名词")),
     SearchEntry(
-        SectionKeys.TEXT_ORIENTATION,
-        R.string.settings_text_orientation_section_title,
+        SectionKeys.OCR,
+        R.string.settings_section_ocr,
         R.string.settings_translation_output_follow_title,
         listOf("follow recognition", "recognized layout", "跟随识别", "识别文字排列"),
         optionLabelResIds = listOf(R.string.settings_translation_output_follow),
     ),
     SearchEntry(
-        SectionKeys.TEXT_ORIENTATION,
-        R.string.settings_text_orientation_section_title,
+        SectionKeys.OCR,
+        R.string.settings_section_ocr,
         R.string.settings_translation_output_layout_label,
         listOf("output direction", "translation layout", "writing mode", "译文方向", "译文排列"),
         optionLabelResIds = listOf(
@@ -8664,13 +9035,19 @@ private val SETTING_ITEMS: List<SearchEntry> = listOfNotNull(
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_tencent_region, listOf("tencent", "腾讯", "region", "区域", "ap-guangzhou", "广州")),
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_youdao_ocr, listOf("youdao", "有道", "ocrapi", "app key", "app secret")),
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_dbnet_advanced, listOf("dbnet", "threshold", "prob", "box score", "unclip", "bubble", "cluster", "gap", "advanced", "阈值", "二值化", "连通域", "外扩", "气泡", "聚类", "高级")),
-    SearchEntry(SectionKeys.TEXT_ORIENTATION, R.string.settings_text_orientation_section_title, R.string.settings_orient_auto_detect_title, listOf("orientation", "text orientation", "direction", "vertical", "horizontal", "自动判别", "方向", "文本方向", "竖排", "横排")),
-    SearchEntry(SectionKeys.TEXT_ORIENTATION, R.string.settings_text_orientation_section_title, R.string.settings_search_item_manual_orientation, listOf("manual", "lock", "orientation", "vertical", "horizontal", "stacked", "手动", "锁定", "方向", "竖排", "横排", "逐字")),
+    SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_orient_auto_detect_title, listOf("orientation", "text orientation", "direction", "vertical", "horizontal", "自动判别", "方向", "文本方向", "竖排", "横排")),
+    SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_manual_orientation, listOf("manual", "lock", "orientation", "vertical", "horizontal", "stacked", "手动", "锁定", "方向", "竖排", "横排", "逐字")),
     if (OrientationModelVisibilityPolicy.userManagementVisible) {
-        SearchEntry(SectionKeys.TEXT_ORIENTATION, R.string.settings_text_orientation_section_title, R.string.settings_search_item_orientation_model, listOf("orientation model", "doc orientation", "direction model", "ONNX", "方向模型", "文本方向模型", "模型", "download", "下载", "本地导入", "local import", "导入", "delete", "删除"))
+        SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_orientation_model, listOf("orientation model", "doc orientation", "direction model", "ONNX", "方向模型", "文本方向模型", "模型", "download", "下载", "本地导入", "local import", "导入", "delete", "删除"))
     } else {
         null
     },
+
+    SearchEntry(SectionKeys.CAPTURE_REGION, R.string.settings_section_capture_region, R.string.settings_section_capture_region, listOf("capture region", "screenshot region", "截屏区域", "截图区域")),
+    SearchEntry(SectionKeys.CAPTURE_REGION, R.string.settings_section_capture_region, R.string.settings_capture_region_border_enabled, listOf("show border", "indicator", "显示边框", "区域状态")),
+    SearchEntry(SectionKeys.CAPTURE_REGION, R.string.settings_section_capture_region, R.string.settings_capture_region_border_color, SETTINGS_SEARCH_COLOR_KEYWORDS),
+    SearchEntry(SectionKeys.CAPTURE_REGION, R.string.settings_section_capture_region, R.string.settings_capture_region_border_width_format, listOf("border width", "thickness", "边框粗细", "线宽")),
+    SearchEntry(SectionKeys.CAPTURE_REGION, R.string.settings_section_capture_region, R.string.settings_floating_window_border_style_label, listOf("solid", "dashed", "dotted", "实线", "虚线", "点线", "边框样式")),
 
     // —— 图像预处理（在 OCR section 内）——
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_upscale, listOf("upscale", "放大", "上采样", "preprocess", "图像预处理")),
@@ -8704,7 +9081,7 @@ private val SETTING_ITEMS: List<SearchEntry> = listOfNotNull(
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_offset, listOf("offset", "微调")),
     SearchEntry(
         SectionKeys.OVERLAY,
-        R.string.settings_section_overlay,
+        R.string.settings_overlay_rendering_title,
         R.string.settings_search_item_overlay_theme,
         listOf("深色", "浅色", "纸张", "霜玻璃", "琥珀", "theme", "dark", "light", "frost", "amber"),
         optionLabelResIds = listOf(
@@ -8715,12 +9092,12 @@ private val SETTING_ITEMS: List<SearchEntry> = listOfNotNull(
             R.string.settings_theme_custom,
         ),
     ),
-    SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_custom_theme, SETTINGS_SEARCH_COLOR_KEYWORDS),
-    SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_border_style, listOf("solid", "dashed", "dotted", "double", "groove", "实线", "虚线", "点线", "双线", "凹槽", "边框样式")),
-    SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_text_size, listOf("font size", "字号", "字体大小")),
-    SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_text_style, listOf("bold", "italic", "underline", "letter spacing", "line spacing", "alignment", "outline", "stroke", "shadow", "加粗", "倾斜", "下划线", "字符间距", "行距", "对齐", "描边", "阴影")),
-    SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_overlay_font, listOf("font", "ttf", "字体", "自定义字体", "译文字体")),
-    SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_alpha, listOf("alpha", "opacity", "透明度")),
+    SearchEntry(SectionKeys.OVERLAY, R.string.settings_overlay_rendering_title, R.string.settings_search_item_custom_theme, SETTINGS_SEARCH_COLOR_KEYWORDS),
+    SearchEntry(SectionKeys.OVERLAY, R.string.settings_overlay_rendering_title, R.string.settings_search_item_border_style, listOf("solid", "dashed", "dotted", "double", "groove", "实线", "虚线", "点线", "双线", "凹槽", "边框样式")),
+    SearchEntry(SectionKeys.OVERLAY, R.string.settings_overlay_rendering_title, R.string.settings_search_item_text_size, listOf("font size", "字号", "字体大小")),
+    SearchEntry(SectionKeys.OVERLAY, R.string.settings_overlay_rendering_title, R.string.settings_search_item_text_style, listOf("bold", "italic", "underline", "letter spacing", "line spacing", "alignment", "outline", "stroke", "shadow", "加粗", "倾斜", "下划线", "字符间距", "行距", "对齐", "描边", "阴影")),
+    SearchEntry(SectionKeys.OVERLAY, R.string.settings_overlay_rendering_title, R.string.settings_search_item_overlay_font, listOf("font", "ttf", "字体", "自定义字体", "译文字体")),
+    SearchEntry(SectionKeys.OVERLAY, R.string.settings_overlay_rendering_title, R.string.settings_search_item_alpha, listOf("alpha", "opacity", "透明度")),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_floating_window_content, listOf("floating window", "悬浮窗", "原文+译文", "仅译文", "src dst", "content mode")),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_floating_window_locked, listOf("lock", "锁定", "悬浮窗")),
     SearchEntry(SectionKeys.OVERLAY, R.string.settings_section_overlay, R.string.settings_search_item_floating_window_reset, listOf("reset", "重置", "还原", "默认", "default", "floating window", "悬浮窗", "geometry", "几何", "位置", "尺寸", "size")),
@@ -8784,9 +9161,9 @@ private val SETTING_ITEMS: List<SearchEntry> = listOfNotNull(
     SearchEntry(SectionKeys.NETWORK, R.string.settings_section_network, R.string.settings_search_item_llm_mirror, listOf("mirror", "hf-mirror", "huggingface", "download source", "模型下载源", "下载源", "镜像", "自定义 URL", "local llm", "llm model")),
     SearchEntry(SectionKeys.NETWORK, R.string.settings_section_network, R.string.settings_search_item_cleartext_hosts, listOf("cleartext", "http", "明文", "白名单", "host", "自架", "私有")),
 
-    SearchEntry(SectionKeys.APP_LANG, R.string.settings_section_app_lang, R.string.settings_section_app_lang, listOf("language", "locale", "语言", "中文", "english", "i18n")),
+    SearchEntry(SectionKeys.GENERAL, R.string.settings_section_app_lang, R.string.settings_section_app_lang, listOf("language", "locale", "语言", "中文", "english", "i18n")),
 
-    SearchEntry(SectionKeys.THEME_MODE, R.string.settings_section_theme_mode, R.string.settings_section_theme_mode, listOf("theme", "夜间", "白天", "深色", "浅色", "dark", "light", "night")),
+    SearchEntry(SectionKeys.GENERAL, R.string.settings_section_theme_mode, R.string.settings_section_theme_mode, listOf("theme", "夜间", "白天", "深色", "浅色", "dark", "light", "night")),
 )
 
 internal fun settingsSearchSectionKeys(): Set<String> = SETTING_ITEMS.mapTo(linkedSetOf()) { it.sectionKey }
@@ -9457,7 +9834,7 @@ internal fun overlayFontDeleteTipAckLabel(
 
 @Composable
 private fun SectionCard(
-    title: String,
+    title: String?,
     onBoundsInWindow: ((top: Float, bottom: Float) -> Unit)? = null,
     helpText: String? = null,
     content: @Composable () -> Unit
@@ -9486,18 +9863,20 @@ private fun SectionCard(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f)
-                )
-                helpText?.let { SettingHelpTooltip(text = it) }
+            if (title != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f)
+                    )
+                    helpText?.let { SettingHelpTooltip(text = it) }
+                }
             }
             content()
         }
@@ -9768,6 +10147,7 @@ private fun InlineSwitchLabel(
     onChange: (Boolean) -> Unit,
 ) {
     Row(
+        modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Switch(
@@ -9788,6 +10168,7 @@ private fun InlineSwitchLabel(
             style = MaterialTheme.typography.labelLarge,
             modifier = Modifier
                 .padding(start = 8.dp)
+                .weight(1f)
                 .alpha(if (enabled) 1f else 0.4f),
         )
         helpText?.let { SettingHelpTooltip(text = it) }

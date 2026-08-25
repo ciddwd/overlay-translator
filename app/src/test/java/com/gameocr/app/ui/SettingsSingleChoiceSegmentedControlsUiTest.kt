@@ -24,7 +24,7 @@ class SettingsSingleChoiceSegmentedControlsUiTest {
             Case(
                 name = "display mode",
                 startMarker = "val renderModeOptions =",
-                endMarker = "if (!layoutControlsEnabled)",
+                endMarker = "if (renderMode == RenderMode.FLOATING_WINDOW)",
                 requiredMarkers = listOf(
                     "RenderMode.BLOCKS",
                     "RenderMode.FLOATING_WINDOW",

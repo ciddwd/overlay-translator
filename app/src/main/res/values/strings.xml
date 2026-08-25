@@ -296,11 +296,16 @@
     <string name="settings_save_btn">Save</string>
     <string name="settings_saved_btn">Saved</string>
     <string name="settings_paddle_status_checking">Checking…</string>
-    <string name="settings_section_translator">Translator backend</string>
+    <string name="settings_section_translator">Translator engine</string>
     <string name="settings_section_tts">TTS output</string>
     <string name="settings_section_ocr">OCR engine</string>
     <string name="settings_section_preprocess">Image preprocessing (before OCR)</string>
+    <string name="settings_section_capture_region">Capture region</string>
+    <string name="settings_capture_region_border_enabled">Show capture region border</string>
+    <string name="settings_capture_region_border_color">Border color</string>
+    <string name="settings_capture_region_border_width_format">Border width: %1$d dp</string>
     <string name="settings_section_overlay">Overlay</string>
+    <string name="settings_overlay_rendering_title">Display &amp; rendering</string>
     <string name="settings_section_floating">Floating button</string>
     <string name="settings_section_trigger">Loop / Triggers</string>
     <string name="settings_section_developer">Developer diagnostics</string>

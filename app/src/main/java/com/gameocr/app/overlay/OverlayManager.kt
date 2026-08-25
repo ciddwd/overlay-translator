@@ -15,8 +15,6 @@ import android.text.SpannableStringBuilder
 import android.text.Spannable
 import android.text.Spanned
 import android.text.style.BackgroundColorSpan
-import android.text.style.ForegroundColorSpan
-import android.text.style.RelativeSizeSpan
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
@@ -830,40 +828,13 @@ class OverlayManager(
     }
 
     private fun buildFloatingWindowText(pairs: List<Pair<String, String>>): CharSequence {
-        val result = SpannableStringBuilder()
-        val sourceScale = (textSizeSp - 1).coerceAtLeast(10).toFloat() /
-            textSizeSp.coerceAtLeast(1).toFloat()
-        floatingWindowTextSegments(pairs, floatingWindowContentMode).forEach { segment ->
-            val start = result.length
-            result.append(segment.text)
-            val end = result.length
-            if (start == end) return@forEach
-            when (segment.role) {
-                FloatingWindowTextRole.SOURCE -> {
-                    result.setSpan(
-                        ForegroundColorSpan(themeFgMutedColor()),
-                        start,
-                        end,
-                        Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
-                    )
-                    result.setSpan(
-                        RelativeSizeSpan(sourceScale),
-                        start,
-                        end,
-                        Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
-                    )
-                }
-
-                FloatingWindowTextRole.TRANSLATION -> Unit
-                FloatingWindowTextRole.SEPARATOR -> result.setSpan(
-                    ForegroundColorSpan(themeFgMutedColor()),
-                    start,
-                    end,
-                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
-                )
-            }
-        }
-        return result
+        return styledFloatingWindowText(
+            pairs = pairs,
+            mode = floatingWindowContentMode,
+            textSizeSp = textSizeSp.toFloat(),
+            foregroundColor = themeFgColor(),
+            mutedColor = themeFgMutedColor(),
+        )
     }
 
     private fun DraggableOverlayWindow.applySettings() {

@@ -150,6 +150,11 @@ class FloatingWindowTextSelectionTest {
     fun floatingWindow_smoke_usesOneDialogHostAndNativeSelection() {
         val windowSource = sourceFile("DraggableOverlayWindow.kt").readText()
         val managerSource = sourceFile("OverlayManager.kt").readText()
+        val textContentSource = sourceFile("FloatingWindowTextContent.kt").readText()
+        val settingsSource = listOf(
+            File("src/main/java/com/gameocr/app/ui/SettingsScreen.kt"),
+            File("app/src/main/java/com/gameocr/app/ui/SettingsScreen.kt"),
+        ).firstOrNull(File::isFile)?.readText() ?: error("SettingsScreen.kt not found")
 
         data class Case(val name: String, val source: String, val marker: String)
 
@@ -193,8 +198,18 @@ class FloatingWindowTextSelectionTest {
             ),
             Case(
                 "floating content uses a mutable styled text buffer",
-                managerSource,
+                textContentSource,
                 "SpannableStringBuilder",
+            ),
+            Case(
+                "floating runtime uses the shared styled text renderer",
+                managerSource,
+                "return styledFloatingWindowText(",
+            ),
+            Case(
+                "settings preview uses the same styled text renderer",
+                settingsSource,
+                "val renderedText = styledFloatingWindowText(",
             ),
             Case(
                 "all rows use one selectable text host",

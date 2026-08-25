@@ -12,6 +12,8 @@ import androidx.datastore.preferences.preferencesDataStore
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import com.gameocr.app.R
 import com.gameocr.app.capture.CaptureRegion
+import com.gameocr.app.capture.CaptureRegionBorderStyle
+import com.gameocr.app.capture.normalizedCaptureRegionBorderWidthDp
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -71,6 +73,10 @@ class SettingsRepository @Inject constructor(
         val Region = stringPreferencesKey("capture_region_json")
         val RegionSavedW = intPreferencesKey("capture_region_saved_screen_w")
         val RegionSavedH = intPreferencesKey("capture_region_saved_screen_h")
+        val RegionBorderEnabled = booleanPreferencesKey("capture_region_border_enabled")
+        val RegionBorderColor = intPreferencesKey("capture_region_border_color")
+        val RegionBorderWidth = intPreferencesKey("capture_region_border_width_dp")
+        val RegionBorderStyle = stringPreferencesKey("capture_region_border_style")
         val Streaming = booleanPreferencesKey("streaming_translate")
         val RetryFailedTranslation = booleanPreferencesKey("retry_failed_translation")
         val LegacyRetryEmptyTranslation = booleanPreferencesKey("retry_empty_translation")
@@ -559,6 +565,11 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.Region] = next.captureRegion?.let { json.encodeToString(it) } ?: ""
             prefs[Keys.RegionSavedW] = next.captureRegionSavedScreenW
             prefs[Keys.RegionSavedH] = next.captureRegionSavedScreenH
+            prefs[Keys.RegionBorderEnabled] = next.captureRegionBorderEnabled
+            prefs[Keys.RegionBorderColor] = next.captureRegionBorderColor
+            prefs[Keys.RegionBorderWidth] =
+                normalizedCaptureRegionBorderWidthDp(next.captureRegionBorderWidthDp)
+            prefs[Keys.RegionBorderStyle] = next.captureRegionBorderStyle.name
             prefs[Keys.Streaming] = next.streamingTranslate
             prefs[Keys.RetryFailedTranslation] = next.retryFailedTranslation
             prefs.remove(Keys.LegacyRetryEmptyTranslation)
@@ -831,6 +842,16 @@ class SettingsRepository @Inject constructor(
             },
             captureRegionSavedScreenW = this[Keys.RegionSavedW] ?: default.captureRegionSavedScreenW,
             captureRegionSavedScreenH = this[Keys.RegionSavedH] ?: default.captureRegionSavedScreenH,
+            captureRegionBorderEnabled = this[Keys.RegionBorderEnabled]
+                ?: default.captureRegionBorderEnabled,
+            captureRegionBorderColor = this[Keys.RegionBorderColor]
+                ?: default.captureRegionBorderColor,
+            captureRegionBorderWidthDp = normalizedCaptureRegionBorderWidthDp(
+                this[Keys.RegionBorderWidth] ?: default.captureRegionBorderWidthDp,
+            ),
+            captureRegionBorderStyle = runCatching {
+                CaptureRegionBorderStyle.valueOf(this[Keys.RegionBorderStyle] ?: "")
+            }.getOrDefault(default.captureRegionBorderStyle),
             streamingTranslate = this[Keys.Streaming] ?: default.streamingTranslate,
             retryFailedTranslation = this[Keys.RetryFailedTranslation]
                 ?: this[Keys.LegacyRetryEmptyTranslation]

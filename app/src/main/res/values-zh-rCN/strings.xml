@@ -296,11 +296,16 @@
     <string name="settings_save_btn">保存</string>
     <string name="settings_saved_btn">已保存</string>
     <string name="settings_paddle_status_checking">检查中…</string>
-    <string name="settings_section_translator">翻译后端</string>
+    <string name="settings_section_translator">翻译引擎</string>
     <string name="settings_section_tts">TTS 朗读</string>
     <string name="settings_section_ocr">OCR 引擎</string>
     <string name="settings_section_preprocess">图像预处理 (OCR 前)</string>
+    <string name="settings_section_capture_region">截屏区域</string>
+    <string name="settings_capture_region_border_enabled">显示截屏区域边框</string>
+    <string name="settings_capture_region_border_color">边框颜色</string>
+    <string name="settings_capture_region_border_width_format">边框粗细：%1$d dp</string>
     <string name="settings_section_overlay">译文显示</string>
+    <string name="settings_overlay_rendering_title">显示与渲染</string>
     <string name="settings_section_floating">悬浮按钮</string>
     <string name="settings_section_trigger">循环 / 触发器</string>
     <string name="settings_section_developer">开发者诊断</string>

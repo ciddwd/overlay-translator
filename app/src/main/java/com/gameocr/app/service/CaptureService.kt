@@ -101,6 +101,7 @@ import com.gameocr.app.data.FloatingSkill
 import com.gameocr.app.tts.ttsFailureMessage
 import com.gameocr.app.overlay.FloatingButtonManager
 import com.gameocr.app.overlay.FloatingMenuTourPrefs
+import com.gameocr.app.overlay.CaptureRegionBorderOverlay
 import com.gameocr.app.overlay.AdaptiveOverlayStyle
 import com.gameocr.app.overlay.AdaptiveOverlayStyleAnalyzer
 import com.gameocr.app.overlay.AdaptiveTextLayoutPhase
@@ -248,6 +249,7 @@ class CaptureService : Service() {
     private var projection: MediaProjection? = null
     private var floatingButton: FloatingButtonManager? = null
     private var overlay: OverlayManager? = null
+    private var captureRegionBorder: CaptureRegionBorderOverlay? = null
     private var regionPicker: RegionPickerOverlay? = null
     private var languageQuickSwitch: LanguageQuickSwitchOverlay? = null
     private var presetQuickSwitch: PresetQuickSwitchOverlay? = null
@@ -387,6 +389,7 @@ class CaptureService : Service() {
             onFloatingWordLookupRequested = ::lookupFloatingEnglishWord,
             onFloatingWordDetailsRequested = ::showFloatingEnglishWordDetails,
         )
+        captureRegionBorder = CaptureRegionBorderOverlay(this)
         floatingButton = FloatingButtonManager(
             this,
             // 主球单击：按当前 skill 路由。FloatingButtonManager.skill 由 settings collect 同步保持最新；
@@ -552,6 +555,7 @@ class CaptureService : Service() {
             overlay?.clearForCapture(preserveFloatingWindow = true)
             translationCard?.dismiss()
             translationBlockCopyOverlay?.dismiss()
+            captureRegionBorder?.setHiddenForCapture(hidden = true)
             if (hideFloatingButton) floatingButton?.hide()
         }.join()
         Timber.d(
@@ -563,6 +567,7 @@ class CaptureService : Service() {
 
     private fun restoreCaptureChrome(showLoading: Boolean, restoreFloatingButton: Boolean) {
         mainScope.launch {
+            captureRegionBorder?.setHiddenForCapture(hidden = false)
             if (restoreFloatingButton) floatingButton?.show()
             if (showLoading) overlay?.showLoadingHint()
             Timber.d(
@@ -1686,6 +1691,7 @@ class CaptureService : Service() {
             val initial = settingsRepository.get().captureRegion?.let {
                 android.graphics.Rect(it.left, it.top, it.right, it.bottom)
             }
+            captureRegionBorder?.setHiddenForEditor(hidden = true)
             floatingButton?.hide()
             picker.show(
                 initial = initial,
@@ -1699,18 +1705,31 @@ class CaptureService : Service() {
                                 captureRegionSavedScreenH = savedScreen.height
                             )
                         }
+                        val updated = settingsRepository.get()
+                        withContext(Dispatchers.Main) {
+                            captureRegionBorder?.applySettings(updated)
+                            captureRegionBorder?.setHiddenForEditor(hidden = false)
+                            floatingButton?.show()
+                        }
                     }
-                    mainScope.launch { floatingButton?.show() }
                 },
                 onCancel = {
-                    mainScope.launch { floatingButton?.show() }
+                    mainScope.launch {
+                        captureRegionBorder?.setHiddenForEditor(hidden = false)
+                        floatingButton?.show()
+                    }
                 },
                 onClearAll = {
                     // 双击 = 选择整屏：跟主屏「清除选框」按钮完全一致——captureRegion=null，下次截屏走整屏。
                     scope.launch {
                         settingsRepository.update { it.copy(captureRegion = null) }
+                        val updated = settingsRepository.get()
+                        withContext(Dispatchers.Main) {
+                            captureRegionBorder?.applySettings(updated)
+                            captureRegionBorder?.setHiddenForEditor(hidden = false)
+                            floatingButton?.show()
+                        }
                     }
-                    mainScope.launch { floatingButton?.show() }
                 }
             )
         }
@@ -1802,6 +1821,7 @@ class CaptureService : Service() {
         var captureAttemptStarted = false
         var captureChromeRestored = false
         var floatingButtonHiddenForCapture = false
+        var captureRegionBorderHiddenForCapture = false
         var floatingWindowPreparation = PreparedFloatingWindowCapture()
         fun restoreCaptureChromeOnce(showLoading: Boolean) {
             if (captureChromeRestored) return
@@ -1816,6 +1836,13 @@ class CaptureService : Service() {
             floatingButtonHiddenForCapture = false
             withContext(Dispatchers.Main) {
                 floatingButton?.setHiddenForCapture(hidden = false)
+            }
+        }
+        suspend fun restoreCaptureRegionBorderAfterCapture() {
+            if (!captureRegionBorderHiddenForCapture) return
+            captureRegionBorderHiddenForCapture = false
+            withContext(Dispatchers.Main) {
+                captureRegionBorder?.setHiddenForCapture(hidden = false)
             }
         }
         try {
@@ -1857,6 +1884,10 @@ class CaptureService : Service() {
                 return
             }
             var captureChromeChanged = false
+            captureRegionBorderHiddenForCapture = withContext(Dispatchers.Main) {
+                captureRegionBorder?.setHiddenForCapture(hidden = true) == true
+            }
+            captureChromeChanged = captureRegionBorderHiddenForCapture
             if (loopMode) {
                 val floatingButtonShown = withContext(Dispatchers.Main) {
                     floatingButton?.isShown() == true
@@ -1881,6 +1912,7 @@ class CaptureService : Service() {
             captureChromeChanged = captureChromeChanged || floatingWindowPreparation.hidden
             if (captureChromeChanged) delay(CAPTURE_CHROME_SETTLE_MS)
             var full = shotter.capture()
+            restoreCaptureRegionBorderAfterCapture()
             restoreFloatingButtonAfterCapture()
             restoreFloatingWindowAfterCapture(floatingWindowPreparation)
             floatingWindowPreparation = floatingWindowPreparation.copy(hidden = false)
@@ -2871,6 +2903,7 @@ class CaptureService : Service() {
                 else -> renderFloatingWindow(translationBlocks, translationRequestSettings, diagId)
             }
         } finally {
+            restoreCaptureRegionBorderAfterCapture()
             restoreFloatingButtonAfterCapture()
             restoreFloatingWindowAfterCapture(floatingWindowPreparation)
             if (captureAttemptStarted) {
@@ -4567,6 +4600,7 @@ class CaptureService : Service() {
             adaptiveOverlayActive(settings.overlayStyleMode, settings.renderMode)
         val effectiveOverlaySettings = settings.effectiveOverlayRenderSettings()
         withContext(Dispatchers.Main) {
+            captureRegionBorder?.applySettings(settings)
             overlay?.apply {
                 overlayStyleMode = if (adaptiveBlocksEnabled) {
                     OverlayStyleMode.ADAPTIVE
@@ -4651,6 +4685,8 @@ class CaptureService : Service() {
         settingsCollectJob = null
         overlay?.clear()
         overlay = null
+        captureRegionBorder?.hide()
+        captureRegionBorder = null
         floatingButton?.hide()
         floatingButton = null
         regionPicker?.dismiss()

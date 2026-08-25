@@ -3,6 +3,9 @@ package com.gameocr.app.data
 import androidx.annotation.StringRes
 import com.gameocr.app.R
 import com.gameocr.app.capture.CaptureRegion
+import com.gameocr.app.capture.CaptureRegionBorderStyle
+import com.gameocr.app.capture.DEFAULT_CAPTURE_REGION_BORDER_COLOR
+import com.gameocr.app.capture.DEFAULT_CAPTURE_REGION_BORDER_WIDTH_DP
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonNames
 import kotlinx.serialization.KSerializer
@@ -58,6 +61,10 @@ data class Settings(
      */
     val captureRegionSavedScreenW: Int = 0,
     val captureRegionSavedScreenH: Int = 0,
+    val captureRegionBorderEnabled: Boolean = true,
+    val captureRegionBorderColor: Int = DEFAULT_CAPTURE_REGION_BORDER_COLOR,
+    val captureRegionBorderWidthDp: Int = DEFAULT_CAPTURE_REGION_BORDER_WIDTH_DP,
+    val captureRegionBorderStyle: CaptureRegionBorderStyle = CaptureRegionBorderStyle.SOLID,
     val overlayStyleMode: OverlayStyleMode = OverlayStyleMode.FIXED,
     val overlayTextSizeSp: Int = 14,
     val overlayTextStyle: OverlayTextStyle = OverlayTextStyle(),
