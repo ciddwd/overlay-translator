@@ -129,6 +129,28 @@
                 android:value="Shizuku-based on-demand screen capture for OCR translation" />
         </service>
 
+        <!-- 快捷设置磁贴：一键启动/停止截屏服务（issue #23）。
+             android:exported 必须为 true —— 绑定磁贴服务的是系统 SystemUI，不是本应用。
+             BIND_QUICK_SETTINGS_TILE 是系统侧的签名级权限，磁贴服务必须声明它才能被绑定。
+             META_DATA_ACTIVE_TILE=true 也**必须**声明：否则 TileService.requestListeningState()
+             对这个磁贴是静默无效的（不报错、不生效），服务自行停止后磁贴会一直停在「运行中」。 -->
+        <service
+            android:name=".tile.CaptureTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_tile_capture"
+            android:label="@string/tile_capture_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.quicksettings.ACTIVE_TILE"
+                android:value="true" />
+            <meta-data
+                android:name="android.service.quicksettings.TOGGLEABLE_TILE"
+                android:value="true" />
+        </service>
+
         <service
             android:name="androidx.work.impl.foreground.SystemForegroundService"
             android:foregroundServiceType="dataSync"

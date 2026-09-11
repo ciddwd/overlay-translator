@@ -412,7 +412,8 @@ class SettingsViewModel @Inject constructor(
         baiduFanyiAppId: String,
         baiduFanyiSecretKey: String,
         overlayFonts: List<OverlayFontEntry>,
-        activeTranslationPresetId: String
+        activeTranslationPresetId: String,
+        mlKitRecentSourceLanguages: List<String>,
     ) {
         repo.update {
             it.copy(
@@ -543,7 +544,8 @@ class SettingsViewModel @Inject constructor(
                 baiduFanyiAppId = baiduFanyiAppId.trim(),
                 baiduFanyiSecretKey = baiduFanyiSecretKey.trim(),
                 overlayFonts = overlayFonts,
-                activeTranslationPresetId = activeTranslationPresetId
+                activeTranslationPresetId = activeTranslationPresetId,
+                mlKitRecentSourceLanguages = mlKitRecentSourceLanguages
             )
         }
     }

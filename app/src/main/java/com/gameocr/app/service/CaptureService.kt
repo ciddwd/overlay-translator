@@ -45,6 +45,7 @@ import com.gameocr.app.capture.LoopTextRoiPolicy
 import com.gameocr.app.capture.LoopActiveResultDecision
 import com.gameocr.app.capture.LoopIndicatorMode
 import com.gameocr.app.capture.LoopRuntimePolicy
+import com.gameocr.app.capture.MediaProjectionRequestActivity
 import com.gameocr.app.capture.MediaProjectionScreenshotter
 import com.gameocr.app.capture.OverlayCaptureRect
 import com.gameocr.app.capture.Screenshotter
@@ -54,6 +55,7 @@ import com.gameocr.app.capture.floatingWindowCaptureAction
 import com.gameocr.app.capture.mapOverlayBoundsToCapture
 import com.gameocr.app.capture.shouldHideFloatingButtonForCapture
 import com.gameocr.app.shizuku.ShizukuCapabilities
+import com.gameocr.app.tile.requestCaptureTileRefresh
 import com.gameocr.app.data.LogRepository
 import com.gameocr.app.data.LoopTriggerMode
 import com.gameocr.app.data.LoopTextRegionMode
@@ -306,7 +308,14 @@ class CaptureService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> handleStart(intent)
-            ACTION_STOP -> stopSelf()
+            ACTION_STOP -> {
+                // 先翻转再销毁：销毁回调不保证执行，而磁贴点击后没有第二次刷新机会。
+                CaptureServiceState.setRunning(false)
+                // 磁贴在监听中时该请求无效（点击后不收起面板，磁贴仍在监听），
+                // 但主屏「停止」时磁贴不在监听，且 active 模式不会因打开面板而重绑，只能靠这次通知。
+                requestCaptureTileRefresh(this)
+                stopSelf()
+            }
             ACTION_TRIGGER_ONCE -> triggerOnce()
             ACTION_PICK_REGION -> showRegionPickerOverlay()
             ACTION_RUN_FLOATING_TOUR -> {
@@ -328,7 +337,8 @@ class CaptureService : Service() {
         // 用户重复点"启动"按钮、或者切换 Shizuku ↔ MediaProjection 路径都走这条。
         cleanupCapture()
 
-        // 先判断要走的截屏路径：用户启用 Shizuku 且就绪 → Shizuku；否则 → MediaProjection
+        // 先判断要走的截屏路径：调用方要求 Shizuku 且此刻仍就绪 → Shizuku；否则才考虑 MediaProjection ——
+        // 后者要求 intent 带授权 token（只有 MediaProjectionRequestActivity 会带），直连路径没带就只 stopSelf。
         val useShizuku = intent.getBooleanExtra(EXTRA_USE_SHIZUKU, false) &&
             shizukuCapabilities.availability(this) == ShizukuCapabilities.Availability.READY
 
@@ -358,7 +368,9 @@ class CaptureService : Service() {
                 @Suppress("DEPRECATION") intent.getParcelableExtra(EXTRA_RESULT_DATA)
             }
             if (data == null) {
+                // 直连路径唯一的失败模式：磁贴判定 Shizuku 就绪，服务侧复核时已经不成立。
                 Timber.w("MediaProjection result data is null")
+                handOffToProjectionGateway(intent)
                 stopSelf()
                 return
             }
@@ -464,6 +476,8 @@ class CaptureService : Service() {
         }
 
         CaptureServiceState.setRunning(true)
+        // 磁贴可能正开着 QS 面板显示「未运行」，状态变了要主动请系统重新回调一次。
+        requestCaptureTileRefresh(this)
         startOcrWarmupIfNeeded()
         startLocalLlmWarmupIfNeeded()
 
@@ -613,6 +627,8 @@ class CaptureService : Service() {
                     handleStart(originalIntent)
                 } catch (e2: SecurityException) {
                     Timber.e(e2, "startForeground retry also failed")
+                    // 前台化都没成功，交接授权窗是唯一还能把用户接回正轨的动作。
+                    handOffToProjectionGateway(originalIntent)
                     logRepository.error(
                         LogRepository.Category.CAPTURE,
                         "startForeground SecurityException after retry: ${e2.message}",
@@ -623,6 +639,23 @@ class CaptureService : Service() {
             }, 200L)
             false
         }
+    }
+
+    /**
+     * 启动已经失败、服务即将 `stopSelf()` 时把用户交给授权窗 —— 是否该做由 [decideCaptureStartRecovery]
+     * 判定。服务此时可能还没前台化，所以这一步依赖 SAW 的 BAL 豁免（直连路由必然持有悬浮窗权限）。
+     */
+    private fun handOffToProjectionGateway(intent: Intent) {
+        val recovery = decideCaptureStartRecovery(
+            CaptureStartRecoveryInput(
+                tokenPresent = intent.hasExtra(EXTRA_RESULT_DATA),
+                shizukuRequested = intent.getBooleanExtra(EXTRA_USE_SHIZUKU, false),
+            )
+        )
+        if (recovery != CaptureStartRecovery.OPEN_PROJECTION_GATEWAY) return
+        Timber.i("capture start failed on the Shizuku direct path; handing off to the gateway")
+        runCatching { startActivity(MediaProjectionRequestActivity.newIntent(this)) }
+            .onFailure { Timber.w(it, "projection gateway handoff rejected") }
     }
 
     private fun triggerOnce() {
@@ -4720,6 +4753,11 @@ class CaptureService : Service() {
         scope.cancel()
         mainScope.cancel()
         CaptureServiceState.setRunning(false)
+        // 服务自己失败退出（Shizuku dry-run 判失败后 stopSelf）时，磁贴必须立刻从「运行中」翻回
+        // 「未运行」，否则下次点击会被路由成 STOP —— 用户以为在启动，实际什么都没发生。
+        requestCaptureTileRefresh(this)
+        // 面板还开着时上面那次刷新会被系统吞掉；磁贴靠这个计数自己发现「这次启动已经没结果了」。
+        CaptureServiceState.signalStoppedWithoutRunning()
         Timber.i("CaptureService destroyed")
         super.onDestroy()
     }

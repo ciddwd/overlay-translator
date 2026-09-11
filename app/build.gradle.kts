@@ -136,6 +136,25 @@ android {
     }
 }
 
+// 🔴 单测任务的源码输入声明 —— 所有「读文件当文本断言」的契约测试的前提。这些文件不在单测
+// classpath 上，缺了它变化就不在依赖图上，任务直接报 UP-TO-DATE 复用旧结果（实测：去掉后改
+// AndroidManifest.xml 照旧 BUILD SUCCESSFUL）。范围要跟着**测试实际读到的文件**走，而不是跟着
+// 「代码」走 —— 覆盖一半比不覆盖更危险。src/main 内被读的还有 assets/*.txt 与 drawable 图片；
+// src/main 之外还有 NOTICE、版本目录、llama-android 的 cpp 源码与构建脚本（兄弟模块不享受
+// 「改本工程构建脚本即失效」那条隐式跟踪）。新增契约测试若读了别处文件必须同步加到这里 ——
+// src/main 含 19M 模型，全量参与指纹是刻意的代价，别为提速砍范围。
+tasks.withType<Test>().configureEach {
+    inputs.files(
+        fileTree("src/main"),
+        rootProject.file("NOTICE"),
+        rootProject.file("gradle/libs.versions.toml"),
+        rootProject.fileTree("llama-android/src/main/cpp"),
+        rootProject.file("llama-android/build.gradle.kts"),
+    )
+        .withPropertyName("sourceTextContractInputs")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
 dependencies {
     // AndroidX core
     implementation(libs.androidx.core.ktx)

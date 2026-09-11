@@ -1942,4 +1942,8 @@
     <string name="source_preservation_delete_message">“%1$s”下次识别时将恢复普通翻译，并可能被涂抹替换。</string>
     <string name="translation_library_help_preserve_title">保留原文字效</string>
     <string name="translation_library_help_preserve_body">OCR 文本块精确命中后，不翻译、不显示，也不涂抹原图。适合把日漫拟声词字形作为画面的一部分保留。匹配会忽略空白和安全的首尾标点，但不会进行模糊匹配或包含匹配。</string>
+    <!-- 快捷设置磁贴（QS Tile）：一键启动/停止截屏服务 -->
+    <string name="tile_capture_label">屏译</string>
+    <string name="tile_toast_overlay_required">请先授予「显示在其他应用上层」权限</string>
+    <string name="tile_toast_unlock_first">请先解锁设备</string>
 </resources>

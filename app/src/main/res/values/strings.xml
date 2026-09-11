@@ -1944,4 +1944,8 @@
     <string name="source_preservation_delete_message">“%1$s” will be translated normally and may be replaced the next time it is recognized.</string>
     <string name="translation_library_help_preserve_title">Keep source artwork</string>
     <string name="translation_library_help_preserve_body">An exact OCR-block match is not translated, displayed, or erased. This is intended for manga sound effects whose original lettering is part of the artwork. Matching ignores whitespace and safe edge punctuation, but never uses fuzzy or substring matching.</string>
+    <!-- 快捷设置磁贴（QS Tile）：一键启动/停止截屏服务 -->
+    <string name="tile_capture_label">Screen Translator</string>
+    <string name="tile_toast_overlay_required">Grant the “Display over other apps” permission first</string>
+    <string name="tile_toast_unlock_first">Unlock the device first</string>
 </resources>

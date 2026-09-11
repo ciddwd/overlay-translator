@@ -758,7 +758,8 @@ fun SettingsScreen(
 
     // dirty 检测：load 时 capture 一份初始 Settings，之后跟 buildSnapshot() 比 equals。
     // 旧版手写两份 List<Any?>，每加 Settings 字段都要在两个 list 同步加，反复犯"忘改一边"的 bug。
-    // 现在用 data class equals 自动覆盖所有字段——加字段只改 buildSnapshot() 一处。
+    // data class equals 让 dirty 检测不再需要并列清单；但**表单字段仍有两份**：buildSnapshot() 覆盖草稿，
+    // save() 落盘，两边必须逐字段对齐 —— 由 buildSnapshotFields_andSaveFields_coverEachOther 守着。
     var initialSettings by remember { mutableStateOf<Settings?>(null) }
     var showUnsavedDialog by remember { mutableStateOf(false) }
     var showSakuraFallbackDialog by remember { mutableStateOf(false) }
@@ -1590,7 +1591,10 @@ fun SettingsScreen(
             baiduFanyiAppId = baiduFanyiAppId,
             baiduFanyiSecretKey = baiduFanyiSecret,
             overlayFonts = overlayFontEntries,
-            activeTranslationPresetId = currentMatchingTranslationPresetId()
+            activeTranslationPresetId = currentMatchingTranslationPresetId(),
+            // 最近用过的端上源语言也是表单草稿（选一次就重排）；必须跟保存路径一起落盘，否则
+            // buildSnapshot() 把它算进 dirty、UI 报告"已保存"，而持久值从头到尾没变过。
+            mlKitRecentSourceLanguages = mlKitRecentSources
         )
     }
 
