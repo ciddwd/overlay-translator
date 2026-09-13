@@ -45,4 +45,16 @@ internal object AutoOcrLanguagePolicy {
         val top = grouped.maxByOrNull { it.value } ?: return null
         return top.key.takeIf { top.value / total >= 0.75 }
     }
+
+    /** A refinement must not erase readable text with punctuation or a different language. */
+    fun canRefine(original: List<AutoOcrEvidence>, refined: AutoOcrEvidence, language: String): Boolean {
+        if (refined.text.none(Char::isLetterOrDigit)) return false
+        if (refined.language != language) return false
+        val targets = original.filter { it.language == language }
+        if (targets.isEmpty()) return true
+        val previousLetters = targets.sumOf { it.text.count(Char::isLetter) }
+        val nextLetters = refined.text.count(Char::isLetter)
+        // Reject severe loss; retain the bootstrap rather than guessing that missing text is noise.
+        return nextLetters * 2 >= previousLetters
+    }
 }

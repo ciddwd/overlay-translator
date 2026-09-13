@@ -6,6 +6,18 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class AutoOcrRoutingPolicyTest {
+    @Test fun detectedKoreanRoutesIndependentlyOfTranslationSource_tableDriven() {
+        for (source in listOf("auto", "en", "ja", "zh-CN", "ko")) {
+            val settings = Settings(sourceLang = source)
+            val route = AutoOcrRoutingPolicy.resolve(settings, "ko") { true }!!
+            assertEquals(source, OcrEngineKind.ML_KIT_KOREAN, route.engine)
+            val effective = AutoOcrRoutingPolicy.settingsFor(settings, "ko", route)
+            assertEquals("ko", effective.sourceLang)
+            assertEquals(source, settings.sourceLang)
+            assertEquals(settings.targetLang, effective.targetLang)
+        }
+    }
+
     @Test fun optionsKeepOnDeviceLocalHttpCloudOrder_tableDriven() {
         val expected = listOf(
             OcrEngineKind.ML_KIT_JAPANESE, OcrEngineKind.ML_KIT_KOREAN,

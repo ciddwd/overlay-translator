@@ -15,8 +15,11 @@ class AutoOcrLanguageIntegrationTest {
             "bounded samples" to identifier.contains("text.take(1000)"),
             "runtime uses identifier" to auto.contains("identifier.identify(sample)"),
             "per-frame cache bounded" to auto.contains("languageCache.size >= 128"),
-            "manual language bypasses identification" to (auto.indexOf("source != \"auto\"") < auto.indexOf("val languageCache")),
+            "translation source cannot bypass identification" to !auto.contains("settings.sourceLang"),
             "refinement uses effective settings" to auto.contains("recognize(bitmap, selected.engine, effective)"),
+            "no first-language early exit" to !auto.substringAfter("val passes =")
+                .substringBefore("if (best.isEmpty())").contains("break"),
+            "refinement quality checked" to auto.contains("AutoOcrLanguagePolicy.canRefine("),
         ).forEach { (name, passed) -> assertTrue(name, passed) }
     }
 

@@ -4,6 +4,27 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class AutoOcrLanguagePolicyTest {
+    @Test fun koreanSampleAndFailedRefinements_tableDriven() {
+        val sample = "안녕하세요! 특별한 요청이 있으신가요?"
+        assertEquals("ko", AutoOcrLanguagePolicy.choose(sample, listOf(LanguageScore("ko", .99f))))
+        val original = listOf(AutoOcrEvidence(sample, "ko", .9f))
+        data class Case(val text: String, val language: String?, val expected: Boolean)
+        listOf(
+            Case(sample, "ko", true),
+            Case("", null, false),
+            Case("！ ？", null, false),
+            Case("！ ？", "ko", false),
+            Case("こんにちは。何かご希望はありますか?", "ja", false),
+            Case("안녕", "ko", false),
+            Case(sample, null, false),
+        ).forEach { case ->
+            assertEquals(case.text, case.expected, AutoOcrLanguagePolicy.canRefine(
+                original, AutoOcrEvidence(case.text, case.language, .99f), "ko"))
+        }
+        assertTrue(AutoOcrLanguagePolicy.score(original) >
+            AutoOcrLanguagePolicy.score(listOf(AutoOcrEvidence("！ ？", null, 1f))))
+    }
+
     @Test fun languageConfidenceAndShortText_tableDriven() {
         data class Case(val text: String, val candidates: List<LanguageScore>, val expected: String?)
         listOf(
