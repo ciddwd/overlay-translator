@@ -29,6 +29,23 @@ class CaptureQuickSettingsPolicyTest {
         assertFalse(tile.contains("shizukuCapabilities.availability"))
     }
 
+    @Test fun tileLaunch_keepsLegacyCallOnlyInPre34Branch() {
+        val tile = File("src/main/java/com/gameocr/app/service/CaptureQuickSettingsTileService.kt").readText()
+        val launch = tile.substringAfter("private fun launchActivity(").substringBefore("private fun updateTileState")
+        assertTrue(launch.contains("if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE)"))
+        val modern = launch.substringBefore("} else {")
+        val legacy = launch.substringAfter("} else {")
+        data class Case(val source: String, val required: String, val forbidden: String)
+        listOf(
+            Case(modern, "startActivityAndCollapse(pendingIntent)", "startActivityAndCollapse(intent."),
+            Case(legacy, "startActivityAndCollapse(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))", "startActivityAndCollapse(pendingIntent)"),
+        ).forEach { case ->
+            assertTrue(case.required, case.source.contains(case.required))
+            assertFalse(case.forbidden, case.source.contains(case.forbidden))
+        }
+        assertTrue(tile.contains("@SuppressLint(\"StartActivityAndCollapseDeprecated\")"))
+    }
+
     @Test fun launchHostNavigationTable_preservesCallerExceptWhenSetupIsRequired() {
         val host = File("src/main/java/com/gameocr/app/capture/CaptureStartRequestActivity.kt").readText()
             .replace("\r\n", "\n")

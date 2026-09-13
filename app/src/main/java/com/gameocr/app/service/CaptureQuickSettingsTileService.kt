@@ -1,5 +1,6 @@
 package com.gameocr.app.service
 
+import android.annotation.SuppressLint
 import android.app.PendingIntent
 import android.app.StatusBarManager
 import android.content.ComponentName
@@ -73,6 +74,8 @@ class CaptureQuickSettingsTileService : TileService() {
         }
     }
 
+    // The Intent overload is required below API 34; newer devices use PendingIntent.
+    @SuppressLint("StartActivityAndCollapseDeprecated")
     private fun launchActivity(intent: Intent, requestCode: Int) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             val pendingIntent = PendingIntent.getActivity(

@@ -93,7 +93,7 @@ class LlmModelInstaller @Inject constructor(
             } catch (t: Exception) {
                 if (t is CancellationException) throw t
                 lastErr = t
-                    if (!ModelDownloadWorkPolicy.mayTryAnotherSource(t)) throw t
+                if (!ModelDownloadWorkPolicy.mayTryAnotherSource(t)) throw t
                 Timber.w(t, "LLM 模型镜像失败: $url")
 
             }
