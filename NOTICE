@@ -16,14 +16,14 @@ Third-party runtime software
 
 The Android release runtime dependency graph and the native code built into the
 application include the principal projects below. Version numbers refer to the
-v0.4.5 build configuration. Transitive modules belonging to the same project
+v0.4.6 build configuration. Transitive modules belonging to the same project
 family are grouped together.
 
 Apache License 2.0
 ------------------
 
 - AndroidX: Activity, AppCompat, Compose, Core, DataStore, DynamicAnimation,
-  Hilt integration, Lifecycle, Navigation, Room and WorkManager
+  ExifInterface, Hilt integration, Lifecycle, Navigation, Room and WorkManager
   https://github.com/androidx/androidx
 - Material Components for Android 1.12.0
   https://github.com/material-components/material-components-android
@@ -42,6 +42,9 @@ Apache License 2.0
   https://github.com/google/error-prone
   https://github.com/jspecify/jspecify
   https://github.com/javax-inject/javax-inject
+- Guava ListenableFuture, used transitively by AndroidX and Google libraries
+  https://github.com/google/guava
+  https://raw.githubusercontent.com/google/guava/master/LICENSE
 - Retrofit 2.11.0, OkHttp 4.12.0 and Okio
   https://github.com/square/retrofit
   https://github.com/square/okhttp
@@ -104,8 +107,9 @@ Google ML Kit
 =============
 
 The application uses Google ML Kit Text Recognition 16.0.1 for Latin, Chinese,
-Japanese and Korean text, and ML Kit Translation 17.0.3 with language models
-downloaded on demand. ML Kit is a Google SDK governed by the ML Kit Terms and
+Japanese and Korean text, ML Kit Translation 17.0.3 with language models
+downloaded on demand, and ML Kit Language Identification 17.0.6 with its model
+bundled in the APK. ML Kit is a Google SDK governed by the ML Kit Terms and
 is not represented here as open-source software.
 
 Input images and text are processed on-device and are not sent to Google. The
@@ -176,6 +180,28 @@ to downloading, using, modifying and redistributing those weights.
 Users and distributors are responsible for reviewing the current upstream
 model-card terms before redistributing optional model weights. Upstream license
 texts control if this summary differs from them.
+
+Optional offline dictionaries
+=============================
+
+Dictionary data is not bundled in the APK. The optional packs are converted
+and indexed for local lookup; their original data licenses still apply.
+
+- ECDICT: Copyright (c) 2025 Linwei, MIT License.
+  The MIT permission and warranty notice above also applies to ECDICT.
+  https://github.com/skywind3000/ECDICT
+  https://raw.githubusercontent.com/skywind3000/ECDICT/master/LICENSE
+- JMdict: James William Breen and the Electronic Dictionary Research and
+  Development Group (EDRDG),
+  Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0).
+  Converted dictionary packs must retain attribution and the same license.
+  https://www.edrdg.org/edrdg/licence.html
+- Korean Basic Dictionary: National Institute of Korean Language,
+  Creative Commons Attribution-ShareAlike 2.0 Korea (CC BY-SA 2.0 KR)
+  for the text data, as documented by the source mirror. Media files are
+  not covered by that text-data license and are not included in our packs.
+  https://github.com/spellcheck-ko/korean-dict-nikl
+  https://creativecommons.org/licenses/by-sa/2.0/kr/
 
 General notices
 ===============

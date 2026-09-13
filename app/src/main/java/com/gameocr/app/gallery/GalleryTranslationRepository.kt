@@ -99,7 +99,13 @@ class GalleryTranslationRepository @Inject constructor(
                 ?.errorMessage
                 .orEmpty(),
         )
-        dao.insertTaskWithItems(task, items)
+        settingsRepository.rememberSnapshotCredentials(snapshot, settings)
+        try {
+            dao.insertTaskWithItems(task, items)
+        } catch (error: Throwable) {
+            settingsRepository.forgetSnapshotCredentials(snapshot.id)
+            throw error
+        }
         GalleryPreparedTask(
             id = taskId,
             sourceLang = settings.sourceLang,
@@ -121,7 +127,7 @@ class GalleryTranslationRepository @Inject constructor(
                 targetLang = task.targetLang,
             )
         }
-        return snapshot.applyTo(current).copy(
+        return settingsRepository.settingsForSnapshot(snapshot).copy(
             // Gallery work has no active foreground game. Global glossary entries remain
             // available, while app-specific memory must not attach to whichever app happens
             // to be visible when WorkManager starts.
@@ -239,6 +245,7 @@ class GalleryTranslationRepository @Inject constructor(
     suspend fun deleteTask(taskId: String) = withContext(Dispatchers.IO) {
         val items = dao.getItems(taskId)
         dao.deleteTask(taskId)
+        settingsRepository.forgetSnapshotCredentials("gallery_$taskId")
         items.map(GalleryTranslationItemEntity::sourceUri)
             .filter(String::isNotBlank)
             .distinct()

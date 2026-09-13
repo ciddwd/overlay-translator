@@ -16,6 +16,7 @@ class MangaOcrModelPolicyTest {
         )
         val cases = listOf(
             Case("legacy V5", OcrEngineKind.MANGA_OCR_JA, PaddleModelVersion.V5_MOBILE, PaddleModelVersion.V6_SMALL),
+            Case("Korean V5", OcrEngineKind.MANGA_OCR_JA, PaddleModelVersion.V5_KOREAN, PaddleModelVersion.V6_SMALL),
             Case("tiny", OcrEngineKind.MANGA_OCR_JA, PaddleModelVersion.V6_TINY, PaddleModelVersion.V6_SMALL),
             Case("small", OcrEngineKind.MANGA_OCR_JA, PaddleModelVersion.V6_SMALL, PaddleModelVersion.V6_SMALL),
             Case("medium", OcrEngineKind.MANGA_OCR_JA, PaddleModelVersion.V6_MEDIUM, PaddleModelVersion.V6_SMALL),

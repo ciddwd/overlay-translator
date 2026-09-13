@@ -66,7 +66,7 @@ class FloatingWordPreviewWiringTest {
             "translation = loadingContent.translation",
             "wordResult = loadingContent.wordResult",
             "loading = loadingContent.loading",
-            "translator.translateWord(outcome.word, settings)",
+            "floatingWordLookupCoordinator.executeFull(outcome.word, settings)",
             "completed = true",
             "updateWordDetailsForSource(outcome.word, finalContent)",
         ).forEach { marker -> assertTrue(marker, flow.contains(marker)) }
@@ -100,6 +100,36 @@ class FloatingWordPreviewWiringTest {
             2,
             manager.count("configureFloatingEnglishWordTap("),
         )
+    }
+
+    @Test
+    fun lookupStatus_smoke_distinguishesMissFromErrorAtEveryPresentationEntry() {
+        val manager = source("app/src/main/java/com/gameocr/app/overlay/OverlayManager.kt")
+        val service = source("app/src/main/java/com/gameocr/app/service/CaptureService.kt")
+        listOf("floating window" to manager, "translation card" to service).forEach { (name, code) ->
+            assertTrue(name, code.contains("failed = outcome.error != null"))
+            assertTrue(name, code.contains("R.string.floating_word_lookup_not_found"))
+            assertFalse(name, code.contains("failed = !outcome.hasDetails"))
+            assertFalse(name, code.contains("failed = !loading && !outcome.hasDetails"))
+        }
+        val fullFlow = service.substring(
+            service.indexOf("private fun showFloatingEnglishWordDetails("),
+            service.indexOf("private fun lookupEnglishWordInTranslationCard("),
+        )
+        assertTrue(fullFlow.contains("failed = fullOutcome.error != null"))
+        assertTrue(fullFlow.contains("FloatingWordLookupOutcome(outcome.word, null, null, error)"))
+        assertTrue(fullFlow.contains("throw cancellation"))
+        assertFalse("errors must not be converted to a normal miss", fullFlow.contains("getOrNull()"))
+
+        data class CopyCase(val directory: String, val notFound: String, val failed: String)
+        listOf(
+            CopyCase("values", "No definition found", "Lookup failed"),
+            CopyCase("values-zh-rCN", "未找到释义", "查询失败"),
+        ).forEach { case ->
+            val strings = source("app/src/main/res/${case.directory}/strings.xml")
+            assertTrue(case.directory, strings.contains("name=\"floating_word_lookup_not_found\">${case.notFound}</string>"))
+            assertTrue(case.directory, strings.contains("name=\"floating_word_lookup_failed\">${case.failed}</string>"))
+        }
     }
 
     private fun String.count(marker: String): Int = windowed(marker.length).count { it == marker }

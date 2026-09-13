@@ -18,6 +18,8 @@ data class TextBlock(
     val regionId: Int? = null,
     val parentRegionId: Int? = null,
     val regionGranularity: TextRegionGranularity = TextRegionGranularity.UNKNOWN,
+    /** Clockwise view rotation used only when a sideways captured frame was normalized for OCR. */
+    val presentationRotationDegrees: Int = 0,
 )
 
 enum class TextRegionGranularity {

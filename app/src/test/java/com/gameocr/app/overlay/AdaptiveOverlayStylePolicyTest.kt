@@ -621,4 +621,15 @@ class AdaptiveOverlayStylePolicyTest {
             )
         }
     }
+
+    @Test
+    fun adaptiveFallbackEraseRects_tableDriven_coversTheWholeSemanticBlock() {
+        listOf(
+            OverlayIntRect(100, 200, 300, 500) to OverlayIntRect(0, 0, 200, 300),
+            OverlayIntRect(0, 0, 1, 1) to OverlayIntRect(0, 0, 1, 1),
+            OverlayIntRect(8, 9, 8, 9) to OverlayIntRect(0, 0, 1, 1),
+        ).forEach { (block, expected) ->
+            assertEquals(listOf(expected), adaptiveFallbackEraseRects(block))
+        }
+    }
 }

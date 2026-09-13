@@ -11,6 +11,9 @@ import com.gameocr.app.gallery.GalleryTranslationDao
 import com.gameocr.app.gallery.GalleryTranslationDatabase
 import com.gameocr.app.ocr.OcrEngine
 import com.gameocr.app.ocr.RoutingOcrEngine
+import com.gameocr.app.network.NetworkPerformanceEventListener
+import com.gameocr.app.network.DebugHttpWireLoggingInterceptor
+import com.gameocr.app.util.RuntimePerformanceDiagnostics
 import com.gameocr.app.translate.RoutingTranslator
 import com.gameocr.app.translate.TranslationCache
 import com.gameocr.app.translate.TranslationMemoryDao
@@ -19,6 +22,7 @@ import com.gameocr.app.translate.Translator
 import com.gameocr.app.translate.GoogleMlKitTranslationClientFactory
 import com.gameocr.app.translate.GoogleMlKitDownloadedLanguageProvider
 import com.gameocr.app.translate.MlKitDownloadedLanguageProvider
+import com.gameocr.app.translate.MlKitLanguageModelDeleter
 import com.gameocr.app.translate.MlKitTranslationClientFactory
 import com.gameocr.app.tts.RoutingTtsEngine
 import com.gameocr.app.tts.TtsEngine
@@ -31,7 +35,6 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Singleton
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
-import okhttp3.logging.HttpLoggingInterceptor
 import java.util.concurrent.TimeUnit
 
 @Module
@@ -53,19 +56,21 @@ object AppModule {
     @Singleton
     fun provideOkHttp(
         privateCleartextInterceptor: PrivateCleartextInterceptor,
+        performanceDiagnostics: RuntimePerformanceDiagnostics,
     ): OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
+        .eventListenerFactory(
+            NetworkPerformanceEventListener.Factory(performanceDiagnostics)
+        )
         // 明文 HTTP 仅允许私有/回环地址 + 用户显式白名单 host。详见拦截器注释。
         .addInterceptor(privateCleartextInterceptor)
         .apply {
             if (BuildConfig.DEBUG) {
-                addInterceptor(
-                    HttpLoggingInterceptor().apply {
-                        level = HttpLoggingInterceptor.Level.BASIC
-                    }
-                )
+                // Complete request/response logs for Debug builds only. The interceptor preserves
+                // streaming delivery and redacts credentials before writing to Logcat.
+                addInterceptor(DebugHttpWireLoggingInterceptor())
             }
         }
         .build()
@@ -141,6 +146,11 @@ abstract class EngineBindings {
     abstract fun bindMlKitDownloadedLanguageProvider(
         impl: GoogleMlKitDownloadedLanguageProvider
     ): MlKitDownloadedLanguageProvider
+
+    @Binds
+    abstract fun bindMlKitLanguageModelDeleter(
+        impl: GoogleMlKitDownloadedLanguageProvider
+    ): MlKitLanguageModelDeleter
 
     @Binds
     @Singleton

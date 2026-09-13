@@ -1,5 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="translation_library_disable_all">Disable all</string>
+    <string name="settings_auto_ocr_title">Automatic recognition settings</string>
+    <string name="settings_auto_ocr_group_on_device">On-device</string>
+    <string name="settings_auto_ocr_group_local">Local</string>
+    <string name="settings_auto_ocr_group_cloud">Cloud</string>
+    <string name="settings_auto_ocr_unconfigured">Not configured</string>
+    <string name="settings_auto_ocr_unsupported">Unsupported</string>
+    <string name="settings_auto_ocr_add_language">Add language</string>
+    <string name="settings_auto_ocr_delete_language_confirm">Confirm deletion of %1$s?</string>
+    <string name="settings_auto_ocr_description">Choose a recognition method for each language. Applies only when “Auto” is selected.</string>
     <string name="app_name">Screen Translator</string>
 
     <!-- Common -->
@@ -39,6 +49,11 @@
     <string name="main_btn_open_autostart">Open auto-start settings</string>
     <string name="main_btn_battery_already_ok">On battery whitelist ✓</string>
     <string name="main_btn_open_battery_whitelist">Open battery whitelist</string>
+    <string name="quick_settings_tile_label">Screen translation</string>
+    <string name="quick_settings_tile_title">Quick Settings tile</string>
+    <string name="quick_settings_tile_description">Start or stop screen capture from Quick Settings.</string>
+    <string name="quick_settings_tile_add">Add to Quick Settings</string>
+    <string name="settings_btn_a11y_enabled">Accessibility service enabled ✓</string>
     <string name="main_btn_pick_region">Pick region</string>
     <string name="main_btn_clear_region">Clear region (use full screen)</string>
     <string name="main_clear_region_dialog_title">Clear capture region?</string>
@@ -49,7 +64,8 @@
     <string name="main_label_usage">Usage</string>
     <string name="main_usage_text">Floating ball: tap to run the current action; long-press to open the arc menu; drag to move.</string>
     <string name="main_usage_overlay_permission_required">Tap the button above to grant the overlay permission first.</string>
-    <string name="main_hint_media_projection">A system permission dialog appears on each start</string>
+    <string name="main_capture_system">System capture</string>
+    <string name="main_hint_media_projection">Selects a capture method based on your device and permissions. Authorization may be required.</string>
     <string name="main_hint_shizuku_ready">Shizuku ready: no permission dialog</string>
     <string name="main_hint_shizuku_not_granted">Shizuku installed but not granted; will request on start</string>
     <string name="main_hint_shizuku_not_running">Please start the Shizuku app first</string>
@@ -74,6 +90,7 @@
     <string name="main_status_shizuku_not_paired">Not paired (no shell privilege)</string>
     <string name="main_status_shizuku_compatibility_required">Compat Hub required</string>
     <string name="main_status_battery_whitelist">Battery whitelist</string>
+    <string name="main_status_accessibility_service">Accessibility service</string>
     <string name="main_status_enabled">Enabled</string>
     <string name="main_status_disabled">Disabled</string>
     <string name="main_preset_title">Presets</string>
@@ -93,7 +110,6 @@
     <string name="gallery_main_latest_task">Latest task</string>
     <string name="gallery_main_no_history_task">No task history yet</string>
     <string name="gallery_main_progress">%1$d / %2$d processed</string>
-    <string name="gallery_main_recent">Latest: %1$d succeeded · %2$d failed</string>
     <string name="gallery_confirm_title">Create translation task</string>
     <string name="gallery_confirm_count">%1$d images selected</string>
     <string name="gallery_confirm_add_photos">Add more images</string>
@@ -261,7 +277,7 @@
     <string name="settings_about_open_github">Open in browser</string>
     <string name="settings_about_tagline">Open-source real-time on-screen translation</string>
     <string name="settings_about_qq_group_label">QQ community</string>
-    <string name="settings_about_qq_group_name_format">Screen Translator community · Group %1$s</string>
+    <string name="settings_about_qq_group_name_format">Screen Translator community Group %1$s</string>
     <string name="settings_about_join_qq_group">Join QQ group</string>
     <string name="settings_about_open_source_licenses">Open-source licenses</string>
     <string name="settings_about_third_party_notice_summary">Third-party notices for dependencies and model assets included in or downloaded by this app</string>
@@ -270,7 +286,7 @@
     <string name="settings_about_share_summary">Enjoying Screen Translator? Recommend it to a friend.</string>
     <string name="settings_about_share_action">Share Screen Translator</string>
     <string name="settings_about_share_chooser">Share Screen Translator</string>
-    <string name="settings_about_share_subject">Screen Translator · Free and open-source screen translation</string>
+    <string name="settings_about_share_subject">Screen Translator Free and open-source screen translation</string>
     <string name="settings_about_share_text">Screen Translator is a free and open-source screen translation / OCR app.\nIt is especially useful for foreign-language forums, overseas shopping and trading platforms, manga, and games without built-in translation.\nIt supports floating screenshot translation, region and full-screen OCR, continuous translation, manga mode, offline and cloud LLM translation, word selection with inflections and synonyms, and TTS reading.\nLatest release: %1$s\nSource code: %2$s\nDownload only from official release channels.</string>
     <string name="main_share_prompt_title">Recommend Screen Translator?</string>
     <string name="main_share_prompt_message">If Screen Translator has been useful, consider recommending it to a friend who also needs translation.</string>
@@ -296,22 +312,38 @@
     <string name="settings_save_btn">Save</string>
     <string name="settings_saved_btn">Saved</string>
     <string name="settings_paddle_status_checking">Checking…</string>
-    <string name="settings_section_translator">Translator backend</string>
+    <string name="settings_section_translator">Translator engine</string>
     <string name="settings_section_tts">TTS output</string>
     <string name="settings_section_ocr">OCR engine</string>
     <string name="settings_section_preprocess">Image preprocessing (before OCR)</string>
+    <string name="settings_section_capture_region">Capture region</string>
+    <string name="settings_capture_region_border_enabled">Show capture region border</string>
+    <string name="settings_capture_region_hide_on_capture">Hide automatically during capture</string>
+    <string name="settings_capture_region_move_enabled">Allow capture region adjustment</string>
+    <string name="settings_capture_region_move_help">Drag the center handle to move the region, or drag a corner to resize it.</string>
+    <string name="capture_region_move_handle">Move capture region</string>
+    <string name="capture_region_resize_handle">Resize capture region</string>
+    <string name="settings_capture_region_style_customization">Customize region style</string>
+    <string name="settings_capture_region_border_color">Border color</string>
+    <string name="settings_capture_region_border_width_format">Border width: %1$d dp</string>
     <string name="settings_section_overlay">Overlay</string>
+    <string name="settings_overlay_rendering_title">Display &amp; rendering</string>
     <string name="settings_section_floating">Floating button</string>
     <string name="settings_section_trigger">Loop / Triggers</string>
     <string name="settings_section_developer">Developer diagnostics</string>
     <string name="settings_section_network">Network</string>
     <string name="settings_cleartext_hosts_label">Cleartext HTTP host whitelist</string>
     <string name="settings_cleartext_hosts_placeholder">One host per line\ne.g. myhost.example.com</string>
-    <string name="settings_cleartext_hosts_hint">Only private/loopback addresses are allowed over cleartext by default. Hosts added here also permit http:// access. ⚠ Cleartext can be intercepted/tampered — only enable when the link is trusted.</string>
+    <string name="settings_cleartext_hosts_hint">Enter only a hostname or IP address, without a protocol, port, or path. Hosts added here permit cleartext HTTP access. ⚠ Cleartext can be intercepted or tampered with — only enable it when the link is trusted.</string>
+    <string name="settings_cleartext_hosts_error_scheme">Line %1$d: remove http:// or https:// and enter only the host.</string>
+    <string name="settings_cleartext_hosts_error_path">Line %1$d: paths, query parameters, and fragments are not allowed.</string>
+    <string name="settings_cleartext_hosts_error_port">Line %1$d: remove the port and enter only the host.</string>
+    <string name="settings_cleartext_hosts_error_invalid">Line %1$d: enter a valid hostname or IP address.</string>
     <string name="settings_label_translator_engine">Translator engine</string>
     <string name="settings_engine_openai_llm">OpenAI-compatible LLM</string>
     <string name="settings_engine_anthropic_llm">Anthropic-compatible LLM</string>
     <string name="settings_engine_deepl">DeepL</string>
+    <string name="settings_engine_niutrans">NiuTrans</string>
     <string name="settings_engine_youdao_pictrans">Youdao PicTrans</string>
     <string name="settings_engine_google">Google</string>
     <string name="settings_on_device_translation_english">English</string>
@@ -339,8 +371,12 @@
     <string name="settings_mlkit_data_disclosure">ML Kit may contact Google to download or update models and compatibility data, and may send performance and usage metrics. Captured images, source text, and translations are not sent to Google.</string>
     <string name="settings_mlkit_download_pair">Download %1$s → %2$s models</string>
     <string name="settings_mlkit_model_downloading">Downloading models…</string>
+    <string name="settings_mlkit_model_stop_waiting">Stop waiting</string>
+    <string name="settings_mlkit_model_waiting_stopped">Stopped waiting. Google may still finish the background task; its state will be checked again next time.</string>
     <string name="settings_mlkit_model_ready">The current language models are ready. Offline translation is available.</string>
     <string name="settings_mlkit_model_download_failed">Model download failed: %1$s</string>
+    <string name="settings_mlkit_download_timeout_help">Download timed out. Try the following:\n1. Switch to mobile data and try again.\n2. Connect to a hotspot shared by a device that can download this model, then try again.</string>
+    <string name="settings_mlkit_download_open_browser">Open browser</string>
     <string name="settings_mlkit_unsupported_source_language">ML Kit does not support the selected source language: %1$s</string>
     <string name="settings_mlkit_unsupported_target_language">ML Kit does not support the selected target language: %1$s</string>
     <string name="mlkit_missing_models_dialog_title">On-device language models not ready</string>
@@ -380,6 +416,15 @@
     <string name="settings_deepl_custom_token_hint">**Fully isolated from the DeepL API Key above** — switching to a custom URL will never send your official key to third parties. Put your self-hosted service\'s access token here; leave blank if it has no auth.</string>
     <string name="settings_deepl_bearer_label">Use Bearer auth (Authorization: Bearer …)</string>
     <string name="settings_deepl_bearer_hint">Custom URL only. Default uses DeepL-Auth-Key (official). Most deeplx deployments use Bearer. Reads the Custom Endpoint Token field above — your official DeepL key is never touched.</string>
+    <string name="settings_niutrans_mode">Translation service</string>
+    <string name="settings_niutrans_flash">Flash</string>
+    <string name="settings_niutrans_pro">Pro</string>
+    <string name="settings_niutrans_api_key">API Key</string>
+    <string name="settings_niutrans_app_id">App ID</string>
+    <string name="settings_niutrans_term_library_id">Term library ID (optional)</string>
+    <string name="settings_niutrans_memory_library_id">Translation memory ID (optional)</string>
+    <string name="settings_niutrans_tip">Flash supports batch translation. Pro supports streaming translation.</string>
+    <string name="settings_niutrans_advanced">Advanced</string>
 
     <!-- TTS output -->
     <string name="settings_tts_enable">Enable TTS output</string>
@@ -525,8 +570,8 @@
     <string name="settings_tts_invalid_base_url">Enter a valid HTTP or HTTPS Base URL.</string>
     <string name="settings_tts_endpoint_volcengine_official">Official endpoint</string>
     <string name="settings_tts_volcengine_resource">Resource</string>
-    <string name="settings_tts_volcengine_preset_resource">Preset voice 2.0 · seed-tts-2.0</string>
-    <string name="settings_tts_volcengine_clone_resource">Voice clone 2.0 · seed-icl-2.0</string>
+    <string name="settings_tts_volcengine_preset_resource">Preset voice 2.0 seed-tts-2.0</string>
+    <string name="settings_tts_volcengine_clone_resource">Voice clone 2.0 seed-icl-2.0</string>
     <string name="settings_tts_volcengine_context">Voice instruction</string>
     <string name="settings_tts_volcengine_context_placeholder">For example: Speak in a warm, restrained and confident tone</string>
     <string name="settings_tts_volcengine_pitch_format">Pitch: %1$d semitones</string>
@@ -576,12 +621,12 @@
     <!-- Translation engine connection test -->
     <string name="settings_test_connection">Test connection</string>
     <string name="settings_test_testing">Testing…</string>
-    <string name="settings_test_ok_deepl_format">OK · used %1$s / %2$s chars (%3$d%% left)</string>
-    <string name="settings_test_ok_deepl_custom_format">OK · custom endpoint reachable, sample: %1$s</string>
-    <string name="settings_test_ok_openai_models_format">OK · fetched %1$d models — tap to fill model name</string>
-    <string name="settings_test_ok_openai_chat_format">OK · model=%1$s · %2$d ms</string>
-    <string name="settings_test_ok_anthropic_models_format">OK · fetched %1$d Anthropic models — tap to fill model name</string>
-    <string name="settings_test_ok_anthropic_message_format">OK · Anthropic model=%1$s · %2$d ms</string>
+    <string name="settings_test_ok_deepl_format">OK used %1$s / %2$s chars (%3$d%% left)</string>
+    <string name="settings_test_ok_deepl_custom_format">OK custom endpoint reachable, sample: %1$s</string>
+    <string name="settings_test_ok_openai_models_format">OK fetched %1$d models — tap to fill model name</string>
+    <string name="settings_test_ok_openai_chat_format">OK model=%1$s %2$d ms</string>
+    <string name="settings_test_ok_anthropic_models_format">OK fetched %1$d Anthropic models — tap to fill model name</string>
+    <string name="settings_test_ok_anthropic_message_format">OK Anthropic model=%1$s %2$d ms</string>
     <string name="settings_test_deepl_403_hint">check Free/Pro endpoint toggle matches your key</string>
     <string name="settings_test_pick_model">Pick a model from the list</string>
 
@@ -627,7 +672,7 @@
     <string name="settings_baidu_endpoint_webimage">Web image</string>
     <string name="settings_baidu_endpoint_accurate">Accurate</string>
     <string name="settings_baidu_endpoint_accurate_loc">Accurate + location</string>
-    <string name="settings_baidu_current_format">Current: %1$s · %2$s%3$s</string>
+    <string name="settings_baidu_current_format">Current: %1$s %2$s%3$s</string>
     <string name="settings_baidu_with_loc_hint">\nWith location: overlay snaps to each text box</string>
     <string name="settings_baidu_no_loc_hint">\nWithout location: text stacks vertically on the left of the screen</string>
     <string name="settings_tencent_id_label">Tencent SecretId</string>
@@ -636,7 +681,7 @@
     <string name="settings_tencent_endpoint_general_basic">General print</string>
     <string name="settings_tencent_endpoint_general_accurate">Accurate</string>
     <string name="settings_tencent_endpoint_recognize_agent">Agent</string>
-    <string name="settings_tencent_current_format">Current: %1$s · %2$s</string>
+    <string name="settings_tencent_current_format">Current: %1$s %2$s</string>
     <string name="settings_preprocess_upscale">2× upscale (improves small text)</string>
     <string name="settings_preprocess_upscale_help">2× upscale enlarges the screenshot before OCR and can help tiny on-device text. Avoid it with cloud OCR: returned text boxes may be based on the enlarged image, so translated overlays can shift on the original screenshot. It also increases upload size.</string>
     <string name="settings_preprocess_upscale_cloud_warning">Avoid 2× upscale with cloud OCR; translated overlay positions may shift.</string>
@@ -751,6 +796,7 @@
     <string name="settings_loop_trigger_mode_label">Loop trigger mode</string>
     <string name="settings_loop_trigger_fixed">Fixed interval</string>
     <string name="settings_loop_trigger_smart">Wait for text completion</string>
+    <string name="settings_loop_trigger_settled">Translate when settled</string>
     <string name="settings_loop_interval_label">Auto-loop interval (ms)</string>
     <string name="settings_loop_text_stable_duration_format">Text stability wait: %1$d ms</string>
     <string name="settings_loop_text_stable_faster">Faster</string>
@@ -776,6 +822,17 @@
     <string name="settings_btn_open_a11y">Open system accessibility settings</string>
     <string name="settings_developer_mode_label">Developer mode</string>
     <string name="settings_developer_mode_hint">Shows diagnostic controls for OCR and translation troubleshooting.</string>
+    <string name="settings_performance_overlay_label">Performance overlay</string>
+    <string name="settings_performance_overlay_hint">Shows OCR, translation, token, memory, and CPU metrics on screen.</string>
+    <string name="performance_overlay_title">STATS:</string>
+    <string name="performance_overlay_ocr">OCR: %1$s</string>
+    <string name="performance_overlay_init">Init: %1$s</string>
+    <string name="performance_overlay_prefill">Prefill: %1$s (%2$s, %3$s)</string>
+    <string name="performance_overlay_decode">Decode: %1$s (%2$s, %3$s)</string>
+    <string name="performance_overlay_total">Total: %1$s</string>
+    <string name="performance_overlay_memory">Memory: %1$s</string>
+    <string name="performance_overlay_cpu">CPU: %1$s</string>
+    <string name="performance_overlay_cpu_cores_value">%1$s cores</string>
     <string name="settings_batch_cumulative_completion_time_label">Cumulative batch completion time</string>
     <string name="settings_batch_cumulative_completion_time_hint">When enabled, translation logs show elapsed time from the start of the full batch to each completed item. When disabled, they show the individual item or native group duration.</string>
     <string name="settings_ocr_screenshot_saving_label">Save OCR screenshots</string>
@@ -800,15 +857,18 @@
     <string name="settings_paddle_model_version_label">Model version:</string>
     <string name="settings_paddle_model_name">PP-OCRv5 mobile</string>
     <string name="paddle_version_v5_mobile">PP-OCRv5 mobile</string>
-    <string name="paddle_version_v5_mobile_desc">~20MB · ~5.3M parameters · 4 languages</string>
+    <string name="paddle_version_v5_mobile_desc">~20MB ~5.3M parameters 4 languages</string>
     <string name="paddle_version_v5_mobile_languages">Simplified Chinese, Traditional Chinese, English, Japanese</string>
+    <string name="paddle_version_v5_korean">PP-OCRv5 Korean</string>
+    <string name="paddle_version_v5_korean_desc">~18MB optimized for Korean 2 languages</string>
+    <string name="paddle_version_v5_korean_languages">Korean, English</string>
     <string name="paddle_version_v6_tiny">PP-OCRv6 tiny</string>
-    <string name="paddle_version_v6_tiny_desc">~6MB · ~1.5M parameters · 49 languages</string>
+    <string name="paddle_version_v6_tiny_desc">~6MB ~1.5M parameters 49 languages</string>
     <string name="paddle_version_v6_tiny_languages">Simplified Chinese, Traditional Chinese, English, French, German, Italian, Spanish, Portuguese, Dutch, Polish, Romanian, Czech, Swedish, Norwegian, Danish, Finnish, Hungarian, Turkish, Vietnamese, Indonesian, Malay, Azerbaijani, Afrikaans, Bosnian, Croatian, Welsh, Estonian, Irish, Icelandic, Kurdish, Lithuanian, Latvian, Maltese, Maori, Occitan, Slovak, Slovenian, Albanian, Swahili, Tagalog, Uzbek, Latin, Serbian (Latin), Catalan, Basque, Galician, Luxembourgish, Romansh, Quechua</string>
     <string name="paddle_version_v6_small">PP-OCRv6 small</string>
-    <string name="paddle_version_v6_small_desc">~30MB · ~7.7M parameters · 50 languages</string>
+    <string name="paddle_version_v6_small_desc">~30MB ~7.7M parameters 50 languages</string>
     <string name="paddle_version_v6_medium">PP-OCRv6 medium</string>
-    <string name="paddle_version_v6_medium_desc">~132MB · ~34.5M parameters · 50 languages</string>
+    <string name="paddle_version_v6_medium_desc">~132MB ~34.5M parameters 50 languages</string>
     <string name="paddle_version_v6_full_languages">Simplified Chinese, Traditional Chinese, English, Japanese, French, German, Italian, Spanish, Portuguese, Dutch, Polish, Romanian, Czech, Swedish, Norwegian, Danish, Finnish, Hungarian, Turkish, Vietnamese, Indonesian, Malay, Azerbaijani, Afrikaans, Bosnian, Croatian, Welsh, Estonian, Irish, Icelandic, Kurdish, Lithuanian, Latvian, Maltese, Maori, Occitan, Slovak, Slovenian, Albanian, Swahili, Tagalog, Uzbek, Latin, Serbian (Latin), Catalan, Basque, Galician, Luxembourgish, Romansh, Quechua</string>
     <string name="settings_paddle_supported_languages_button">View supported languages (%1$d)</string>
     <string name="settings_paddle_supported_languages_title">Languages supported by %1$s</string>
@@ -883,6 +943,7 @@
     <string name="settings_search_item_baidu_fanyi">Baidu Translate Open API (AppID / Secret)</string>
     <string name="settings_search_item_tencent_translator">Tencent Cloud translation (TMT)</string>
     <string name="settings_search_item_deepl_advanced">DeepL advanced (custom URL / Bearer / protocol / DeepLX)</string>
+    <string name="settings_search_item_niutrans">NiuTrans</string>
     <string name="settings_search_item_baidu_endpoint">Baidu OCR endpoint</string>
     <string name="settings_search_item_baidu_lang">Baidu OCR language</string>
     <string name="settings_search_item_tencent_endpoint">Tencent OCR endpoint</string>
@@ -1050,12 +1111,12 @@
     <!-- Notification -->
     <string name="notif_channel_name">Capture &amp; translate service</string>
     <string name="notif_channel_desc">Foreground capture + OCR + translate</string>
-    <string name="notif_title">Screen Translator · running</string>
-    <string name="notif_text">Tap the floating ball to run its current mode · long-press for menu</string>
+    <string name="notif_title">Screen Translator running</string>
+    <string name="notif_text">Tap the floating ball to run its current mode long-press for menu</string>
 
     <!-- Accessibility -->
-    <string name="a11y_desc">Listens for a volume-key combo (Volume+ and Volume- held together for 0.3s) as a global shortcut to trigger screen translation. Only active after you turn it on in settings; does not read screen content or window structure.</string>
-    <string name="a11y_summary">Screen Translator · Volume-key trigger</string>
+    <string name="a11y_desc">Used for volume-key shortcuts and Input Translation. Input-field text is read only when you tap the floating ball; password input fields are never read.</string>
+    <string name="a11y_summary">Screen Translator Shortcuts</string>
 
     <!-- Baidu OCR endpoint names / quotas -->
     <string name="baidu_endpoint_general_basic_name">Standard (no location)</string>
@@ -1113,7 +1174,7 @@
     <string name="tencent_endpoint_recognize_agent_desc">LLM-enhanced, good for complex layout / handwriting</string>
 
     <!-- Region picker -->
-    <string name="region_picker_hint_drawing">Drag to select the translation area · double-tap for full screen</string>
+    <string name="region_picker_hint_drawing">Drag to select the translation area double-tap for full screen</string>
     <string name="region_picker_btn_confirm">Confirm</string>
     <string name="region_picker_btn_cancel">Cancel</string>
     <string name="region_picker_btn_redo">Redraw</string>
@@ -1361,6 +1422,7 @@
     <string name="floating_tour_home_body">Returns to the Screen Translator home screen.</string>
     <string name="floating_tour_word_select_body">Switches the main ball to word-select translation. Tap the main ball afterward, then drag a box around the text to translate.</string>
     <string name="floating_tour_full_screen_body">Switches the main ball to full-screen translation. Tap the main ball afterward to capture and translate the configured area.</string>
+    <string name="floating_tour_input_translation_body">Switches the main ball to Input Translation. Tap it afterward to translate the text in the current input field.</string>
     <string name="floating_tour_next_page_body">When the actions do not fit on one page, use this ball to open the next group. Tap “Show next page” to continue the tour there.</string>
     <string name="floating_tour_next_page_wrap_body">This is also the paging ball. On the last page, it cycles back to the first group.</string>
     <string name="floating_tour_generic_item_body">Runs this arc-menu action.</string>
@@ -1368,6 +1430,39 @@
     <string name="floating_skill_word_select_label">Word Select Translate</string>
     <string name="toast_skill_switched_full_screen">Tap the ball to translate full screen</string>
     <string name="toast_skill_switched_word_select">Tap the ball to drag a selection</string>
+    <string name="menu_input_translate">Input Translation</string>
+    <string name="toast_skill_switched_input_translate">Tap the ball to translate the current input field</string>
+    <string name="a11y_floating_mode_input_translate">Input Translation mode</string>
+    <string name="a11y_floating_hint_input_translate">Double tap to translate the current input field. Long press to open the menu</string>
+    <string name="settings_section_input_translation">Input Translation</string>
+    <string name="settings_input_translation_desc">Translate all text in the current input field into the configured source language and replace the original content.</string>
+    <string name="settings_input_translation_double_action">Double-tap action</string>
+    <string name="settings_input_translation_double_full_screen">Full-screen translation</string>
+    <string name="settings_input_translation_double_word_select">Word select</string>
+    <string name="settings_input_translation_double_help">Choose what double-tapping the floating ball does in Input Translation mode.</string>
+    <string name="settings_input_translation_permission">Requires Accessibility access. Input is read and replaced only when you tap the floating ball; password fields are never read.</string>
+    <string name="settings_search_item_input_translation">Input Translation / double-tap action</string>
+    <string name="input_translation_guide_progress">Input Translation</string>
+    <string name="input_translation_guide_body">In Input Translation mode:\nTap: translate the text in the current input field.\nDouble tap: run %1$s.\nYou can change the double-tap action in Settings.</string>
+    <string name="input_translation_guide_done">Got it</string>
+    <string name="input_translation_translating">Translating input…</string>
+    <string name="input_translation_cancelled">Input translation cancelled</string>
+    <string name="input_translation_accessibility_required">Enable Screen Translator in system Accessibility settings first</string>
+    <string name="input_translation_no_focused_input">Tap the input field you want to translate first</string>
+    <string name="input_translation_wechat_unsupported">WeChat does not currently support Input Translation.</string>
+    <string name="input_translation_password_rejected">Password input fields are never read</string>
+    <string name="input_translation_not_editable">This input field cannot be read and replaced</string>
+    <string name="input_translation_empty_input">The current input field is empty</string>
+    <string name="input_translation_explicit_source_required">Choose a specific source language first</string>
+    <string name="input_translation_engine_unsupported_format">The current translation service cannot translate into %1$s</string>
+    <string name="input_translation_empty_result">The translation service returned no translation</string>
+    <string name="input_translation_target_changed">The input field changed, so it was not replaced</string>
+    <string name="input_translation_success_format">Translated into %1$s</string>
+    <string name="input_translation_failed">Input translation failed. Try again.</string>
+    <string name="input_translation_clip_label">Input translation result</string>
+    <string name="input_translation_replace_failed_copied">This input field does not support replacement. The translation was copied.</string>
+    <string name="input_translation_replace_unconfirmed_copied">Unable to confirm whether the text was replaced. The translation was copied.</string>
+    <string name="input_translation_service_disconnected_copied">The accessibility service is disconnected. Unable to replace the text; the translation was copied.</string>
 
     <!-- Word selection overlay -->
     <string name="word_select_hint_drawing">Drag a rectangle around text to translate</string>
@@ -1375,6 +1470,9 @@
     <string name="word_select_btn_cancel">Cancel</string>
     <string name="word_select_btn_redraw">Redraw</string>
     <string name="settings_section_word_select">Word-select translation</string>
+    <string name="settings_word_select_extract_only">Extract text only</string>
+    <string name="settings_word_select_extract_only_help">When enabled, only recognize text in the selected area, without translating it.</string>
+    <string name="word_select_btn_extract">Extract text</string>
     <string name="settings_word_select_precise_adjust">Precise adjustment (adjust selection before translating)</string>
     <string name="settings_word_select_precise_adjust_help">When on, after drawing a box you can fine-tune its edges before translating. When off, releasing your finger immediately translates the drawn area.</string>
     <string name="settings_word_select_card_mode">Show translation card</string>
@@ -1420,6 +1518,7 @@
     <!-- Translation card -->
     <string name="word_card_loading">Translating…</string>
     <string name="floating_word_lookup_failed">Lookup failed</string>
+    <string name="floating_word_lookup_not_found">No definition found</string>
     <string name="floating_word_open_details">View complete definitions for %1$s</string>
     <string name="floating_word_view_details">View full definition</string>
     <string name="word_card_recognizing">Recognizing selected text…</string>
@@ -1540,6 +1639,11 @@
 
     <!-- Text orientation auto-detect -->
     <string name="settings_text_orientation_section_title">Auto-detect orientation</string>
+    <string name="settings_capture_content_orientation_label">Content orientation correction</string>
+    <string name="settings_capture_content_orientation_auto">No adjustment</string>
+    <string name="settings_capture_content_orientation_landscape">Landscape content</string>
+    <string name="settings_capture_content_orientation_portrait">Portrait content</string>
+    <string name="settings_capture_content_orientation_summary">For cases where the content orientation does not match the device orientation.</string>
     <string name="settings_orient_auto_detect_title">Auto-detect text orientation</string>
     <string name="settings_orient_auto_detect_summary">This mainly improves non-horizontal text, such as vertical layouts. It detects layout direction from OCR box geometry and can re-run OCR with a better engine when needed. If you do not need it, turn this off to improve translation speed.</string>
     <string name="settings_orient_manual_label">Manually lock orientation</string>
@@ -1594,6 +1698,30 @@
     <string name="settings_permission_not_granted">Not granted</string>
     <string name="settings_usage_access_unavailable">Usage access settings are unavailable</string>
     <string name="settings_manage_glossary">Translation library</string>
+    <string name="settings_manage_dictionary_library">Dictionary library</string>
+    <string name="dictionary_library_title">Dictionary library</string>
+    <string name="dictionary_library_summary">Provides pronunciation, parts of speech, and definitions when a word is tapped. It does not affect OCR, main translation, or glossary replacement.</string>
+    <string name="dictionary_lookup_source">Lookup source</string>
+    <string name="dictionary_tap_lookup_enabled">Show definitions when tapping source text</string>
+    <string name="dictionary_tap_lookup_enabled_summary">Tap an English word in source text to show its definition.</string>
+    <string name="dictionary_mode_offline">Offline</string>
+    <string name="dictionary_mode_online">Online</string>
+    <string name="dictionary_mode_offline_summary">Uses installed offline dictionaries only. A miss is shown as not found.</string>
+    <string name="dictionary_mode_online_summary">Uses the current cloud LLM only. Offline dictionaries are not queried.</string>
+    <string name="dictionary_online_unavailable">The current translation service only supports offline dictionaries. Online lookup requires an OpenAI- or Anthropic-compatible cloud LLM.</string>
+    <string name="dictionary_offline_packs">Offline dictionaries</string>
+    <string name="dictionary_pack_checking">Checking dictionary packages…</string>
+    <string name="dictionary_pack_installed">Installed</string>
+    <string name="dictionary_pack_not_installed">Not installed</string>
+    <string name="dictionary_pack_import">Import package</string>
+    <string name="dictionary_pack_replace">Replace package</string>
+    <string name="dictionary_pack_action_import">Import</string>
+    <string name="dictionary_pack_action_replace">Replace</string>
+    <string name="dictionary_pack_delete">Delete</string>
+    <string name="dictionary_pack_imported">Dictionary package imported</string>
+    <string name="dictionary_pack_deleted">Dictionary package deleted</string>
+    <string name="dictionary_pack_delete_failed">Could not delete the dictionary package</string>
+    <string name="dictionary_pack_import_note">Only the app’s dictionary package format is accepted. Source, version, database schema, and integrity are checked during import. Dictionary files are not included in settings exports.</string>
     <string name="settings_prompt_advanced_header">Prompt settings</string>
     <string name="settings_openai_request_options_title">LLM request parameters</string>
     <string name="settings_openai_user_template">User message template</string>
@@ -1630,7 +1758,7 @@
     <string name="translation_library_help_terms_title">Terms: keep names and key words consistent</string>
     <string name="translation_library_help_terms_body">Use terms for character names, places, organizations, item names, and other fixed wording.\n\nFor example, save “セイバー” as “Artoria”. When the source contains that term again, the app will try to use your chosen translation.\n\nA term can work in every game or only in one game. Game-specific terms take priority over global terms. Some translation engines cannot use terms; if a term has no effect, check the selected translator.</string>
     <string name="translation_library_help_memory_title">Translation memory: remember a corrected sentence</string>
-    <string name="translation_library_help_memory_body">Use translation memory for a complete sentence or OCR text block.\n\nWhen the same or a very similar source appears again, the app directly reuses your corrected translation. Common lines, character tone, and repeated expressions become more consistent over time.\n\nMemories are kept separately for each game and language direction. The app must identify the current game before it can save or use that game’s memories.</string>
+    <string name="translation_library_help_memory_body">Use translation memory for a complete sentence or OCR text block.\n\nWhen the same or a very similar source appears again, the app directly reuses your corrected translation. Common lines, character tone, and repeated expressions become more consistent over time.\n\nWhen the current app is identified, memories are saved for that app; otherwise, they are saved as global memories. During translation, memories for the current app are used first, followed by global memories.</string>
     <string name="translation_library_help_priority_title">Priority order</string>
     <string name="translation_library_help_priority_body">Source preservation is checked first. An exact match stays in the image and never enters erasing or translation.\n\nFor the remaining text, the app checks translation memory first. If no memory matches, it finds relevant terms and translates normally.\n\nSound effect kept as artwork → add to Keep source\nCorrected sentence → save to translation memory\nIncorrect name or fixed word → add a term</string>
     <string name="translation_library_help_add_title">How to add corrections</string>
@@ -1716,7 +1844,6 @@
     <string name="glossary_import_conflict_skip">Skip</string>
     <string name="glossary_import_conflict_overwrite">Replace</string>
     <string name="glossary_import_preview_title">Import preview</string>
-    <string name="glossary_import_preview_summary">%1$d total · %2$d to import · %3$d replace · %4$d skip · %5$d invalid</string>
     <string name="glossary_import_filter_all">All %1$d</string>
     <string name="glossary_import_filter_importable">Importable %1$d</string>
     <string name="glossary_import_filter_overwrite">Replace %1$d</string>
@@ -1744,15 +1871,37 @@
     <string name="glossary_save_failed">Unable to save the glossary term</string>
     <string name="model_download_channel_name">Model downloads</string>
     <string name="model_download_notification_title">Downloading model</string>
-    <string name="model_download_starting_format">%1$s · connecting to download source (%2$d/%3$d)</string>
-    <string name="model_download_progress_batch_format">%1$s · %2$d%% · %3$s (%4$d/%5$d)</string>
-    <string name="model_download_progress_bytes_batch_format">%1$s · %2$d MB · %3$s (%4$d/%5$d)</string>
+    <string name="model_download_preparing_format">%1$s preparing download (%2$d/%3$d)</string>
+    <string name="model_download_starting_format">%1$s checking download source (%2$d/%3$d)</string>
+    <string name="model_download_progress_batch_format">%1$s %2$d%% %3$s (%4$d/%5$d)</string>
+    <string name="model_download_progress_bytes_batch_format">%1$s %2$d MB %3$s (%4$d/%5$d)</string>
     <string name="model_download_complete">Model download complete</string>
+    <string name="settings_auto_ocr_download_complete">Download complete</string>
     <string name="model_download_failed_format">Model download failed: %1$s</string>
     <string name="model_download_retrying_format">Download interrupted; waiting to retry: %1$s</string>
     <string name="model_download_cancel">Cancel</string>
+    <string name="model_download_cancel_confirm_title">Cancel this download?</string>
+    <string name="model_download_cancel_confirm_ok">OK</string>
     <string name="model_download_in_app_title">Background model download</string>
     <string name="model_download_waiting">Preparing download…</string>
+    <string name="settings_model_network_test_label">Model download network</string>
+    <string name="settings_model_network_test_hint">Checks whether the current model download sources are available.</string>
+    <string name="settings_model_network_test_action">Run test</string>
+    <string name="settings_model_network_test_running">Testing…</string>
+    <string name="settings_model_network_test_success">%1$s: %2$d ms</string>
+    <string name="settings_model_network_test_failure">%1$s</string>
+    <string name="settings_model_network_target_llm">On-device LLM</string>
+    <string name="settings_model_network_target_paddle">Paddle OCR</string>
+    <string name="settings_model_network_target_manga">Manga OCR</string>
+    <string name="settings_model_network_target_orientation">Orientation model</string>
+    <string name="settings_model_network_failure_no_network">No network connection</string>
+    <string name="settings_model_network_failure_dns">Could not resolve the download address</string>
+    <string name="settings_model_network_failure_tls">Secure connection failed</string>
+    <string name="settings_model_network_failure_timeout">Connection timed out</string>
+    <string name="settings_model_network_failure_connection">Could not connect</string>
+    <string name="settings_model_network_failure_http">The source rejected the request</string>
+    <string name="settings_model_network_failure_invalid_source">Invalid download address</string>
+    <string name="settings_model_network_failure_unknown">Test failed</string>
     <string name="model_download_failure_card_title">Model download failed</string>
     <string name="model_download_failure_model_format">Model: %1$s</string>
     <string name="model_download_failure_downloaded_format">Downloaded: %1$s</string>
@@ -1878,8 +2027,15 @@
     <string name="onboarding_model_not_downloaded">Not downloaded</string>
 
     <string name="onboarding_cloud_title">Choose and configure a cloud LLM</string>
-    <string name="onboarding_cloud_body">Selecting a provider fills verified defaults. You can still edit all three fields for regional endpoints, plans, or compatible gateways.</string>
+    <string name="onboarding_cloud_body">Providers are sorted by name. The order does not indicate recommendations or rankings.\nFollow the instructions on your provider’s official website to get an API Key, then enter it below. You can change the address and model name as needed.</string>
+    <string name="settings_test_balance_format">Balance: %1$s</string>
+    <string name="settings_test_balance_failed">Balance query failed</string>
     <string name="onboarding_cloud_custom">Custom</string>
+    <string name="onboarding_cloud_region">API region</string>
+    <string name="onboarding_cloud_region_mainland">Mainland China</string>
+    <string name="onboarding_cloud_region_international">International</string>
+    <string name="onboarding_cloud_provider_modelscope">ModelScope</string>
+    <string name="onboarding_cloud_provider_scnet">SCNet</string>
     <string name="onboarding_cloud_url">Base URL</string>
     <string name="onboarding_cloud_api_key">API key</string>
     <string name="onboarding_cloud_model">Model name</string>
@@ -1939,4 +2095,5 @@
     <string name="source_preservation_delete_message">“%1$s” will be translated normally and may be replaced the next time it is recognized.</string>
     <string name="translation_library_help_preserve_title">Keep source artwork</string>
     <string name="translation_library_help_preserve_body">An exact OCR-block match is not translated, displayed, or erased. This is intended for manga sound effects whose original lettering is part of the artwork. Matching ignores whitespace and safe edge punctuation, but never uses fuzzy or substring matching.</string>
+    <string name="settings_search_item_floating_alpha">Floating button opacity</string>
 </resources>

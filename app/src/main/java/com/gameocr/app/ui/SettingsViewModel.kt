@@ -4,8 +4,12 @@ import android.content.Context
 import android.graphics.Typeface
 import android.net.Uri
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import com.gameocr.app.R
+import com.gameocr.app.capture.CaptureRegionBorderStyle
+import com.gameocr.app.capture.normalizedCaptureRegionBorderWidthDp
 import com.gameocr.app.data.FloatingMenu
+import com.gameocr.app.data.InputTranslationDoubleAction
 import com.gameocr.app.data.MangaOcrAdvancedSettingsPolicy
 import com.gameocr.app.data.OcrEngineKind
 import com.gameocr.app.data.OpenAiRequestOptions
@@ -19,6 +23,7 @@ import com.gameocr.app.data.OverlayTheme
 import com.gameocr.app.data.PreprocessOptions
 import com.gameocr.app.data.RenderMode
 import com.gameocr.app.data.Settings
+import com.gameocr.app.data.normalizedFloatingButtonAlpha
 import com.gameocr.app.data.SettingsBundleExportResult
 import com.gameocr.app.data.SettingsBundleImportResult
 import com.gameocr.app.data.SettingsBundlePreview
@@ -40,6 +45,8 @@ import com.gameocr.app.data.MimoTtsModel
 import com.gameocr.app.data.MAX_TTS_PLAYBACK_GAIN_DB
 import com.gameocr.app.data.MIN_TTS_PLAYBACK_GAIN_DB
 import com.gameocr.app.download.ModelDownloadManager
+import com.gameocr.app.download.ModelDownloadNetworkProbeResult
+import com.gameocr.app.download.ModelDownloadNetworkTester
 import com.gameocr.app.download.ModelReadinessChecker
 import com.gameocr.app.download.ModelDownloadSpec
 import com.gameocr.app.glossary.TranslationGlossaryRepository
@@ -71,6 +78,10 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import java.io.File
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 
@@ -82,25 +93,96 @@ class SettingsViewModel @Inject constructor(
     private val mangaOcrInstaller: com.gameocr.app.ocr.MangaOcrModelInstaller,
     private val orientationModelInstaller: OrientationModelInstaller,
     private val routingTranslator: RoutingTranslator,
+    private val connectionTester: com.gameocr.app.translate.TranslatorConnectionTester,
     private val llmInstaller: LlmModelInstaller,
     private val modelReadinessChecker: ModelReadinessChecker,
     private val overlayFontManager: OverlayFontManager,
     private val glossaryRepository: TranslationGlossaryRepository,
     private val modelDownloadManager: ModelDownloadManager,
+    private val modelDownloadNetworkTester: ModelDownloadNetworkTester,
     private val systemTtsEngine: SystemTtsEngine,
     private val ttsEngine: TtsEngine,
     private val httpTtsEngine: HttpTtsEngine,
     private val voiceDesignPromptGenerator: VoiceDesignPromptGenerator,
     private val miniMaxVoiceManager: MiniMaxVoiceManager,
+    private val appPermissions: com.gameocr.app.shizuku.AppPermissionCoordinator,
 ) : ViewModel() {
 
     val modelDownloadWorkInfos: Flow<List<WorkInfo>> = modelDownloadManager.workInfos
 
     suspend fun load(): Settings = repo.get()
 
-    suspend fun downloadMlKitLanguagePair(sourceLang: String, targetLang: String) {
-        routingTranslator.downloadMlKitLanguagePair(sourceLang, targetLang)
+    private val recentLanguageMutex = Mutex()
+
+    internal fun rememberMlKitSourceLanguage(languageTag: String) =
+        viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            recentLanguageMutex.withLock {
+                withContext(Dispatchers.IO) {
+                    repo.update { current ->
+                        current.copy(mlKitRecentSourceLanguages = mlKitRecentSourceLanguages(
+                            current.mlKitRecentSourceLanguages, languageTag,
+                        ))
+                    }
+                }
+            }
+        }
+
+    private val autoOcrSettingsSaver by lazy {
+        AutoOcrSettingsSaver(viewModelScope) { value ->
+            withContext(Dispatchers.IO) { repo.update { it.copy(autoOcr = value) } }
+        }
     }
+    internal fun saveAutoOcrSettings(value: com.gameocr.app.data.AutoOcrSettings) =
+        autoOcrSettingsSaver.save(value)
+
+    internal suspend fun availableAutoOcrRoutes(settings: Settings): Set<com.gameocr.app.data.AutoOcrRoute> =
+        withContext(Dispatchers.IO) {
+            com.gameocr.app.data.AutoOcrRoutingPolicy.candidates.filter { route ->
+                com.gameocr.app.data.AutoOcrRoutingPolicy.configured(settings, route) && when (route.engine) {
+                    OcrEngineKind.PADDLE_ONNX -> modelReadinessChecker.paddle(route.paddleVersion).ready
+                    OcrEngineKind.MANGA_OCR_JA -> modelReadinessChecker.mangaOcr().ready
+                    else -> true
+                }
+            }.toSet()
+        }
+
+    suspend fun loadForScreen(activityContext: Context): Settings = withContext(Dispatchers.IO) {
+        loadSettingsForScreen(
+            read = repo::get,
+            update = repo::update,
+            currentDefault = activityContext.getString(R.string.default_prompt),
+            knownDefaults = {
+                listOf("zh-CN", "en").map { tag ->
+                    val cfg = android.content.res.Configuration(activityContext.resources.configuration)
+                        .apply { setLocale(java.util.Locale.forLanguageTag(tag)) }
+                    activityContext.createConfigurationContext(cfg).getString(R.string.default_prompt)
+                }
+            },
+        )
+    }
+
+    private val floatingButtonSettingsSaver by lazy {
+        FloatingButtonSettingsSaver(viewModelScope) { value ->
+            withContext(Dispatchers.IO) { repo.update(value::applyTo) }
+        }
+    }
+
+    internal fun saveFloatingButtonSettings(value: FloatingButtonSettings) =
+        floatingButtonSettingsSaver.save(value)
+
+    internal suspend fun loadModelStates(request: SettingsModelReadinessRequest) = withContext(Dispatchers.IO) {
+        checkSettingsModels(request, ::llmModelUiState, ::paddleModelUiState,
+            ::mangaOcrModelUiState, ::orientationModelUiState)
+    }
+
+    suspend fun enableAccessibilityViaShizuku(): Boolean = appPermissions.configureIfReady().accessibilityConnected
+
+    suspend fun downloadMlKitLanguagePair(sourceLang: String, targetLang: String, timeoutSeconds: Int) {
+        routingTranslator.downloadMlKitLanguagePair(sourceLang, targetLang, timeoutSeconds)
+    }
+
+    internal suspend fun testModelDownloadNetwork(): List<ModelDownloadNetworkProbeResult> =
+        modelDownloadNetworkTester.probeConfiguredSources()
 
     suspend fun areMlKitLanguagePairModelsDownloaded(
         sourceLang: String,
@@ -114,6 +196,9 @@ class SettingsViewModel @Inject constructor(
 
     suspend fun getDownloadedMlKitLanguageModels(): Set<String> =
         routingTranslator.getDownloadedMlKitLanguageModels()
+
+    suspend fun deleteMlKitSourceLanguageModel(sourceLang: String, targetLang: String) =
+        routingTranslator.deleteMlKitSourceLanguageModel(sourceLang, targetLang)
 
     suspend fun loadSystemTtsVoices(preferredLanguageTag: String): List<SystemTtsVoiceOption> =
         systemTtsEngine.availableVoices(preferredLanguageTag)
@@ -247,11 +332,13 @@ class SettingsViewModel @Inject constructor(
                 )
                 val importedGlossaryCount = glossaryRepository.importTerms(preview.glossaryTerms)
                 glossaryCommitted = true
-                repo.update { merged.settings }
+                val importedState = repo.updateAfterPresetImport(
+                    (merged.presetResult.addedNames + merged.presetResult.overwrittenNames).toSet(),
+                ) { merged.settings }
                 settingsCommitted = true
                 commits.forEach(overlayFontManager::finishTransferredFont)
                 SettingsBundleImportResult(
-                    settings = merged.settings,
+                    settings = importedState,
                     importedPresetCount = merged.presetResult.importedCount,
                     overwrittenPresetNames = merged.presetResult.overwrittenNames,
                     importedFontCount = installedFonts.size,
@@ -317,6 +404,7 @@ class SettingsViewModel @Inject constructor(
         loopTextRegionMode: com.gameocr.app.data.LoopTextRegionMode,
         loopTranslateRegionOnly: Boolean,
         developerOptionsEnabled: Boolean,
+        performanceOverlayEnabled: Boolean,
         ocrScreenshotSavingEnabled: Boolean,
         disableTranslationCache: Boolean,
         batchCumulativeCompletionTimeEnabled: Boolean,
@@ -370,6 +458,7 @@ class SettingsViewModel @Inject constructor(
         offsetX: Int,
         offsetY: Int,
         ocrEngine: OcrEngineKind,
+        autoOcr: com.gameocr.app.data.AutoOcrSettings,
         baiduKey: String,
         baiduSecret: String,
         baiduEndpoint: com.gameocr.app.data.BaiduOcrEndpoint,
@@ -385,6 +474,7 @@ class SettingsViewModel @Inject constructor(
         preprocess: PreprocessOptions,
         a11yVolume: Boolean,
         floatingButtonSizeDp: Int,
+        floatingButtonAlpha: Float,
         floatingButtonSnapToEdge: Boolean,
         floatingButtonAutoDock: Boolean,
         floatingButtonDockInsetDp: Int,
@@ -402,6 +492,11 @@ class SettingsViewModel @Inject constructor(
         deeplBaseUrl: String,
         deeplBearerAuth: Boolean,
         deeplCustomToken: String,
+        niuTransMode: com.gameocr.app.data.NiuTransMode,
+        niuTransApiKey: String,
+        niuTransAppId: String,
+        niuTransTermLibraryId: String,
+        niuTransMemoryLibraryId: String,
         youdaoAppKey: String,
         youdaoAppSecret: String,
         volcAccessKeyId: String,
@@ -410,7 +505,7 @@ class SettingsViewModel @Inject constructor(
         baiduFanyiAppId: String,
         baiduFanyiSecretKey: String,
         overlayFonts: List<OverlayFontEntry>,
-        activeTranslationPresetId: String
+        activeTranslationPresetId: String,
     ) {
         repo.update {
             it.copy(
@@ -435,6 +530,7 @@ class SettingsViewModel @Inject constructor(
                 loopTextRegionMode = loopTextRegionMode,
                 loopTranslateRegionOnly = loopTranslateRegionOnly,
                 developerOptionsEnabled = developerOptionsEnabled,
+                performanceOverlayEnabled = performanceOverlayEnabled,
                 ocrScreenshotSavingEnabled = ocrScreenshotSavingEnabled,
                 disableTranslationCache = disableTranslationCache,
                 batchCumulativeCompletionTimeEnabled = batchCumulativeCompletionTimeEnabled,
@@ -493,6 +589,7 @@ class SettingsViewModel @Inject constructor(
                 overlayOffsetX = offsetX,
                 overlayOffsetY = offsetY,
                 ocrEngine = ocrEngine,
+                autoOcr = autoOcr.normalized(),
                 baiduOcrApiKey = baiduKey.trim(),
                 baiduOcrSecretKey = baiduSecret.trim(),
                 baiduOcrEndpoint = baiduEndpoint,
@@ -508,6 +605,7 @@ class SettingsViewModel @Inject constructor(
                 preprocess = preprocess,
                 a11yVolumeTrigger = a11yVolume,
                 floatingButtonSizeDp = floatingButtonSizeDp.coerceIn(32, 96),
+                floatingButtonAlpha = normalizedFloatingButtonAlpha(floatingButtonAlpha),
                 floatingButtonSnapToEdge = floatingButtonSnapToEdge,
                 floatingButtonAutoDock = floatingButtonAutoDock,
                 floatingButtonDockInsetDp = floatingButtonDockInsetDp.coerceIn(0, 40),
@@ -533,6 +631,11 @@ class SettingsViewModel @Inject constructor(
                 deeplBaseUrl = deeplBaseUrl.trim(),
                 deeplBearerAuth = deeplBearerAuth,
                 deeplCustomToken = deeplCustomToken.trim(),
+                niuTransMode = niuTransMode,
+                niuTransApiKey = niuTransApiKey.trim(),
+                niuTransAppId = niuTransAppId.trim(),
+                niuTransTermLibraryId = niuTransTermLibraryId.trim(),
+                niuTransMemoryLibraryId = niuTransMemoryLibraryId.trim(),
                 youdaoAppKey = youdaoAppKey.trim(),
                 youdaoAppSecret = youdaoAppSecret.trim(),
                 volcAccessKeyId = volcAccessKeyId.trim(),
@@ -541,7 +644,7 @@ class SettingsViewModel @Inject constructor(
                 baiduFanyiAppId = baiduFanyiAppId.trim(),
                 baiduFanyiSecretKey = baiduFanyiSecretKey.trim(),
                 overlayFonts = overlayFonts,
-                activeTranslationPresetId = activeTranslationPresetId
+                activeTranslationPresetId = activeTranslationPresetId,
             )
         }
     }
@@ -552,14 +655,6 @@ class SettingsViewModel @Inject constructor(
 
     suspend fun savePaddleModelVersion(version: com.gameocr.app.data.PaddleModelVersion) {
         repo.update { it.copy(paddleModelVersion = version) }
-    }
-
-    /**
-     * 单独保存「悬浮球吸附边缘」开关。切换时立即落盘 + 立即触发 CaptureService 响应，
-     * 不走 [save] 的 dirty/save 流程——用户切了开关期望立即生效，不需要再点保存。
-     */
-    suspend fun saveFloatingSnapEdge(enabled: Boolean) {
-        repo.update { it.copy(floatingButtonSnapToEdge = enabled) }
     }
 
     /** 悬浮窗口内容形态（原文+译文 / 仅译文）。立即落盘 + 即时生效，不走 [save] 流程。 */
@@ -577,12 +672,42 @@ class SettingsViewModel @Inject constructor(
         repo.update { it.copy(customBorderStyle = style) }
     }
 
+    suspend fun saveCaptureRegionBorderEnabled(enabled: Boolean) {
+        repo.update { it.copy(captureRegionBorderEnabled = enabled) }
+    }
+
+    suspend fun saveCaptureRegionHideOnCapture(enabled: Boolean) {
+        repo.update { it.copy(captureRegionHideOnCapture = enabled) }
+    }
+
+    suspend fun saveCaptureRegionBorderColor(color: Int) {
+        repo.update { it.copy(captureRegionBorderColor = color) }
+    }
+
+    suspend fun saveCaptureRegionBorderWidth(widthDp: Int) {
+        repo.update {
+            it.copy(captureRegionBorderWidthDp = normalizedCaptureRegionBorderWidthDp(widthDp))
+        }
+    }
+
+    suspend fun saveCaptureRegionBorderStyle(style: CaptureRegionBorderStyle) {
+        repo.update { it.copy(captureRegionBorderStyle = style) }
+    }
+
+    suspend fun saveCaptureRegionAdjustmentEnabled(enabled: Boolean) {
+        repo.update { it.copy(captureRegionAdjustmentEnabled = enabled) }
+    }
+
     suspend fun saveWordSelectPreciseAdjust(enabled: Boolean) {
         repo.update { it.copy(wordSelectPreciseAdjust = enabled) }
     }
 
     suspend fun saveWordSelectCardMode(enabled: Boolean) {
         repo.update { it.copy(wordSelectCardMode = enabled) }
+    }
+
+    suspend fun saveWordSelectExtractOnly(enabled: Boolean) {
+        repo.update { it.copy(wordSelectExtractOnly = enabled) }
     }
 
     suspend fun saveWordSelectRememberRegion(enabled: Boolean) {
@@ -595,35 +720,29 @@ class SettingsViewModel @Inject constructor(
 
     /** 弧菜单按钮顺序：拖拽完即时落盘 + 生效，不走主 [save] 流程的 dirty 判定。 */
     suspend fun saveArcMenuOrder(order: List<com.gameocr.app.data.MenuItemId>) {
-        repo.update { it.copy(floatingMenuItemOrder = order) }
+        repo.update { it.copy(floatingMenuItemOrder = FloatingMenu.normalizeOrder(order)) }
     }
 
     suspend fun saveArcMenuPageSize(size: Int) {
         repo.update { it.copy(arcMenuPageSize = FloatingMenu.coercePageSize(size)) }
     }
 
+    suspend fun saveInputTranslationDoubleAction(action: InputTranslationDoubleAction) {
+        repo.update { it.copy(inputTranslationDoubleAction = action) }
+    }
+
     suspend fun createTranslationPresetFromCurrent(
         name: String,
         shortName: String
     ): TranslationPreset {
-        var saved: TranslationPreset? = null
-        repo.update { current ->
-            val preset = TranslationPresetCatalog.fromSettings(
-                id = "custom_${System.currentTimeMillis()}",
+        val current = repo.get()
+        val preset = TranslationPresetCatalog.fromSettings(
+                id = "custom_${java.util.UUID.randomUUID()}",
                 name = name.trim().ifBlank { "Custom preset" },
                 shortName = shortName.trim().ifBlank { name.trim().take(8).ifBlank { "Custom" } },
                 settings = current
             )
-            saved = preset
-            current.copy(
-                translationPresets = TranslationPresetCatalog.upsertCustom(
-                    current.translationPresets,
-                    preset
-                ),
-                activeTranslationPresetId = preset.id
-            )
-        }
-        return saved ?: repo.get().translationPresets.last()
+        return repo.saveTranslationPreset(preset, current)
     }
 
     suspend fun duplicateTranslationPreset(
@@ -631,38 +750,15 @@ class SettingsViewModel @Inject constructor(
         name: String,
         shortName: String
     ): TranslationPreset? {
-        var saved: TranslationPreset? = null
-        repo.update { current ->
-            val source = TranslationPresetCatalog.find(current.translationPresets, id)
-                ?: return@update current
-            val preset = source.copy(
-                id = "custom_${System.currentTimeMillis()}",
-                name = name.trim().ifBlank { "${source.name} Copy" },
-                shortName = shortName.trim().ifBlank { source.shortName }
-            )
-            saved = preset
-            current.copy(
-                translationPresets = TranslationPresetCatalog.upsertCustom(
-                    current.translationPresets,
-                    preset
-                )
-            )
-        }
-        return saved
+        val source = TranslationPresetCatalog.find(repo.get().translationPresets, id) ?: return null
+        return repo.duplicateTranslationPreset(
+            id, name.trim().ifBlank { "${source.name} Copy" },
+            shortName.trim().ifBlank { source.shortName },
+        )
     }
 
-    suspend fun saveTranslationPreset(preset: TranslationPreset): TranslationPreset {
-        repo.update { current ->
-            current.copy(
-                translationPresets = TranslationPresetCatalog.upsertCustom(
-                    current.translationPresets,
-                    preset
-                ),
-                activeTranslationPresetId = preset.id
-            )
-        }
-        return preset
-    }
+    suspend fun saveTranslationPreset(preset: TranslationPreset, source: Settings): TranslationPreset =
+        repo.saveTranslationPreset(preset, source)
 
     suspend fun deleteTranslationPreset(id: String) {
         if (TranslationPresetCatalog.isBuiltIn(id)) return
@@ -678,7 +774,7 @@ class SettingsViewModel @Inject constructor(
         imported: List<TranslationPreset>
     ): TranslationPresetImportResult {
         var importResult: TranslationPresetImportResult? = null
-        repo.update { current ->
+        repo.updateAfterPresetImport(imported.mapTo(mutableSetOf()) { it.name }) { current ->
             val result = TranslationPresetTransfer.mergeImportedPresets(
                 existing = current.translationPresets,
                 imported = imported,
@@ -695,26 +791,19 @@ class SettingsViewModel @Inject constructor(
         return requireNotNull(importResult)
     }
 
-    suspend fun applyTranslationPreset(id: String): Settings? {
-        var applied: Settings? = null
-        repo.update { current ->
-            val preset = TranslationPresetCatalog.find(current.translationPresets, id)
-                ?: return@update current
-            val next = preset.applyTo(current).copy(activeTranslationPresetId = preset.id)
-            applied = next
-            next
-        }
-        return applied
-    }
+    suspend fun applyTranslationPreset(id: String): Settings? = repo.applyTranslationPreset(id)
 
-    /** 划词翻译词典 Prompt（仅 OpenAI 兼容引擎用），即时落盘。 */
-    suspend fun saveDictionaryPrompt(prompt: String) {
-        repo.update { it.copy(dictionaryPrompt = prompt) }
-    }
+    suspend fun matchingCredentialPresetIds(source: Settings): Set<String> = repo.matchingCredentialPresetIds(source)
 
     /** 文本方向自动判别开关。立即落盘 + 即时生效，不走 [save] 流程的 dirty 判定。 */
     suspend fun saveTextOrientationAutoDetect(enabled: Boolean) {
         repo.update { it.copy(textOrientationAutoDetect = enabled) }
+    }
+
+    suspend fun saveCaptureContentOrientation(
+        orientation: com.gameocr.app.data.CaptureContentOrientation,
+    ) {
+        repo.update { it.copy(captureContentOrientation = orientation) }
     }
 
     /** 手动锁定文本方向（null = 解除锁定，走自动判别）。 */
@@ -758,34 +847,6 @@ class SettingsViewModel @Inject constructor(
                 floatingWindowHeightDp = 180
             )
         }
-    }
-
-    /**
-     * 用户切换 UI 语言后，如果当前 promptTemplate 仍是"上一个 locale 的默认 prompt"
-     * （即用户从没改过），把它迁移到当前 locale 的默认。这样英文用户不会看到中文 prompt
-     * 又苦于不知道该点"恢复默认"。已自定义的 prompt 不动。
-     *
-     * 用 [activityContext] 而不是 application context 取 [R.string.default_prompt]：
-     * Activity context 的 Configuration 由 framework 保证跟 LocaleManager 同步，最稳。
-     *
-     * 返回当前应展示的 prompt（迁移后或原值）。
-     */
-    suspend fun migrateDefaultPromptIfStale(activityContext: Context): String {
-        val current = repo.get().promptTemplate
-        val currentDefault = activityContext.getString(R.string.default_prompt)
-        if (current == currentDefault) return current
-
-        // 列出所有已知 locale 下的 default_prompt；当前 prompt 命中任一即视为"未定制"
-        val supportedTags = listOf("zh-CN", "en")
-        val knownDefaults = supportedTags.map { tag ->
-            val cfg = android.content.res.Configuration(activityContext.resources.configuration)
-                .apply { setLocale(java.util.Locale.forLanguageTag(tag)) }
-            activityContext.createConfigurationContext(cfg).getString(R.string.default_prompt)
-        }
-        if (current !in knownDefaults) return current
-
-        repo.update { it.copy(promptTemplate = currentDefault) }
-        return currentDefault
     }
 
     /**
@@ -850,7 +911,7 @@ class SettingsViewModel @Inject constructor(
         uris: List<android.net.Uri>,
     ): Int = paddleInstaller.importFromLocal(uris, version)
 
-    /** PaddleOCR 模型是否已就位。manga-ocr 复用 Paddle DBNet 做检测，下完 manga 后用它判断要不要级联拉 Paddle。 */
+    /** PaddleOCR 模型是否已就位；日漫 OCR 的依赖由后台下载管线统一处理。 */
     suspend fun isPaddleInstalled(): Boolean = isPaddleInstalled(repo.get().paddleModelVersion)
 
     fun isPaddleInstalled(version: com.gameocr.app.data.PaddleModelVersion): Boolean =
@@ -943,7 +1004,7 @@ class SettingsViewModel @Inject constructor(
         return if (readiness.installed) {
             val mb = (readiness.totalBytes / 1024 / 1024).toInt()
             LlmModelUiState(
-                status = appContext.getString(R.string.llm_status_ready, "${kind.displayName} · $mb"),
+                status = appContext.getString(R.string.llm_status_ready, "${kind.displayName} $mb"),
                 ready = true,
             )
         } else {
@@ -1051,6 +1112,11 @@ class SettingsViewModel @Inject constructor(
         deeplBaseUrl: String,
         deeplBearerAuth: Boolean,
         deeplCustomToken: String,
+        niuTransMode: com.gameocr.app.data.NiuTransMode,
+        niuTransApiKey: String,
+        niuTransAppId: String,
+        niuTransTermLibraryId: String,
+        niuTransMemoryLibraryId: String,
         youdaoAppKey: String,
         youdaoAppSecret: String,
         apiTimeoutSeconds: Int,
@@ -1078,6 +1144,11 @@ class SettingsViewModel @Inject constructor(
             deeplBaseUrl = deeplBaseUrl.trim(),
             deeplBearerAuth = deeplBearerAuth,
             deeplCustomToken = deeplCustomToken.trim(),
+            niuTransMode = niuTransMode,
+            niuTransApiKey = niuTransApiKey.trim(),
+            niuTransAppId = niuTransAppId.trim(),
+            niuTransTermLibraryId = niuTransTermLibraryId.trim(),
+            niuTransMemoryLibraryId = niuTransMemoryLibraryId.trim(),
             youdaoAppKey = youdaoAppKey.trim(),
             youdaoAppSecret = youdaoAppSecret.trim(),
             volcAccessKeyId = volcAccessKeyId.trim().ifBlank { base.volcAccessKeyId },
@@ -1090,7 +1161,7 @@ class SettingsViewModel @Inject constructor(
             tencentRegion = tencentRegion.trim().ifBlank { base.tencentRegion },
             apiTimeoutSeconds = apiTimeoutSeconds.coerceIn(5, 300)
         )
-        return routingTranslator.testConnection(temp)
+        return connectionTester.test(temp)
     }
 }
 
@@ -1103,7 +1174,7 @@ internal fun cleartextHostsWithLocalOcrUrls(
     ttsMimoBaseUrl: String = "",
     ttsVolcengineBaseUrl: String = "",
 ): List<String> {
-    val normalized = hosts.map { it.trim() }.filter { it.isNotEmpty() }
+    val normalized = com.gameocr.app.data.CleartextHostPolicy.normalize(hosts)
     val umiHost = umiOcrHttpHostOrNull(umiOcrBaseUrl)
     val lunaHost = lunaOcrHttpHostOrNull(lunaOcrBaseUrl)
     val ttsHost = ttsHttpHostOrNull(ttsHttpBaseUrl)

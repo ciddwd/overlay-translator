@@ -17,3 +17,18 @@ data class CaptureRegion(
     val height: Int get() = bottom - top
     fun isValid(): Boolean = width > 8 && height > 8
 }
+
+internal data class CaptureRegionOrigin(
+    val x: Int,
+    val y: Int,
+)
+
+/**
+ * Converts an absolute capture region to the screen-space origin used to render local OCR boxes.
+ * Invalid regions are treated as full-screen, matching the capture crop behavior.
+ */
+internal fun captureRegionOrigin(region: CaptureRegion?): CaptureRegionOrigin =
+    region
+        ?.takeIf(CaptureRegion::isValid)
+        ?.let { CaptureRegionOrigin(x = it.left, y = it.top) }
+        ?: CaptureRegionOrigin(x = 0, y = 0)

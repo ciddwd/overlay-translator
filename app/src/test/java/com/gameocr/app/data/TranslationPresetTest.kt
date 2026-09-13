@@ -262,6 +262,10 @@ class TranslationPresetTest {
             Case("translator engine", base.copy(translatorEngine = TranslatorEngine.LOCAL_HY_MT2)),
             Case("merge strength", base.copy(mergeStrength = MergeStrength.STANDARD)),
             Case("orientation auto detect", base.copy(textOrientationAutoDetect = false)),
+            Case(
+                "capture content orientation",
+                base.copy(captureContentOrientation = CaptureContentOrientation.LANDSCAPE),
+            ),
             Case("translation output follow", base.copy(translationOutputFollowRecognition = false)),
             Case("translation output layout", base.copy(translationOutputLayout = TranslationOutputLayout.VERTICAL)),
             Case("translation output direction", base.copy(translationOutputDirection = TranslationOutputDirection.RIGHT_TO_LEFT)),
@@ -482,6 +486,7 @@ class TranslationPresetTest {
             mergeAdjacentBlocks = true,
             mergeStrength = MergeStrength.CONSERVATIVE,
             textOrientationAutoDetect = false,
+            captureContentOrientation = CaptureContentOrientation.LANDSCAPE,
             manualTextOrientation = com.gameocr.app.ocr.TextOrientation.VERTICAL_RTL,
             translationOutputFollowRecognition = false,
             translationOutputLayout = TranslationOutputLayout.VERTICAL,

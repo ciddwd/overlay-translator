@@ -1,5 +1,7 @@
 package com.gameocr.app.data
 
+import kotlinx.coroutines.async
+
 import android.content.Context
 import android.content.ContextWrapper
 import com.gameocr.app.capture.CaptureRegion
@@ -7,13 +9,143 @@ import com.gameocr.app.ocr.TextOrientation
 import java.io.File
 import java.nio.file.Files
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.asCoroutineDispatcher
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class SettingsRepositoryBehaviorTest {
 
+    @Test fun autoOcrAutoSavePersistsOnlyMappingAndReopens_tableDriven() = runBlocking {
+        val root = Files.createTempDirectory("auto-ocr-auto-save-test").toFile()
+        val repository = fileBackedRepository(root)
+        repository.update { it.copy(ocrEngine = OcrEngineKind.ML_KIT_KOREAN,
+            promptTemplate = "keep prompt", apiKey = "local-test-only", apiTimeoutSeconds = 43) }
+        val baseline = repository.get()
+        val saver = com.gameocr.app.ui.AutoOcrSettingsSaver(this) { value ->
+            repository.update { it.copy(autoOcr = value) }
+        }
+        val mapped = AutoOcrSettings(routes = mapOf("ja" to AutoOcrRoute(OcrEngineKind.MANGA_OCR_JA)))
+        val added = AutoOcrLanguageListPolicy.add(mapped, "fr")
+        for (value in listOf(mapped, added, AutoOcrLanguageListPolicy.remove(added, "fr"))) {
+            saver.save(value).await()
+            assertEquals(baseline.copy(autoOcr = value), repository.get())
+            assertEquals(value, fileBackedRepository(root).get().autoOcr)
+        }
+    }
+
+    @Test fun autoOcrMappings_roundTripAndDoNotChangeManualSelection_tableDriven() = runBlocking {
+        for (manual in listOf(OcrEngineKind.ML_KIT_AUTO, OcrEngineKind.ML_KIT_CHINESE, OcrEngineKind.PADDLE_ONNX)) {
+            val root = Files.createTempDirectory("auto-ocr-settings-test").toFile()
+            val repository = fileBackedRepository(root)
+            repository.update { it.copy(ocrEngine = manual, apiKey = "local-test-only", apiTimeoutSeconds = 41) }
+            val before = repository.get()
+            val config = AutoOcrSettings(
+                routes = mapOf("ko" to AutoOcrRoute(OcrEngineKind.PADDLE_ONNX, PaddleModelVersion.V5_KOREAN)),
+                additionalLanguages = listOf("ar", "fr"),
+            )
+            repository.update { it.copy(autoOcr = config) }
+            assertEquals(before.copy(autoOcr = config), repository.get())
+            assertEquals(config, fileBackedRepository(root).get().autoOcr)
+            repository.update { it.copy(apiTimeoutSeconds = 42) }
+            assertEquals(config, repository.get().autoOcr)
+        }
+    }
+
     @Test
-    fun loopTriggerMode_freshInstallDefaultsToFixedAndSavedChoiceIsPreserved_tableDriven() =
+    fun captureRegionHideOnCapture_defaultsOnAndPersistsBothChoices_tableDriven() = runBlocking {
+        for (saved in listOf(null, false, true)) {
+            val root = Files.createTempDirectory("region-autohide-test").toFile()
+            val repository = fileBackedRepository(root)
+            saved?.let { value -> repository.update { it.copy(captureRegionHideOnCapture = value) } }
+            val expected = saved ?: true
+            assertEquals("saved=$saved", expected, repository.get().captureRegionHideOnCapture)
+            assertEquals("reopen=$saved", expected, fileBackedRepository(root).get().captureRegionHideOnCapture)
+            repository.update { it.copy(apiTimeoutSeconds = 43) }
+            assertEquals("unrelated save=$saved", expected, repository.get().captureRegionHideOnCapture)
+        }
+    }
+
+    @Test
+    fun dictionaryLookupMode_defaultsOnlineAndPreservesSavedChoice_tableDriven() = runBlocking {
+        val cases = listOf(
+            null to DictionaryLookupMode.ONLINE,
+            DictionaryLookupMode.OFFLINE to DictionaryLookupMode.OFFLINE,
+            DictionaryLookupMode.ONLINE to DictionaryLookupMode.ONLINE,
+        )
+        for ((saved, expected) in cases) {
+            val root = Files.createTempDirectory("dictionary-mode-default-test").toFile()
+            val repository = fileBackedRepository(root)
+            saved?.let { mode -> repository.update { it.copy(dictionaryLookupMode = mode) } }
+            assertEquals("saved=$saved", expected, repository.get().dictionaryLookupMode)
+            assertEquals("reopen=$saved", expected, fileBackedRepository(root).get().dictionaryLookupMode)
+        }
+    }
+
+    @Test
+    fun floatingButtonAutoSavePersistsOnlyItsFiveFields_tableDriven() = runBlocking {
+        val repository = fileBackedRepository(Files.createTempDirectory("floating-button-save-test").toFile())
+        repository.update { it.copy(promptTemplate = "keep prompt", apiTimeoutSeconds = 43, floatingButtonX = 101) }
+        val values = listOf(
+            com.gameocr.app.ui.FloatingButtonSettings(32, 0.1f, false, true, 0),
+            com.gameocr.app.ui.FloatingButtonSettings(64, 0.55f, true, false, 22),
+            com.gameocr.app.ui.FloatingButtonSettings(96, 1f, true, true, 40),
+        )
+        val saver = com.gameocr.app.ui.FloatingButtonSettingsSaver(this) { value -> repository.update(value::applyTo) }
+        for (value in values) {
+            val previous = repository.get()
+            saver.save(value).await()
+            assertEquals(value.applyTo(previous), repository.get())
+            assertEquals("keep prompt", repository.get().promptTemplate)
+            assertEquals(43, repository.get().apiTimeoutSeconds)
+            assertEquals(101, repository.get().floatingButtonX)
+        }
+    }
+
+    @Test
+    fun settingsDecodeDoesNotRunOnTheCollectorThread() = runBlocking {
+        val decryptThreads = java.util.concurrent.ConcurrentLinkedQueue<String>()
+        val cipher = object : SettingsSecretCipher {
+            override fun encrypt(plainText: String) = "test:$plainText"
+            override fun decrypt(cipherText: String): String {
+                decryptThreads += Thread.currentThread().name
+                return cipherText.removePrefix("test:")
+            }
+        }
+        val repository = fileBackedRepository(Files.createTempDirectory("settings-decode-thread-test").toFile(), cipher)
+        repository.update { it.copy(apiKey = "test-only-value") }
+        decryptThreads.clear()
+        java.util.concurrent.Executors.newSingleThreadExecutor { task ->
+            Thread(task, "settings-ui-collector")
+        }.asCoroutineDispatcher().use { dispatcher ->
+            kotlinx.coroutines.withContext(dispatcher) {
+                assertEquals("test-only-value", repository.get().apiKey)
+            }
+        }
+        org.junit.Assert.assertTrue(decryptThreads.isNotEmpty())
+        org.junit.Assert.assertTrue(decryptThreads.none { it == "settings-ui-collector" })
+    }
+
+    @Test
+    fun floatingButtonAlpha_defaultAndPersistedValues_tableDriven() = runBlocking {
+        val cases = listOf(
+            null to 1f, 0.1f to 0.1f, 0.55f to 0.55f, 1f to 1f,
+            0f to 0.1f, -1f to 0.1f, 2f to 1f,
+            Float.NaN to 1f, Float.POSITIVE_INFINITY to 1f, Float.NEGATIVE_INFINITY to 1f,
+        )
+        for ((requested, expected) in cases) {
+            val root = Files.createTempDirectory("settings-floating-alpha-test").toFile()
+            val repository = fileBackedRepository(root)
+            requested?.let { value ->
+                repository.update { it.copy(floatingButtonAlpha = value) }
+            }
+            assertEquals("requested=$requested", expected, repository.get().floatingButtonAlpha, 0f)
+            assertEquals("reopen=$requested", expected, fileBackedRepository(root).get().floatingButtonAlpha, 0f)
+            assertEquals(Settings().overlayAlpha, repository.get().overlayAlpha, 0f)
+        }
+    }
+
+    @Test
+    fun loopTriggerMode_defaultsToSettledAndSavedChoiceIsPreserved_tableDriven() =
         runBlocking {
             data class Case(
                 val name: String,
@@ -22,7 +154,8 @@ class SettingsRepositoryBehaviorTest {
             )
 
             listOf(
-                Case("fresh install", null, LoopTriggerMode.FIXED_INTERVAL),
+                Case("fresh install or missing setting", null, LoopTriggerMode.SETTLED_PAGE),
+                Case("saved settled page", LoopTriggerMode.SETTLED_PAGE, LoopTriggerMode.SETTLED_PAGE),
                 Case(
                     "saved smart trigger",
                     LoopTriggerMode.WAIT_FOR_TEXT_COMPLETE,
@@ -180,6 +313,7 @@ class SettingsRepositoryBehaviorTest {
         )
         val cases = listOf(
             Case("legacy Manga V5 migrates", OcrEngineKind.MANGA_OCR_JA, PaddleModelVersion.V5_MOBILE, PaddleModelVersion.V6_SMALL),
+            Case("Manga Korean V5 migrates", OcrEngineKind.MANGA_OCR_JA, PaddleModelVersion.V5_KOREAN, PaddleModelVersion.V6_SMALL),
             Case("Manga tiny migrates", OcrEngineKind.MANGA_OCR_JA, PaddleModelVersion.V6_TINY, PaddleModelVersion.V6_SMALL),
             Case("Manga medium migrates", OcrEngineKind.MANGA_OCR_JA, PaddleModelVersion.V6_MEDIUM, PaddleModelVersion.V6_SMALL),
             Case("Manga small remains", OcrEngineKind.MANGA_OCR_JA, PaddleModelVersion.V6_SMALL, PaddleModelVersion.V6_SMALL),
@@ -349,6 +483,7 @@ class SettingsRepositoryBehaviorTest {
             overlayOffsetY = -17,
             preprocess = PreprocessOptions(upscale2x = true, invert = true, binarize = true),
             textOrientationAutoDetect = false,
+            captureContentOrientation = CaptureContentOrientation.LANDSCAPE,
             manualTextOrientation = TextOrientation.VERTICAL_RTL,
             translationOutputFollowRecognition = false,
             translationOutputLayout = TranslationOutputLayout.VERTICAL,
@@ -369,7 +504,6 @@ class SettingsRepositoryBehaviorTest {
             paddleModelMirrorUrl = "https://mirror.example/paddle/",
             mangaOcrModelMirrorUrl = "https://mirror.example/manga/",
             orientationModelMirrorUrl = "https://mirror.example/orientation/",
-            preferShizukuCapture = true,
             a11yVolumeTrigger = true,
             translatorEngine = TranslatorEngine.DEEPL,
             translationGlossaryEnabled = false,
@@ -389,6 +523,7 @@ class SettingsRepositoryBehaviorTest {
             baiduFanyiAppId = "baidu-app-id",
             baiduFanyiSecretKey = "baidu-fanyi-secret",
             floatingButtonSizeDp = 53,
+            floatingButtonAlpha = 0.63f,
             floatingButtonX = 101,
             floatingButtonY = 202,
             floatingButtonSnapToEdge = false,
@@ -413,6 +548,8 @@ class SettingsRepositoryBehaviorTest {
             floatingMenuItemOrder = FloatingMenu.DEFAULT_ORDER.reversed(),
             arcMenuPageSize = 5,
             floatingButtonSkill = FloatingSkill.LOOP,
+            dictionaryLookupMode = DictionaryLookupMode.ONLINE,
+            dictionaryTapLookupEnabled = false,
             dictionaryPrompt = "roundtrip dictionary",
             localLlmContextSize = 3072,
             localLlmMaxNewTokens = 333,
@@ -433,8 +570,45 @@ class SettingsRepositoryBehaviorTest {
         assertEquals(MangaOcrSettingsPolicy.normalize(requested), repository.get())
     }
 
-    private fun fileBackedRepository(root: File): SettingsRepository =
-        SettingsRepository(FileBackedContext(root), PlainTestCipher).apply {
+    @Test fun captureRegion_partial_writes_do_not_process_secrets_and_preserve_other_settings() = runBlocking {
+        var cipherCalls = 0
+        val cipher = object : SettingsSecretCipher {
+            override fun encrypt(plainText: String): String { cipherCalls++; return "test:$plainText" }
+            override fun decrypt(cipherText: String): String { cipherCalls++; return cipherText.removePrefix("test:") }
+        }
+        val repository = fileBackedRepository(Files.createTempDirectory("region-partial-write").toFile(), cipher)
+        repository.update { it.copy(apiKey = "local-test-key", overlayAlpha = .62f, mergeStrength = MergeStrength.AGGRESSIVE) }
+        val before = repository.get()
+        for (region in listOf(CaptureRegion(10, 20, 100, 200), null, CaptureRegion(20, 40, 200, 400))) {
+            cipherCalls = 0
+            repository.setCaptureRegion(region, 400, 800)
+            assertEquals("partial write must skip cipher", 0, cipherCalls)
+            assertEquals(region, repository.rescaleCaptureRegionIfNeeded(400, 800))
+            assertEquals("region read/rescale must skip cipher", 0, cipherCalls)
+            assertEquals(before.copy(captureRegion = region, captureRegionSavedScreenW = 400, captureRegionSavedScreenH = 800), repository.get())
+        }
+        cipherCalls = 0
+        assertEquals(CaptureRegion(40, 80, 400, 800), repository.rescaleCaptureRegionIfNeeded(800, 1600))
+        assertEquals(0, cipherCalls)
+        assertEquals(null, repository.rescaleCaptureRegionIfNeeded(0, 0))
+        assertEquals(CaptureRegion(40, 80, 400, 800), repository.get().captureRegion)
+    }
+
+    @Test fun captureRegion_partial_write_is_atomic_with_other_settings_updates() = runBlocking {
+        val repository = fileBackedRepository(Files.createTempDirectory("region-concurrent-write").toFile())
+        kotlinx.coroutines.coroutineScope {
+            val a = async { repository.setCaptureRegion(CaptureRegion(1, 2, 30, 40), 400, 800) }
+            val b = async { repository.update { it.copy(overlayAlpha = .55f, apiKey = "concurrent-test") } }
+            a.await(); b.await()
+        }
+        val settings = repository.get()
+        assertEquals(CaptureRegion(1, 2, 30, 40), settings.captureRegion)
+        assertEquals(.55f, settings.overlayAlpha)
+        assertEquals("concurrent-test", settings.apiKey)
+    }
+
+    private fun fileBackedRepository(root: File, cipher: SettingsSecretCipher = PlainTestCipher): SettingsRepository =
+        SettingsRepository(FileBackedContext(root), cipher).apply {
             setDefaultPromptProvidersForTest(
                 prompt = { "default prompt" },
                 dictionaryPrompt = { "default dictionary prompt" },

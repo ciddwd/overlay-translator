@@ -102,7 +102,8 @@ class ModelDownloadManager @Inject constructor(
 
     private suspend fun enqueue(specs: List<ModelDownloadSpec>, ownerPresetId: String?): UUID {
         require(specs.isNotEmpty()) { "At least one model download is required" }
-        val uniqueName = ModelDownloadWorkPolicy.uniqueWorkName(specs)
+        val requiredSpecs = ModelDownloadDependencies.expand(specs)
+        val uniqueName = ModelDownloadWorkPolicy.uniqueWorkName(requiredSpecs)
         return enqueueMutex.withLock {
             val existing = workManager.getWorkInfosForUniqueWorkFlow(uniqueName)
                 .first()
@@ -112,7 +113,7 @@ class ModelDownloadManager @Inject constructor(
             val request = OneTimeWorkRequestBuilder<ModelDownloadWorker>()
                 .setInputData(
                     androidx.work.Data.Builder()
-                        .putStringArray(ModelDownloadWorker.KEY_SPECS, specs.map { it.encode() }.toTypedArray())
+                        .putStringArray(ModelDownloadWorker.KEY_SPECS, requiredSpecs.map { it.encode() }.toTypedArray())
                         .putString(ModelDownloadWorker.KEY_OWNER_PRESET_ID, ownerPresetId.orEmpty())
                         .build()
                 )

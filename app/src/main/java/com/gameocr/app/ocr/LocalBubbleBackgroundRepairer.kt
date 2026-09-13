@@ -28,6 +28,11 @@ internal object LocalBubbleBackgroundRepairer {
         val repairedPixels: Int,
         val acceptedComponentCount: Int,
         val componentCount: Int,
+        val completionPixels: Int = repairedPixels,
+        val repairedCompletionPixels: Int = repairedPixels,
+        val completionReliable: Boolean = true,
+        val completionStrategy: AdaptiveTextEraseCompletionPolicy.Strategy =
+            AdaptiveTextEraseCompletionPolicy.Strategy.OBSERVED_SUPPORT,
     ) {
         val workingPixels: Int
             get() = bounds.width * bounds.height
@@ -35,7 +40,10 @@ internal object LocalBubbleBackgroundRepairer {
         val fullyRepaired: Boolean
             get() = componentCount > 0 &&
                 acceptedComponentCount == componentCount &&
-                repairedPixels > 0
+                repairedPixels > 0 &&
+                completionReliable &&
+                repairedCompletionPixels.toFloat() /
+                    completionPixels.coerceAtLeast(1) >= MIN_COMPLETION_COVERAGE_FRACTION
     }
 
     data class Result(
@@ -126,14 +134,25 @@ internal object LocalBubbleBackgroundRepairer {
                 allowedMask = localAllowed,
                 memberBounds = region.memberBounds,
             )
+            val completion = AdaptiveTextEraseCompletionPolicy.refine(
+                width = cropWidth,
+                height = cropHeight,
+                sourceArgb = localSource,
+                seedMask = localErase,
+                supportMask = localErase,
+                semanticMask = localCompletion,
+            )
             val localResult = MaskedBackgroundRepairer.repair(
                 width = cropWidth,
                 height = cropHeight,
                 sourceArgb = localSource,
                 eraseMask = localErase,
                 allowedSampleMask = localAllowed,
-                flatCompletionMask = localCompletion,
+                flatCompletionMask = completion.mask,
             )
+            val repairedCompletionPixels = localResult.repairedMask.indices.count { index ->
+                localResult.repairedMask[index] && localCompletion[index]
+            }
             for (localY in 0 until cropHeight) {
                 val globalRow = (cropBounds.top + localY) * width
                 val localRow = localY * cropWidth
@@ -158,6 +177,10 @@ internal object LocalBubbleBackgroundRepairer {
                 repairedPixels = localResult.repairedPixelCount,
                 acceptedComponentCount = localResult.acceptedComponentCount,
                 componentCount = localResult.decisions.size,
+                completionPixels = localCompletion.count { it },
+                repairedCompletionPixels = repairedCompletionPixels,
+                completionReliable = completion.reliable,
+                completionStrategy = completion.strategy,
             )
         }
 
@@ -226,7 +249,8 @@ internal object LocalBubbleBackgroundRepairer {
     }
 
     private const val SAMPLE_MARGIN_PX = 12
-    private const val COMPLETION_MARGIN_RATIO = 0.04f
-    private const val MIN_COMPLETION_MARGIN_PX = 1
-    private const val MAX_COMPLETION_MARGIN_PX = 6
+    private const val COMPLETION_MARGIN_RATIO = 0.08f
+    private const val MIN_COMPLETION_MARGIN_PX = 2
+    private const val MAX_COMPLETION_MARGIN_PX = 12
+    private const val MIN_COMPLETION_COVERAGE_FRACTION = 0.98f
 }

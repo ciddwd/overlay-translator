@@ -59,7 +59,14 @@ class BaiduOcrEngine @Inject constructor(
     @Volatile private var tokenExpiresAt: Long = 0L
 
     override suspend fun recognize(bitmap: Bitmap, kind: OcrEngineKind): List<TextBlock> {
-        val settings = settingsRepository.get()
+        return recognize(bitmap, kind, settingsRepository.get())
+    }
+
+    override suspend fun recognize(
+        bitmap: Bitmap,
+        kind: OcrEngineKind,
+        settings: com.gameocr.app.data.Settings,
+    ): List<TextBlock> {
         if (settings.baiduOcrApiKey.isBlank() || settings.baiduOcrSecretKey.isBlank()) {
             throw IllegalStateException(appContext.getString(R.string.err_baidu_no_keys))
         }

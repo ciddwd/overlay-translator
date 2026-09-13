@@ -57,6 +57,7 @@ class WordSelectOverlay(private val context: Context) {
         onCancel: () -> Unit,
         initial: Rect? = null,
         skipAdjustment: Boolean = false,
+        extractTextOnly: Boolean = false,
     ) {
         if (container != null) return
 
@@ -72,6 +73,7 @@ class WordSelectOverlay(private val context: Context) {
         lateinit var doCancel: () -> Unit
         lateinit var doTranslate: () -> Unit
         val toolbar = buildToolbar(
+            extractTextOnly = extractTextOnly,
             onRedo = { picker.resetToDrawing() },
             onCancel = { doCancel() },
             onTranslate = { doTranslate() }
@@ -178,6 +180,7 @@ class WordSelectOverlay(private val context: Context) {
     }
 
     private fun buildToolbar(
+        extractTextOnly: Boolean,
         onRedo: () -> Unit,
         onCancel: () -> Unit,
         onTranslate: () -> Unit
@@ -192,7 +195,8 @@ class WordSelectOverlay(private val context: Context) {
             setPadding(dp(8), dp(8), dp(8), dp(8))
             addView(buildButton(context.getString(R.string.word_select_btn_redraw), onRedo))
             addView(buildButton(context.getString(R.string.word_select_btn_cancel), onCancel))
-            addView(buildButton(context.getString(R.string.word_select_btn_translate), onTranslate, primary = true))
+            val actionLabel = if (extractTextOnly) R.string.word_select_btn_extract else R.string.word_select_btn_translate
+            addView(buildButton(context.getString(actionLabel), onTranslate, primary = true))
         }
     }
 

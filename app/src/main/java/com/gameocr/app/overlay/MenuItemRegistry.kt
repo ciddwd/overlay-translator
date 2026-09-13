@@ -26,6 +26,13 @@ object MenuItemRegistry {
             FloatingSkill.FULL_SCREEN -> FloatingSkill.WORD_SELECT
             FloatingSkill.WORD_SELECT -> FloatingSkill.FULL_SCREEN
             FloatingSkill.LOOP -> FloatingSkill.WORD_SELECT
+            FloatingSkill.INPUT_TRANSLATE -> FloatingSkill.FULL_SCREEN
+        }
+        MenuItemId.INPUT_TRANSLATE_SKILL -> when (currentSkill) {
+            FloatingSkill.INPUT_TRANSLATE -> FloatingSkill.WORD_SELECT
+            FloatingSkill.FULL_SCREEN,
+            FloatingSkill.WORD_SELECT,
+            FloatingSkill.LOOP -> FloatingSkill.INPUT_TRANSLATE
         }
         else -> null
     }
@@ -44,7 +51,8 @@ object MenuItemRegistry {
     ): List<MenuItem> = ids.flatMap { id ->
         when (id) {
             MenuItemId.LOOP,
-            MenuItemId.FULL_SCREEN_SKILL -> listOf(
+            MenuItemId.FULL_SCREEN_SKILL,
+            MenuItemId.INPUT_TRANSLATE_SKILL -> listOf(
                 buildSkillItem(
                     targetSkill = checkNotNull(targetSkill(id, currentSkill)),
                     callbacks = callbacks,
@@ -105,6 +113,12 @@ object MenuItemRegistry {
             labelRes = R.string.menu_loop_translate,
             onTap = callbacks.onSwitchToLoop,
         )
+        FloatingSkill.INPUT_TRANSLATE -> MenuItem(
+            iconRes = R.drawable.ic_menu_input_translate,
+            bgRes = R.drawable.bg_arc_menu_item,
+            labelRes = R.string.menu_input_translate,
+            onTap = callbacks.onSwitchToInputTranslate,
+        )
     }
 
     /**
@@ -142,6 +156,7 @@ object MenuItemRegistry {
         val onOpenSettings: () -> Unit,
         val onPresetSwitch: () -> Unit,
         val onSwitchToFullScreen: () -> Unit,
-        val onSwitchToWordSelect: () -> Unit
+        val onSwitchToWordSelect: () -> Unit,
+        val onSwitchToInputTranslate: () -> Unit,
     )
 }

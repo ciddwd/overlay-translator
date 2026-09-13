@@ -1,5 +1,7 @@
 package com.gameocr.app.capture
 
+import com.gameocr.app.data.LoopTriggerMode
+
 internal enum class LoopActiveResultDecision {
     CAPTURE,
     KEEP_TRANSLATING,
@@ -18,6 +20,21 @@ internal data class LoopIndicatorSpec(
 
 internal object LoopRuntimePolicy {
     const val SMART_INDICATOR_PERIOD_MS: Long = 1600L
+
+    fun usesStabilityPolling(mode: LoopTriggerMode): Boolean =
+        mode != LoopTriggerMode.FIXED_INTERVAL
+
+    fun pollingIntervalMs(
+        configuredLoopIntervalMs: Long,
+        mode: LoopTriggerMode,
+        backendMinimumMs: Long,
+    ): Long = maxOf(
+        LoopFrameStabilityPolicy.pollingIntervalMs(
+            configuredLoopIntervalMs = configuredLoopIntervalMs,
+            enabled = usesStabilityPolling(mode),
+        ),
+        backendMinimumMs.coerceAtLeast(0L),
+    )
 
     fun activeResultDecision(
         hasBlockingResult: Boolean,

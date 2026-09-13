@@ -46,8 +46,8 @@ android {
         applicationId = "com.gameocr.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 18
-        versionName = "0.4.5"
+        versionCode = 19
+        versionName = "0.4.6"
 
         // Controlled local-LLM A/B switch. PP remains device-policy selected (6 on the
         // target 8-core phone); TG can be rebuilt as 4 or 6 without source changes.
@@ -176,6 +176,7 @@ dependencies {
     implementation(libs.mlkit.text.recognition.chinese)
     implementation(libs.mlkit.text.recognition.korean)
     implementation(libs.mlkit.translate)
+    implementation("com.google.mlkit:language-id:17.0.6")
 
     // DataStore / Room
     implementation(libs.androidx.datastore.preferences)

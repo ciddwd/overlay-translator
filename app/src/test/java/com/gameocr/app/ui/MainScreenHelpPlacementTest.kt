@@ -20,11 +20,11 @@ class MainScreenHelpPlacementTest {
             source.indexOf("ActionCard(title = stringResource(R.string.main_section_region))"),
         )
         val overlayPermissionGate = captureSection.substring(
-            captureSection.indexOf("if (!canDrawOverlay)"),
-            captureSection.indexOf("// 已授权时恢复原使用说明布局"),
+            captureSection.indexOf("if (!showCaptureControls)"),
+            captureSection.indexOf("// 可启动时使用完整说明布局"),
         )
         val usageSection = captureSection.substring(
-            captureSection.indexOf("// 已授权时恢复原使用说明布局"),
+            captureSection.indexOf("// 可启动时使用完整说明布局"),
         )
 
         data class Case(
@@ -48,7 +48,7 @@ class MainScreenHelpPlacementTest {
             Case(
                 "usage description selects permission-aware copy in both layouts",
                 usageSection,
-                "mainUsageTextRes(canDrawOverlay)",
+                "mainUsageTextRes(showCaptureControls)",
                 true,
             ),
             Case(
@@ -72,14 +72,14 @@ class MainScreenHelpPlacementTest {
         assertTrue(
             "unauthorized hint must remain between its label and the help action",
             usageSection.indexOf("R.string.main_label_usage") <
-                usageSection.indexOf("mainUsageTextRes(canDrawOverlay)") &&
-                usageSection.indexOf("mainUsageTextRes(canDrawOverlay)") <
+                usageSection.indexOf("mainUsageTextRes(showCaptureControls)") &&
+                usageSection.indexOf("mainUsageTextRes(showCaptureControls)") <
                 usageSection.indexOf("onClick = onOpenOnboarding"),
         )
         assertTrue(
             "authorized instructions must return below the original help row",
             usageSection.indexOf("onClick = onOpenOnboarding") <
-                usageSection.lastIndexOf("mainUsageTextRes(canDrawOverlay)"),
+                usageSection.lastIndexOf("mainUsageTextRes(showCaptureControls)"),
         )
         assertEquals(
             "onboarding help must have exactly one main-screen entry",

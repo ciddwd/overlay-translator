@@ -39,6 +39,8 @@ class LegalNoticeAssetsTest {
         listOf(
             Case("Android runtime", listOf("AndroidX", "Material Components", "Kotlin", "Dagger and Hilt")),
             Case("network runtime", listOf("Retrofit", "OkHttp", "Okio", "Timber")),
+            Case("language identification", listOf("ML Kit Language Identification 17.0.6", "bundled in the APK")),
+            Case("optional dictionaries", listOf("ECDICT", "JMdict", "Korean Basic Dictionary", "CC BY-SA 4.0", "CC BY-SA 2.0 KR")),
             Case(
                 "ML Kit terms",
                 listOf(

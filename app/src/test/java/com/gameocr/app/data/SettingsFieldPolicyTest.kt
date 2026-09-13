@@ -12,6 +12,17 @@ import org.junit.Test
 class SettingsFieldPolicyTest {
 
     @Test
+    fun regionAutoHidePortableRoundTripAndLegacyDefault_tableDriven() {
+        assertTrue(SettingsFieldPolicy.decodePortable(JsonObject(emptyMap())).settings.captureRegionHideOnCapture)
+        for (enabled in listOf(false, true)) {
+            val encoded = SettingsFieldPolicy.encodePortable(Settings(captureRegionHideOnCapture = enabled))
+            val imported = SettingsFieldPolicy.decodePortable(encoded).settings
+            assertEquals(enabled, imported.captureRegionHideOnCapture)
+            assertEquals(enabled, SettingsFieldPolicy.applyPortable(Settings(), imported).captureRegionHideOnCapture)
+        }
+    }
+
+    @Test
     fun visualContext_tableDrivenPersistsToggleButNeverExportsRuntimeImage() {
         val runtime = RuntimeTranslationVisualContext(
             mimeType = "image/jpeg",

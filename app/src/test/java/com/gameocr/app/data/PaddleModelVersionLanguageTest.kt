@@ -15,6 +15,7 @@ class PaddleModelVersionLanguageTest {
 
         val cases = listOf(
             Case(PaddleModelVersion.V5_MOBILE, 4, true),
+            Case(PaddleModelVersion.V5_KOREAN, 2, false),
             Case(PaddleModelVersion.V6_TINY, 49, false),
             Case(PaddleModelVersion.V6_SMALL, 50, true),
             Case(PaddleModelVersion.V6_MEDIUM, 50, true),

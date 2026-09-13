@@ -63,15 +63,16 @@ internal fun floatingWordPreviewContent(
     failed: Boolean,
     loadingLabel: String,
     failedLabel: String,
+    notFoundLabel: String,
 ): FloatingWordPreviewContent {
+    val meanings = wordResult?.compactSenseLines().orEmpty().ifEmpty {
+        listOfNotNull(translation?.trim()?.takeIf(String::isNotEmpty))
+    }
     val lines = when {
         loading -> listOf(loadingLabel)
-        wordResult != null -> wordResult.compactSenseLines().ifEmpty {
-            listOfNotNull(translation?.trim()?.takeIf(String::isNotEmpty))
-        }
-        !translation.isNullOrBlank() -> listOf(translation.trim())
+        meanings.isNotEmpty() -> meanings
         failed -> listOf(failedLabel)
-        else -> emptyList()
+        else -> listOf(notFoundLabel)
     }
     return FloatingWordPreviewContent(word = word, lines = lines)
 }
@@ -107,12 +108,14 @@ internal fun shouldShowFloatingWordDetailsAction(
 /**
  * The full dictionary card never carries compact preview content across states. While the fresh
  * full lookup is running it shows only its loading state; completion replaces that state with
- * either the full structured result or an explicit failure message.
+ * the full structured result, a normal miss, or an explicit failure message.
  */
 internal fun floatingWordDetailsContent(
     completed: Boolean,
     wordResult: WordResult?,
+    failed: Boolean,
     failedLabel: String,
+    notFoundLabel: String,
 ): FloatingWordDetailsContent = when {
     !completed -> FloatingWordDetailsContent(
         translation = null,
@@ -124,8 +127,13 @@ internal fun floatingWordDetailsContent(
         wordResult = wordResult,
         loading = false,
     )
+    !wordResult?.fallbackTranslation.isNullOrBlank() -> FloatingWordDetailsContent(
+        translation = wordResult?.fallbackTranslation?.trim(),
+        wordResult = null,
+        loading = false,
+    )
     else -> FloatingWordDetailsContent(
-        translation = failedLabel,
+        translation = if (failed) failedLabel else notFoundLabel,
         wordResult = null,
         loading = false,
     )

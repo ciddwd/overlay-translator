@@ -31,11 +31,7 @@ class AndroidKeystoreSettingsSecretCipher @Inject constructor(
 ) : SettingsSecretCipher {
 
     override fun encrypt(plainText: String): String =
-        runCatching {
-            KEYSTORE_PREFIX + encryptWithKey(getOrCreateKey(), plainText)
-        }.getOrElse {
-            FALLBACK_PREFIX + encryptWithKey(fallbackKey, plainText)
-        }
+        KEYSTORE_PREFIX + encryptWithKey(getOrCreateKey(), plainText)
 
     override fun decrypt(cipherText: String): String =
         when {
@@ -74,6 +70,7 @@ class AndroidKeystoreSettingsSecretCipher @Inject constructor(
         return cipher.doFinal(encrypted).toString(Charsets.UTF_8)
     }
 
+    // Read-only compatibility for existing fb: records. Never write new fallback ciphertext.
     private val fallbackKey: SecretKey by lazy {
         val androidId = AndroidSettings.Secure.getString(
             context.contentResolver,

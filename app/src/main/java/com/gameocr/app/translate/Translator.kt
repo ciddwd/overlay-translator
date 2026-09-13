@@ -149,9 +149,9 @@ interface Translator {
      * / 词形变化 / 同义词 / 难点解释 / 例句）。默认返回 null 表示「本引擎不支持词典化」，
      * 调用方应回退到 [translate]。
      *
-     * 仅 OpenAI 兼容引擎实现：通过 [Settings.dictionaryPrompt] 让 LLM 返回 JSON，解析失败也返
-     * 回 null（CaptureService 看到 null 就走纯翻译）。DeepL / 百度 / 腾讯 / Google / 火山 / 有道
-     * 都没有词典 API，全部走默认实现。
+     * OpenAI / Anthropic 兼容引擎通过应用内置的版本化词典协议让 LLM 返回 JSON，解析失败也
+     * 返回 null（CaptureService 看到 null 就走纯翻译）。DeepL / 百度 / 腾讯 / Google / 火山 /
+     * 有道都没有词典 API，全部走默认实现。
      */
     suspend fun translateWord(source: String, settings: Settings): WordResult? = null
 
@@ -282,14 +282,15 @@ data class ExamplePair(val src: String, val dst: String)
  * 翻译引擎连通性测试结果。
  *
  * @property success true=可用
- * @property message 给用户看的简短文案（成功如"OK · 已用 X / Y 字符"；失败如"HTTP 401: ..."）
+ * @property message 给用户看的简短文案（成功如"OK 已用 X / Y 字符"；失败如"HTTP 401: ..."）
  * @property models OpenAI 兼容 `GET /v1/models` 拉到的 id 列表，便于 UI 让用户从下拉中选；
  *                  DeepL / 失败 / 模型探活模式都返回空列表
  */
 data class TestResult(
     val success: Boolean,
     val message: String,
-    val models: List<String> = emptyList()
+    val models: List<String> = emptyList(),
+    val balance: ConnectionBalance? = null,
 )
 
 class TranslationException(message: String, cause: Throwable? = null) : RuntimeException(message, cause)

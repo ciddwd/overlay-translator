@@ -1,11 +1,13 @@
 package com.gameocr.app.translate
 
 import android.os.SystemClock
+import com.gameocr.app.data.LogRepository
 import com.gameocr.app.data.Settings
 import com.gameocr.app.data.TranslationContextMode
 import com.gameocr.app.llm.LlamaEngineHolder
 import com.gameocr.app.llm.LlmModelKind
 import com.gameocr.app.llm.LlamaPromptMetrics
+import com.gameocr.app.util.RuntimePerformanceDiagnostics
 import javax.inject.Inject
 import javax.inject.Singleton
 import timber.log.Timber
@@ -24,7 +26,9 @@ import timber.log.Timber
 class SakuraGalTranslator @Inject constructor(
     holder: LlamaEngineHolder,
     cache: TranslationCache,
-) : LocalLlamaTranslator(holder, cache) {
+    performanceDiagnostics: RuntimePerformanceDiagnostics,
+    private val logRepository: LogRepository,
+) : LocalLlamaTranslator(holder, cache, performanceDiagnostics) {
 
     override val modelKind = LlmModelKind.SAKURA_1_5B_Q4
 
@@ -115,8 +119,8 @@ class SakuraGalTranslator @Inject constructor(
         val promptTokenBudget = (
             budgetedSettings.localLlmContextSize - budgetedSettings.localLlmMaxNewTokens - CONTEXT_HEADROOM_TOKENS
             ).coerceAtLeast(MINIMUM_PROMPT_TOKEN_BUDGET)
-        val groups = holder.withEngineSession(modelKind, systemPrompt) {
-            SakuraContextBatchPolicy.groups(
+        val outputBudgetPlan = holder.withEngineSession(modelKind, systemPrompt) {
+            val promptGroups = SakuraContextBatchPolicy.groups(
                 sources = sources,
                 maxPromptTokens = promptTokenBudget,
                 promptTokenCount = { joined ->
@@ -125,8 +129,26 @@ class SakuraGalTranslator @Inject constructor(
                     )
                 },
             )
+            promptGroups?.let { groups ->
+                SakuraOutputBudgetGroupingPolicy.plan(
+                    groups = groups,
+                    configuredMaxNewTokens = budgetedSettings.localLlmMaxNewTokens,
+                    sourceTokenCount = LlamaPromptMetrics::countTextTokens,
+                )
+            }
         }
             ?: return super.translateBatchIncremental(sources, budgetedSettings, onUpdate)
+        val groups = outputBudgetPlan.groups
+        if (outputBudgetPlan.preSplit) {
+            Timber.tag(TAG).i(
+                "output budget pre-split originalGroups=%d plannedGroups=%d sizes=%s configuredMax=%d retryEnabled=%s",
+                outputBudgetPlan.originalGroupCount,
+                groups.size,
+                groups.map { it.sourceLines.size },
+                budgetedSettings.localLlmMaxNewTokens,
+                budgetedSettings.retryFailedTranslation,
+            )
+        }
         val startedAt = SystemClock.elapsedRealtime()
         val results = MutableList<String?>(sources.size) { null }
         val isolatedRecoveryIndexes = linkedSetOf<Int>()
@@ -243,6 +265,20 @@ class SakuraGalTranslator @Inject constructor(
                 rejectedLocalIndexes = recoveryIndexes,
                 retryEnabled = settings.retryFailedTranslation,
             )
+            if (retryPlan.salvageGroups.isEmpty() && retryPlan.isolatedIndexes.isEmpty()) {
+                logRepository.warn(
+                    LogRepository.Category.TRANSLATE,
+                    SakuraFailureLogPolicy.lineFailures(
+                        startIndex = group.startIndex,
+                        lineCount = group.sourceLines.size,
+                        rejectedLocalIndexes = recoveryIndexes,
+                        reasons = recoveryIndexes.associateWith { lines[it].rejectionReason },
+                        stage = stage,
+                        retryEnabled = settings.retryFailedTranslation,
+                    ),
+                    elapsedMs = (SystemClock.elapsedRealtime() - startedAt).coerceAtLeast(0L),
+                )
+            }
             isolatedRecoveryIndexes += retryPlan.isolatedIndexes
             return
         }
@@ -267,6 +303,23 @@ class SakuraGalTranslator @Inject constructor(
             stage = stage,
             retryEnabled = settings.retryFailedTranslation,
         )
+        if (retryPlan.salvageGroups.isEmpty() && retryPlan.isolatedIndexes.isEmpty()) {
+            logRepository.warn(
+                LogRepository.Category.TRANSLATE,
+                SakuraFailureLogPolicy.groupFailure(
+                    startIndex = group.startIndex,
+                    expectedLines = group.sourceLines.size,
+                    actualLines = generation.text?.lineSequence()?.count() ?: 0,
+                    outputChars = generation.text?.length ?: 0,
+                    outputPieces = generation.outputPieces,
+                    effectiveMaxTokens = generationBudget.effectiveMaxNewTokens,
+                    reason = validation.rejectionReason,
+                    stage = stage,
+                    retryEnabled = settings.retryFailedTranslation,
+                ),
+                elapsedMs = (SystemClock.elapsedRealtime() - startedAt).coerceAtLeast(0L),
+            )
+        }
         if (retryPlan.salvageGroups.isNotEmpty()) {
             Timber.tag(TAG).i(
                 "context retry plan start=%d lines=%d action=salvage groups=%s",

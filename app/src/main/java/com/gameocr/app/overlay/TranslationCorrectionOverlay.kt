@@ -103,13 +103,12 @@ class TranslationCorrectionOverlay(
         )
         val remember = checkbox(
             label = context.getString(R.string.translation_correction_remember),
-            checked = scope != null,
+            checked = true,
             palette = palette,
-        ).apply {
-            isEnabled = scope != null
-        }
+        )
+        val applicationScope = scope?.takeIf { it.packageName.isNotBlank() }
         val quickGlossary = checkbox(
-            label = scope?.let {
+            label = applicationScope?.let {
                 context.getString(R.string.translation_correction_glossary_format, it.appLabel)
             } ?: context.getString(R.string.translation_correction_glossary_global),
             checked = false,
@@ -152,14 +151,12 @@ class TranslationCorrectionOverlay(
             addView(translationInput, matchWidth())
             addView(spacer((12 * density).toInt()))
             addView(remember, matchWidth())
-            if (scope != null) {
-                addView(TextView(context).apply {
-                    text = context.getString(R.string.translation_correction_remember_summary)
-                    setTextColor(palette.secondaryText)
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-                    setPadding((32 * density).toInt(), 0, 0, (4 * density).toInt())
-                })
-            }
+            addView(TextView(context).apply {
+                text = context.getString(R.string.translation_correction_remember_summary)
+                setTextColor(palette.secondaryText)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                setPadding((32 * density).toInt(), 0, 0, (4 * density).toInt())
+            })
             addView(quickGlossary, matchWidth())
             addView(TextView(context).apply {
                 text = context.getString(R.string.translation_correction_glossary_summary)
@@ -168,14 +165,6 @@ class TranslationCorrectionOverlay(
                 setPadding((32 * density).toInt(), 0, 0, (4 * density).toInt())
             })
             addView(glossaryFields, matchWidth())
-            if (scope == null) {
-                addView(TextView(context).apply {
-                    text = context.getString(R.string.translation_correction_no_game)
-                    setTextColor(palette.secondaryText)
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-                    setPadding(0, (8 * density).toInt(), 0, 0)
-                })
-            }
         }
         val scroll = ScrollView(context).apply {
             isFillViewport = false
@@ -282,7 +271,7 @@ class TranslationCorrectionOverlay(
                         observedSource = request.observedSource,
                         correctedSource = correctedSource,
                         correctedTranslation = correctedTranslation,
-                        rememberTranslation = remember.isChecked && scope != null,
+                        rememberTranslation = remember.isChecked,
                         glossary = buildTranslationCorrectionGlossaryDraft(
                             enabled = quickGlossary.isChecked,
                             sourceTerm = glossarySourceInput.text.toString(),

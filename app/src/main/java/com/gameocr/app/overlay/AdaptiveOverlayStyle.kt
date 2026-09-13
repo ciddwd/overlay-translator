@@ -118,6 +118,16 @@ internal fun adaptiveEraseRects(
     }
 }
 
+/**
+ * Last-resort geometry for an incomplete pixel repair.
+ *
+ * It must not reuse [sourceBoxes]: both the detector patch and those boxes can omit the same
+ * antialiased edge. The fallback covers the semantic OCR block so an incomplete repair can never
+ * be reported as applied while leaving the original glyph visible.
+ */
+internal fun adaptiveFallbackEraseRects(block: OverlayIntRect): List<OverlayIntRect> =
+    listOf(OverlayIntRect(0, 0, block.width.coerceAtLeast(1), block.height.coerceAtLeast(1)))
+
 internal fun adaptiveAutoSizeMaxSp(
     maxTextSizeSp: Float,
     minTextSizeSp: Int = ADAPTIVE_MIN_TEXT_SIZE_SP,

@@ -9,9 +9,9 @@ cmake_minimum_required(VERSION 3.22)
 
 project("ai-chat" VERSION 1.0.0 LANGUAGES C CXX)
 
-# Android log priorities: VERBOSE=2, ERROR=6. Gradle sets 2 for Debug and 6 for
-# Release so native model diagnostics do not spend time formatting normal logs in production.
-set(GAMEOCR_NATIVE_LOG_MIN_LEVEL "6" CACHE STRING "Minimum Android log priority")
+# Compile out the app's native Logcat sink in Release, including error logs and
+# formatting arguments. In-app runtime logs and JNI performance metrics are separate.
+option(GAMEOCR_NATIVE_LOGCAT "Enable native Android Logcat diagnostics" OFF)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED true)
@@ -42,6 +42,18 @@ set(UPSTREAM_CPP ${LLAMA_SRC}/examples/llama.android/lib/src/main/cpp)
 # an upstream change fail at configure time instead of silently dropping either fix.
 file(READ "${UPSTREAM_CPP}/ai_chat.cpp" GAMEOCR_AI_CHAT_SOURCE)
 string(REPLACE "\r\n" "\n" GAMEOCR_AI_CHAT_SOURCE "${GAMEOCR_AI_CHAT_SOURCE}")
+
+# Keep the submodule untouched. Debug delegates to its original logger; Release
+# installs a no-op llama/ggml callback instead of falling back to stderr.
+set(GAMEOCR_LOG_INCLUDE_ORIGINAL "#include \"logging.h\"")
+string(FIND "${GAMEOCR_AI_CHAT_SOURCE}" "${GAMEOCR_LOG_INCLUDE_ORIGINAL}" GAMEOCR_LOG_INCLUDE_INDEX)
+if(GAMEOCR_LOG_INCLUDE_INDEX EQUAL -1)
+    message(FATAL_ERROR "GameOCR ai_chat logging include no longer matches upstream")
+endif()
+string(REPLACE
+        "${GAMEOCR_LOG_INCLUDE_ORIGINAL}"
+        "#include \"gameocr_logging.h\""
+        GAMEOCR_AI_CHAT_SOURCE "${GAMEOCR_AI_CHAT_SOURCE}")
 
 set(GAMEOCR_USER_RESET_ORIGINAL [=[
     // Reset short-term states
@@ -437,7 +449,8 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
         llama_thread_policy.cpp)
 
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
-        LOG_MIN_LEVEL=${GAMEOCR_NATIVE_LOG_MIN_LEVEL}
+        GAMEOCR_NATIVE_LOGCAT=$<BOOL:${GAMEOCR_NATIVE_LOGCAT}>
+        LOG_MIN_LEVEL=2
         GGML_SYSTEM_ARCH=${GGML_SYSTEM_ARCH}
         GGML_CPU_KLEIDIAI=$<BOOL:${GGML_CPU_KLEIDIAI}>
         GGML_OPENMP=$<BOOL:${GGML_OPENMP}>
@@ -447,6 +460,7 @@ target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
 )
 
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
+        ${CMAKE_CURRENT_LIST_DIR}
         ${UPSTREAM_CPP}
         ${LLAMA_SRC}
         ${LLAMA_SRC}/common

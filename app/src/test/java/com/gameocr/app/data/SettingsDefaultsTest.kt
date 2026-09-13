@@ -1,10 +1,38 @@
 package com.gameocr.app.data
 
 import com.gameocr.app.capture.LoopFrameStabilityPolicy
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class SettingsDefaultsTest {
+
+    @Test
+    fun loopTriggerDefaultsToSettledButKeepsExplicitChoices_tableDriven() {
+        assertEquals(LoopTriggerMode.SETTLED_PAGE, Settings().loopTriggerMode)
+        val cases = listOf(
+            "{}" to LoopTriggerMode.SETTLED_PAGE,
+            "{\"loopTriggerMode\":\"FIXED_INTERVAL\"}" to LoopTriggerMode.FIXED_INTERVAL,
+            "{\"loopTriggerMode\":\"WAIT_FOR_TEXT_COMPLETE\"}" to LoopTriggerMode.WAIT_FOR_TEXT_COMPLETE,
+            "{\"loopTriggerMode\":\"SETTLED_PAGE\"}" to LoopTriggerMode.SETTLED_PAGE,
+        )
+        cases.forEach { (encoded, expected) ->
+            assertEquals(encoded, expected, Json.decodeFromString(Settings.serializer(), encoded).loopTriggerMode)
+        }
+    }
+
+    @Test
+    fun dictionaryLookupMode_defaultsOnlineAndHonorsExplicitSerializedChoices_tableDriven() {
+        assertEquals(DictionaryLookupMode.ONLINE, Settings().dictionaryLookupMode)
+        val cases = listOf(
+            "{}" to DictionaryLookupMode.ONLINE,
+            "{\"dictionaryLookupMode\":\"OFFLINE\"}" to DictionaryLookupMode.OFFLINE,
+            "{\"dictionaryLookupMode\":\"ONLINE\"}" to DictionaryLookupMode.ONLINE,
+        )
+        cases.forEach { (serialized, expected) ->
+            assertEquals(serialized, expected, Json.decodeFromString(Settings.serializer(), serialized).dictionaryLookupMode)
+        }
+    }
 
     @Test
     fun wordSelectDefaults_tableDriven_keepSelectionMemoryOff() {
@@ -50,6 +78,7 @@ class SettingsDefaultsTest {
         val settings = Settings()
         listOf(
             Case("developer options", settings.developerOptionsEnabled),
+            Case("performance overlay", settings.performanceOverlayEnabled),
             Case("OCR screenshot saving", settings.ocrScreenshotSavingEnabled),
             Case("disable translation cache", settings.disableTranslationCache),
         ).forEach { case ->
@@ -123,6 +152,7 @@ class SettingsDefaultsTest {
         val settings = Settings()
 
         assertEquals(true, settings.textOrientationAutoDetect)
+        assertEquals(CaptureContentOrientation.AUTO, settings.captureContentOrientation)
     }
 
     @Test

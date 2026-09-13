@@ -1,5 +1,9 @@
 package com.gameocr.app.overlay
 
+import android.text.SpannableStringBuilder
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
+import android.text.style.RelativeSizeSpan
 import com.gameocr.app.data.FloatingWindowContentMode
 
 internal enum class FloatingWindowTextRole {
@@ -27,6 +31,56 @@ internal fun floatingWindowTextSegments(
             add(FloatingWindowTextSegment("\n\n", FloatingWindowTextRole.SEPARATOR, index))
         }
     }
+}
+
+internal fun styledFloatingWindowText(
+    pairs: List<Pair<String, String>>,
+    mode: FloatingWindowContentMode,
+    textSizeSp: Float,
+    foregroundColor: Int,
+    mutedColor: Int,
+): CharSequence {
+    val result = SpannableStringBuilder()
+    val sourceScale = (textSizeSp - 1f).coerceAtLeast(10f) / textSizeSp.coerceAtLeast(1f)
+    floatingWindowTextSegments(pairs, mode).forEach { segment ->
+        val start = result.length
+        result.append(segment.text)
+        val end = result.length
+        if (start == end) return@forEach
+        when (segment.role) {
+            FloatingWindowTextRole.SOURCE -> {
+                result.setSpan(
+                    ForegroundColorSpan(mutedColor),
+                    start,
+                    end,
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+                )
+                result.setSpan(
+                    RelativeSizeSpan(sourceScale),
+                    start,
+                    end,
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+                )
+            }
+            FloatingWindowTextRole.TRANSLATION -> {
+                result.setSpan(
+                    ForegroundColorSpan(foregroundColor),
+                    start,
+                    end,
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+                )
+            }
+            FloatingWindowTextRole.SEPARATOR -> {
+                result.setSpan(
+                    ForegroundColorSpan(mutedColor),
+                    start,
+                    end,
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+                )
+            }
+        }
+    }
+    return result
 }
 
 internal fun floatingWindowTranslationIndexForSelection(

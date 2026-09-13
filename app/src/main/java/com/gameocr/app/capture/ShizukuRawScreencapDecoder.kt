@@ -31,6 +31,13 @@ internal object ShizukuRawScreencapDecoder {
         val pixelByteCount: Int = width * height * bytesPerPixel
     }
 
+    internal data class HeaderProbe(
+        val width: Int,
+        val height: Int,
+        val pixelFormat: Int,
+        val pixelByteCount: Int,
+    )
+
     internal enum class BitmapEncoding {
         ARGB_8888_DIRECT,
         RGB_565_DIRECT,
@@ -61,6 +68,22 @@ internal object ShizukuRawScreencapDecoder {
         }
     }
 
+    /**
+     * Reads only the common 12-byte prefix so the caller can allocate the final raw-frame buffer
+     * once. Current frames use a 16-byte header; legacy frames are exactly four bytes shorter.
+     */
+    internal fun probeHeader(prefix: ByteArray): HeaderProbe? {
+        if (prefix.size < LEGACY_HEADER_BYTES) return null
+        val width = readIntLe(prefix, 0)
+        val height = readIntLe(prefix, 4)
+        val format = readIntLe(prefix, 8)
+        val encoding = encodingFor(format) ?: return null
+        if (!isPlausibleDimensions(width, height)) return null
+        val pixelBytes = width.toLong() * height.toLong() * encoding.bytesPerPixel
+        if (pixelBytes > Int.MAX_VALUE) return null
+        return HeaderProbe(width, height, format, pixelBytes.toInt())
+    }
+
     internal fun parse(bytes: ByteArray): FrameSpec? =
         parseCandidate(bytes, COLORSPACE_HEADER_BYTES, requireExactPayload = true)
             ?: parseCandidate(bytes, LEGACY_HEADER_BYTES, requireExactPayload = true)
@@ -72,20 +95,17 @@ internal object ShizukuRawScreencapDecoder {
         requireExactPayload: Boolean
     ): FrameSpec? {
         if (bytes.size < headerBytes) return null
-        val width = readIntLe(bytes, 0)
-        val height = readIntLe(bytes, 4)
-        val format = readIntLe(bytes, 8)
+        val probe = probeHeader(bytes) ?: return null
+        val width = probe.width
+        val height = probe.height
+        val format = probe.pixelFormat
         val colorspace = if (headerBytes >= COLORSPACE_HEADER_BYTES) {
             readIntLe(bytes, 12)
         } else {
             UNKNOWN_COLORSPACE
         }
-        val encoding = encodingFor(format) ?: return null
-        if (!isPlausibleDimensions(width, height)) return null
-
-        val pixelBytes = width.toLong() * height.toLong() * encoding.bytesPerPixel
-        if (pixelBytes > Int.MAX_VALUE) return null
-        val expectedPayload = pixelBytes.toInt()
+        val encoding = requireNotNull(encodingFor(format))
+        val expectedPayload = probe.pixelByteCount
         val actualPayload = bytes.size - headerBytes
         if (requireExactPayload) {
             if (actualPayload != expectedPayload) return null

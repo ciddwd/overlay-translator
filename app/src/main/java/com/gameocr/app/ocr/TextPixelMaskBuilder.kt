@@ -25,12 +25,14 @@ internal object TextPixelMaskBuilder {
         val selectedCorePixels: Int,
         val corePixels: BooleanArray = pixels,
         val supportPixels: BooleanArray = pixels,
+        val semanticPixels: BooleanArray = supportPixels,
     ) {
         init {
             require(bounds.width > 0 && bounds.height > 0)
             require(pixels.size == bounds.width * bounds.height)
             require(corePixels.size == pixels.size)
             require(supportPixels.size == pixels.size)
+            require(semanticPixels.size == pixels.size)
             require(selectedCorePixels > 0)
             require(corePixels.count { it } == selectedCorePixels)
         }
@@ -92,6 +94,26 @@ internal object TextPixelMaskBuilder {
                     selected[label] = maxOf(selected[label] ?: 0, dilationRadius(source))
                 }
             }
+            // A text-region detector may extend the recognition area beyond its DBNet members.
+            // Retain probability components wholly inside that confirmed text extent as well.
+            // Do not fill the rectangle or admit components crossing into neighboring artwork.
+            val semanticSource = block.semanticBounds
+                ?.let { clamp(it, width, height) }
+                ?.takeIf { it.width > 0 && it.height > 0 }
+            val supplementalSources = mutableListOf<IntRect>()
+            if (semanticSource != null) {
+                val radius = sourceBoxes.map(::dilationRadius).sorted().let { it[it.size / 2] }
+                collectLabels(components.labels, width, semanticSource).forEach { label ->
+                    val bounds = components.items[label].bounds
+                    if (label !in selected && bounds.left >= semanticSource.left &&
+                        bounds.top >= semanticSource.top && bounds.right <= semanticSource.right &&
+                        bounds.bottom <= semanticSource.bottom
+                    ) {
+                        selected[label] = radius
+                        supplementalSources += bounds
+                    }
+                }
+            }
             if (selected.isEmpty()) {
                 return@map Decision(
                     blockIndex = block.blockIndex,
@@ -101,7 +123,13 @@ internal object TextPixelMaskBuilder {
             }
 
             val cropBounds = expand(
-                rect = union(sourceBoxes),
+                rect = union(
+                    sourceBoxes + listOfNotNull(
+                        block.semanticBounds
+                            ?.let { clamp(it, width, height) }
+                            ?.takeIf { it.width > 0 && it.height > 0 },
+                    ),
+                ),
                 margin = sampleMargin(sourceBoxes),
                 width = width,
                 height = height,
@@ -109,7 +137,8 @@ internal object TextPixelMaskBuilder {
             val localCoreMask = BooleanArray(cropBounds.width * cropBounds.height)
             val localMask = BooleanArray(cropBounds.width * cropBounds.height)
             val localSupportMask = BooleanArray(cropBounds.width * cropBounds.height)
-            sourceBoxes.forEach { source ->
+            val localSemanticMask = BooleanArray(cropBounds.width * cropBounds.height)
+            (sourceBoxes + supplementalSources).forEach { source ->
                 val support = expand(source, componentSearchRadius(source), width, height)
                 for (y in support.top until support.bottom) {
                     val localY = y - cropBounds.top
@@ -119,6 +148,25 @@ internal object TextPixelMaskBuilder {
                         if (localX !in 0 until cropBounds.width) continue
                         localSupportMask[localY * cropBounds.width + localX] = true
                     }
+                }
+            }
+            val semanticBounds = block.semanticBounds
+                ?.let { clamp(it, width, height) }
+                ?.takeIf { it.width > 0 && it.height > 0 }
+                ?: union(sourceBoxes)
+            val semanticCompletionBounds = expand(
+                rect = semanticBounds,
+                margin = semanticCompletionMargin(sourceBoxes),
+                width = width,
+                height = height,
+            )
+            for (y in semanticCompletionBounds.top until semanticCompletionBounds.bottom) {
+                val localY = y - cropBounds.top
+                if (localY !in 0 until cropBounds.height) continue
+                for (x in semanticCompletionBounds.left until semanticCompletionBounds.right) {
+                    val localX = x - cropBounds.left
+                    if (localX !in 0 until cropBounds.width) continue
+                    localSemanticMask[localY * cropBounds.width + localX] = true
                 }
             }
             selected.forEach { (label, radius) ->
@@ -159,6 +207,7 @@ internal object TextPixelMaskBuilder {
                 selectedCorePixels = corePixels,
                 corePixels = localCoreMask,
                 supportPixels = localSupportMask,
+                semanticPixels = localSemanticMask,
             )
             Decision(
                 blockIndex = block.blockIndex,
@@ -327,6 +376,16 @@ internal object TextPixelMaskBuilder {
             .coerceIn(MIN_SAMPLE_MARGIN_PX, MAX_SAMPLE_MARGIN_PX)
     }
 
+    private fun semanticCompletionMargin(sourceBoxes: List<IntRect>): Int {
+        val minorAxes = sourceBoxes
+            .map { minOf(it.width, it.height) }
+            .sorted()
+        val medianMinorAxis = minorAxes[minorAxes.size / 2]
+        return (medianMinorAxis * SEMANTIC_COMPLETION_MARGIN_RATIO)
+            .roundToInt()
+            .coerceIn(MIN_SEMANTIC_COMPLETION_MARGIN_PX, MAX_SEMANTIC_COMPLETION_MARGIN_PX)
+    }
+
     private fun union(rects: List<IntRect>): IntRect = IntRect(
         left = rects.minOf { it.left },
         top = rects.minOf { it.top },
@@ -366,6 +425,9 @@ internal object TextPixelMaskBuilder {
     private const val SAMPLE_MARGIN_RATIO = 0.35f
     private const val MIN_SAMPLE_MARGIN_PX = 8
     private const val MAX_SAMPLE_MARGIN_PX = 64
+    private const val SEMANTIC_COMPLETION_MARGIN_RATIO = 0.08f
+    private const val MIN_SEMANTIC_COMPLETION_MARGIN_PX = 2
+    private const val MAX_SEMANTIC_COMPLETION_MARGIN_PX = 12
     private const val MIN_RELATED_COMPONENT_PIXELS = 64
     private const val MAX_COMPONENT_TO_SOURCE_AREA_RATIO = 1.5
 }

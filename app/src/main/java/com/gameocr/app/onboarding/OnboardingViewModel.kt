@@ -16,12 +16,16 @@ import javax.inject.Inject
 class OnboardingViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val routingTranslator: RoutingTranslator,
+    private val connectionTester: com.gameocr.app.translate.TranslatorConnectionTester,
     private val modelReadinessChecker: ModelReadinessChecker,
     private val modelDownloadManager: ModelDownloadManager,
 ) : ViewModel() {
     suspend fun loadDraft(firstRun: Boolean): OnboardingDraft =
         if (firstRun) OnboardingDraft()
         else OnboardingPolicy.fromSettings(settingsRepository.get())
+
+    suspend fun testCloudConnection(draft: OnboardingDraft): com.gameocr.app.translate.TestResult =
+        connectionTester.test(OnboardingPolicy.apply(settingsRepository.get(), draft))
 
     suspend fun save(draft: OnboardingDraft) {
         settingsRepository.update { current ->
@@ -34,7 +38,9 @@ class OnboardingViewModel @Inject constructor(
     }
 
     suspend fun downloadMlKitLanguagePair(sourceLang: String, targetLang: String) {
-        routingTranslator.downloadMlKitLanguagePair(sourceLang, targetLang)
+        routingTranslator.downloadMlKitLanguagePair(
+            sourceLang, targetLang, settingsRepository.get().apiTimeoutSeconds,
+        )
     }
 
     fun recommendedModelsReadiness(draft: OnboardingDraft): RecommendedModelsReadiness {

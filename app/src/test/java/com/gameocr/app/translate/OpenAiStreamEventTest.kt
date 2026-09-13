@@ -37,8 +37,12 @@ class OpenAiStreamEventTest {
             ),
             Case(
                 "usage-only valid data",
-                """data: {"choices":[],"usage":{"total_tokens":12}}""",
-                OpenAiStreamEvent.Data(content = "", finishReason = null),
+                """data: {"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":5,"total_tokens":12}}""",
+                OpenAiStreamEvent.Data(
+                    content = "",
+                    finishReason = null,
+                    usage = ChatUsage(promptTokens = 7, completionTokens = 5, totalTokens = 12),
+                ),
             ),
             Case("malformed data", "data: not-json", OpenAiStreamEvent.Malformed("not-json")),
         ).forEach { case ->

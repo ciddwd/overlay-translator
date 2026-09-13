@@ -51,6 +51,7 @@ internal class MangaDelayedMaskDebugSessionManager {
         val modelMasks: List<BubbleSegmentationPostprocessor.InstanceMask>,
         val modelMaskQualities: List<BubbleShapeMaskQuality> =
             List(modelMasks.size) { BubbleShapeMaskQuality.TRUSTED },
+        val protectedSourceBounds: List<IntRect> = emptyList(),
     ) {
         init {
             require(width > 0 && height > 0)
@@ -157,7 +158,7 @@ internal class MangaDelayedMaskDebugSessionManager {
                 blocks = blocks.mapIndexed { index, block ->
                     DelayedTextEraseMaskBuilder.ConfirmedBlock(
                         blockIndex = index,
-                        sourceBoxes = block.sourceBoxes.map { source ->
+                        sourceBoxes = block.sourceBoxesOrBoundingBox().map { source ->
                             IntRect(
                                 left = floor(source.left * coordinateScale).toInt(),
                                 top = floor(source.top * coordinateScale).toInt(),
@@ -165,6 +166,12 @@ internal class MangaDelayedMaskDebugSessionManager {
                                 bottom = ceil(source.bottom * coordinateScale).toInt(),
                             )
                         },
+                        semanticBounds = IntRect(
+                            left = floor(block.boundingBox.left * coordinateScale).toInt(),
+                            top = floor(block.boundingBox.top * coordinateScale).toInt(),
+                            right = ceil(block.boundingBox.right * coordinateScale).toInt(),
+                            bottom = ceil(block.boundingBox.bottom * coordinateScale).toInt(),
+                        ),
                     )
                 },
                 textBlocks = blocks.toList(),
@@ -196,7 +203,7 @@ internal class MangaDelayedMaskDebugSessionManager {
             height = input.height,
             sourceArgb = input.sourceArgb,
             eraseMask = result.mask,
-            regions = buildLocalRepairRegions(input, result),
+            regions = buildLocalRepairRegions(input, result, confirmed),
         )
         val repairResult = localRepairResult.repairResult
         val repairDurationMs = (System.nanoTime() - repairStartedNs) / 1_000_000L
@@ -205,7 +212,7 @@ internal class MangaDelayedMaskDebugSessionManager {
             batch = batch,
             result = result,
             localRepairResult = localRepairResult,
-        )
+        ).map { it.protectSourceRegions(input.protectedSourceBounds) }
         val modelBackgroundBlockIndices = modelBackgroundPatches
             .flatMapTo(linkedSetOf()) { it.blockIndices }
         val textRepairStartedNs = System.nanoTime()
@@ -232,7 +239,7 @@ internal class MangaDelayedMaskDebugSessionManager {
         val textBackgroundPatches = buildTextBackgroundPatches(
             repairResult = textRepairResult,
             coordinateScale = batch.coordinateScale,
-        )
+        ).map { it.protectSourceRegions(input.protectedSourceBounds) }
         Prepared(
             batch = batch,
             confirmedBlocks = confirmed,
@@ -393,6 +400,7 @@ internal class MangaDelayedMaskDebugSessionManager {
     private fun buildLocalRepairRegions(
         input: Input,
         result: DelayedTextEraseMaskBuilder.Result,
+        confirmedBlocks: List<DelayedTextEraseMaskBuilder.ConfirmedBlock>,
     ): List<LocalBubbleBackgroundRepairer.Region> {
         val memberToModel = mutableMapOf<Int, Int>()
         input.modelGroups.forEach { group ->
@@ -421,7 +429,16 @@ internal class MangaDelayedMaskDebugSessionManager {
                 return@mapNotNull null
             }
             val modelMask = input.modelMasks.getOrNull(modelIndex) ?: return@mapNotNull null
-            val bounds = memberIndices.mapNotNull(input.memberBounds::getOrNull)
+            val semanticBounds = result.decisions.asSequence()
+                .filter { decision ->
+                    decision.accepted && modelIndex in decision.modelBubbleIndices
+                }
+                .mapNotNull { decision ->
+                    confirmedBlocks.firstOrNull { it.blockIndex == decision.blockIndex }
+                        ?.semanticBounds
+                }
+                .toList()
+            val bounds = memberIndices.mapNotNull(input.memberBounds::getOrNull) + semanticBounds
             if (bounds.isEmpty()) return@mapNotNull null
             LocalBubbleBackgroundRepairer.Region(
                 modelBubbleIndex = modelIndex,
@@ -488,6 +505,11 @@ internal class MangaDelayedMaskDebugSessionManager {
                 return@forEach
             }
             val maskQualityRejection = maskQuality.shapePatchRejectionReason
+            if (IntRect(modelMask.left, modelMask.top, modelMask.left + modelMask.width,
+                    modelMask.top + modelMask.height).overlapsProtectedSource(input.protectedSourceBounds)) {
+                decisions += shapeLayoutFallback(modelIndex, "REJECTED_OCR_SOURCE_PROTECTED", orientation, text.length)
+                return@forEach
+            }
             if (maskQualityRejection != null) {
                 decisions += shapeLayoutFallback(
                     modelIndex = modelIndex,

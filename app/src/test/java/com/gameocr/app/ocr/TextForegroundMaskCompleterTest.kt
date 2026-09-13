@@ -95,6 +95,40 @@ class TextForegroundMaskCompleterTest {
     }
 
     @Test
+    fun complete_tableDriven_recoversOppositePolarityOutlinesOnlyNextToText() {
+        data class Case(
+            val name: String,
+            val foreground: Int,
+            val outline: Int,
+        )
+        val background = gray(128)
+
+        listOf(
+            Case("dark glyph with light outline", gray(18), gray(244)),
+            Case("light glyph with dark outline", gray(240), gray(12)),
+        ).forEach { case ->
+            val pixels = IntArray(SIZE) { background }
+            val support = BooleanArray(SIZE).apply { fill(this, SUPPORT) }
+            val strong = BooleanArray(SIZE).apply { fill(this, IntRect(12, 12, 16, 16)) }
+            strong.indices.filter { strong[it] }.forEach { pixels[it] = case.foreground }
+            fillColor(pixels, IntRect(16, 12, 18, 16), case.outline)
+            fillColor(pixels, IntRect(22, 12, 24, 16), case.outline)
+
+            val result = TextForegroundMaskCompleter.complete(
+                width = WIDTH,
+                height = HEIGHT,
+                argb = pixels,
+                strongMask = strong,
+                supportMask = support,
+                backgroundSamples = IntArray(64) { background },
+            )
+
+            assertTrue("${case.name}: touching outline is recovered", result.mask[index(16, 14)])
+            assertFalse("${case.name}: detached artwork is not recovered", result.mask[index(22, 14)])
+        }
+    }
+
+    @Test
     fun complete_tableDriven_isScaleAwareAndDoesNotInventForegroundWithoutReliableSeeds() {
         data class Case(val name: String, val scale: Int)
 

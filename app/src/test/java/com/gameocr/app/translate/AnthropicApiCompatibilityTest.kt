@@ -299,6 +299,22 @@ class AnthropicApiCompatibilityTest {
     }
 
     @Test
+    fun usageParsing_preservesInputAndFinalOutputCounts() {
+        val response = parseAnthropicResponse(
+            """{"content":[{"type":"text","text":"译文"}],"usage":{"input_tokens":30,"output_tokens":39}}""",
+            json,
+        )
+        assertEquals("译文", response?.text)
+        assertEquals(AnthropicUsage(inputTokens = 30, outputTokens = 39), response?.usage)
+
+        val merged = listOf(
+            AnthropicUsage(inputTokens = 30, outputTokens = 1),
+            AnthropicUsage(inputTokens = null, outputTokens = 39),
+        ).fold<AnthropicUsage, AnthropicUsage?>(null, ::mergeAnthropicUsage)
+        assertEquals(AnthropicUsage(inputTokens = 30, outputTokens = 39), merged)
+    }
+
+    @Test
     fun modelIds_tableDrivenPreservesServerOrderAndIgnoresInvalidEntries() {
         data class Case(val name: String, val raw: String, val expected: List<String>)
 
@@ -342,6 +358,16 @@ class AnthropicApiCompatibilityTest {
                 "thinking delta is ignored",
                 """{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hidden"}}""",
                 AnthropicStreamEvent.Ignore,
+            ),
+            Case(
+                "message start exposes input tokens",
+                """{"type":"message_start","message":{"usage":{"input_tokens":30,"output_tokens":1}}}""",
+                AnthropicStreamEvent.Metrics(AnthropicUsage(inputTokens = 30, outputTokens = 1)),
+            ),
+            Case(
+                "message delta exposes final output tokens",
+                """{"type":"message_delta","usage":{"output_tokens":39}}""",
+                AnthropicStreamEvent.Metrics(AnthropicUsage(outputTokens = 39)),
             ),
             Case("ping is ignored", """{"type":"ping"}""", AnthropicStreamEvent.Ignore),
             Case("future event is ignored", """{"type":"future_event","extra":true}""", AnthropicStreamEvent.Ignore),

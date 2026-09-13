@@ -24,7 +24,7 @@ class SettingsSingleChoiceSegmentedControlsUiTest {
             Case(
                 name = "display mode",
                 startMarker = "val renderModeOptions =",
-                endMarker = "if (!layoutControlsEnabled)",
+                endMarker = "if (renderMode == RenderMode.FLOATING_WINDOW)",
                 requiredMarkers = listOf(
                     "RenderMode.BLOCKS",
                     "RenderMode.FLOATING_WINDOW",
@@ -58,6 +58,17 @@ class SettingsSingleChoiceSegmentedControlsUiTest {
                     "mergeStrengthOptionsFor(renderMode)",
                     "selected = shownMergeStrength == strength",
                     "if (mergeStrength != strength)",
+                ),
+            ),
+            Case(
+                name = "NiuTrans version",
+                startMarker = "val niuTransModes =",
+                endMarker = "SecretTextField(",
+                requiredMarkers = listOf(
+                    "NiuTransMode.FLASH",
+                    "NiuTransMode.PRO",
+                    "selected = niuTransMode == mode",
+                    "if (niuTransMode != mode)",
                 ),
             ),
         )

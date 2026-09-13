@@ -19,6 +19,21 @@ import org.junit.Test
 class SettingsBundleTransferTest {
 
     @Test
+    fun floatingButtonAlpha_roundTripsBundleWithoutChangingTranslationOpacity() {
+        for (alpha in listOf(0.1f, 0.5f, 1f)) {
+            val output = ByteArrayOutputStream()
+            SettingsBundleTransfer.write(
+                output = output,
+                settings = Settings(floatingButtonAlpha = alpha, overlayAlpha = 0.85f),
+                resolveFontFile = { null },
+            )
+            val restored = SettingsBundleTransfer.readPreview(ByteArrayInputStream(output.toByteArray())).settings!!
+            assertEquals(alpha, restored.floatingButtonAlpha, 0f)
+            assertEquals(0.85f, restored.overlayAlpha, 0f)
+        }
+    }
+
+    @Test
     fun portableSettings_excludesCredentialsPrivateConnectionsAndDeviceState() {
         val original = sampleSettings()
         val portable = SettingsBundleTransfer.portableSettings(original)
@@ -77,6 +92,7 @@ class SettingsBundleTransferTest {
             PortableCase("OCR debug source", original.ocrRedBoxShowSourceText, portable.ocrRedBoxShowSourceText),
             PortableCase("OCR debug translation", original.ocrRedBoxShowTranslation, portable.ocrRedBoxShowTranslation),
             PortableCase("overlay style", original.overlayTextStyle, portable.overlayTextStyle),
+            PortableCase("floating button opacity", original.floatingButtonAlpha, portable.floatingButtonAlpha),
             PortableCase("pinned languages", original.pinnedLanguages, portable.pinnedLanguages),
             PortableCase("menu order", original.floatingMenuItemOrder, portable.floatingMenuItemOrder),
             PortableCase("LLM context size", original.localLlmContextSize, portable.localLlmContextSize),
@@ -367,6 +383,7 @@ class SettingsBundleTransferTest {
             baiduFanyiAppId = "baidu-app-id",
             baiduFanyiSecretKey = "baidu-secret-key",
             floatingButtonSizeDp = 52,
+            floatingButtonAlpha = 0.6f,
             floatingWindowWidthDp = 444,
             floatingWindowHeightDp = 222,
             pinnedLanguages = listOf("ja", "zh-TW"),
@@ -374,6 +391,9 @@ class SettingsBundleTransferTest {
             floatingMenuItemOrder = FloatingMenu.DEFAULT_ORDER.reversed(),
             arcMenuPageSize = 5,
             floatingButtonSkill = FloatingSkill.LOOP,
+            inputTranslationDoubleAction = InputTranslationDoubleAction.WORD_SELECT,
+            dictionaryLookupMode = DictionaryLookupMode.ONLINE,
+            dictionaryTapLookupEnabled = false,
             dictionaryPrompt = "portable dictionary prompt",
             localLlmContextSize = 3072,
             localLlmMaxNewTokens = 384,

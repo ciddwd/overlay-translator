@@ -3,6 +3,17 @@ package com.gameocr.app.data
 class SettingsSecretCodec(
     private val cipher: SettingsSecretCipher
 ) {
+    /** Credentials must never fall back to plaintext or device-derived encryption. */
+    fun encryptCredential(value: String): String {
+        if (value.isEmpty()) return ""
+        return runCatching {
+            val encrypted = cipher.encrypt(value)
+            require(encrypted.isNotEmpty() && encrypted != value)
+            PREFIX + encrypted
+        }.getOrDefault("")
+    }
+
+    // Also used for non-secret addresses, prompts and credential-free preset metadata.
     fun encryptPlainText(value: String): String {
         if (value.isEmpty()) return ""
         return runCatching { PREFIX + cipher.encrypt(value) }.getOrElse { value }

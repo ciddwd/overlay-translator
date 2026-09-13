@@ -8,6 +8,7 @@ internal fun DBPostprocessor.Quad.offsetBy(dx: Float, dy: Float): DBPostprocesso
         p1 = paddlePointF(p1.x + dx, p1.y + dy),
         p2 = paddlePointF(p2.x + dx, p2.y + dy),
         p3 = paddlePointF(p3.x + dx, p3.y + dy),
+        support = support?.offsetBy(dx, dy),
     )
 
 internal fun paddlePointF(x: Float, y: Float): PointF = PointF().apply {

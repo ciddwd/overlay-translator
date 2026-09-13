@@ -174,6 +174,41 @@ internal object TextForegroundMaskCompleter {
                 }
             }
         }
+
+        // A glyph outline or drop shadow can have the opposite luminance polarity from its core.
+        // Recover only the narrow, high-contrast ring touching confirmed foreground so nearby
+        // panel art cannot grow into the erase mask.
+        val outlineRadius = ceil(
+            minOf(supportWidth, supportHeight) * OUTLINE_RADIUS_RATIO,
+        ).toInt().coerceIn(MIN_OUTLINE_RADIUS_PX, MAX_OUTLINE_RADIUS_PX)
+        val outlineReach = BinarySquareDilation.dilate(
+            input = output,
+            width = width,
+            height = height,
+            radius = outlineRadius,
+        )
+        val outlineColorDifference = maxOf(
+            MIN_OUTLINE_COLOR_DIFFERENCE,
+            (colorContrast * OUTLINE_CONTRAST_RATIO).roundToInt(),
+        )
+        val outlineColorDifferenceSquared = outlineColorDifference * outlineColorDifference
+        for (index in output.indices) {
+            if (
+                output[index] ||
+                !supportMask[index] ||
+                !outlineReach[index]
+            ) {
+                continue
+            }
+            if (
+                abs(luminance(argb[index]) - backgroundLuminance) >=
+                MIN_OUTLINE_LUMINANCE_DIFFERENCE &&
+                colorDistanceSquared(argb[index], background) >= outlineColorDifferenceSquared
+            ) {
+                output[index] = true
+                addedPixels++
+            }
+        }
         return Result(mask = output, addedPixels = addedPixels)
     }
 
@@ -292,4 +327,10 @@ internal object TextForegroundMaskCompleter {
     private const val MAX_DETACHED_SUPPORT_RATIO = 0.20
     private const val MAX_DETACHED_ASPECT_RATIO = 6f
     private const val MAX_DETACHED_LONG_SIDE_RATIO = 0.72f
+    private const val OUTLINE_RADIUS_RATIO = 0.06
+    private const val MIN_OUTLINE_RADIUS_PX = 1
+    private const val MAX_OUTLINE_RADIUS_PX = 4
+    private const val MIN_OUTLINE_LUMINANCE_DIFFERENCE = 10
+    private const val MIN_OUTLINE_COLOR_DIFFERENCE = 28
+    private const val OUTLINE_CONTRAST_RATIO = 0.12
 }

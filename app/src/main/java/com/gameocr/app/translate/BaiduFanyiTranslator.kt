@@ -151,7 +151,7 @@ class BaiduFanyiTranslator @Inject constructor(
         return runCatching {
             val out = translate("hello", settings)
             if (out.isNullOrBlank()) TestResult(false, "返回空")
-            else TestResult(true, "OK · 样例: ${out.take(40)}")
+            else TestResult(true, "OK 样例: ${out.take(40)}")
         }.getOrElse { TestResult(false, it.message ?: it.javaClass.simpleName) }
     }
 

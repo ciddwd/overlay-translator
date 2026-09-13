@@ -14,6 +14,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CancellationException
 import rikka.shizuku.Shizuku
 import timber.log.Timber
 import kotlin.coroutines.resume
@@ -39,10 +40,9 @@ class ShizukuManager @Inject constructor() {
 
     private val _shellPrivilegeOk = MutableStateFlow(false)
     /**
-     * Shizuku 是否拿到了 shell uid 特权（**已通过 ADB / root 配对启动**）。
-     * `pingBinder()` 只能确认 Shizuku 进程在跑、IPC 通道在，**不能** 判定特权 session 是否建立。
-     * 用户「没配对」时 pingBinder 返回 true，但 newProcess(screencap) 跑不动——只有跑一次
-     * `id` 验证 uid=2000(shell) 才能确认。结果异步刷到这个 flow。
+     * 已授权的 Shizuku 服务是否以 shell/root 身份运行。
+     * `pingBinder()` 仅表示 IPC 通道可用；通过官方 getUid() 验证服务身份，
+     * 不额外启动 shell 命令。实际截屏或设置权限仍需分别检查执行结果。
      */
     val shellPrivilegeOk: StateFlow<Boolean> = _shellPrivilegeOk.asStateFlow()
 
@@ -68,8 +68,7 @@ class ShizukuManager @Inject constructor() {
     private fun safePingBinder(): Boolean = try { Shizuku.pingBinder() } catch (t: Throwable) { false }
 
     /**
-     * 验证 Shizuku 是否真正建立了 shell 特权 session。跑 `id` 命令读 stdout，看 uid=2000(shell)。
-     * 未配对（Shizuku 进程在但没 ADB / root 启动过）时拿不到 shell uid——这是 [pingBinder] 检测不到的情形。
+     * 检查 Binder、应用授权和服务 UID；不通过额外子进程探测。
      */
     suspend fun verifyShellPrivilegeAsync() = withContext(Dispatchers.IO) {
         verifyMutex.withLock {
@@ -78,14 +77,9 @@ class ShizukuManager @Inject constructor() {
                 _binderAlive.value = binderAlive
                 if (!binderAlive) return@runCatching false
                 if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) return@runCatching false
-                val process = invokeNewProcessReflective(arrayOf("id")) ?: return@runCatching false
-                val inStream = process.javaClass.getMethod("getInputStream").invoke(process) as java.io.InputStream
-                val stdout = inStream.use { String(it.readBytes(), Charsets.US_ASCII) }
-                val ec = runCatching {
-                    process.javaClass.getMethod("waitFor").invoke(process) as Int
-                }.getOrElse { -1 }
-                val pass = ec == 0 && ("uid=2000" in stdout || "(shell)" in stdout || "uid=0" in stdout)
-                if (!pass) Timber.w("[shizuku-verify] privilege check failed: exit=%d stdout=%s", ec, stdout.take(200))
+                val uid = Shizuku.getUid()
+                val pass = uid == 2000 || uid == 0
+                if (!pass) Timber.w("[shizuku-verify] privilege check failed: uid=%d", uid)
                 pass
             }.getOrElse { t ->
                 Timber.w(t, "[shizuku-verify] verify threw")
@@ -103,6 +97,48 @@ class ShizukuManager @Inject constructor() {
         if (!requestPermission()) return false
         verifyShellPrivilegeAsync()
         return shellPrivilegeOk.value
+    }
+
+    /**
+     * Enables this app's SYSTEM_ALERT_WINDOW app-op with the already authorized shell identity.
+     * The caller must still verify [android.provider.Settings.canDrawOverlays], because an OEM may
+     * accept the command without making the public permission state effective.
+     */
+    suspend fun grantOverlayPermission(packageName: String, user: String = "current"): Boolean = withContext(Dispatchers.IO) {
+        if (!isServiceRunning() || !hasPermission() || !shellPrivilegeOk.value) {
+            return@withContext false
+        }
+        executePermissionCommand(overlayPermissionAppOpsCommand(packageName, user)) != null
+    }
+
+    /** Only settings get/put for this app's accessibility configuration; never log service lists. */
+    internal suspend fun executeSettingsCommand(command: Array<String>): String? = withContext(Dispatchers.IO) {
+        require(command.firstOrNull() == "settings")
+        executePermissionCommand(command)
+    }
+
+    private suspend fun executePermissionCommand(command: Array<String>): String? {
+        if (!isServiceRunning() || !hasPermission() || !shellPrivilegeOk.value) return null
+        try {
+            val process = invokeNewProcessReflective(command) as? Process ?: return null
+            val result = runPermissionCommand(process)
+            return when {
+                result == null -> {
+                    Timber.w("[shizuku-permissions] %s command timed out", command.first())
+                    null
+                }
+                result.exitCode != 0 -> {
+                    Timber.w("[shizuku-permissions] %s command failed exit=%d", command.first(), result.exitCode)
+                    null
+                }
+                else -> result.output
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            Timber.w(error, "[shizuku-permissions] %s command failed", command.first())
+            return null
+        }
     }
 
     /** 反射调用 `Shizuku.newProcess`——同 [com.gameocr.app.capture.ShizukuScreenshotter.invokeNewProcess]。
@@ -142,7 +178,7 @@ class ShizukuManager @Inject constructor() {
                 override fun onRequestPermissionResult(requestCode: Int, grantResult: Int) {
                     if (requestCode != PERMISSION_REQUEST_CODE) return
                     Shizuku.removeRequestPermissionResultListener(this)
-                    cont.resume(grantResult == PackageManager.PERMISSION_GRANTED)
+                    if (cont.isActive) cont.resume(grantResult == PackageManager.PERMISSION_GRANTED)
                 }
             }
             Shizuku.addRequestPermissionResultListener(listener)
@@ -150,11 +186,12 @@ class ShizukuManager @Inject constructor() {
                 Shizuku.requestPermission(PERMISSION_REQUEST_CODE)
             } catch (t: Throwable) {
                 Shizuku.removeRequestPermissionResultListener(listener)
-                cont.resume(false)
+                if (cont.isActive) cont.resume(false)
             }
             cont.invokeOnCancellation {
                 Shizuku.removeRequestPermissionResultListener(listener)
             }
         }
     }
+
 }

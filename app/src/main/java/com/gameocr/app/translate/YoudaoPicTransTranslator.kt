@@ -92,10 +92,10 @@ class YoudaoPicTransTranslator @Inject constructor(
                     }.getOrNull() ?: return@use TestResult(false, "解析失败: ${raw.take(200)}")
                     // 错误码参考有道公共错误码表，挑常用的；其余按 fail 兜底
                     when (parsed.errorCode) {
-                        "0" -> TestResult(true, "OK · 有道图翻可用")
+                        "0" -> TestResult(true, "OK 有道图翻可用")
                         // 401 账户欠费 / 411 访问频率受限 / 412 长 query 频率受限：服务侧拒绝
                         // 但说明 key 已通过认证，记为成功
-                        "411", "412" -> TestResult(true, "OK · key 有效，当前触发限流 (errorCode=${parsed.errorCode})")
+                        "411", "412" -> TestResult(true, "OK key 有效，当前触发限流 (errorCode=${parsed.errorCode})")
                         "401" -> TestResult(false, "账户欠费 (errorCode=401)")
                         "108", "109", "202", "203", "205" ->
                             TestResult(false, "AppKey/Secret 无效或签名错 (errorCode=${parsed.errorCode})")

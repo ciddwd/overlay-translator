@@ -65,4 +65,34 @@ class SakuraGenerationBudgetPolicyTest {
             assertEquals(case.name, case.expectedAdaptive, actual.adaptive)
         }
     }
+
+    @Test
+    fun requiresPreSplit_tableDriven_detectsCapacityBeforeGeneration() {
+        data class Case(
+            val name: String,
+            val configuredMax: Int,
+            val sourceTokens: Int,
+            val lineCount: Int,
+            val expected: Boolean,
+        )
+
+        listOf(
+            Case("observed fourteen-line batch exceeds 256", 256, 143, 14, true),
+            Case("smaller seven-line half fits", 256, 72, 7, false),
+            Case("single line cannot be split", 64, 500, 1, false),
+            Case("exact boundary fits", 64, 24, 3, false),
+            Case("one over boundary splits", 63, 24, 3, true),
+            Case("invalid negative input is normalized", 64, -1, 2, false),
+        ).forEach { case ->
+            assertEquals(
+                case.name,
+                case.expected,
+                SakuraGenerationBudgetPolicy.requiresPreSplit(
+                    configuredMaxNewTokens = case.configuredMax,
+                    sourceTokens = case.sourceTokens,
+                    lineCount = case.lineCount,
+                ),
+            )
+        }
+    }
 }

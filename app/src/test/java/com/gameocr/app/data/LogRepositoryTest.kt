@@ -7,7 +7,34 @@ import org.junit.Test
 class LogRepositoryTest {
 
     @Test
-    fun verbosePolicy_tableDriven_enablesOnlyDebugOrExplicitDeveloperDiagnostics() {
+    fun releaseAndDebug_tableDriven_keepOcrTranslationTimingsAndFailureDetails() {
+        for (debug in listOf(false, true)) {
+            for (developerOptions in listOf(false, true)) {
+                val label = "debug=$debug developerOptions=$developerOptions"
+                val repo = LogRepository().apply {
+                    verboseEnabled = RuntimeLogPolicy.verboseEnabled(debug, developerOptions)
+                    configureVerbose(developerOptions)
+                }
+                repo.info(LogRepository.Category.OCR, "recognized source", elapsedMs = 25L)
+                repo.pair(LogRepository.Category.TRANSLATE, "source", "translation", elapsedMs = 80L)
+                repo.warn(LogRepository.Category.OCR, "low confidence")
+                repo.error(LogRepository.Category.TRANSLATE, "request failed", IllegalStateException("HTTP 429"))
+
+                val entries = repo.entries.value
+                assertEquals(label, 4, entries.size)
+                assertEquals(label, "recognized source", entries[0].message)
+                assertEquals(label, 25L, entries[0].elapsedMs)
+                assertEquals(label, "source", entries[1].source)
+                assertEquals(label, "translation", entries[1].translated)
+                assertEquals(label, 80L, entries[1].elapsedMs)
+                assertEquals(label, LogRepository.Level.WARN, entries[2].level)
+                assertEquals(label, "request failed: IllegalStateException: HTTP 429", entries[3].message)
+            }
+        }
+    }
+
+    @Test
+    fun verbosePolicy_tableDriven_keepsInAppLogsForEveryBuildType() {
         data class Case(
             val name: String,
             val debugBuild: Boolean,
@@ -16,7 +43,7 @@ class LogRepositoryTest {
         )
 
         listOf(
-            Case("normal release", debugBuild = false, developerOptions = false, expected = false),
+            Case("normal release", debugBuild = false, developerOptions = false, expected = true),
             Case("release developer diagnostics", debugBuild = false, developerOptions = true, expected = true),
             Case("debug default", debugBuild = true, developerOptions = false, expected = true),
             Case("debug developer diagnostics", debugBuild = true, developerOptions = true, expected = true),

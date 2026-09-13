@@ -7,6 +7,29 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TextPixelMaskBuilderTest {
+    @Test
+    fun build_tableDriven_keepsDetectedInkAcrossCompleteSemanticTextRegion() {
+        for (scale in listOf(1, 2)) {
+            val width = WIDTH * scale
+            val height = HEIGHT * scale
+            val candidate = BooleanArray(width * height)
+            val first = IntRect(22, 15, 26, 28).scaled(scale)
+            val missedColumn = IntRect(42, 15, 46, 32).scaled(scale)
+            val outside = IntRect(67, 14, 72, 38).scaled(scale)
+            listOf(first, missedColumn, outside).forEach { fill(candidate, it, width) }
+            val result = TextPixelMaskBuilder.build(width, height, candidate, listOf(
+                DelayedTextEraseMaskBuilder.ConfirmedBlock(
+                    0, listOf(IntRect(20, 12, 30, 35).scaled(scale)),
+                    semanticBounds = IntRect(18, 10, 50, 38).scaled(scale),
+                ),
+            )).masks.single()
+            assertEquals(first.width * first.height + missedColumn.width * missedColumn.height, result.selectedCorePixels)
+            val missedIndex = (missedColumn.top - result.bounds.top) * result.bounds.width + missedColumn.left - result.bounds.left
+            assertTrue(result.corePixels[missedIndex])
+            assertTrue(result.supportPixels[missedIndex])
+        }
+    }
+
 
     @Test
     fun build_tableDriven_extractsOnlyGeometryRelatedTextComponents() {
@@ -125,6 +148,39 @@ class TextPixelMaskBuilderTest {
                 mask.supportPixels.first(),
             )
         }
+    }
+
+    @Test
+    fun build_keepsSemanticBlockGeometrySeparateFromDetectorSupport() {
+        val source = IntRect(30, 20, 40, 34)
+        val semantic = IntRect(16, 10, 58, 48)
+        val candidate = BooleanArray(WIDTH * HEIGHT)
+        fill(candidate, IntRect(33, 23, 37, 31))
+
+        val mask = TextPixelMaskBuilder.build(
+            width = WIDTH,
+            height = HEIGHT,
+            candidateTextMask = candidate,
+            confirmedBlocks = listOf(
+                DelayedTextEraseMaskBuilder.ConfirmedBlock(
+                    blockIndex = 0,
+                    sourceBoxes = listOf(source),
+                    semanticBounds = semantic,
+                ),
+            ),
+        ).masks.single()
+
+        assertTrue(mask.bounds.left <= semantic.left)
+        assertTrue(mask.bounds.top <= semantic.top)
+        assertTrue(mask.bounds.right >= semantic.right)
+        assertTrue(mask.bounds.bottom >= semantic.bottom)
+        val semanticCorner = (semantic.top - mask.bounds.top) * mask.bounds.width +
+            semantic.left - mask.bounds.left
+        assertTrue(mask.semanticPixels[semanticCorner])
+        assertFalse("semantic geometry must not become detector support", mask.supportPixels[semanticCorner])
+        val expandedSemanticCorner = (semantic.top - 2 - mask.bounds.top) * mask.bounds.width +
+            semantic.left - 2 - mask.bounds.left
+        assertTrue("semantic completion includes a scale-derived safety edge", mask.semanticPixels[expandedSemanticCorner])
     }
 
     private fun IntRect.scaled(scale: Int) = IntRect(

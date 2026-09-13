@@ -7,6 +7,61 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LocalTextBackgroundRepairerTest {
+    @Test
+    fun repair_tableDriven_erasesDisconnectedInkInExpandedTextExtent() {
+        for (darkText in listOf(false, true)) {
+            val bg = gray(if (darkText) 248 else 18)
+            val ink = gray(if (darkText) 8 else 245)
+            val erase = centeredMask()
+            val support = BooleanArray(SIZE).apply { fill(this, IntRect(11, 11, 22, 22)) }
+            val semantic = BooleanArray(SIZE).apply { fill(this, IntRect(3, 3, 29, 29)) }
+            val source = IntArray(SIZE) { bg }.apply {
+                erase.indices.filter { erase[it] }.forEach { this[it] = ink }
+                // Completely disconnected from every DBNet pixel.
+                for (y in 6..9) for (x in 25..26) this[y * WIDTH + x] = ink
+                // A nearby balloon border prevents blanket rectangle completion.
+                for (i in 2..29) {
+                    this[2 * WIDTH + i] = ink
+                    this[29 * WIDTH + i] = ink
+                    this[i * WIDTH + 2] = ink
+                    this[i * WIDTH + 29] = ink
+                }
+            }
+            val block = LocalTextBackgroundRepairer.repair(WIDTH, HEIGHT, source, listOf(
+                blockMask(erase, erase, support, semantic),
+            )).blocks.single()
+            assertTrue(block.displayable)
+            assertFalse("border blocks blanket fill", block.completion.reliable)
+            assertTrue("detached ink recovered from image", block.regionForegroundAddedPixels >= 8)
+            assertTrue(block.residualRepairAttempted)
+            assertEquals(0, block.residualPixels)
+            for (y in 6..9) for (x in 25..26) {
+                assertEquals(bg, requireNotNull(block.patchPixels)[y * WIDTH + x])
+            }
+            assertEquals(block.requiredErasePixels, block.repairedRequiredErasePixels)
+            assertEquals("balloon border preserved", 0, requireNotNull(block.patchPixels)[2 * WIDTH + 10])
+        }
+    }
+
+    @Test
+    fun repair_tableDriven_completeGlyphPatchDoesNotHaveToPaintBackgroundGaps() {
+        for (lightText in listOf(false, true)) {
+            val glyphs = centeredMask()
+            val semantic = BooleanArray(SIZE).apply { fill(this, IntRect(5, 5, 28, 28)) }
+            val source = IntArray(SIZE) { index ->
+                gray(if ((index % WIDTH + index / WIDTH) % 2 == 0) 40 else 215)
+            }.apply {
+                glyphs.indices.filter { glyphs[it] }.forEach { this[it] = gray(if (lightText) 250 else 5) }
+            }
+            val result = LocalTextBackgroundRepairer.repair(
+                WIDTH, HEIGHT, source, listOf(blockMask(glyphs, glyphs, glyphs, semantic)),
+            ).blocks.single()
+            assertEquals(0, result.residualPixels)
+            assertTrue("glyphs repaired; unpainted background is not missing ink", result.displayable)
+            assertEquals("distant artwork remains untouched", 0, requireNotNull(result.patchPixels)[5 * WIDTH + 5])
+        }
+    }
+
 
     @Test
     fun repairTiming_tableDriven_accountsForEveryPipelineShape() {
@@ -80,6 +135,119 @@ class LocalTextBackgroundRepairerTest {
                     else -> assertEquals("${case.name}: pixels outside repair stay transparent", 0, patch[index])
                 }
             }
+        }
+    }
+
+    @Test
+    fun repair_tableDriven_flatBackgroundCompletesOcrSupportWithoutAffectingComplexBackgrounds() {
+        data class Case(
+            val name: String,
+            val source: IntArray,
+            val foreground: Int,
+            val expectedSupportCompletion: Boolean,
+        )
+        val flatBackground = gray(248)
+        val flatSource = IntArray(SIZE) { flatBackground }
+        val complexSource = IntArray(SIZE) { index ->
+            val x = index % WIDTH
+            val y = index / WIDTH
+            gray(if ((x + y) % 2 == 0) 42 else 214)
+        }
+        listOf(
+            Case("light speech bubble", flatSource, gray(8), true),
+            Case("busy illustration", complexSource, gray(8), false),
+        ).forEach { case ->
+            val erase = centeredMask()
+            val support = BooleanArray(SIZE).apply { fill(this, IntRect(8, 8, 25, 25)) }
+            erase.indices.filter { erase[it] }.forEach { case.source[it] = case.foreground }
+            val detachedCorner = 8 * WIDTH + 8
+            case.source[detachedCorner] = case.foreground
+
+            val block = LocalTextBackgroundRepairer.repair(
+                imageWidth = WIDTH,
+                imageHeight = HEIGHT,
+                sourceArgb = case.source,
+                masks = listOf(blockMask(erase, erase, support)),
+            ).blocks.single()
+            val patch = requireNotNull(block.patchPixels)
+
+            assertEquals(
+                case.name,
+                case.expectedSupportCompletion,
+                patch[detachedCorner] != 0,
+            )
+            if (case.expectedSupportCompletion) {
+                assertEquals(case.name, flatBackground, patch[detachedCorner])
+            }
+        }
+    }
+
+    @Test
+    fun repair_tableDriven_flatCompletionIsOptionalButEraseCoverageIsRequired() {
+        data class Case(
+            val name: String,
+            val source: IntArray,
+            val expectedFlatCompletion: Boolean,
+        )
+        val erase = centeredMask()
+        val support = BooleanArray(SIZE).apply { fill(this, IntRect(10, 10, 23, 23)) }
+        val semantic = BooleanArray(SIZE).apply { fill(this, IntRect(6, 6, 27, 27)) }
+        val flat = IntArray(SIZE) { gray(248) }.apply {
+            erase.indices.filter { erase[it] }.forEach { this[it] = gray(8) }
+        }
+        val complex = IntArray(SIZE) { index ->
+            val x = index % WIDTH
+            val y = index / WIDTH
+            gray(if ((x + y) % 2 == 0) 24 else 230)
+        }.apply {
+            erase.indices.filter { erase[it] }.forEach { this[it] = gray(8) }
+        }
+
+        listOf(
+            Case("flat bubble publishes verified semantic completion", flat, true),
+            Case("complex artwork keeps unmasked background intact", complex, false),
+        ).forEach { case ->
+            val block = LocalTextBackgroundRepairer.repair(
+                imageWidth = WIDTH,
+                imageHeight = HEIGHT,
+                sourceArgb = case.source,
+                masks = listOf(blockMask(erase, erase, support, semantic)),
+            ).blocks.single()
+
+            assertTrue(case.name, block.displayable)
+            assertEquals(case.name, block.requiredErasePixels, block.repairedRequiredErasePixels)
+            if (case.expectedFlatCompletion) {
+                assertTrue(case.name, block.completion.reliable)
+                assertTrue(case.name, block.repairedSemanticPixels >= semantic.count { it } * 0.98f)
+                assertTrue(
+                    case.name,
+                    requireNotNull(block.patchPixels)[6 * WIDTH + 6] != 0,
+                )
+            } else {
+                assertFalse(case.name, block.completion.reliable)
+                assertEquals(case.name, 0, requireNotNull(block.patchPixels)[6 * WIDTH + 6])
+            }
+        }
+    }
+
+    @Test
+    fun repair_tableDriven_neverMarksAnIncompleteGlyphPatchDisplayable() {
+        val erase = centeredMask()
+        val source = IntArray(SIZE) { gray(248) }.apply {
+            erase.indices.filter { erase[it] }.forEach { this[it] = gray(8) }
+        }
+        val complete = LocalTextBackgroundRepairer.repair(
+            WIDTH, HEIGHT, source, listOf(blockMask(erase)),
+        ).blocks.single()
+        assertTrue(complete.displayable)
+        listOf(
+            "residual ink" to complete.copy(residualPixels = 1),
+            "missing target pixel" to complete.copy(repairedRequiredErasePixels = complete.requiredErasePixels - 1),
+            "component rejected" to complete.copy(acceptedComponentCount = 0),
+            "no patch" to complete.copy(patchPixels = null),
+        ).forEach { (name, partial) ->
+            assertFalse(name, partial.displayable)
+            assertFalse(name, partial.fullyRepaired)
         }
     }
 
@@ -189,17 +357,17 @@ class LocalTextBackgroundRepairerTest {
     }
 
     @Test
-    fun repair_tableDriven_marksSamePolarityPixelsOutsideCoverageAsResidual() {
+    fun repair_tableDriven_repairsRelatedResidualPixelsInSecondPass() {
         data class Case(
             val name: String,
             val background: Int,
             val foreground: Int,
             val missedInsideSupport: Boolean,
-            val expectedResidual: Boolean,
+            val expectedSecondPass: Boolean,
         )
         listOf(
-            Case("dark corner on light bubble", gray(248), gray(8), true, true),
-            Case("light corner on dark panel", gray(18), gray(245), true, true),
+            Case("dark corner on light bubble", gray(248), gray(8), true, false),
+            Case("light corner on dark panel", gray(18), gray(245), true, false),
             Case("foreground outside OCR support", gray(248), gray(8), false, false),
         ).forEach { case ->
             val erase = centeredMask()
@@ -216,8 +384,14 @@ class LocalTextBackgroundRepairerTest {
                 masks = listOf(blockMask(erase, erase, support)),
             ).blocks.single()
 
-            assertEquals(case.name, case.expectedResidual, block.residualPixels > 0)
-            assertEquals(case.name, !case.expectedResidual, block.fullyRepaired)
+            assertEquals(case.name, case.expectedSecondPass, block.residualRepairAttempted)
+            assertEquals(case.name, 0, block.residualPixels)
+            assertTrue(case.name, block.fullyRepaired)
+            assertEquals(
+                case.name,
+                case.missedInsideSupport,
+                requireNotNull(block.patchPixels)[16 * WIDTH + missedX] != 0,
+            )
             assertTrue("${case.name}: diagnostics do not suppress a valid patch", block.publishable)
         }
     }
@@ -226,6 +400,7 @@ class LocalTextBackgroundRepairerTest {
         mask: BooleanArray,
         core: BooleanArray = mask,
         support: BooleanArray = mask,
+        semantic: BooleanArray = support,
     ) = TextPixelMaskBuilder.BlockMask(
         blockIndex = 0,
         bounds = IntRect(0, 0, WIDTH, HEIGHT),
@@ -233,6 +408,7 @@ class LocalTextBackgroundRepairerTest {
         corePixels = core,
         selectedCorePixels = core.count { it },
         supportPixels = support,
+        semanticPixels = semantic,
     )
 
     private fun centeredMask() = BooleanArray(SIZE).apply {

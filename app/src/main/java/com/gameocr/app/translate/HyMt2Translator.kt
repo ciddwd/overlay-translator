@@ -3,6 +3,7 @@ package com.gameocr.app.translate
 import com.gameocr.app.data.Settings
 import com.gameocr.app.llm.LlamaEngineHolder
 import com.gameocr.app.llm.LlmModelKind
+import com.gameocr.app.util.RuntimePerformanceDiagnostics
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -11,7 +12,8 @@ import javax.inject.Singleton
 class HyMt2Translator @Inject constructor(
     holder: LlamaEngineHolder,
     cache: TranslationCache,
-) : LocalLlamaTranslator(holder, cache) {
+    performanceDiagnostics: RuntimePerformanceDiagnostics,
+) : LocalLlamaTranslator(holder, cache, performanceDiagnostics) {
 
     override val modelKind = LlmModelKind.HY_MT2_1_8B_Q4_K_M
 

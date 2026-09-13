@@ -234,7 +234,7 @@ class DeepLTranslator @Inject constructor(
                     val overallOk = deeplxResult.success || officialResult.success
                     TestResult(
                         overallOk,
-                        "[deeplx] ${deeplxResult.message}  ·  [official] ${officialResult.message}"
+                        "[deeplx] ${deeplxResult.message} [official] ${officialResult.message}"
                     )
                 }
             }

@@ -83,14 +83,14 @@ android {
         getByName("debug") {
             externalNativeBuild {
                 cmake {
-                    arguments += "-DGAMEOCR_NATIVE_LOG_MIN_LEVEL=2"
+                    arguments += "-DGAMEOCR_NATIVE_LOGCAT=ON"
                 }
             }
         }
         getByName("release") {
             externalNativeBuild {
                 cmake {
-                    arguments += "-DGAMEOCR_NATIVE_LOG_MIN_LEVEL=6"
+                    arguments += "-DGAMEOCR_NATIVE_LOGCAT=OFF"
                 }
             }
         }

@@ -11,6 +11,7 @@ import java.io.Closeable
 import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.tasks.await
@@ -29,13 +30,22 @@ fun interface MlKitDownloadedLanguageProvider {
     suspend fun getDownloadedLanguages(): Set<String>
 }
 
+fun interface MlKitLanguageModelDeleter {
+    suspend fun deleteDownloadedLanguage(language: String)
+}
+
 class GoogleMlKitDownloadedLanguageProvider @Inject constructor() :
-    MlKitDownloadedLanguageProvider {
+    MlKitDownloadedLanguageProvider, MlKitLanguageModelDeleter {
     override suspend fun getDownloadedLanguages(): Set<String> =
         RemoteModelManager.getInstance()
             .getDownloadedModels(TranslateRemoteModel::class.java)
             .await()
             .mapTo(mutableSetOf()) { it.language }
+
+    override suspend fun deleteDownloadedLanguage(language: String) {
+        val model = TranslateRemoteModel.Builder(language).build()
+        RemoteModelManager.getInstance().deleteDownloadedModel(model).await()
+    }
 }
 
 class GoogleMlKitTranslationClientFactory @Inject constructor() :
@@ -74,6 +84,7 @@ class GoogleMlKitTranslationClientFactory @Inject constructor() :
 class MlKitOnDeviceTranslator @Inject constructor(
     private val clientFactory: MlKitTranslationClientFactory,
     private val downloadedLanguageProvider: MlKitDownloadedLanguageProvider,
+    private val modelDeleter: MlKitLanguageModelDeleter,
     private val cache: TranslationCache,
 ) : Translator {
     override val prefersBatch: Boolean = true
@@ -157,19 +168,25 @@ class MlKitOnDeviceTranslator @Inject constructor(
             source = probeText,
             settings = settings.copy(sourceLang = source, targetLang = target),
         ).orEmpty()
-        TestResult(true, "OK · $probeText → $translated")
+        TestResult(true, "OK $probeText → $translated")
     }.getOrElse { error ->
         TestResult(false, error.message ?: error.javaClass.simpleName)
     }
 
     /** Explicit user action from Settings; downloads models without translating any text. */
-    suspend fun ensureLanguagePairModelsDownloaded(sourceTag: String, targetTag: String) {
+    suspend fun ensureLanguagePairModelsDownloaded(
+        sourceTag: String,
+        targetTag: String,
+        timeoutSeconds: Int,
+    ) {
         val sourceLanguage = MlKitLanguagePolicy.resolveConfiguredSource(sourceTag)
         val targetLanguage = MlKitLanguagePolicy.resolveTarget(targetTag)
         if (sourceLanguage == targetLanguage) return
 
-        createTranslationClient(sourceLanguage, targetLanguage).use { client ->
-            downloadModels(client)
+        MlKitModelDownloadPolicy.awaitDownload(timeoutSeconds) {
+            createTranslationClient(sourceLanguage, targetLanguage).use { client ->
+                downloadModels(client)
+            }
         }
     }
 
@@ -181,6 +198,14 @@ class MlKitOnDeviceTranslator @Inject constructor(
 
     suspend fun getDownloadedLanguageModels(): Set<String> =
         downloadedLanguageProvider.getDownloadedLanguages()
+
+    /** Delete exactly the selected source model, never the pair's target model. */
+    suspend fun deleteSourceLanguageModel(sourceTag: String, targetTag: String) {
+        val source = MlKitSourceModelPolicy.deletableSource(
+            sourceTag, targetTag, getDownloadedLanguageModels(),
+        ) ?: return
+        modelDeleter.deleteDownloadedLanguage(source)
+    }
 
     /** Returns canonical ML Kit language tags for models still missing from this device. */
     suspend fun getMissingLanguageModels(sourceTag: String, targetTag: String): Set<String> {
@@ -225,6 +250,8 @@ class MlKitOnDeviceTranslator @Inject constructor(
     private suspend fun downloadModels(client: MlKitTranslationClient) {
         try {
             client.downloadModelIfNeeded()
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: Exception) {
             throw TranslationException(
                 "ML Kit 语言模型下载失败: ${error.message ?: error.javaClass.simpleName}",
@@ -280,10 +307,10 @@ internal object MlKitLanguagePolicy {
     private fun requireSupported(normalizedTag: String, role: String): String {
         val canonicalTag = canonicalize(normalizedTag)
         if (canonicalTag !in supportedLanguageTags) {
-            throw TranslationException("ML Kit 不支持${role}语言: $normalizedTag")
+            throw TranslationException("ML Kit 不支持${role}语言: ${com.gameocr.app.data.languageDisplayName(normalizedTag)}")
         }
         return TranslateLanguage.fromLanguageTag(canonicalTag)
-            ?: throw TranslationException("ML Kit 不支持${role}语言: $normalizedTag")
+            ?: throw TranslationException("ML Kit 不支持${role}语言: ${com.gameocr.app.data.languageDisplayName(normalizedTag)}")
     }
 
     private fun canonicalize(normalizedTag: String): String =

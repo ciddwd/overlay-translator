@@ -9,41 +9,71 @@ import timber.log.Timber
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
 
+internal enum class ShizukuCaptureRoute { ACCESSIBILITY, SHELL, UNAVAILABLE }
+
+internal fun resolveShizukuCaptureRoute(
+    accessibilityReady: Boolean,
+    shizukuReady: Boolean,
+): ShizukuCaptureRoute = when {
+    accessibilityReady -> ShizukuCaptureRoute.ACCESSIBILITY
+    shizukuReady -> ShizukuCaptureRoute.SHELL
+    else -> ShizukuCaptureRoute.UNAVAILABLE
+}
+
 /**
- * 基于 Shizuku 的截屏实现（experimental）：通过反射调用 Shizuku 的 hidden `newProcess`
- * API 在 shell uid 下执行 raw `screencap`，不兼容时回退到 `screencap -p` PNG。
+ * Uses the direct accessibility screenshot API whenever the Shizuku-assisted service is ready.
+ * Raw shell `screencap` remains the compatibility fallback, with PNG as its final fallback.
  *
  * 优势：
  * - 免 MediaProjection 每次系统授权窗（Android 14+ 强制弹）
  *
  * 代价：
  * - 反射 hidden API，未来 Shizuku 大版本变动可能失效
- * - 每次截屏 ~150-300ms，帧率上限 ~5 FPS，仅适合"按需触发"
- *
- * 生产路径建议改为 ShizukuUserService + aidl，本类作为最小可用 PoC。
+ * - shell fallback 每次截屏 ~150-300ms，帧率上限 ~5 FPS，仅适合"按需触发"
  */
 class ShizukuScreenshotter : Screenshotter {
 
     private val released = AtomicBoolean(false)
+    private val accessibilityFastPath = AccessibilityScreenshotter()
+
+    private fun shizukuReady(): Boolean =
+        runCatching { Shizuku.pingBinder() }.getOrDefault(false)
 
     override val isReady: Boolean
-        get() = !released.get() && runCatching { Shizuku.pingBinder() }.getOrDefault(false)
+        get() = !released.get() && resolveShizukuCaptureRoute(
+            accessibilityReady = accessibilityFastPath.isReady,
+            shizukuReady = shizukuReady(),
+        ) != ShizukuCaptureRoute.UNAVAILABLE
+
+    override val minimumLoopObservationIntervalMs: Long
+        get() = MIN_LOOP_OBSERVATION_INTERVAL_MS
 
     override suspend fun capture(): Bitmap? = withContext(Dispatchers.IO) {
-        if (!isReady) {
-            Timber.w("[shizuku-cap] skip: not ready (released=%s, pingBinder=%s)",
+        val shellReady = shizukuReady()
+        val route = if (released.get()) ShizukuCaptureRoute.UNAVAILABLE else {
+            resolveShizukuCaptureRoute(accessibilityFastPath.isReady, shellReady)
+        }
+        if (route == ShizukuCaptureRoute.UNAVAILABLE) {
+            Timber.w(
+                "[shizuku-cap] skip: not ready (released=%s, accessibility=%s, pingBinder=%s)",
                 released.get(),
-                runCatching { Shizuku.pingBinder() }.getOrDefault(false))
+                accessibilityFastPath.isReady,
+                shellReady,
+            )
             return@withContext null
+        }
+        if (route == ShizukuCaptureRoute.ACCESSIBILITY) {
+            accessibilityFastPath.capture()?.let { bitmap ->
+                Timber.d("[shizuku-cap] accessibility fast path ok %dx%d", bitmap.width, bitmap.height)
+                return@withContext bitmap
+            }
+            Timber.w("[shizuku-cap] accessibility fast path failed; trying shell fallback")
+            if (!shellReady) return@withContext null
         }
         try {
             // Raw screencap avoids vendor-specific PNG stream corruption. Keep PNG as a
             // compatibility fallback for devices whose raw header or pixel format is unknown.
-            val rawBitmap = executeScreencap(arrayOf("screencap"), "raw")?.let { bytes ->
-                runCatching { ShizukuRawScreencapDecoder.decode(bytes) }
-                    .onFailure { Timber.w(it, "[shizuku-cap] raw decode threw") }
-                    .getOrNull()
-            }
+            val rawBitmap = executeRawScreencap()
             if (rawBitmap != null) {
                 Timber.d("[shizuku-cap] raw ok %dx%d", rawBitmap.width, rawBitmap.height)
                 return@withContext rawBitmap
@@ -87,17 +117,7 @@ class ShizukuScreenshotter : Screenshotter {
             }.getOrElse { -1 }
             val bytes = out.toByteArray()
             if (exitCode != 0) {
-                val error = runCatching {
-                    val stream = process.javaClass.getMethod("getErrorStream").invoke(process) as java.io.InputStream
-                    stream.use { String(it.readBytes()).take(300) }
-                }.getOrElse { "<no stderr>" }
-                Timber.w(
-                    "[shizuku-cap] %s exit=%d, stdoutBytes=%d, stderr=%s",
-                    format,
-                    exitCode,
-                    bytes.size,
-                    error
-                )
+                logProcessFailure(process, format, exitCode, bytes.size)
                 null
             } else if (bytes.isEmpty()) {
                 Timber.w("[shizuku-cap] %s exit=0 but empty payload", format)
@@ -133,5 +153,85 @@ class ShizukuScreenshotter : Screenshotter {
 
     override fun release() {
         released.set(true)
+        accessibilityFastPath.release()
+    }
+
+    /**
+     * Raw screencap is a full uncompressed frame. Allocate its final buffer from the header once
+     * instead of growing a ByteArrayOutputStream and copying it again with toByteArray().
+     */
+    private fun executeRawScreencap(): Bitmap? {
+        val process = invokeNewProcess(arrayOf("screencap")) ?: return null
+        return try {
+            val input = process.javaClass.getMethod("getInputStream").invoke(process) as java.io.InputStream
+            val header = ByteArray(RAW_CURRENT_HEADER_BYTES)
+            var total = 0
+            input.use { stream ->
+                while (total < header.size) {
+                    val count = stream.read(header, total, header.size - total)
+                    if (count < 0) break
+                    total += count
+                }
+                val probe = ShizukuRawScreencapDecoder.probeHeader(header.copyOf(total))
+                    ?: return null
+                val currentFrameBytes = RAW_CURRENT_HEADER_BYTES + probe.pixelByteCount
+                val frame = ByteArray(currentFrameBytes)
+                header.copyInto(frame, endIndex = total)
+                while (total < frame.size) {
+                    val count = stream.read(frame, total, frame.size - total)
+                    if (count < 0) break
+                    total += count
+                }
+                val discard = ByteArray(1024)
+                while (stream.read(discard) >= 0) Unit
+
+                val exitCode = runCatching {
+                    process.javaClass.getMethod("waitFor").invoke(process) as Int
+                }.getOrElse { -1 }
+                if (exitCode != 0) {
+                    logProcessFailure(process, "raw", exitCode, total)
+                    return null
+                }
+                val legacyFrameBytes = RAW_LEGACY_HEADER_BYTES + probe.pixelByteCount
+                val exactFrame = when (total) {
+                    currentFrameBytes -> frame
+                    legacyFrameBytes -> frame.copyOf(total)
+                    else -> {
+                        Timber.w(
+                            "[shizuku-cap] raw size mismatch bytes=%d expected=%d or %d",
+                            total,
+                            currentFrameBytes,
+                            legacyFrameBytes,
+                        )
+                        return null
+                    }
+                }
+                runCatching { ShizukuRawScreencapDecoder.decode(exactFrame) }
+                    .onFailure { Timber.w(it, "[shizuku-cap] raw decode threw") }
+                    .getOrNull()
+            }
+        } finally {
+            runCatching { process.javaClass.getMethod("destroy").invoke(process) }
+        }
+    }
+
+    private fun logProcessFailure(process: Any, format: String, exitCode: Int, stdoutBytes: Int) {
+        val error = runCatching {
+            val stream = process.javaClass.getMethod("getErrorStream").invoke(process) as java.io.InputStream
+            stream.use { String(it.readBytes()).take(300) }
+        }.getOrElse { "<no stderr>" }
+        Timber.w(
+            "[shizuku-cap] %s exit=%d, stdoutBytes=%d, stderr=%s",
+            format,
+            exitCode,
+            stdoutBytes,
+            error,
+        )
+    }
+
+    private companion object {
+        const val MIN_LOOP_OBSERVATION_INTERVAL_MS = 350L
+        const val RAW_LEGACY_HEADER_BYTES = 12
+        const val RAW_CURRENT_HEADER_BYTES = 16
     }
 }

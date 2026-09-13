@@ -7,6 +7,7 @@ import com.gameocr.app.data.CrashRecorder
 import com.gameocr.app.data.LogRepository
 import com.gameocr.app.data.SettingsRepository
 import com.gameocr.app.di.PrivateCleartextInterceptor
+import com.gameocr.app.network.ScreenWakeNetworkRecovery
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
@@ -22,6 +23,7 @@ class GameOcrApp : Application(), Configuration.Provider {
     @Inject lateinit var logRepository: LogRepository
     @Inject lateinit var settingsRepository: SettingsRepository
     @Inject lateinit var cleartextInterceptor: PrivateCleartextInterceptor
+    @Inject lateinit var screenWakeNetworkRecovery: ScreenWakeNetworkRecovery
     @Inject lateinit var workerFactory: HiltWorkerFactory
 
     override val workManagerConfiguration: Configuration
@@ -50,6 +52,7 @@ class GameOcrApp : Application(), Configuration.Provider {
         // LogRepository，让用户在日志页就能看到上次为什么挂的。
         CrashRecorder.loadPendingCrashes(this, logRepository)
         CrashRecorder.loadExitReasons(this, logRepository)
+        screenWakeNetworkRecovery.start()
         // 持续把脱敏后的 settings 快照塞给 CrashRecorder，crash 时同步读这个内存值即可，
         // 避免 crash handler 走 DataStore IO 二次 crash。
         appScope.launch {
@@ -90,6 +93,7 @@ class GameOcrApp : Application(), Configuration.Provider {
     }
 
     override fun onTerminate() {
+        screenWakeNetworkRecovery.stop()
         appScope.cancel()
         super.onTerminate()
     }

@@ -148,7 +148,8 @@ object Languages {
 
     /** 按 code 反查名称（跟随当前 context locale）；找不到时返回 code 本身。 */
     fun nameOf(context: Context, code: String): String {
-        val lang = ALL.firstOrNull { it.code.equals(code, ignoreCase = true) } ?: return code
+        val lang = ALL.firstOrNull { it.code.equals(code, ignoreCase = true) }
+            ?: return languageDisplayName(code, context.resources.configuration.locales[0])
         return context.getString(lang.nameRes)
     }
 

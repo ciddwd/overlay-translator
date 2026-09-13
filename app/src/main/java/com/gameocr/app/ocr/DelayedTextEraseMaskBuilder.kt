@@ -17,6 +17,7 @@ internal object DelayedTextEraseMaskBuilder {
     data class ConfirmedBlock(
         val blockIndex: Int,
         val sourceBoxes: List<IntRect>,
+        val semanticBounds: IntRect? = null,
     )
 
     enum class Reason {

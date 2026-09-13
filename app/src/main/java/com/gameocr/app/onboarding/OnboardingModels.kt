@@ -16,6 +16,7 @@ import com.gameocr.app.data.TtsProvider
 import com.gameocr.app.ocr.OcrLanguageCapability
 import com.gameocr.app.translate.MlKitLanguagePolicy
 import java.net.URI
+import java.util.Locale
 
 enum class OnboardingStep {
     WELCOME,
@@ -69,58 +70,98 @@ enum class CloudApiProtocol {
     ANTHROPIC,
 }
 
+enum class CloudApiRegion {
+    MAINLAND_CHINA,
+    INTERNATIONAL,
+}
+
 enum class CloudProvider(
     val displayName: String,
     val baseUrl: String,
-    val model: String,
     val protocol: CloudApiProtocol = CloudApiProtocol.OPENAI,
+    val internationalBaseUrl: String? = null,
+    val sortName: String = displayName,
 ) {
     DEEPSEEK(
         displayName = "DeepSeek",
         baseUrl = "https://api.deepseek.com/v1/",
-        model = "deepseek-v4-flash",
     ),
     KIMI(
         displayName = "Kimi",
         baseUrl = "https://api.moonshot.cn/v1/",
-        model = "kimi-k3",
+        internationalBaseUrl = "https://api.moonshot.ai/v1/",
     ),
     MINIMAX(
         displayName = "MiniMax",
         baseUrl = "https://api.minimaxi.com/v1/",
-        model = "MiniMax-M3",
+        internationalBaseUrl = "https://api.minimax.io/v1/",
     ),
     GLM(
         displayName = "GLM",
         baseUrl = "https://open.bigmodel.cn/api/paas/v4/",
-        model = "glm-5.2",
+        internationalBaseUrl = "https://api.z.ai/api/paas/v4/",
     ),
     MIMO(
         displayName = "MiMo",
         baseUrl = "https://api.xiaomimimo.com/v1/",
-        model = "mimo-v2.5-pro",
     ),
     OPENAI(
         displayName = "OpenAI",
         baseUrl = "https://api.openai.com/v1/",
-        model = "gpt-4.1-mini",
     ),
     CLAUDE(
         displayName = "Claude",
         baseUrl = "https://api.anthropic.com",
-        model = "claude-sonnet-4-5",
         protocol = CloudApiProtocol.ANTHROPIC,
     ),
     GEMINI(
         displayName = "Gemini",
         baseUrl = "https://generativelanguage.googleapis.com/v1beta/openai/",
-        model = "gemini-3.6-flash",
+    ),
+    // Provider entries contain connection information, never a preselected model.
+    MODELSCOPE(
+        displayName = "魔搭 ModelScope",
+        baseUrl = "https://api-inference.modelscope.cn/v1/",
+        sortName = "ModelScope",
+    ),
+    OPENROUTER(
+        displayName = "OpenRouter",
+        baseUrl = "https://openrouter.ai/api/v1/",
+    ),
+    AIHUBMIX(
+        displayName = "AIHubMix",
+        baseUrl = "https://aihubmix.com/v1/",
+    ),
+    AI_302(
+        displayName = "302.AI",
+        baseUrl = "https://api.302ai.cn/v1/",
+        internationalBaseUrl = "https://api.302.ai/v1/",
+    ),
+    SCNET(
+        displayName = "国家超算互联网（SCNet）",
+        baseUrl = "https://api.scnet.cn/api/llm/v1/",
+        sortName = "SCNet",
     ),
     CUSTOM(
         displayName = "Custom",
         baseUrl = "",
-        model = "",
-    ),
+    );
+
+    val supportsRegions: Boolean get() = internationalBaseUrl != null
+
+    fun baseUrlFor(region: CloudApiRegion): String? = when {
+        !supportsRegions -> null
+        region == CloudApiRegion.MAINLAND_CHINA -> baseUrl
+        else -> internationalBaseUrl
+    }
+
+    companion object {
+        // Presentation order only: keep enum identities independent from the UI's ordering.
+        val sortedChoices: List<CloudProvider> = entries.sortedWith(
+            compareBy<CloudProvider> { it == CUSTOM }
+                .thenBy { it.sortName.lowercase(Locale.ROOT) },
+        )
+    }
 }
 
 data class OnboardingDraft(
@@ -134,7 +175,7 @@ data class OnboardingDraft(
     val cloudProvider: CloudProvider = CloudProvider.DEEPSEEK,
     val cloudBaseUrl: String = CloudProvider.DEEPSEEK.baseUrl,
     val cloudApiKey: String = "",
-    val cloudModel: String = CloudProvider.DEEPSEEK.model,
+    val cloudModel: String = "",
     val ttsChoice: OnboardingTtsChoice = OnboardingTtsChoice.DISABLED,
 )
 
@@ -142,6 +183,7 @@ object OnboardingPolicy {
     fun stepsFor(
         draft: OnboardingDraft,
         localLlmSupported: Boolean = true,
+        mangaOcrReady: Boolean = false,
     ): List<OnboardingStep> = buildList {
         add(OnboardingStep.WELCOME)
         add(OnboardingStep.SOURCE_LANGUAGE)
@@ -155,7 +197,9 @@ object OnboardingPolicy {
         add(OnboardingStep.TRANSLATION_METHOD)
         val usesJapaneseMangaOcr = usesJapaneseMangaOcr(draft)
         if (usesJapaneseMangaOcr) {
-            add(OnboardingStep.MANGA_OFFLINE_DOWNLOAD)
+            if (!mangaOcrReady || draft.translationMethod != OnboardingTranslationMethod.CLOUD_LLM) {
+                add(OnboardingStep.MANGA_OFFLINE_DOWNLOAD)
+            }
         } else if (needsRecommendedModelsDownload(draft, localLlmSupported)) {
             add(OnboardingStep.RECOMMENDED_MODELS_DOWNLOAD)
         }
@@ -171,6 +215,28 @@ object OnboardingPolicy {
         }
         add(OnboardingStep.TTS)
         add(OnboardingStep.SUMMARY)
+    }
+
+    /** Resolve against step identities, including when a completed preparation page disappears. */
+    internal fun adjacentStepIndex(
+        draft: OnboardingDraft,
+        localLlmSupported: Boolean,
+        mangaOcrReady: Boolean,
+        currentStep: OnboardingStep,
+        forward: Boolean,
+    ): Int {
+        val allSteps = stepsFor(draft, localLlmSupported)
+        val visibleSteps = stepsFor(draft, localLlmSupported, mangaOcrReady)
+        val currentIndex = allSteps.indexOf(currentStep)
+        require(currentIndex >= 0)
+        val candidates = if (forward) {
+            allSteps.drop(currentIndex + 1)
+        } else {
+            allSteps.take(currentIndex).asReversed()
+        }
+        val target = candidates.firstOrNull { it in visibleSteps }
+            ?: if (forward) visibleSteps.last() else visibleSteps.first()
+        return visibleSteps.indexOf(target)
     }
 
     fun isMlKitPairSupported(sourceLang: String, targetLang: String): Boolean =
@@ -217,6 +283,9 @@ object OnboardingPolicy {
     private fun normalizedSourceLanguage(sourceLang: String): String =
         sourceLang.trim().replace('_', '-')
 
+    private fun isJapaneseSourceLanguage(sourceLang: String): Boolean =
+        normalizedSourceLanguage(sourceLang).substringBefore('-').equals("ja", ignoreCase = true)
+
     private fun mlKitOcrEngineForSourceLanguage(sourceLang: String): OcrEngineKind? {
         val normalized = normalizedSourceLanguage(sourceLang)
         val candidate = when (normalized.substringBefore('-').lowercase()) {
@@ -237,6 +306,14 @@ object OnboardingPolicy {
             paddleModelVersion = PaddleModelVersion.V6_SMALL,
         )
 
+    private fun supportsPaddleV5Korean(sourceLang: String): Boolean =
+        normalizedSourceLanguage(sourceLang).substringBefore('-').equals("ko", ignoreCase = true) &&
+            OcrLanguageCapability.supports(
+                engine = OcrEngineKind.PADDLE_ONNX,
+                sourceCode = normalizedSourceLanguage(sourceLang),
+                paddleModelVersion = PaddleModelVersion.V5_KOREAN,
+            )
+
     /**
      * Everyday use prioritizes ML Kit when it has a recognizer for the source language.
      * If it does not, fall back to PaddleOCR v6 Small.
@@ -250,6 +327,7 @@ object OnboardingPolicy {
             OnboardingUsage.DAILY -> ocrEngineForSourceLanguage(draft.sourceLang)
             OnboardingUsage.MANGA -> when {
                 usesJapaneseMangaOcr(draft) -> OcrEngineKind.MANGA_OCR_JA
+                supportsPaddleV5Korean(draft.sourceLang) -> OcrEngineKind.PADDLE_ONNX
                 supportsPaddleV6Small(draft.sourceLang) -> OcrEngineKind.PADDLE_ONNX
                 else -> mlKitOcrEngineForSourceLanguage(draft.sourceLang)
                     ?: OcrEngineKind.PADDLE_ONNX
@@ -267,9 +345,14 @@ object OnboardingPolicy {
             (localLlmSupported && usesHyMt2MangaTranslation(draft))
 
     fun recommendedPaddleModelVersion(draft: OnboardingDraft): PaddleModelVersion? =
-        when (recommendedOcrEngine(draft)) {
-            OcrEngineKind.PADDLE_ONNX,
-            OcrEngineKind.MANGA_OCR_JA -> PaddleModelVersion.V6_SMALL
+        when {
+            recommendedOcrEngine(draft) == OcrEngineKind.MANGA_OCR_JA ->
+                PaddleModelVersion.V6_SMALL
+            recommendedOcrEngine(draft) == OcrEngineKind.PADDLE_ONNX &&
+                supportsPaddleV5Korean(draft.sourceLang) ->
+                PaddleModelVersion.V5_KOREAN
+            recommendedOcrEngine(draft) == OcrEngineKind.PADDLE_ONNX ->
+                PaddleModelVersion.V6_SMALL
             else -> null
         }
 
@@ -291,12 +374,30 @@ object OnboardingPolicy {
     fun selectCloudProvider(
         draft: OnboardingDraft,
         provider: CloudProvider,
-    ): OnboardingDraft = draft.copy(
+    ): OnboardingDraft = if (provider == draft.cloudProvider) draft else draft.copy(
         cloudProvider = provider,
         cloudBaseUrl = provider.baseUrl,
-        cloudModel = provider.model,
-        cloudApiKey = if (provider == draft.cloudProvider) draft.cloudApiKey else "",
+        cloudModel = "",
+        cloudApiKey = "",
     )
+
+    fun cloudApiRegion(draft: OnboardingDraft): CloudApiRegion? {
+        if (!draft.cloudProvider.supportsRegions) return null
+        val current = normalizedBaseUrl(draft.cloudBaseUrl) ?: return null
+        return CloudApiRegion.entries.firstOrNull {
+            normalizedBaseUrl(draft.cloudProvider.baseUrlFor(it).orEmpty()) == current
+        }
+    }
+
+    fun selectCloudApiRegion(draft: OnboardingDraft, region: CloudApiRegion): OnboardingDraft {
+        val baseUrl = draft.cloudProvider.baseUrlFor(region) ?: return draft
+        if (cloudApiRegion(draft) == region) return draft
+        return draft.copy(
+            cloudBaseUrl = baseUrl,
+            // Regional accounts can use different credentials. Only clear this unsaved form field.
+            cloudApiKey = "",
+        )
+    }
 
     fun fromSettings(settings: Settings): OnboardingDraft {
         val protocol = if (settings.translatorEngine == TranslatorEngine.ANTHROPIC) {
@@ -322,7 +423,9 @@ object OnboardingPolicy {
         val provider = CloudProvider.entries.firstOrNull {
             it != CloudProvider.CUSTOM &&
                 it.protocol == protocol &&
-                normalizedBaseUrl(it.baseUrl) == normalizedBaseUrl(baseUrl)
+                listOfNotNull(it.baseUrl, it.internationalBaseUrl).any { candidate ->
+                    normalizedBaseUrl(candidate) == normalizedBaseUrl(baseUrl)
+                }
         } ?: CloudProvider.CUSTOM
         return OnboardingDraft(
             sourceLang = settings.sourceLang.takeUnless { it == Languages.AUTO.code } ?: "ja",
@@ -445,6 +548,7 @@ object OnboardingPolicy {
             }
         }
         if (draft.usage == OnboardingUsage.MANGA) {
+            val mergeNonJapaneseText = !isJapaneseSourceLanguage(draft.sourceLang)
             val output = when (draft.mangaDirection) {
                 OnboardingMangaDirection.FOLLOW_RECOGNITION -> Triple(
                     true,
@@ -466,7 +570,12 @@ object OnboardingPolicy {
                 renderMode = RenderMode.BLOCKS,
                 overlayStyleMode = OverlayStyleMode.ADAPTIVE,
                 overlayPlacement = OverlayPlacement.OVERLAP,
-                mergeAdjacentBlocks = false,
+                mergeAdjacentBlocks = mergeNonJapaneseText,
+                mergeStrength = if (mergeNonJapaneseText) {
+                    MergeStrength.STANDARD
+                } else {
+                    next.mergeStrength
+                },
                 translationOutputFollowRecognition = output.first,
                 translationOutputLayout = output.second,
                 translationOutputDirection = output.third,
@@ -482,7 +591,18 @@ object OnboardingPolicy {
         return next
     }
 
-    private fun normalizedBaseUrl(value: String): String = value.trim().trimEnd('/').lowercase()
+    private fun normalizedBaseUrl(value: String): String? {
+        val uri = runCatching { URI(value.trim()) }.getOrNull() ?: return null
+        if (uri.host.isNullOrBlank() || uri.rawUserInfo != null ||
+            uri.rawQuery != null || uri.rawFragment != null
+        ) return null
+        val scheme = uri.scheme?.lowercase(Locale.ROOT) ?: return null
+        if (scheme !in setOf("https", "http")) return null
+        val port = uri.port.takeUnless { it == -1 || (scheme == "https" && it == 443) ||
+            (scheme == "http" && it == 80) }?.let { ":$it" }.orEmpty()
+        // Host names are case-insensitive; API paths are not.
+        return "$scheme://${uri.host.lowercase(Locale.ROOT)}$port${uri.rawPath.orEmpty().trimEnd('/')}"
+    }
 
     private fun ensureTrailingSlash(value: String): String =
         if (value.endsWith('/')) value else "$value/"

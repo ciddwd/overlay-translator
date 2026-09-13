@@ -6,6 +6,32 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class MangaOcrTextEvidencePolicyTest {
+    @Test
+    fun filter_tableDriven_recognizedTextExtentSurvivesScaleAndAxisChanges() {
+        // A text detector can see columns that DBNet missed. The recognition crop and the
+        // geometry used by erasure/rendering must describe that same text, not just the members.
+        for (scale in listOf(1, 2)) for (transpose in listOf(false, true)) {
+            fun rect(l: Int, t: Int, r: Int, b: Int): IntRect = if (transpose) {
+                IntRect(t * scale, l * scale, b * scale, r * scale)
+            } else IntRect(l * scale, t * scale, r * scale, b * scale)
+            val member = rect(75, 1844, 141, 2028)
+            val evidence = rect(82, 1850, 229, 2111)
+            val expected = rect(75, 1844, 229, 2111)
+            val result = MangaOcrTextEvidencePolicy.filter(
+                entries = listOf(entry(BubbleModelRegrouper.Source.MODEL, member, members = listOf(0))),
+                textDetections = listOf(textDetection(
+                    MangaBubbleDetectionPostprocessor.Kind.TEXT_BUBBLE,
+                    evidence.left.toFloat(), evidence.top.toFloat(),
+                    evidence.right.toFloat(), evidence.bottom.toFloat(),
+                )),
+                evidenceAvailable = true,
+            )
+            assertEquals("scale=$scale transpose=$transpose crop", expected, result.entries.single().bubble.rect)
+            assertEquals("scale=$scale transpose=$transpose erasure", expected, result.entries.single().bubble.contentRect)
+            assertEquals(listOf(0), result.entries.single().bubble.memberIndices)
+        }
+    }
+
     private data class Case(
         val name: String,
         val entries: List<MangaOcrBubbleGroupingPolicy.Entry>,
@@ -187,7 +213,7 @@ class MangaOcrTextEvidencePolicyTest {
     }
 
     @Test
-    fun filter_modelBubbleEvidence_tightensRecognitionCropWithoutChangingContentBounds() {
+    fun filter_modelBubbleEvidence_updatesTextExtentButNotToTheWholeBubble() {
         val contentBounds = IntRect(40, 50, 100, 150)
         val result = MangaOcrTextEvidencePolicy.filter(
             entries = listOf(
@@ -218,7 +244,7 @@ class MangaOcrTextEvidencePolicyTest {
         )
 
         assertEquals(IntRect(40, 40, 110, 160), result.entries.single().bubble.rect)
-        assertEquals(contentBounds, result.entries.single().bubble.contentRect)
+        assertEquals(IntRect(40, 40, 110, 160), result.entries.single().bubble.contentRect)
         assertEquals(setOf(0), result.textSupportedEntryIndices)
     }
 

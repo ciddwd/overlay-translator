@@ -36,6 +36,26 @@ internal data class AnthropicInputMessage(
 @Serializable
 private data class AnthropicMessageResponse(
     val content: List<AnthropicContentBlock> = emptyList(),
+    val usage: AnthropicUsage? = null,
+)
+
+@Serializable
+internal data class AnthropicUsage(
+    @SerialName("input_tokens") val inputTokens: Int? = null,
+    @SerialName("output_tokens") val outputTokens: Int? = null,
+)
+
+internal fun mergeAnthropicUsage(
+    previous: AnthropicUsage?,
+    next: AnthropicUsage,
+): AnthropicUsage = AnthropicUsage(
+    inputTokens = next.inputTokens ?: previous?.inputTokens,
+    outputTokens = next.outputTokens ?: previous?.outputTokens,
+)
+
+internal data class ParsedAnthropicResponse(
+    val text: String,
+    val usage: AnthropicUsage?,
 )
 
 @Serializable
@@ -71,8 +91,15 @@ private data class AnthropicStreamEnvelope(
     val type: String = "",
     @SerialName("content_block") val contentBlock: AnthropicContentBlock? = null,
     val delta: AnthropicStreamDelta? = null,
+    val message: AnthropicStreamMessage? = null,
+    val usage: AnthropicUsage? = null,
     val error: AnthropicErrorBody? = null,
     @SerialName("request_id") val requestId: String? = null,
+)
+
+@Serializable
+private data class AnthropicStreamMessage(
+    val usage: AnthropicUsage? = null,
 )
 
 @Serializable
@@ -83,6 +110,7 @@ private data class AnthropicStreamDelta(
 
 internal sealed interface AnthropicStreamEvent {
     data class Text(val value: String) : AnthropicStreamEvent
+    data class Metrics(val usage: AnthropicUsage) : AnthropicStreamEvent
     data class Error(val detail: String) : AnthropicStreamEvent
     data class Malformed(val payload: String) : AnthropicStreamEvent
     data object Stop : AnthropicStreamEvent
@@ -159,16 +187,21 @@ internal fun buildAnthropicModelsRequest(settings: Settings): Request = Request.
     .get()
     .build()
 
-internal fun parseAnthropicResponseText(raw: String, json: Json): String? = runCatching {
-    json.decodeFromString<AnthropicMessageResponse>(raw)
-        .content
+internal fun parseAnthropicResponse(raw: String, json: Json): ParsedAnthropicResponse? = runCatching {
+    val response = json.decodeFromString<AnthropicMessageResponse>(raw)
+    val text = response.content
         .asSequence()
         .filter { it.type == "text" }
         .mapNotNull(AnthropicContentBlock::text)
         .joinToString("")
         .trim()
         .takeIf(String::isNotEmpty)
+        ?: return@runCatching null
+    ParsedAnthropicResponse(text = text, usage = response.usage)
 }.getOrNull()
+
+internal fun parseAnthropicResponseText(raw: String, json: Json): String? =
+    parseAnthropicResponse(raw, json)?.text
 
 internal fun parseAnthropicModelIds(raw: String, json: Json): List<String> = runCatching {
     json.decodeFromString<AnthropicModelsResponse>(raw)
@@ -183,6 +216,12 @@ internal fun parseAnthropicStreamEvent(raw: String, json: Json): AnthropicStream
     val event = runCatching { json.decodeFromString<AnthropicStreamEnvelope>(raw) }
         .getOrNull() ?: return AnthropicStreamEvent.Malformed(raw)
     return when (event.type) {
+        "message_start" -> event.message?.usage
+            ?.let(AnthropicStreamEvent::Metrics)
+            ?: AnthropicStreamEvent.Ignore
+        "message_delta" -> event.usage
+            ?.let(AnthropicStreamEvent::Metrics)
+            ?: AnthropicStreamEvent.Ignore
         "content_block_start" -> event.contentBlock
             ?.takeIf { it.type == "text" }
             ?.text

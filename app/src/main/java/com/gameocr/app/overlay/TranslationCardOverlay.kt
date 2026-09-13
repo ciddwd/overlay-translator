@@ -52,7 +52,9 @@ internal fun shouldShowTranslationCardTranslationSection(
     translation: String?,
     wordResult: WordResult?,
     loading: Boolean,
+    textOnly: Boolean = false,
 ): Boolean = when {
+    textOnly -> false
     loading -> true
     wordResult != null && !wordResult.isEmpty() -> false
     else -> !translation.isNullOrBlank()
@@ -108,12 +110,19 @@ class TranslationCardOverlay(
     private var currentTranslation: String = ""
     private var currentWordResult: WordResult? = null
     private var translationLoading: Boolean = false
+    private var textOnlyMode: Boolean = false
     private var translationFinal: Boolean = false
     private var renderWordResult: ((WordResult?) -> Unit)? = null
     private var wordPreviewView: View? = null
     private var sourceWordHighlight: BackgroundColorSpan? = null
+    private var sourceWordLookupEnabled: Boolean = true
 
     fun isShown(): Boolean = rootView != null
+
+    fun setSourceWordLookupEnabled(enabled: Boolean) {
+        sourceWordLookupEnabled = enabled
+        if (!enabled) dismissEnglishWordPreview()
+    }
 
     /** 立即关闭已显示的卡片。 */
     fun dismiss() {
@@ -140,6 +149,7 @@ class TranslationCardOverlay(
         currentTranslation = ""
         currentWordResult = null
         translationLoading = false
+        textOnlyMode = false
         translationFinal = false
         renderWordResult = null
         wordPreviewView = null
@@ -148,6 +158,7 @@ class TranslationCardOverlay(
 
     fun updateSource(sourceText: String) {
         currentSource = sourceText
+        if (textOnlyMode) translationLoading = false
         sourceWordHighlight = null
         sourceView?.apply {
             text = sourceText
@@ -185,6 +196,7 @@ class TranslationCardOverlay(
     }
 
     fun updateWordResult(wordResult: WordResult?) {
+        if (textOnlyMode) return
         currentWordResult = wordResult
         renderWordResult?.invoke(wordResult)
         refreshTranslationSectionVisibility()
@@ -210,6 +222,7 @@ class TranslationCardOverlay(
             translation = currentTranslation,
             wordResult = currentWordResult,
             loading = translationLoading,
+            textOnly = textOnlyMode,
         )
         translationSectionView?.visibility = if (showSection) View.VISIBLE else View.GONE
         val hasDictionaryContent = currentWordResult?.let { !it.isEmpty() } == true
@@ -397,6 +410,7 @@ class TranslationCardOverlay(
                     downY = event.y
                 }
                 MotionEvent.ACTION_UP -> {
+                    if (!sourceWordLookupEnabled) return@setOnTouchListener false
                     if (
                         kotlin.math.abs(event.x - downX) <= slop &&
                         kotlin.math.abs(event.y - downY) <= slop
@@ -472,10 +486,13 @@ class TranslationCardOverlay(
         onSpeakDictionary: TtsPlaybackAction? = null,
         onCorrectTranslation: ((source: String, translation: String) -> Unit)? = null,
         onEnglishWordTapped: ((word: String, anchorInWindow: Rect) -> Unit)? = null,
+        textOnly: Boolean = false,
     ) {
         dismiss()
+        textOnlyMode = textOnly
+        setSourceWordLookupEnabled(!textOnly && settings.dictionaryTapLookupEnabled)
         currentSource = sourceText
-        currentWordResult = wordResult
+        currentWordResult = if (textOnly) null else wordResult
         translationLoading = loading
         val density = context.resources.displayMetrics.density
         val padH = (16 * density).toInt()
@@ -537,7 +554,7 @@ class TranslationCardOverlay(
             gravity = Gravity.CENTER_VERTICAL
         }
         val srcLabel = TextView(context).apply {
-            text = context.getString(R.string.word_card_section_source)
+            text = if (textOnly) "" else context.getString(R.string.word_card_section_source)
             setTextColor(accentColor)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             setTypeface(typeface, android.graphics.Typeface.BOLD)
@@ -559,7 +576,9 @@ class TranslationCardOverlay(
             val speakButton = buildSpeakButton(
                 accentColor = accentColor,
                 density = density,
-                contentDescription = context.getString(R.string.word_card_speak_source),
+                contentDescription = context.getString(
+                    if (textOnly) R.string.word_card_speak_selection else R.string.word_card_speak_source
+                ),
                 action = action,
                 onClick = { currentSource.takeIf(String::isNotBlank)?.let(action.onToggle) },
             ).apply {
@@ -589,6 +608,10 @@ class TranslationCardOverlay(
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
             setPadding(0, (4 * density).toInt(), 0, (6 * density).toInt())
             setLineSpacing(2f, 1.08f)
+            if (textOnly) {
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, settings.overlayTextSizeSp.toFloat())
+                applyOverlayTextStyle(settings.overlayTextStyle, settingsTypeface(settings))
+            }
             setTextIsSelectable(true)
             onSpeakSource?.let { action ->
                 enableSelectionSpeech(
@@ -610,6 +633,7 @@ class TranslationCardOverlay(
                 translation = translation,
                 wordResult = wordResult,
                 loading = loading,
+                textOnly = textOnly,
             )
             visibility = if (
                 translationCardSectionDividerCount(
@@ -672,6 +696,7 @@ class TranslationCardOverlay(
                     translation = translation,
                     wordResult = wordResult,
                     loading = loading,
+                    textOnly = textOnly,
                 )
             ) {
                 View.VISIBLE
@@ -747,7 +772,7 @@ class TranslationCardOverlay(
                 }
             }
         }
-        renderWordResult?.invoke(wordResult)
+        renderWordResult?.invoke(if (textOnly) null else wordResult)
         scrollContent.addView(dictionarySection)
 
         // 动作行：复制原文 / 复制译文（仅在对应文本非空时）。
@@ -778,7 +803,9 @@ class TranslationCardOverlay(
             val mt = (10 * density).toInt()
             setPadding(0, mt, 0, 0)
         }
-        val copySrcLabel = context.getString(R.string.word_card_btn_copy_source)
+        val copySrcLabel = context.getString(
+            if (textOnly) android.R.string.copy else R.string.word_card_btn_copy_source
+        )
         val copySrcBtn = buildPillButton(copySrcLabel, accentColor, density).apply {
             visibility = if (currentSource.isBlank()) View.GONE else View.VISIBLE
         }
@@ -800,6 +827,7 @@ class TranslationCardOverlay(
                     translation = currentTranslation,
                     wordResult = currentWordResult,
                     loading = translationLoading,
+                    textOnly = textOnly,
                 ) && currentTranslation.isNotBlank()
             ) {
                 View.VISIBLE

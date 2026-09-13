@@ -1,6 +1,7 @@
 package com.gameocr.app.translate
 
 import com.gameocr.app.data.Settings
+import java.io.File
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
@@ -124,17 +125,55 @@ class WordResultPromptTest {
 
     @Test
     fun groupedSenseContracts_tableDriven_requireCompactAndFullRelationships() {
-        val full = "Return dictionary JSON."
-            .withGroupedSensesContract("English", "Chinese")
-        assertTrue(full.contains("\"senses\""))
-        assertTrue(full.contains("\"lemma\""))
-        assertSame(full, full.withGroupedSensesContract("English", "Chinese"))
-
+        val full = fullDictionaryPrompt("English", "Chinese")
         val compact = compactDictionaryPrompt("English", "Chinese")
-        listOf("\"lemma\"", "\"senses\"", "\"pos\"", "\"definitions\"", "\"form_note\"")
-            .forEach { field -> assertTrue(field, compact.contains(field)) }
-        listOf("phonetic", "examples", "synonyms", "difficulty_notes")
-            .forEach { omitted -> assertFalse(omitted, compact.contains("\"$omitted\"")) }
+        data class Case(
+            val name: String,
+            val prompt: String,
+            val version: Int,
+            val requiredFields: List<String>,
+            val omittedFields: List<String> = emptyList(),
+        )
+        listOf(
+            Case(
+                "full",
+                full,
+                DictionaryPromptPolicy.FULL_SCHEMA_VERSION,
+                listOf("lemma", "phonetic", "senses", "pos", "definitions", "form_note", "inflections", "synonyms", "difficulty_notes", "examples"),
+            ),
+            Case(
+                "compact",
+                compact,
+                DictionaryPromptPolicy.COMPACT_SCHEMA_VERSION,
+                listOf("lemma", "senses", "pos", "definitions", "form_note", "fallback_translation"),
+                listOf("phonetic", "examples", "synonyms", "difficulty_notes"),
+            ),
+        ).forEach { case ->
+            assertTrue(case.name, case.prompt.contains("schema version: ${case.version}"))
+            assertTrue(case.name, case.prompt.contains("English"))
+            assertTrue(case.name, case.prompt.contains("Chinese"))
+            case.requiredFields.forEach { field ->
+                assertTrue("${case.name}: $field", case.prompt.contains("\"$field\""))
+            }
+            case.omittedFields.forEach { field ->
+                assertFalse("${case.name}: $field", case.prompt.contains("\"$field\""))
+            }
+        }
+    }
+
+    @Test
+    fun remoteDictionaryTranslators_tableDriven_useInternalPolicyInsteadOfLegacySetting() {
+        data class Case(val name: String, val path: String)
+
+        listOf(
+            Case("OpenAI", "src/main/java/com/gameocr/app/translate/OpenAiTranslator.kt"),
+            Case("Anthropic", "src/main/java/com/gameocr/app/translate/AnthropicTranslator.kt"),
+        ).forEach { case ->
+            val source = sourceFile(case.path).readText()
+            assertTrue(case.name, source.contains("fullDictionaryPrompt(sourceDisplay, targetDisplay)"))
+            assertTrue(case.name, source.contains("compactDictionaryPrompt(sourceDisplay, targetDisplay)"))
+            assertFalse(case.name, source.contains("settings.dictionaryPrompt"))
+        }
     }
 
     @Test
@@ -383,4 +422,8 @@ class WordResultPromptTest {
         )
         assertTrue(encoded.contains("\"response_format\":{\"type\":\"json_object\"}"))
     }
+
+    private fun sourceFile(path: String): File = listOf(File(path), File("app", path))
+        .firstOrNull(File::isFile)
+        ?: error("Source file not found: $path")
 }

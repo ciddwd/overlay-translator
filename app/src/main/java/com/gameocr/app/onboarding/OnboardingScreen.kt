@@ -54,6 +54,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -80,16 +81,31 @@ import com.gameocr.app.R
 import com.gameocr.app.ui.CatalystAlertDialog
 import com.gameocr.app.data.Languages
 import com.gameocr.app.ui.LanguagePicker
+import com.gameocr.app.ui.SettingsOptionDropdown
 import com.gameocr.app.ui.rememberModelDownloadNotificationPermissionGate
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import timber.log.Timber
+import androidx.compose.runtime.collectAsState
+import com.gameocr.app.translate.MlKitDownloadPhase
+import com.gameocr.app.translate.MlKitModelDownloadState
+import com.gameocr.app.ui.MlKitModelDownloadFeedback
+import com.gameocr.app.ui.MlKitModelDownloadActions
+import com.gameocr.app.ui.rememberMlKitModelDownloadSession
+import com.gameocr.app.translate.TestResult
+import com.gameocr.app.ui.ExternalBrowserLinkButton
+import com.gameocr.app.ui.TranslatorConnectionTestPanel
+import com.gameocr.app.ui.TranslatorModelPicker
 
 private sealed interface MlKitDownloadState {
     data object Checking : MlKitDownloadState
     data class Missing(val languages: Set<String>) : MlKitDownloadState
-    data object Downloading : MlKitDownloadState
+    data class Downloading(val requestId: Long) : MlKitDownloadState
     data object Ready : MlKitDownloadState
     data object Unsupported : MlKitDownloadState
-    data class Error(val detail: String) : MlKitDownloadState
+    data class Error(val detail: String, val download: MlKitModelDownloadState? = null) : MlKitDownloadState
 }
 
 private sealed interface MangaOfflineDownloadState {
@@ -131,9 +147,11 @@ fun OnboardingScreen(
         rememberModelDownloadNotificationPermissionGate()
     var draft by remember { mutableStateOf<OnboardingDraft?>(null) }
     var stepIndex by rememberSaveable { mutableIntStateOf(0) }
+    var cloudMangaOcrReady by rememberSaveable { mutableStateOf(false) }
+    var navigating by remember { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
     var showSkipConfirmation by rememberSaveable { mutableStateOf(false) }
-    var downloadState by remember { mutableStateOf<MlKitDownloadState>(MlKitDownloadState.Checking) }
+    var checkedDownloadState by remember { mutableStateOf<MlKitDownloadState>(MlKitDownloadState.Checking) }
     var mangaDownloadState by remember {
         mutableStateOf<MangaOfflineDownloadState>(MangaOfflineDownloadState.Checking)
     }
@@ -154,23 +172,50 @@ fun OnboardingScreen(
         return
     }
     val localLlmSupported = remember { viewModel.isLocalLlmSupported() }
+    val mlKitDownload = rememberMlKitModelDownloadSession { pair ->
+        viewModel.downloadMlKitLanguagePair(pair.first, pair.second)
+    }
+    val mlKitState by mlKitDownload.state.collectAsState()
+    val currentPair = currentDraft.sourceLang to currentDraft.targetLang
+    val downloadState = if (mlKitState.pair == currentPair) {
+        when (mlKitState.phase) {
+            MlKitDownloadPhase.DOWNLOADING -> MlKitDownloadState.Downloading(mlKitState.requestId)
+            MlKitDownloadPhase.READY -> MlKitDownloadState.Ready
+            MlKitDownloadPhase.FAILED, MlKitDownloadPhase.TIMED_OUT ->
+                MlKitDownloadState.Error(mlKitState.error.orEmpty(), mlKitState)
+            else -> checkedDownloadState
+        }
+    } else checkedDownloadState
 
-    val steps = OnboardingPolicy.stepsFor(currentDraft, localLlmSupported)
+    fun startMlKitDownload() {
+        val missing = (checkedDownloadState as? MlKitDownloadState.Missing)?.languages.orEmpty()
+        mlKitDownload.start(currentPair, missing)
+    }
+
+    val mlKitCancelRequestId = mlKitState.requestId
+    fun stopWaitingForMlKitDownload() {
+        mlKitDownload.cancel(mlKitCancelRequestId)
+    }
+
+    val steps = OnboardingPolicy.stepsFor(currentDraft, localLlmSupported, cloudMangaOcrReady)
     if (stepIndex > steps.lastIndex) stepIndex = steps.lastIndex
     val currentStep = steps[stepIndex]
 
     LaunchedEffect(currentStep, currentDraft.sourceLang, currentDraft.targetLang) {
+        if (currentStep != OnboardingStep.OFFLINE_LANGUAGE_DOWNLOAD ||
+            mlKitState.pair?.let { it != currentPair } == true
+        ) mlKitDownload.reset()
         if (currentStep != OnboardingStep.OFFLINE_LANGUAGE_DOWNLOAD) return@LaunchedEffect
         if (!OnboardingPolicy.isMlKitPairSupported(
                 currentDraft.sourceLang,
                 currentDraft.targetLang,
             )
         ) {
-            downloadState = MlKitDownloadState.Unsupported
+            checkedDownloadState = MlKitDownloadState.Unsupported
             return@LaunchedEffect
         }
-        downloadState = MlKitDownloadState.Checking
-        downloadState = runCatching {
+        checkedDownloadState = MlKitDownloadState.Checking
+        checkedDownloadState = runCatching {
             val missing = viewModel.missingMlKitLanguageModels(
                 currentDraft.sourceLang,
                 currentDraft.targetLang,
@@ -256,8 +301,59 @@ fun OnboardingScreen(
         continueModelDownloadAfterNotificationPermission(::downloadMangaOfflineModels)
     }
 
+    fun moveStep(forward: Boolean) {
+        if (saving || navigating) return
+        navigating = true
+        scope.launch {
+            try {
+                val needsMangaOcrCheck =
+                    currentDraft.translationMethod == OnboardingTranslationMethod.CLOUD_LLM &&
+                        OnboardingPolicy.usesJapaneseMangaOcr(currentDraft) &&
+                        currentStep in setOf(
+                            OnboardingStep.TRANSLATION_METHOD,
+                            OnboardingStep.MANGA_OFFLINE_DOWNLOAD,
+                            OnboardingStep.CLOUD_CONFIG,
+                        )
+                val ready = if (needsMangaOcrCheck) {
+                    try {
+                        withContext(Dispatchers.IO) {
+                            viewModel.mangaOfflineModelReadiness(includeSakura = false).ocrReady
+                        }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Exception) {
+                        Timber.w(error, "Failed to check onboarding manga OCR models")
+                        false // Keep the preparation page when readiness cannot be established.
+                    }
+                } else cloudMangaOcrReady
+                if (draft != currentDraft) return@launch
+                val nextIndex = OnboardingPolicy.adjacentStepIndex(
+                    currentDraft, localLlmSupported, ready, currentStep, forward,
+                )
+                cloudMangaOcrReady = ready
+                stepIndex = nextIndex
+            } finally {
+                navigating = false
+            }
+        }
+    }
+
     fun goBack() {
-        if (stepIndex > 0) stepIndex--
+        if (stepIndex > 0) moveStep(forward = false)
+    }
+
+    fun continueSetup() {
+        if (saving || navigating) return
+        if (currentStep == OnboardingStep.SUMMARY) {
+            saving = true
+            scope.launch {
+                runCatching { viewModel.save(currentDraft) }
+                    .onSuccess { onFinished() }
+                    .onFailure { saving = false }
+            }
+        } else {
+            moveStep(forward = true)
+        }
     }
     BackHandler(enabled = stepIndex > 0, onBack = ::goBack)
 
@@ -302,7 +398,7 @@ fun OnboardingScreen(
                 actions = {
                     TextButton(
                         onClick = { showSkipConfirmation = true },
-                        enabled = !saving,
+                        enabled = !saving && !navigating,
                     ) {
                         Text(stringResource(R.string.onboarding_skip))
                     }
@@ -333,38 +429,14 @@ fun OnboardingScreen(
                         mangaDownloadState = mangaDownloadState,
                         recommendedModelsDownloadState = recommendedModelsDownloadState,
                         localLlmSupported = localLlmSupported,
-                        saving = saving,
+                        saving = saving || navigating,
                         onDraftChange = { draft = it },
-                        onDownload = {
-                            downloadState = MlKitDownloadState.Downloading
-                            scope.launch {
-                                downloadState = runCatching {
-                                    viewModel.downloadMlKitLanguagePair(
-                                        currentDraft.sourceLang,
-                                        currentDraft.targetLang,
-                                    )
-                                    MlKitDownloadState.Ready
-                                }.getOrElse {
-                                    MlKitDownloadState.Error(
-                                        it.message ?: it.javaClass.simpleName
-                                    )
-                                }
-                            }
-                        },
+                        onTestCloudConnection = viewModel::testCloudConnection,
+                        onDownload = ::startMlKitDownload,
+                        onStopMlKitDownload = ::stopWaitingForMlKitDownload,
                         onDownloadRecommendedModels = ::requestRecommendedModelsDownload,
                         onDownloadMangaModels = ::requestMangaOfflineModelsDownload,
-                        onNext = {
-                            if (currentStep == OnboardingStep.SUMMARY) {
-                                saving = true
-                                scope.launch {
-                                    runCatching { viewModel.save(currentDraft) }
-                                        .onSuccess { onFinished() }
-                                        .onFailure { saving = false }
-                                }
-                            } else {
-                                stepIndex++
-                            }
-                        },
+                        onNext = ::continueSetup,
                     )
                 }
             } else {
@@ -378,38 +450,14 @@ fun OnboardingScreen(
                         mangaDownloadState = mangaDownloadState,
                         recommendedModelsDownloadState = recommendedModelsDownloadState,
                         localLlmSupported = localLlmSupported,
-                        saving = saving,
+                        saving = saving || navigating,
                         onDraftChange = { draft = it },
-                        onDownload = {
-                            downloadState = MlKitDownloadState.Downloading
-                            scope.launch {
-                                downloadState = runCatching {
-                                    viewModel.downloadMlKitLanguagePair(
-                                        currentDraft.sourceLang,
-                                        currentDraft.targetLang,
-                                    )
-                                    MlKitDownloadState.Ready
-                                }.getOrElse {
-                                    MlKitDownloadState.Error(
-                                        it.message ?: it.javaClass.simpleName
-                                    )
-                                }
-                            }
-                        },
+                        onTestCloudConnection = viewModel::testCloudConnection,
+                        onDownload = ::startMlKitDownload,
+                        onStopMlKitDownload = ::stopWaitingForMlKitDownload,
                         onDownloadRecommendedModels = ::requestRecommendedModelsDownload,
                         onDownloadMangaModels = ::requestMangaOfflineModelsDownload,
-                        onNext = {
-                            if (currentStep == OnboardingStep.SUMMARY) {
-                                saving = true
-                                scope.launch {
-                                    runCatching { viewModel.save(currentDraft) }
-                                        .onSuccess { onFinished() }
-                                        .onFailure { saving = false }
-                                }
-                            } else {
-                                stepIndex++
-                            }
-                        },
+                        onNext = ::continueSetup,
                     )
                 }
             }
@@ -540,7 +588,9 @@ private fun OnboardingPageSurface(
     localLlmSupported: Boolean,
     saving: Boolean,
     onDraftChange: (OnboardingDraft) -> Unit,
+    onTestCloudConnection: suspend (OnboardingDraft) -> TestResult,
     onDownload: () -> Unit,
+    onStopMlKitDownload: () -> Unit,
     onDownloadRecommendedModels: () -> Unit,
     onDownloadMangaModels: () -> Unit,
     onNext: () -> Unit,
@@ -617,6 +667,7 @@ private fun OnboardingPageSurface(
                             draft,
                             downloadState,
                             onDownload,
+                            onStopMlKitDownload,
                         )
                         OnboardingStep.MANGA_OFFLINE_DOWNLOAD -> MangaOfflineDownloadPage(
                             state = mangaDownloadState,
@@ -627,6 +678,7 @@ private fun OnboardingPageSurface(
                         OnboardingStep.CLOUD_CONFIG -> CloudConfigPage(
                             draft,
                             onDraftChange,
+                            onTestCloudConnection,
                         )
                         OnboardingStep.TTS -> TtsPage(draft, onDraftChange)
                         OnboardingStep.SUMMARY -> SummaryPage(draft, localLlmSupported)
@@ -1047,6 +1099,7 @@ private fun MlKitDownloadPage(
     draft: OnboardingDraft,
     state: MlKitDownloadState,
     onDownload: () -> Unit,
+    onStop: () -> Unit,
 ) {
     PageHeading(
         icon = Icons.Default.Download,
@@ -1070,21 +1123,11 @@ private fun MlKitDownloadPage(
                 ),
                 style = MaterialTheme.typography.bodyMedium,
             )
-            OutlinedButton(
-                onClick = onDownload,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Icon(Icons.Default.Download, contentDescription = null)
-                Text(
-                    stringResource(R.string.onboarding_mlkit_download),
-                    modifier = Modifier.padding(start = 8.dp),
-                )
-            }
+            MlKitModelDownloadActions(false, stringResource(R.string.onboarding_mlkit_download), onDownload, onStop, requestId = 0)
         }
-        MlKitDownloadState.Downloading -> StatusRow(
-            loading = true,
-            text = stringResource(R.string.onboarding_mlkit_downloading),
-        )
+        is MlKitDownloadState.Downloading -> {
+            MlKitModelDownloadActions(true, stringResource(R.string.onboarding_mlkit_download), onDownload, onStop, requestId = state.requestId)
+        }
         MlKitDownloadState.Ready -> StatusRow(
             loading = false,
             text = stringResource(R.string.onboarding_mlkit_ready),
@@ -1094,13 +1137,15 @@ private fun MlKitDownloadPage(
             color = MaterialTheme.colorScheme.error,
         )
         is MlKitDownloadState.Error -> {
-            Text(
-                stringResource(R.string.onboarding_mlkit_error, state.detail),
-                color = MaterialTheme.colorScheme.error,
-            )
-            OutlinedButton(onClick = onDownload, modifier = Modifier.fillMaxWidth()) {
-                Text(stringResource(R.string.onboarding_mlkit_retry))
+            if (state.download != null) {
+                MlKitModelDownloadFeedback(state.download)
+            } else {
+                Text(
+                    stringResource(R.string.onboarding_mlkit_error, state.detail),
+                    color = MaterialTheme.colorScheme.error,
+                )
             }
+            MlKitModelDownloadActions(false, stringResource(R.string.onboarding_mlkit_retry), onDownload, onStop, requestId = 0)
         }
     }
 }
@@ -1220,24 +1265,24 @@ private fun MangaOfflineDownloadPage(
 private fun CloudConfigPage(
     draft: OnboardingDraft,
     onDraftChange: (OnboardingDraft) -> Unit,
+    onTestConnection: suspend (OnboardingDraft) -> TestResult,
 ) {
+    var fetchedModels by remember(draft.cloudProvider, draft.cloudBaseUrl, draft.cloudApiKey) {
+        mutableStateOf<List<String>>(emptyList())
+    }
     PageHeading(
         icon = Icons.Default.Cloud,
         title = stringResource(R.string.onboarding_cloud_title),
         body = stringResource(R.string.onboarding_cloud_body),
     )
-    CloudProvider.entries.chunked(2).forEach { rowProviders ->
+    CloudProvider.sortedChoices.chunked(2).forEach { rowProviders ->
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             rowProviders.forEach { provider ->
                 ChoiceChip(
-                    label = if (provider == CloudProvider.CUSTOM) {
-                        stringResource(R.string.onboarding_cloud_custom)
-                    } else {
-                        provider.displayName
-                    },
+                    label = cloudProviderLabel(provider),
                     selected = draft.cloudProvider == provider,
                     onClick = {
                         onDraftChange(OnboardingPolicy.selectCloudProvider(draft, provider))
@@ -1246,6 +1291,33 @@ private fun CloudConfigPage(
                 )
             }
             if (rowProviders.size == 1) Spacer(Modifier.weight(1f))
+        }
+    }
+    draft.cloudProvider.documentationUrl?.let { url ->
+        ExternalBrowserLinkButton(
+            url = url,
+            actionLabel = stringResource(R.string.settings_mlkit_download_open_browser),
+        )
+    }
+    if (draft.cloudProvider.supportsRegions) {
+        key(draft.cloudProvider) {
+            SettingsOptionDropdown<CloudApiRegion?>(
+                label = stringResource(R.string.onboarding_cloud_region),
+                value = OnboardingPolicy.cloudApiRegion(draft),
+                options = CloudApiRegion.entries,
+                optionLabel = { region ->
+                    stringResource(when (region) {
+                        CloudApiRegion.MAINLAND_CHINA -> R.string.onboarding_cloud_region_mainland
+                        CloudApiRegion.INTERNATIONAL -> R.string.onboarding_cloud_region_international
+                        null -> R.string.onboarding_cloud_custom
+                    })
+                },
+                onValueChange = { region ->
+                    if (region != null) {
+                        onDraftChange(OnboardingPolicy.selectCloudApiRegion(draft, region))
+                    }
+                },
+            )
         }
     }
     OutlinedTextField(
@@ -1270,6 +1342,12 @@ private fun CloudConfigPage(
         singleLine = true,
         modifier = Modifier.fillMaxWidth(),
     )
+    TranslatorConnectionTestPanel(
+        inputKey = draft,
+        onTest = { onTestConnection(draft) },
+        onModels = { fetchedModels = it },
+    )
+    TranslatorModelPicker(fetchedModels) { onDraftChange(draft.copy(cloudModel = it)) }
     OnboardingPolicy.cloudConfigError(draft)?.let { error ->
         Text(
             text = stringResource(
@@ -1288,6 +1366,14 @@ private fun CloudConfigPage(
             style = MaterialTheme.typography.bodySmall,
         )
     }
+}
+
+@Composable
+private fun cloudProviderLabel(provider: CloudProvider): String = when (provider) {
+    CloudProvider.CUSTOM -> stringResource(R.string.onboarding_cloud_custom)
+    CloudProvider.MODELSCOPE -> stringResource(R.string.onboarding_cloud_provider_modelscope)
+    CloudProvider.SCNET -> stringResource(R.string.onboarding_cloud_provider_scnet)
+    else -> provider.displayName
 }
 
 @Composable
@@ -1384,7 +1470,7 @@ private fun SummaryPage(
                 }
             )
         } else {
-            draft.cloudProvider.displayName
+            cloudProviderLabel(draft.cloudProvider)
         },
     )
     SummaryRow(

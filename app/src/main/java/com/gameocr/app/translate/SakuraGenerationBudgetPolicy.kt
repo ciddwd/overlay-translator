@@ -34,12 +34,10 @@ internal object SakuraGenerationBudgetPolicy {
             )
         }
 
-        val source = normalizedSourceTokens.toLong()
-        val proportionalHeadroom = (source + 1L) / 2L
-        val estimated = source +
-            proportionalHeadroom +
-            lineCount.toLong() * PER_LINE_HEADROOM_TOKENS +
-            FIXED_HEADROOM_TOKENS
+        val estimated = estimatedRequiredTokens(
+            sourceTokens = normalizedSourceTokens,
+            lineCount = lineCount,
+        )
         val minimum = minOf(configured, MIN_MULTI_LINE_BUDGET)
         val effective = estimated
             .coerceAtLeast(minimum.toLong())
@@ -50,5 +48,33 @@ internal object SakuraGenerationBudgetPolicy {
             configuredMaxNewTokens = configured,
             effectiveMaxNewTokens = effective,
         )
+    }
+
+    /**
+     * A configured output limit must remain a hard upper bound. If a multi-line group is already
+     * estimated to exceed it, split before inference instead of spending a full generation that
+     * can only end in a truncated, structurally invalid response. This is capacity planning, not
+     * a retry, so it deliberately does not depend on the user's failure-retry preference.
+     */
+    fun requiresPreSplit(
+        configuredMaxNewTokens: Int,
+        sourceTokens: Int,
+        lineCount: Int,
+    ): Boolean {
+        if (lineCount <= 1) return false
+        val configured = configuredMaxNewTokens.coerceAtLeast(1).toLong()
+        return estimatedRequiredTokens(
+            sourceTokens = sourceTokens.coerceAtLeast(0),
+            lineCount = lineCount,
+        ) > configured
+    }
+
+    private fun estimatedRequiredTokens(sourceTokens: Int, lineCount: Int): Long {
+        val source = sourceTokens.coerceAtLeast(0).toLong()
+        val proportionalHeadroom = (source + 1L) / 2L
+        return source +
+            proportionalHeadroom +
+            lineCount.coerceAtLeast(0).toLong() * PER_LINE_HEADROOM_TOKENS +
+            FIXED_HEADROOM_TOKENS
     }
 }

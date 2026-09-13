@@ -17,6 +17,7 @@ internal object TranslationPromptContextPolicy {
         TranslatorEngine.LOCAL_HY_MT2 -> TranslationPromptContextStrategy.HY_MT2_OFFICIAL
         TranslatorEngine.LOCAL_SAKURA -> TranslationPromptContextStrategy.SAKURA_OFFICIAL
         TranslatorEngine.DEEPL,
+        TranslatorEngine.NIUTRANS,
         TranslatorEngine.YOUDAO_PICTRANS,
         TranslatorEngine.GOOGLE,
         TranslatorEngine.GOOGLE_ML_KIT,

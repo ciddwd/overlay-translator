@@ -66,6 +66,7 @@ class FloatingEnglishWordPolicyTest {
 
         listOf(
             Case("loading", null, null, true, false, listOf("翻译中…")),
+            Case("loading hides a stale error", null, null, true, true, listOf("翻译中…")),
             Case(
                 "displayed keeps adjective and verb meanings separate",
                 "显示的、表现、展示、陈列",
@@ -104,6 +105,11 @@ class FloatingEnglishWordPolicyTest {
                 listOf("记录；记下", "词性：n. / v."),
             ),
             Case("failure", null, null, false, true, listOf("查询失败")),
+            Case("ordinary miss", null, null, false, false, listOf("未找到释义")),
+            Case("empty result is a miss", " ", WordResult(), false, false, listOf("未找到释义")),
+            Case("empty result with error is a failure", null, WordResult(), false, true, listOf("查询失败")),
+            Case("available text survives an error", "更新", WordResult(), false, true, listOf("更新")),
+            Case("fallback meaning remains visible", null, WordResult(fallbackTranslation = "更新"), false, false, listOf("更新")),
             Case("plain translation without POS", "更新", null, false, false, listOf("更新")),
         ).forEach { case ->
             val actual = floatingWordPreviewContent(
@@ -114,6 +120,7 @@ class FloatingEnglishWordPolicyTest {
                 failed = case.failed,
                 loadingLabel = "翻译中…",
                 failedLabel = "查询失败",
+                notFoundLabel = "未找到释义",
             )
             assertEquals(case.name, "update", actual.word)
             assertEquals(case.name, case.expectedLines, actual.lines)
@@ -156,18 +163,26 @@ class FloatingEnglishWordPolicyTest {
             val expectedTranslation: String?,
             val expectedResult: WordResult?,
             val expectedLoading: Boolean,
+            val failed: Boolean = false,
         )
 
         listOf(
             Case("fresh request clears compact content", false, complete, null, null, true),
             Case("complete result replaces loading", true, complete, null, complete, false),
-            Case("null result becomes explicit failure", true, null, "查询失败", null, false),
-            Case("empty result becomes explicit failure", true, empty, "查询失败", null, false),
+            Case("null result is a miss", true, null, "未找到释义", null, false),
+            Case("empty result is a miss", true, empty, "未找到释义", null, false),
+            Case("null result with error is failure", true, null, "查询失败", null, false, failed = true),
+            Case("empty result with error is failure", true, empty, "查询失败", null, false, failed = true),
+            Case("loading hides stale error", false, null, null, null, true, failed = true),
+            Case("available result survives an error", true, complete, null, complete, false, failed = true),
+            Case("fallback remains visible", true, WordResult(fallbackTranslation = "展示"), "展示", null, false),
         ).forEach { case ->
             val actual = floatingWordDetailsContent(
                 completed = case.completed,
                 wordResult = case.result,
+                failed = case.failed,
                 failedLabel = "查询失败",
+                notFoundLabel = "未找到释义",
             )
             assertEquals(case.name, case.expectedTranslation, actual.translation)
             assertEquals(case.name, case.expectedResult, actual.wordResult)
@@ -210,6 +225,7 @@ class FloatingEnglishWordPolicyTest {
                 true,
             ),
             Case("failure message remains visible", "查询失败", null, false, true),
+            Case("miss message remains visible", "未找到释义", null, false, true),
             Case("completed empty state has no empty heading", null, null, false, false),
         ).forEach { case ->
             assertEquals(

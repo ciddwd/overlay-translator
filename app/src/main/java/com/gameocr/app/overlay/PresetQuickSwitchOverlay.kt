@@ -271,6 +271,7 @@ class PresetQuickSwitchOverlay(private val context: Context) {
         TranslatorEngine.OPENAI -> context.getString(R.string.settings_engine_openai_llm)
         TranslatorEngine.ANTHROPIC -> context.getString(R.string.settings_engine_anthropic_llm)
         TranslatorEngine.DEEPL -> context.getString(R.string.settings_engine_deepl)
+        TranslatorEngine.NIUTRANS -> context.getString(R.string.settings_engine_niutrans)
         TranslatorEngine.YOUDAO_PICTRANS -> context.getString(R.string.settings_engine_youdao_pictrans)
         TranslatorEngine.GOOGLE -> context.getString(R.string.settings_engine_google)
         TranslatorEngine.GOOGLE_ML_KIT -> context.getString(R.string.settings_translator_group_on_device)

@@ -68,6 +68,7 @@
     public static int w(...);
     public static int e(...);
     public static int wtf(...);
+    public static int println(...);
 }
 
 # Shizuku：ShizukuScreenshotter 用反射调 hidden API `Shizuku.newProcess`，R8 不能 rename/strip

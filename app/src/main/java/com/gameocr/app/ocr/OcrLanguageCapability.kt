@@ -32,6 +32,14 @@ object OcrLanguageCapability {
     /** PaddleOCR PP-OCRv5 mobile rec 字典涵盖的语言（中英日融合）。韩 / 拉丁系扩展暂未打包。 */
     private val PADDLE_V5_LANGS = setOf("zh", "zh-CN", "zh-TW", "en", "ja")
 
+    /**
+     * korean_PP-OCRv5_mobile_rec 的主要识别语言。
+     *
+     * 模型字典包含拉丁字符，但产品联动只把韩文视为匹配语言；当整页源语言为英文时，
+     * 仍应建议使用更合适的拉丁 OCR，而不是把“字典能输出英文”当成英文专用能力。
+     */
+    private val PADDLE_V5_KOREAN_LANGS = setOf("ko")
+
     /** PP-OCRv6 medium/small includes these 46 Latin-script languages in one unified model. */
     private val PADDLE_V6_LATIN_LANGS = setOf(
         "fr", "de", "it", "es", "pt", "nl", "pl", "ro", "cs", "sv", "no", "da",
@@ -55,7 +63,13 @@ object OcrLanguageCapability {
     private val ML_KIT_AUTO_LANGS = ML_KIT_LATIN_LANGS + setOf("ja", "ko", "zh", "zh-CN", "zh-TW")
 
     /** 完整 Settings 版本：内部委托给轻量重载。 */
-    fun supports(settings: Settings, sourceCode: String): Boolean = supports(
+    fun supports(settings: Settings, sourceCode: String): Boolean {
+        if (settings.ocrEngine == OcrEngineKind.ML_KIT_AUTO) {
+            if (sourceCode.isBlank() || sourceCode.equals("auto", ignoreCase = true)) return true
+            val route = settings.autoOcr.routeFor(sourceCode) ?: return false
+            return com.gameocr.app.data.AutoOcrRoutingPolicy.supports(settings, sourceCode, route)
+        }
+        return supports(
         engine = settings.ocrEngine,
         sourceCode = sourceCode,
         baiduEndpoint = settings.baiduOcrEndpoint,
@@ -64,6 +78,7 @@ object OcrLanguageCapability {
         tencentLanguage = settings.tencentOcrLanguage,
         paddleModelVersion = settings.paddleModelVersion,
     )
+    }
 
     /**
      * 轻量重载：只依赖 [engine] / [baiduEndpoint] / [tencentEndpoint] / 当前 language 状态，方便
@@ -94,6 +109,7 @@ object OcrLanguageCapability {
             OcrEngineKind.ML_KIT_CHINESE -> code.startsWith("zh")
             OcrEngineKind.PADDLE_ONNX -> when (paddleModelVersion) {
                 PaddleModelVersion.V5_MOBILE -> code in PADDLE_V5_LANGS
+                PaddleModelVersion.V5_KOREAN -> code in PADDLE_V5_KOREAN_LANGS
                 PaddleModelVersion.V6_TINY -> code in PADDLE_V6_BASE_LANGS
                 PaddleModelVersion.V6_SMALL,
                 PaddleModelVersion.V6_MEDIUM -> code in PADDLE_V6_AI_STUDIO_LANGS

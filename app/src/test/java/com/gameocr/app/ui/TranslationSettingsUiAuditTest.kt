@@ -328,16 +328,13 @@ class TranslationSettingsUiAuditTest {
     }
 
     @Test
-    fun promptEditors_areInsideCollapsedAdvancedSection() {
+    fun promptEditor_isInsideCollapsedAdvancedSectionAndDictionaryProtocolIsNotEditable() {
         val advancedGate = source.indexOf("if (!advancedExpanded) return")
-        listOf(
-            "R.string.settings_prompt_label",
-            "R.string.settings_dictionary_prompt_title",
-            "R.string.settings_dictionary_prompt_desc",
-        ).forEach { marker ->
-            assertTrue("missing $marker", source.contains(marker))
-            assertTrue("$marker must follow the advanced gate", advancedGate in 0 until source.indexOf(marker))
-        }
+        val marker = "R.string.settings_prompt_label"
+        assertTrue("missing $marker", source.contains(marker))
+        assertTrue("$marker must follow the advanced gate", advancedGate in 0 until source.indexOf(marker))
+        assertFalse(source.contains("R.string.settings_dictionary_prompt_title"))
+        assertFalse(source.contains("onDictionaryPromptChange"))
     }
 
     @Test

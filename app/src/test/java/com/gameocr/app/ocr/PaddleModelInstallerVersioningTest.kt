@@ -22,6 +22,8 @@ class PaddleModelInstallerVersioningTest {
             Case("inference.yml", PaddleModelVersion.V5_MOBILE, PaddleModelInstaller.FILE_KEYS_YAML),
             Case("keys.yaml", PaddleModelVersion.V5_MOBILE, PaddleModelInstaller.FILE_KEYS_YAML),
             Case("ppocrv5_dict.txt", PaddleModelVersion.V5_MOBILE, null),
+            Case("korean-ppocrv5-rec.onnx", PaddleModelVersion.V5_KOREAN, PaddleModelInstaller.FILE_REC),
+            Case("inference.yml", PaddleModelVersion.V5_KOREAN, PaddleModelInstaller.FILE_KEYS_YAML),
             Case("inference.yml", PaddleModelVersion.V6_TINY, PaddleModelInstaller.FILE_KEYS_YAML),
             Case("keys.yaml", PaddleModelVersion.V6_TINY, PaddleModelInstaller.FILE_KEYS_YAML),
             Case("ppocrv6_dict.txt", PaddleModelVersion.V6_TINY, null),
@@ -55,6 +57,7 @@ class PaddleModelInstallerVersioningTest {
 
         val cases = listOf(
             Case(PaddleModelVersion.V5_MOBILE, PaddleModelInstaller.FILE_KEYS_YAML),
+            Case(PaddleModelVersion.V5_KOREAN, PaddleModelInstaller.FILE_KEYS_YAML),
             Case(PaddleModelVersion.V6_TINY, PaddleModelInstaller.FILE_KEYS_YAML),
             Case(PaddleModelVersion.V6_SMALL, PaddleModelInstaller.FILE_KEYS_YAML),
             Case(PaddleModelVersion.V6_MEDIUM, PaddleModelInstaller.FILE_KEYS_YAML),
@@ -86,6 +89,15 @@ class PaddleModelInstallerVersioningTest {
                 keysSuffix = "inference.yml",
                 detRevision = "e6f4fa85f00e168c862bc462aebca69eef9b3d3d",
                 recRevision = "ed152b8b495f84de93cda5709d768548a9127622",
+            ),
+            Case(
+                version = PaddleModelVersion.V5_KOREAN,
+                detRepo = "PaddlePaddle/PP-OCRv5_mobile_det_onnx",
+                recRepo = "PaddlePaddle/korean_PP-OCRv5_mobile_rec_onnx",
+                keysRepo = "PaddlePaddle/korean_PP-OCRv5_mobile_rec_onnx",
+                keysSuffix = "inference.yml",
+                detRevision = "e6f4fa85f00e168c862bc462aebca69eef9b3d3d",
+                recRevision = "5c6f574b8e2230adf4287b33e736d71b9fabd28e",
             ),
             Case(
                 version = PaddleModelVersion.V6_TINY,
@@ -136,8 +148,15 @@ class PaddleModelInstallerVersioningTest {
 
     @Test
     fun modelDirectoryName_isVersionedSoLegacyRootFilesAreNotReused() {
-        PaddleModelVersion.entries.forEach { version ->
-            assertEquals(version.name, version.dirName, PaddleModelInstaller.modelDirectoryName(version))
+        val cases = listOf(
+            PaddleModelVersion.V5_MOBILE to "v5",
+            PaddleModelVersion.V5_KOREAN to "v5ko",
+            PaddleModelVersion.V6_TINY to "v6tiny",
+            PaddleModelVersion.V6_SMALL to "v6small",
+            PaddleModelVersion.V6_MEDIUM to "v6medium",
+        )
+        cases.forEach { (version, expected) ->
+            assertEquals(version.name, expected, PaddleModelInstaller.modelDirectoryName(version))
         }
     }
 

@@ -219,7 +219,7 @@ internal fun galleryExportMetadata(): GalleryExportMetadata = GalleryExportMetad
     software = GALLERY_EXPORT_CREATOR,
 )
 
-internal const val GALLERY_EXPORT_CREATOR = "屏译 · Screen Translator"
+internal const val GALLERY_EXPORT_CREATOR = "屏译 Screen Translator"
 
 internal fun galleryCanExport(
     status: GalleryTaskStatus,

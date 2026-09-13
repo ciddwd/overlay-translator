@@ -122,6 +122,8 @@ fun GlossaryScreen(
     val terms by viewModel.terms.collectAsState()
     val memories by viewModel.memories.collectAsState()
     val sourcePreservationEnabled by viewModel.sourcePreservationEnabled.collectAsState()
+    val glossaryEnabled by viewModel.glossaryEnabled.collectAsState()
+    val memoryEnabled by viewModel.memoryEnabled.collectAsState()
     var selectedTab by rememberSaveable { mutableStateOf(TranslationLibraryTab.TERMS) }
     var currentApp by remember { mutableStateOf<ForegroundApp?>(null) }
     var defaultLanguages by remember { mutableStateOf("auto" to "zh-CN") }
@@ -329,6 +331,16 @@ fun GlossaryScreen(
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
+                    glossaryEnabled?.let { enabled ->
+                        item(key = "glossary-master") {
+                            SourcePreservationMasterCard(
+                                disableAll = !enabled,
+                                onDisableAllChange = { viewModel.setGlossaryEnabled(!it) },
+                                labelRes = R.string.translation_library_disable_all,
+                                descriptionRes = null,
+                            )
+                        }
+                    }
                     if (visibleTerms.isEmpty()) {
                         item {
                             Text(
@@ -399,6 +411,16 @@ fun GlossaryScreen(
                     }
                 }
                 TranslationLibraryTab.MEMORY -> TranslationMemoryPane(
+                    masterSwitch = {
+                        memoryEnabled?.let { enabled ->
+                            SourcePreservationMasterCard(
+                                disableAll = !enabled,
+                                onDisableAllChange = { viewModel.setMemoryEnabled(!it) },
+                                labelRes = R.string.translation_library_disable_all,
+                                descriptionRes = null,
+                            )
+                        }
+                    },
                     entries = memories,
                     query = memoryQuery,
                     onUpdate = { id, correctedSource, correctedTranslation ->
@@ -1076,6 +1098,8 @@ internal fun GlossaryConfirmationDialog(
 private fun SourcePreservationMasterCard(
     disableAll: Boolean,
     onDisableAllChange: (Boolean) -> Unit,
+    labelRes: Int = R.string.source_preservation_disable_all,
+    descriptionRes: Int? = R.string.source_preservation_disable_all_description,
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -1091,12 +1115,12 @@ private fun SourcePreservationMasterCard(
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             SwitchRow(
-                label = stringResource(R.string.source_preservation_disable_all),
+                label = stringResource(labelRes),
                 checked = disableAll,
                 onChange = onDisableAllChange,
             )
-            Text(
-                text = stringResource(R.string.source_preservation_disable_all_description),
+            if (descriptionRes != null) Text(
+                text = stringResource(descriptionRes),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

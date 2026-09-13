@@ -54,7 +54,7 @@ data class ModelDownloadTerminalRecord(
 internal fun splitModelDownloadRequests(
     specs: List<ModelDownloadSpec>,
 ): List<List<ModelDownloadSpec>> =
-    specs.distinct().map(::listOf)
+    ModelDownloadDependencies.independentRequests(specs)
 
 internal fun latestUnresolvedModelDownloadFailure(
     records: List<ModelDownloadTerminalRecord>,
@@ -105,4 +105,20 @@ object ModelDownloadWorkPolicy {
 
     /** WorkManager's runAttemptCount starts at zero. */
     fun shouldRetry(runAttemptCount: Int): Boolean = runAttemptCount < MAX_ATTEMPTS - 1
+
+    fun shouldRetry(runAttemptCount: Int, error: Throwable): Boolean {
+        if (!shouldRetry(runAttemptCount)) return false
+        val causes = generateSequence(error) { it.cause }.take(16).toList()
+        if (!mayTryAnotherSource(error)) return false
+        val http = causes.filterIsInstance<ModelDownloadHttpException>().firstOrNull()
+        return if (http != null) http.code in setOf(408, 429, 500, 502, 503, 504)
+            else causes.any { it is java.io.IOException }
+    }
+
+    internal fun mayTryAnotherSource(error: Throwable): Boolean =
+        generateSequence(error) { it.cause }.take(16).none {
+            it is Error || it is kotlinx.coroutines.CancellationException ||
+                it is ModelDownloadFileException || it is ModelDownloadResumeException ||
+                (it is ModelDownloadHttpException && it.code == 416)
+        }
 }
