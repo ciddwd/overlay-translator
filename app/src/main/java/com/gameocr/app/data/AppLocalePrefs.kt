@@ -1,7 +1,11 @@
 package com.gameocr.app.data
 
 import android.content.Context
+import android.content.ContextWrapper
+import android.content.SharedPreferences
+import android.content.res.Resources
 import android.content.res.Configuration
+import android.view.View
 import java.util.Locale
 
 /**
@@ -19,6 +23,51 @@ import java.util.Locale
 object AppLocalePrefs {
     private const val FILE = "locale_prefs"
     private const val KEY_TAG = "tag"
+
+    /** Long-lived overlay contexts resolve the current app language, not their creation-time language. */
+    fun live(base: Context): Context = object : ContextWrapper(base) {
+        private var lastTag: String? = null
+        private var lastConfig: Configuration? = null
+        private var localized: Context = base
+        override fun getResources(): Resources {
+            val tag = read(base)
+            val config = base.resources.configuration
+            if (tag != lastTag || config != lastConfig) {
+                localized = wrap(base)
+                lastTag = tag
+                lastConfig = Configuration(config)
+            }
+            return localized.resources
+        }
+        override fun getAssets() = resources.assets
+    }
+
+    /** Listener lifetime follows its window; queued changes never refresh a detached window. */
+    fun observe(view: View, refresh: () -> Unit) {
+        val prefs = view.context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+        var previous = read(view.context)
+        fun update() {
+            if (!view.isAttachedToWindow) return
+            val current = read(view.context)
+            if (current != previous) {
+                previous = current
+                refresh()
+            }
+        }
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == KEY_TAG || key == null) view.post { update() }
+        }
+        view.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: View) {
+                prefs.registerOnSharedPreferenceChangeListener(listener)
+                update()
+            }
+            override fun onViewDetachedFromWindow(v: View) {
+                prefs.unregisterOnSharedPreferenceChangeListener(listener)
+            }
+        })
+        if (view.isAttachedToWindow) prefs.registerOnSharedPreferenceChangeListener(listener)
+    }
 
     fun read(context: Context): String = context
         .getSharedPreferences(FILE, Context.MODE_PRIVATE)

@@ -56,6 +56,7 @@ data class Settings(
     val ocrScreenshotSavingEnabled: Boolean = false,
     val disableTranslationCache: Boolean = false,
     val batchCumulativeCompletionTimeEnabled: Boolean = false,
+    val shareEntireScreen: Boolean = false,
     val translationContextMode: TranslationContextMode = TranslationContextMode.FAST_PER_SEGMENT,
     val ocrRedBoxModeEnabled: Boolean = false,
     val ocrRedBoxShowSourceText: Boolean = true,

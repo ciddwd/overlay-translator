@@ -36,6 +36,9 @@ import kotlinx.coroutines.runBlocking
  */
 @AndroidEntryPoint
 class RegionPickerActivity : ComponentActivity() {
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(com.gameocr.app.data.AppLocalePrefs.wrap(newBase))
+    }
 
     @Inject lateinit var settingsRepository: SettingsRepository
 

@@ -50,13 +50,15 @@ internal object ArcMenuGeometry {
  * 位置写回 [SettingsRepository] 持久化，下次启动 Service 还原。
  */
 class FloatingButtonManager(
-    private val context: Context,
+    context: Context,
     private val onSingleTap: () -> Unit,
     private val onDoubleTap: () -> Unit,
     private val onSwitchToLoop: () -> Unit,
     private val settingsRepository: SettingsRepository,
     private val ioScope: CoroutineScope
 ) {
+    private val context = com.gameocr.app.data.AppLocalePrefs.live(context)
+    private var localeMenuPage = 0
     @Volatile var sizeDp: Int = 56
     @Volatile private var buttonAlpha: Float = 1f
 
@@ -336,6 +338,29 @@ class FloatingButtonManager(
         }
         wm.addView(container, params)
         view = container
+        com.gameocr.app.data.AppLocalePrefs.observe(container) {
+            updateAccessibilityDescription()
+            if (inputTranslationGuideVisible) {
+                inputTranslationGuideVisible = false
+                showInputTranslationGuide(context.getString(
+                    when (inputTranslationDoubleAction) {
+                        InputTranslationDoubleAction.FULL_SCREEN -> R.string.menu_full_screen_skill
+                        InputTranslationDoubleAction.WORD_SELECT -> R.string.menu_word_select
+                    }
+                ))
+            }
+            if (arcMenuView != null) {
+                val page = localeMenuPage
+                dismissArcMenu(restorePosition = false)
+                openArcMenuPage(page)
+            }
+            when (tourStage) {
+                TourStage.WAITING_FOR_LONG_PRESS -> showMainBallTourStep()
+                TourStage.MENU_ITEMS -> showCurrentMenuTourStep()
+                TourStage.COMPLETION -> showFirstUseTourCelebration()
+                TourStage.NONE -> Unit
+            }
+        }
         layoutParams = params
         if (hiddenForCapture) container.visibility = View.INVISIBLE
         updateAccessibilityDescription()
@@ -1246,6 +1271,7 @@ class FloatingButtonManager(
 
     /** 真正展开某一页菜单（含必要时的腾位 spring）。翻页按钮 / 入口都走这里。 */
     private fun openArcMenuPage(pageIndex: Int) {
+        localeMenuPage = pageIndex
         android.util.Log.d(TAG_MENU, "openArcMenuPage(page=$pageIndex) arcMenuView=${arcMenuView != null} positionBeforeMenu=$positionBeforeMenu")
         if (arcMenuView != null) {
             android.util.Log.d(TAG_MENU, "  skip: arcMenuView already exists")

@@ -66,6 +66,7 @@ class SettingsRepository internal constructor(
         val LoopTextRegionMode = stringPreferencesKey("loop_text_region_mode")
         val LoopTranslateRegionOnly = booleanPreferencesKey("loop_translate_region_only")
         val DeveloperOptionsEnabled = booleanPreferencesKey("developer_options_enabled")
+        val ShareEntireScreen = booleanPreferencesKey("share_entire_screen")
         val PerformanceOverlayEnabled = booleanPreferencesKey("performance_overlay_enabled")
         val OcrScreenshotSavingEnabled = booleanPreferencesKey("ocr_screenshot_saving_enabled")
         val DisableTranslationCache = booleanPreferencesKey("disable_translation_cache")
@@ -715,6 +716,7 @@ class SettingsRepository internal constructor(
             prefs[Keys.LoopTextRegionMode] = next.loopTextRegionMode.name
             prefs[Keys.LoopTranslateRegionOnly] = next.loopTranslateRegionOnly
             prefs[Keys.DeveloperOptionsEnabled] = next.developerOptionsEnabled
+            prefs[Keys.ShareEntireScreen] = next.shareEntireScreen
             prefs[Keys.PerformanceOverlayEnabled] = next.performanceOverlayEnabled
             prefs[Keys.OcrScreenshotSavingEnabled] = next.ocrScreenshotSavingEnabled
             prefs[Keys.DisableTranslationCache] = next.disableTranslationCache
@@ -999,6 +1001,7 @@ class SettingsRepository internal constructor(
             batchCumulativeCompletionTimeEnabled =
                 this[Keys.BatchCumulativeCompletionTimeEnabled]
                     ?: default.batchCumulativeCompletionTimeEnabled,
+            shareEntireScreen = this[Keys.ShareEntireScreen] ?: default.shareEntireScreen,
             translationContextMode = runCatching {
                 TranslationContextMode.valueOf(this[Keys.TranslationContextMode].orEmpty())
             }.getOrDefault(default.translationContextMode),

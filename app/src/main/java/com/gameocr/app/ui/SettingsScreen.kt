@@ -583,6 +583,7 @@ fun SettingsScreen(
     var ocrScreenshotSavingEnabled by remember { mutableStateOf(false) }
     var disableTranslationCache by remember { mutableStateOf(false) }
     var batchCumulativeCompletionTimeEnabled by remember { mutableStateOf(false) }
+    var shareEntireScreen by remember { mutableStateOf(false) }
     var ocrRedBoxModeEnabled by remember { mutableStateOf(false) }
     var ocrRedBoxShowSourceText by remember { mutableStateOf(true) }
     var ocrRedBoxShowTranslation by remember { mutableStateOf(false) }
@@ -1106,6 +1107,7 @@ fun SettingsScreen(
         ocrScreenshotSavingEnabled = s.ocrScreenshotSavingEnabled
         disableTranslationCache = s.disableTranslationCache
         batchCumulativeCompletionTimeEnabled = s.batchCumulativeCompletionTimeEnabled
+        shareEntireScreen = s.shareEntireScreen
         ocrRedBoxModeEnabled = s.ocrRedBoxModeEnabled
         ocrRedBoxShowSourceText = s.ocrRedBoxShowSourceText
         ocrRedBoxShowTranslation = s.ocrRedBoxShowTranslation
@@ -1433,6 +1435,7 @@ fun SettingsScreen(
         ocrScreenshotSavingEnabled = ocrScreenshotSavingEnabled,
         disableTranslationCache = disableTranslationCache,
         batchCumulativeCompletionTimeEnabled = batchCumulativeCompletionTimeEnabled,
+        shareEntireScreen = shareEntireScreen,
         ocrRedBoxModeEnabled = ocrRedBoxModeEnabled,
         ocrRedBoxShowSourceText = ocrRedBoxShowSourceText,
         ocrRedBoxShowTranslation = ocrRedBoxShowTranslation,
@@ -1691,6 +1694,7 @@ fun SettingsScreen(
             ocrScreenshotSavingEnabled = ocrScreenshotSavingEnabled,
             disableTranslationCache = disableTranslationCache,
             batchCumulativeCompletionTimeEnabled = batchCumulativeCompletionTimeEnabled,
+            shareEntireScreen = shareEntireScreen,
             ocrRedBoxModeEnabled = ocrRedBoxModeEnabled,
             ocrRedBoxShowSourceText = ocrRedBoxShowSourceText,
             ocrRedBoxShowTranslation = ocrRedBoxShowTranslation,
@@ -2835,6 +2839,7 @@ fun SettingsScreen(
             ocrScreenshotSavingEnabled = s.ocrScreenshotSavingEnabled
             disableTranslationCache = s.disableTranslationCache
             batchCumulativeCompletionTimeEnabled = s.batchCumulativeCompletionTimeEnabled
+            shareEntireScreen = s.shareEntireScreen
             ocrRedBoxModeEnabled = s.ocrRedBoxModeEnabled
             ocrRedBoxShowSourceText = s.ocrRedBoxShowSourceText
             ocrRedBoxShowTranslation = s.ocrRedBoxShowTranslation
@@ -6280,6 +6285,10 @@ fun SettingsScreen(
                         modifier = Modifier.padding(start = 16.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
+                        SwitchRow(
+                            label = stringResource(R.string.settings_share_entire_screen),
+                            checked = shareEntireScreen,
+                        ) { shareEntireScreen = it }
                         SwitchRow(
                             label = stringResource(R.string.settings_performance_overlay_label),
                             checked = performanceOverlayEnabled,

@@ -3,7 +3,6 @@ package com.gameocr.app.ocr
 import android.graphics.Bitmap
 import com.gameocr.app.data.AutoOcrRoute
 import com.gameocr.app.data.AutoOcrRoutingPolicy
-import com.gameocr.app.data.AutoOcrSettings
 import com.gameocr.app.data.OcrEngineKind
 import com.gameocr.app.data.Settings
 import com.gameocr.app.download.ModelReadinessChecker
@@ -40,14 +39,7 @@ class AutomaticOcrRecognizer @Inject constructor(
                 }
             }
         }
-        val source = AutoOcrSettings.languageKey(settings.sourceLang)
-        if (source.isNotBlank() && source != "auto") {
-            val selected = route(source) ?: return AutomaticOcrResult(emptyList())
-            val effective = AutoOcrRoutingPolicy.settingsFor(settings, source, selected)
-            Timber.tag("AutoOCR").i("source=%s engine=%s model=%s", source, selected.engine, selected.paddleVersion)
-            return AutomaticOcrResult(recognize(bitmap, selected.engine, effective), selected.engine == OcrEngineKind.MANGA_OCR_JA)
-        }
-
+        // Translation source language must not bypass automatic OCR language detection.
         val languageCache = mutableMapOf<String, String?>()
         suspend fun tag(blocks: List<TextBlock>): List<TextBlock> = blocks.map { block ->
             // Cache is bounded to this frame, with bounded samples. Never retain screenshot text globally.
@@ -63,20 +55,18 @@ class AutomaticOcrRecognizer @Inject constructor(
             AutoOcrEvidence(it.text, it.recognizedLanguage, it.confidence)
         }
 
-        // A bounded, confidence-driven bootstrap. A stray "OK" cannot short-circuit CJK recognition.
+        // Compare every script candidate: language ID cannot validate glyphs that OCR misread.
         val passes = linkedMapOf<OcrEngineKind, List<TextBlock>>()
-        var bestKind = OcrEngineKind.ML_KIT_JAPANESE
-        var best = emptyList<TextBlock>()
         for (kind in listOf(OcrEngineKind.ML_KIT_JAPANESE, OcrEngineKind.ML_KIT_KOREAN,
             OcrEngineKind.ML_KIT_CHINESE, OcrEngineKind.ML_KIT_LATIN)) {
             val blocks = tag(mlKit.recognize(bitmap, kind, settings))
             passes[kind] = blocks
-            if (AutoOcrLanguagePolicy.score(evidence(blocks)) > AutoOcrLanguagePolicy.score(evidence(best))) {
-                best = blocks
-                bestKind = kind
-            }
-            if (AutoOcrLanguagePolicy.dominant(evidence(blocks)) != null) break
+            Timber.tag("AutoOCR").d("candidate=%s blocks=%d score=%.3f languages=%s", kind,
+                blocks.size, AutoOcrLanguagePolicy.score(evidence(blocks)),
+                blocks.map { it.recognizedLanguage }.distinct())
         }
+        val best = selectAutoOcrRegions(passes.values.flatten(),
+            { AutoOcrEvidence(it.text, it.recognizedLanguage, it.confidence) }, ::overlaps)
         if (best.isEmpty()) return AutomaticOcrResult(best)
 
         val groups = best.filter { it.recognizedLanguage != null }.groupBy { it.recognizedLanguage!! }
@@ -85,7 +75,6 @@ class AutomaticOcrRecognizer @Inject constructor(
         // One refinement per detected language, never recursive Auto calls or an unbounded retry queue.
         for ((language) in groups.entries.sortedByDescending { it.value.sumOf { b -> b.text.length } }.take(4)) {
             val selected = route(language) ?: continue
-            if (selected.engine == bestKind) continue
             val effective = AutoOcrRoutingPolicy.settingsFor(settings, language, selected)
             val refined = try {
                 passes[selected.engine] ?: tag(recognize(bitmap, selected.engine, effective))
@@ -95,14 +84,23 @@ class AutomaticOcrRecognizer @Inject constructor(
                 Timber.tag("AutoOCR").w(error, "Refinement failed language=%s engine=%s; keep bootstrap", language, selected.engine)
                 continue
             }
-            val replaced = replaceAutoOcrRegions(result, refined, language, { it.recognizedLanguage }, ::overlaps)
+            val usable = selectAutoOcrRegions(refined.filter { candidate ->
+                AutoOcrLanguagePolicy.canRefine(
+                    evidence(result.filter { overlaps(candidate, it) }),
+                    AutoOcrEvidence(candidate.text, candidate.recognizedLanguage, candidate.confidence),
+                    language,
+                )
+            }, { AutoOcrEvidence(it.text, it.recognizedLanguage, it.confidence) }, ::overlaps)
+            val replaced = replaceAutoOcrRegions(result, usable, language, { it.recognizedLanguage }, ::overlaps)
             if (replaced != result) {
                 result = replaced
                 usedManga = usedManga || selected.engine == OcrEngineKind.MANGA_OCR_JA
             }
         }
-        Timber.tag("AutoOCR").i("bootstrap=%s passes=%d languages=%s blocks=%d", bestKind, passes.size, groups.keys, result.size)
-        return AutomaticOcrResult(result.sortedWith(compareBy({ it.boundingBox.top }, { it.boundingBox.left })), usedManga)
+        Timber.tag("AutoOCR").i("bootstrap=regions passes=%d languages=%s blocks=%d", passes.size, groups.keys, result.size)
+        // Parent IDs are local to each OCR pass and cannot identify a shared parent after mixing passes.
+        return AutomaticOcrResult(result.map { it.copy(parentRegionId = null) }
+            .sortedWith(compareBy({ it.boundingBox.top }, { it.boundingBox.left })), usedManga)
     }
 
     private fun overlaps(a: TextBlock, b: TextBlock): Boolean {
