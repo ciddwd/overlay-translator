@@ -12,6 +12,20 @@ import org.junit.Test
 class MainScreenPresetCarouselTest {
 
     @Test
+    fun carouselPlans_doesNotMatchADifferentKeyByConfigurationAlone() {
+        val source = AppSettings(model = "same-model")
+        val a = TranslationPresetCatalog.fromSettings("a", "a", "a", source)
+        val b = a.copy(id = "b", name = "b")
+        val settings = source.copy(translationPresets = listOf(a, b), activeTranslationPresetId = a.id)
+        listOf(
+            setOf("a") to "a", setOf("b") to "b",
+            emptySet<String>() to TranslationPresetCatalog.UNSAVED_DRAFT_ID,
+        ).forEach { (matching, expected) ->
+            assertEquals(expected, presetCarouselPlans(settings, "unsaved", matching).currentPresetId)
+        }
+    }
+
+    @Test
     fun presetHeading_isConciseInEveryLocale() {
         data class Case(
             val name: String,
@@ -248,13 +262,13 @@ class MainScreenPresetCarouselTest {
             Case("loads the requested preset", "TranslationPresetCatalog.find("),
             Case("checks shared model issues", "translationPresetCanApply(modelIssuesFor(preset))"),
             Case("rejects missing models", "if (!canApply) return false"),
-            Case("persists only after validation", "repo.update { current ->"),
+            Case("persists only after validation", "repo.applyTranslationPreset(id)"),
         ).forEach { case ->
             assertTrue("${case.name}: missing ${case.marker}", applyBlock.contains(case.marker))
         }
         assertTrue(
             "model validation must precede persistence",
-            applyBlock.indexOf("translationPresetCanApply") < applyBlock.indexOf("repo.update"),
+            applyBlock.indexOf("translationPresetCanApply") < applyBlock.indexOf("repo.applyTranslationPreset"),
         )
     }
 
@@ -273,14 +287,13 @@ class MainScreenPresetCarouselTest {
             Case("loads the target preset", "TranslationPresetCatalog.find("),
             Case("validates target model readiness", "translationPresetCanApply(modelIssuesFor(target))"),
             Case("rejects before persistence", "if (!canApply) return false"),
-            Case("saves the draft in the same update", "TranslationPresetCatalog.upsertCustom("),
-            Case("applies the target in the same update", "latestTarget.applyTo(withSavedPreset)"),
+            Case("saves and switches through the atomic repository operation", "repo.applyTranslationPreset(targetId, presetToSave)"),
         ).forEach { case ->
             assertTrue("${case.name}: missing ${case.marker}", block.contains(case.marker))
         }
         assertTrue(
             "validation precedes the settings update",
-            block.indexOf("translationPresetCanApply") < block.indexOf("repo.update"),
+            block.indexOf("translationPresetCanApply") < block.indexOf("repo.applyTranslationPreset"),
         )
     }
 
@@ -354,7 +367,7 @@ class MainScreenPresetCarouselTest {
         val carousel = source.substring(carouselFunction, carouselFunctionEnd)
         val actionCardFunction = source.substring(
             source.indexOf("private fun ActionCard("),
-            source.indexOf("private enum class StartMode"),
+            source.indexOf("@HiltViewModel", source.indexOf("private fun ActionCard(")),
         )
 
         data class Case(val name: String, val expected: Boolean)
@@ -548,8 +561,9 @@ class MainScreenPresetCarouselTest {
                 carousel.contains("verticalArrangement = Arrangement.spacedBy(4.dp)"),
             ),
             Case(
-                "keeps the original compact pager and card heights",
+                "restores the compact pager after accessibility leaves current status",
                 source.contains(".height(196.dp)") &&
+                    !source.contains(".height(220.dp)") &&
                     carousel.contains(".height(140.dp)") &&
                     carousel.contains(".height(132.dp)") &&
                     !carousel.contains(".height(172.dp)"),

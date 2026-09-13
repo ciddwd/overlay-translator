@@ -109,13 +109,11 @@ internal object MangaMaskDebugAnalyzer {
                 workspace = workspace,
             )
         }
-        val polygonMask = rasterizePolygons(width, height, polygons)
         val textEraseMask = buildTextEraseMask(
             width = width,
             height = height,
             argb = argb,
             probabilityTextMask = probabilityTextMask,
-            polygonMask = polygonMask,
             polygons = polygons,
         )
         return Analysis(
@@ -202,21 +200,29 @@ internal object MangaMaskDebugAnalyzer {
         height: Int,
         argb: IntArray,
         probabilityTextMask: BooleanArray,
-        polygonMask: BooleanArray,
         polygons: List<Polygon>,
     ): BooleanArray {
         val core = BooleanArray(width * height)
+        val polygonMask = BooleanArray(core.size)
         polygons.forEach { polygon ->
             val bounds = clamp(polygon.bounds, width, height)
             if (bounds.width <= 0 || bounds.height <= 0) return@forEach
             val samples = mutableListOf<Int>()
+            val localSize = bounds.width * bounds.height
+            val localArgb = IntArray(localSize)
+            val localSupport = BooleanArray(localSize)
+            val localStrong = BooleanArray(localSize)
+            // The same point-in-polygon result serves sampling, support and the final clipping
+            // mask. Preserve the original pixel-center rule, including tilted/overlapping boxes.
             for (y in bounds.top until bounds.bottom) {
                 for (x in bounds.left until bounds.right) {
                     val index = y * width + x
-                    if (
-                        probabilityTextMask[index] &&
-                        pointInPolygon(x + 0.5f, y + 0.5f, polygon.points)
-                    ) {
+                    val localIndex = (y - bounds.top) * bounds.width + (x - bounds.left)
+                    localArgb[localIndex] = argb[index]
+                    val inside = pointInPolygon(x + 0.5f, y + 0.5f, polygon.points)
+                    localSupport[localIndex] = inside
+                    if (inside) polygonMask[index] = true
+                    if (inside && probabilityTextMask[index]) {
                         samples += luminance(argb[index])
                     }
                 }
@@ -227,23 +233,17 @@ internal object MangaMaskDebugAnalyzer {
                 argb = argb,
                 probabilityTextMask = probabilityTextMask,
                 polygon = polygon,
+                localSupport = localSupport,
             )
             val selection = foregroundSelection(
                 samples = samples,
                 surroundingSamples = surroundingColors.map(::luminance),
             )
-            val localSize = bounds.width * bounds.height
-            val localArgb = IntArray(localSize)
-            val localSupport = BooleanArray(localSize)
-            val localStrong = BooleanArray(localSize)
             for (y in bounds.top until bounds.bottom) {
                 for (x in bounds.left until bounds.right) {
                     val index = y * width + x
                     val localIndex = (y - bounds.top) * bounds.width + (x - bounds.left)
-                    localArgb[localIndex] = argb[index]
-                    val inside = pointInPolygon(x + 0.5f, y + 0.5f, polygon.points)
-                    localSupport[localIndex] = inside
-                    localStrong[localIndex] = inside &&
+                    localStrong[localIndex] = localSupport[localIndex] &&
                         probabilityTextMask[index] &&
                         (selection?.contains(luminance(argb[index])) ?: true)
                 }
@@ -305,13 +305,11 @@ internal object MangaMaskDebugAnalyzer {
         surroundingSamples: List<Int>,
     ): ForegroundSelection? {
         if (samples.size < MIN_TEXT_LUMINANCE_SAMPLES) return null
-        val sorted = samples.sorted()
-        val low = sorted[(sorted.lastIndex * 0.1f).roundToInt()]
-        val high = sorted[(sorted.lastIndex * 0.9f).roundToInt()]
-        if (high - low < MIN_TEXT_LUMINANCE_CONTRAST) return null
-
         val histogram = IntArray(256)
         samples.forEach { histogram[it.coerceIn(0, 255)]++ }
+        val low = histogramValueAt(histogram, (samples.lastIndex * 0.1f).roundToInt())
+        val high = histogramValueAt(histogram, (samples.lastIndex * 0.9f).roundToInt())
+        if (high - low < MIN_TEXT_LUMINANCE_CONTRAST) return null
         val total = samples.size
         var totalWeighted = 0L
         histogram.forEachIndexed { value, count -> totalWeighted += value.toLong() * count }
@@ -335,20 +333,21 @@ internal object MangaMaskDebugAnalyzer {
                 bestThreshold = threshold
             }
         }
-        val darkCount = samples.count { it <= bestThreshold }
+        val darkCount = (0..bestThreshold).sumOf { histogram[it] }
         val lightCount = total - darkCount
         val surroundingBackground = surroundingSamples
             .takeIf { it.size >= MIN_SURROUNDING_LUMINANCE_SAMPLES }
-            ?.sorted()
-            ?.let { it[it.size / 2] }
+            ?.let { surrounding ->
+                val surroundingHistogram = IntArray(256)
+                surrounding.forEach { surroundingHistogram[it]++ }
+                histogramValueAt(surroundingHistogram, surrounding.size / 2)
+            }
         val darkForeground = if (
             surroundingBackground != null &&
             darkCount > 0 &&
             lightCount > 0
         ) {
-            val darkWeighted = samples.sumOf { value ->
-                if (value <= bestThreshold) value.toLong() else 0L
-            }
+            val darkWeighted = (0..bestThreshold).sumOf { it.toLong() * histogram[it] }
             val darkMean = darkWeighted.toDouble() / darkCount
             val lightMean = (totalWeighted - darkWeighted).toDouble() / lightCount
             val darkDistance = abs(darkMean - surroundingBackground)
@@ -367,12 +366,23 @@ internal object MangaMaskDebugAnalyzer {
         )
     }
 
+    /** Exact zero-based order statistic for byte luminance, without sorting pixel-sized lists. */
+    private fun histogramValueAt(histogram: IntArray, index: Int): Int {
+        var count = 0
+        histogram.forEachIndexed { value, frequency ->
+            count += frequency
+            if (count > index) return value
+        }
+        error("Luminance rank outside histogram: $index")
+    }
+
     private fun surroundingColorSamples(
         width: Int,
         height: Int,
         argb: IntArray,
         probabilityTextMask: BooleanArray,
         polygon: Polygon,
+        localSupport: BooleanArray,
     ): List<Int> {
         val bounds = clamp(polygon.bounds, width, height)
         val margin = (minOf(bounds.width, bounds.height) * SURROUNDING_SAMPLE_MARGIN_RATIO)
@@ -393,7 +403,9 @@ internal object MangaMaskDebugAnalyzer {
             for (x in expanded.left until expanded.right) {
                 val index = y * width + x
                 if (probabilityTextMask[index]) continue
-                if (pointInPolygon(x + 0.5f, y + 0.5f, polygon.points)) continue
+                if (x in bounds.left until bounds.right && y in bounds.top until bounds.bottom &&
+                    localSupport[(y - bounds.top) * bounds.width + x - bounds.left]
+                ) continue
                 samples += argb[index]
             }
         }
@@ -1112,7 +1124,7 @@ internal object MangaMaskDebugAnalyzer {
         attempts = attempts,
     )
 
-    private fun pointInPolygon(x: Float, y: Float, points: List<Point>): Boolean {
+    internal fun pointInPolygon(x: Float, y: Float, points: List<Point>): Boolean {
         var inside = false
         var previous = points.last()
         for (current in points) {
@@ -1208,7 +1220,13 @@ internal class MangaProbabilityMaskAccumulator(
         offsetX: Int,
         offsetY: Int,
         threshold: Float,
+        allowedQuads: List<DBPostprocessor.Quad>? = null,
     ) {
+        val allowed = allowedQuads?.map { quad ->
+            MangaMaskDebugAnalyzer.Polygon(listOf(quad.p0, quad.p1, quad.p2, quad.p3).map {
+                MangaMaskDebugAnalyzer.Point(it.x, it.y)
+            })
+        }
         probabilityMap.forEachIndexed { mapY, row ->
             row.forEachIndexed { mapX, probability ->
                 if (probability < threshold) return@forEachIndexed
@@ -1218,7 +1236,11 @@ internal class MangaProbabilityMaskAccumulator(
                 val bottom = (ceil((mapY + 1) * scaleY).toInt() + offsetY).coerceIn(0, height)
                 for (y in top until bottom) {
                     val rowOffset = y * width
-                    for (x in left until right) pixels[rowOffset + x] = true
+                    for (x in left until right) {
+                        if (allowed == null || allowed.any { polygon ->
+                            MangaMaskDebugAnalyzer.pointInPolygon(x + 0.5f, y + 0.5f, polygon.points)
+                        }) pixels[rowOffset + x] = true
+                    }
                 }
             }
         }

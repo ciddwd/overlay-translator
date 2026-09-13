@@ -11,9 +11,8 @@ import kotlin.math.sqrt
  * DBNet 后处理纯 Kotlin 实现，对齐 PaddleOCR 官方流水线：
  *   prob_map → bin → BFS 联通域 → 边界点 → 凸包 → 最小外接旋转矩形 → box 得分复核 → unclip 外推。
  *
- * 这里没有引入 OpenCV/pyclipper 依赖：APK 不增大。代价是密集多文字行场景识别精度
- * 略低于 cv2.findContours（cv2 用 Suzuki-Abe 拓扑轮廓追踪，能更稳地分开紧贴的不同
- * 文字块），但对单段横排 / 斜排文字足够。
+ * No OpenCV/pyclipper runtime dependency. Optional column separation handles weak probability
+ * bridges before unclip; replacing connected components with contours alone does not split them.
  */
 object DBPostprocessor {
 
@@ -21,8 +20,10 @@ object DBPostprocessor {
      * 旋转矩形 4 个角，按 left-top / right-top / right-bottom / left-bottom 排（针对
      * 接近水平的文字行）。对倾斜矩形，p0->p1 方向就是文字基线方向。
      */
-    data class Quad(
-        val p0: PointF, val p1: PointF, val p2: PointF, val p3: PointF
+    data class Quad @JvmOverloads constructor(
+        val p0: PointF, val p1: PointF, val p2: PointF, val p3: PointF,
+        // Unexpanded detector support, distinct from the recognition crop's padding.
+        val support: Quad? = null,
     ) {
         val centerX: Float get() = (p0.x + p1.x + p2.x + p3.x) / 4f
         val centerY: Float get() = (p0.y + p1.y + p2.y + p3.y) / 4f
@@ -49,6 +50,7 @@ object DBPostprocessor {
      * @param unclipRatio 外扩比例（pyclipper unclip 公式：dist = area * ratio / perim）
      * @param minSide 旋转矩形短边阈值（prob_map 尺度下像素）
      */
+    @JvmOverloads
     fun extractQuads(
         probMap: Array<FloatArray>,
         scaleX: Float,
@@ -56,12 +58,15 @@ object DBPostprocessor {
         binThresh: Float,
         scoreThresh: Float,
         unclipRatio: Float,
-        minSide: Int = 3
+        minSide: Int = 3,
+        retainSupport: Boolean = false,
+        columnCutValidator: ((Float, Int, Int) -> Boolean)? = null,
     ): List<Quad> {
         val h = probMap.size
         val w = probMap[0].size
         val visited = Array(h) { BooleanArray(w) }
         val result = mutableListOf<Quad>()
+        val splitIndices = mutableSetOf<Int>()
         val maxUnclip = (minOf(w, h) * 0.05f).coerceAtLeast(4f)
 
         for (y0 in 0 until h) {
@@ -96,19 +101,70 @@ object DBPostprocessor {
                 if (side < minSide) continue
                 val score = boxScore(probMap, quad)
                 if (score < scoreThresh) continue
-                val unclipped = unclip(quad, unclipRatio, maxUnclip)
-                // 映射回原图
-                val mapped = Quad(
-                    PointF(unclipped.p0.x * scaleX, unclipped.p0.y * scaleY),
-                    PointF(unclipped.p1.x * scaleX, unclipped.p1.y * scaleY),
-                    PointF(unclipped.p2.x * scaleX, unclipped.p2.y * scaleY),
-                    PointF(unclipped.p3.x * scaleX, unclipped.p3.y * scaleY)
-                )
-                result.add(mapped)
+                val partition = if (columnCutValidator != null &&
+                    kotlin.math.abs(quad.p1.y - quad.p0.y) < quad.width * 0.1f
+                ) PaddleTextColumnSplitPolicy.split(
+                    probMap, component.map { it.y * w + it.x }.toIntArray(), binThresh, columnCutValidator,
+                ) else null
+                val childSupports = partition?.members?.map { pixels ->
+                    minAreaRect(convexHull(pixels.map { IntPoint(it % w, it / w) }))
+                }?.takeIf { children -> children.all { it != null && minOf(it.width, it.height) >= minSide && boxScore(probMap, it) >= scoreThresh } }
+                val supports = childSupports?.filterNotNull() ?: listOf(quad)
+                supports.forEachIndexed { childIndex, support ->
+                    var unclipped = unclip(support, unclipRatio, maxUnclip)
+                    if (supports.size > 1) {
+                        // Splitting changes only the cross-column axis. Keep the parent's longitudinal
+                        // extent: detached punctuation may lie beyond a short child's probability core.
+                        val parentCrop = unclip(quad, unclipRatio, maxUnclip)
+                        val xs = listOf(unclipped.p0.x, unclipped.p1.x, unclipped.p2.x, unclipped.p3.x)
+                        unclipped = Quad(
+                            PointF(xs.min(), parentCrop.p0.y), PointF(xs.max(), parentCrop.p1.y),
+                            PointF(xs.max(), parentCrop.p2.y), PointF(xs.min(), parentCrop.p3.y),
+                        )
+                        val l = partition!!.cuts.getOrNull(childIndex - 1) ?: Float.NEGATIVE_INFINITY
+                        val r = partition.cuts.getOrNull(childIndex) ?: Float.POSITIVE_INFINITY
+                        unclipped = clipHorizontal(unclipped, l, r)
+                        splitIndices += result.size
+                    }
+                    val mapped = Quad(
+                        PointF(unclipped.p0.x * scaleX, unclipped.p0.y * scaleY),
+                        PointF(unclipped.p1.x * scaleX, unclipped.p1.y * scaleY),
+                        PointF(unclipped.p2.x * scaleX, unclipped.p2.y * scaleY),
+                        PointF(unclipped.p3.x * scaleX, unclipped.p3.y * scaleY),
+                        support = if (retainSupport || columnCutValidator != null) Quad(
+                            PointF(support.p0.x * scaleX, support.p0.y * scaleY),
+                            PointF(support.p1.x * scaleX, support.p1.y * scaleY),
+                            PointF(support.p2.x * scaleX, support.p2.y * scaleY),
+                            PointF(support.p3.x * scaleX, support.p3.y * scaleY),
+                        ) else null,
+                    )
+                    result.add(mapped)
+                }
             }
         }
-        return result
+        // An outer child's padding must not reach an already separate neighbouring column.
+        if (splitIndices.isEmpty()) return result
+        return result.mapIndexed { index, crop ->
+            if (index !in splitIndices) return@mapIndexed crop
+            val core = crop.support!!
+            var leftLimit = Float.NEGATIVE_INFINITY
+            var rightLimit = Float.POSITIVE_INFINITY
+            result.forEach { other ->
+                val adjacent = other.support ?: return@forEach
+                if (other === crop) return@forEach
+                val overlap = minOf(core.p3.y, adjacent.p3.y) - maxOf(core.p0.y, adjacent.p0.y)
+                if (overlap < minOf(core.height, adjacent.height) * 0.4f) return@forEach
+                if (adjacent.p1.x < core.p0.x) leftLimit = maxOf(leftLimit, (adjacent.p1.x + core.p0.x) / 2)
+                if (adjacent.p0.x > core.p1.x) rightLimit = minOf(rightLimit, (adjacent.p0.x + core.p1.x) / 2)
+            }
+            clipHorizontal(crop, leftLimit, rightLimit).copy(support = core)
+        }
     }
+
+    private fun clipHorizontal(q: Quad, left: Float, right: Float) = Quad(
+        PointF(q.p0.x.coerceIn(left, right), q.p0.y), PointF(q.p1.x.coerceIn(left, right), q.p1.y),
+        PointF(q.p2.x.coerceIn(left, right), q.p2.y), PointF(q.p3.x.coerceIn(left, right), q.p3.y),
+    )
 
     /** Andrew monotone chain 凸包，返回逆时针顺序点集。 */
     private fun convexHull(pts: List<IntPoint>): List<IntPoint> {

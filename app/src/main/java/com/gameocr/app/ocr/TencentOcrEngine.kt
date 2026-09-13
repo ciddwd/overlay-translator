@@ -49,7 +49,15 @@ class TencentOcrEngine @Inject constructor(
 ) : OcrEngine {
 
     override suspend fun recognize(bitmap: Bitmap, kind: OcrEngineKind): List<TextBlock> {
-        val s = settingsRepository.get()
+        return recognize(bitmap, kind, settingsRepository.get())
+    }
+
+    override suspend fun recognize(
+        bitmap: Bitmap,
+        kind: OcrEngineKind,
+        settings: com.gameocr.app.data.Settings,
+    ): List<TextBlock> {
+        val s = settings
         if (s.tencentSecretId.isBlank() || s.tencentSecretKey.isBlank()) {
             throw IllegalStateException(appContext.getString(R.string.err_tencent_no_keys))
         }

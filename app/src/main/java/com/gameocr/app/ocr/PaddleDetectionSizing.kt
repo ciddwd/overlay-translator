@@ -34,13 +34,16 @@ internal object PaddleDetectionSizing {
         sourceWidth: Int,
         sourceHeight: Int,
         profile: PaddleDetectionProfile,
+        maxSideOverride: Int? = null,
     ): PaddleDetectionResizePlan {
+        val maxSide = maxSideOverride ?: profile.maxSideLen
+        require(maxSide >= ALIGNMENT && maxSide % ALIGNMENT == 0)
         val safeWidth = sourceWidth.coerceAtLeast(1)
         val safeHeight = sourceHeight.coerceAtLeast(1)
         val longestSide = maxOf(safeWidth, safeHeight)
-        val resizeRatio = minOf(1f, profile.maxSideLen.toFloat() / longestSide)
-        val targetWidth = align((safeWidth * resizeRatio).roundToInt(), profile.maxSideLen)
-        val targetHeight = align((safeHeight * resizeRatio).roundToInt(), profile.maxSideLen)
+        val resizeRatio = minOf(1f, maxSide.toFloat() / longestSide)
+        val targetWidth = align((safeWidth * resizeRatio).roundToInt(), maxSide)
+        val targetHeight = align((safeHeight * resizeRatio).roundToInt(), maxSide)
         return PaddleDetectionResizePlan(
             sourceWidth = safeWidth,
             sourceHeight = safeHeight,

@@ -4,7 +4,8 @@ import android.content.Context
 import com.gameocr.app.R
 import com.gameocr.app.data.LlmMirrorChoice
 import com.gameocr.app.data.SettingsRepository
-import com.gameocr.app.util.HttpResumePolicy
+import com.gameocr.app.download.ModelFileDownloader
+import com.gameocr.app.download.ModelDownloadWorkPolicy
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -14,9 +15,6 @@ import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.runInterruptible
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import timber.log.Timber
 import java.io.File
 import java.io.FileOutputStream
@@ -32,16 +30,12 @@ import java.nio.charset.StandardCharsets
  *  - vocab.txt           (~24KB)  6144 行，行号即 token id
  *  - config.json / generation_config.json / preprocessor_config.json / special_tokens_map.json
  *
- * **下载源策略**：仅 huggingface.co 原站 + 用户自定义 mirror 字段。**与 [PaddleModelInstaller] 不同**——
- * 实测 hf-mirror.com 对此 repo **不代理**（HTTP/1.1 308 Permanent Redirect 回 huggingface.co/...，
- * 见 plan 文档 Phase 1 调研结论）。所以这里不带社区镜像兜底，失败提示文案强制提醒用户开代理。
- *
- * 模式跟 [PaddleModelInstaller] 一致：OkHttp + .tmp + rename + Flow<Progress>。
+ * 下载源沿用用户配置；文件传输、续传校验及安装由 ModelFileDownloader 统一处理。
  */
 @Singleton
 class MangaOcrModelInstaller @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val client: OkHttpClient,
+    private val downloader: ModelFileDownloader,
     private val settingsRepository: SettingsRepository
 ) {
 
@@ -86,11 +80,23 @@ class MangaOcrModelInstaller @Inject constructor(
         val error: String? = null
     )
 
+    internal suspend fun downloadProbeUrl(): String {
+        val settings = settingsRepository.get()
+        val legacyMirror = settings.mangaOcrModelMirrorUrl.trim().takeIf { it.isNotBlank() }
+        val networkMirror = settings.localLlmMirrorUrl
+            .trim()
+            .takeIf { settings.localLlmMirror == LlmMirrorChoice.CUSTOM && it.isNotBlank() }
+        return urlsFor(
+            userMirror = legacyMirror ?: networkMirror,
+            file = FILE_CONFIG,
+            choice = settings.localLlmMirror,
+        ).first()
+    }
+
     /**
      * 下载 7 个文件，单文件失败 → 整体抛错（与 paddle 一致）。
      *
-     * 用户自定义 mirror 优先，原站兜底；两者都失败抛 [RuntimeException]，message 明示
-     * `huggingface.co 当前不可达，请检查代理 / VPN`，让用户走「本地导入」按钮。
+     * 保留最后一次真实异常，不将文件错误或 HTTP 状态统一归为网络不可达。
      */
     fun downloadAll(): Flow<Progress> = channelFlow {
         val settings = settingsRepository.get()
@@ -108,7 +114,7 @@ class MangaOcrModelInstaller @Inject constructor(
             }
             val urls = urlsFor(userMirror, name, settings.localLlmMirror)
             var ok = false
-            var lastErr: String? = null
+            var lastErr: Exception? = null
             for (url in urls) {
                 val mirror = url.substringAfter("//").substringBefore("/")
                 try {
@@ -116,19 +122,14 @@ class MangaOcrModelInstaller @Inject constructor(
                     ok = true
                     send(Progress(name, mirror, dest.length(), dest.length(), true))
                     break
-                } catch (t: Throwable) {
+                } catch (t: Exception) {
                     if (t is CancellationException) throw t
-                    lastErr = "${t.javaClass.simpleName}: ${t.message}"
+                    lastErr = t
+                    if (!ModelDownloadWorkPolicy.mayTryAnotherSource(t)) throw t
                     Timber.w(t, "manga-ocr 镜像失败: $url")
-                    send(Progress(name, mirror, 0, 0, false, error = lastErr))
                 }
             }
-            if (!ok) {
-                send(Progress(name, "(all failed)", 0, 0, false, error = lastErr ?: "unknown"))
-                throw RuntimeException(
-                    context.getString(R.string.err_manga_ocr_all_mirrors_failed_format, name, lastErr ?: "")
-                )
-            }
+            if (!ok) throw lastErr ?: IllegalArgumentException("Model download source is empty")
         }
     }.flowOn(Dispatchers.IO)
 
@@ -145,56 +146,10 @@ class MangaOcrModelInstaller @Inject constructor(
         dest: File,
         channel: SendChannel<Progress>,
         name: String,
-        mirror: String
-    ) = runInterruptible {
-        val tmp = File(dest.parentFile, dest.name + ".tmp")
-        val resumeFrom = tmp.length().takeIf { tmp.exists() } ?: 0L
-        Timber.i("manga-ocr trying: $url resumeFrom=$resumeFrom")
-        var expectedTotal = -1L
-        var downloaded = 0L
-        val request = Request.Builder().url(url).apply {
-            HttpResumePolicy.rangeHeader(resumeFrom)?.let { header("Range", it) }
-        }.build()
-        client.newCall(request).execute().use { r ->
-            if (!r.isSuccessful) throw RuntimeException("HTTP ${r.code}")
-            val body = r.body ?: throw RuntimeException("empty body")
-            val contentLength = body.contentLength().takeIf { it > 0 } ?: -1L
-            val resumePlan = HttpResumePolicy.responsePlan(resumeFrom, r.code, contentLength)
-            expectedTotal = resumePlan.expectedTotal
-            downloaded = resumePlan.initialDownloaded
-            var lastReported = downloaded
-            val output = RandomAccessFile(tmp, "rw")
-            body.byteStream().use { input ->
-                output.use {
-                    if (resumePlan.append) output.seek(resumeFrom) else output.setLength(0)
-                    val buf = ByteArray(64 * 1024)
-                    while (true) {
-                        val n = input.read(buf)
-                        if (n <= 0) break
-                        output.write(buf, 0, n)
-                        downloaded += n
-                        // 节流：每 200KB 报一次（与 paddle 一致）
-                        if (downloaded - lastReported >= 200 * 1024) {
-                            lastReported = downloaded
-                            channel.trySend(Progress(name, mirror, downloaded, expectedTotal, false))
-                        }
-                    }
-                }
-            }
-        }
-        if (expectedTotal > 0 && downloaded != expectedTotal) {
-            throw RuntimeException("download truncated: got $downloaded of $expectedTotal bytes")
-        }
-        val validationError = validateModelFile(name, tmp)
-        if (validationError != null) {
-            tmp.delete()
-            throw RuntimeException("invalid manga-ocr model $name: $validationError")
-        }
-        if (dest.exists()) dest.delete()
-        if (!tmp.renameTo(dest)) {
-            throw RuntimeException(
-                context.getString(R.string.err_manga_ocr_rename_failed_format, tmp.name, dest.name)
-            )
+        mirror: String,
+    ) {
+        downloader.download(url, dest, { validateModelFile(name, it) }) { downloaded, total ->
+            channel.trySend(Progress(name, mirror, downloaded, total, false))
         }
     }
 
@@ -326,7 +281,12 @@ class MangaOcrModelInstaller @Inject constructor(
         }
 
         private fun validateVocabFile(file: File): String? {
-            val lines = runCatching { file.useLines { it.take(4).toList() } }
+            // The four required special tokens are at the start; never allocate an unbounded line.
+            val lines = runCatching {
+                val header = ByteArray(256)
+                val count = file.inputStream().use { it.read(header) }
+                String(header, 0, count.coerceAtLeast(0), Charsets.UTF_8).lineSequence().take(4).toList()
+            }
                 .getOrElse { return "unreadable: ${it.message}" }
             if (lines.size < 4) return "vocab too short"
             if (lines[0] != "[PAD]" || lines[2] != "[CLS]" || lines[3] != "[SEP]") {
@@ -336,9 +296,28 @@ class MangaOcrModelInstaller @Inject constructor(
         }
 
         private fun validateJsonFile(file: File): String? {
-            val text = runCatching { file.readText(Charsets.UTF_8).trim() }
-                .getOrElse { return "unreadable: ${it.message}" }
-            return if (text.startsWith("{") && text.endsWith("}")) null else "invalid json object"
+            // Keep the existing envelope validation without materializing a possibly huge response.
+            var first: Char? = null
+            var last: Char? = null
+            try {
+                file.reader(Charsets.UTF_8).use { input ->
+                    val chunk = CharArray(4096)
+                    while (true) {
+                        if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("cancelled")
+                        val count = input.read(chunk)
+                        if (count < 0) break
+                        for (index in 0 until count) if (!chunk[index].isWhitespace()) {
+                            if (first == null) first = chunk[index]
+                            last = chunk[index]
+                        }
+                    }
+                }
+            } catch (error: java.io.InterruptedIOException) {
+                throw error
+            } catch (error: java.io.IOException) {
+                return "unreadable: ${error.message}"
+            }
+            return if (first == '{' && last == '}') null else "invalid json object"
         }
 
         private fun looksLikeTextError(file: File): Boolean {

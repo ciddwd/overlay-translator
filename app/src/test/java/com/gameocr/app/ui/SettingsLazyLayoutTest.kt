@@ -68,11 +68,12 @@ class SettingsLazyLayoutTest {
             Case("overlay", 5),
             Case("word_select", 6),
             Case("capture_region", 7),
-            Case("trigger", 8),
-            Case("floating", 9),
-            Case("arc_menu", 10),
-            Case("developer", 11),
-            Case("network", 12),
+            Case("input_translation", 8),
+            Case("trigger", 9),
+            Case("floating", 10),
+            Case("arc_menu", 11),
+            Case("developer", 12),
+            Case("network", 13),
         ).forEach { case ->
             assertEquals(case.key, case.expectedIndex, settingsSectionIndex(case.key))
         }
@@ -102,7 +103,8 @@ class SettingsLazyLayoutTest {
             Case("general before presets", "GENERAL", "PRESETS"),
             Case("OCR before overlay", "OCR", "OVERLAY"),
             Case("word select before capture region", "WORD_SELECT", "CAPTURE_REGION"),
-            Case("capture region before loop trigger", "CAPTURE_REGION", "TRIGGER"),
+            Case("capture region before input translation", "CAPTURE_REGION", "INPUT_TRANSLATION"),
+            Case("input translation before loop trigger", "INPUT_TRANSLATION", "TRIGGER"),
             Case("loop trigger before floating", "TRIGGER", "FLOATING"),
             Case("floating before arc menu", "FLOATING", "ARC_MENU"),
         ).forEach { case ->
@@ -323,6 +325,7 @@ class SettingsLazyLayoutTest {
                 "tts" -> "TTS"
                 "ocr" -> "OCR"
                 "capture_region" -> "CAPTURE_REGION"
+                "input_translation" -> "INPUT_TRANSLATION"
                 "overlay" -> "OVERLAY"
                 "floating" -> "FLOATING"
                 "arc_menu" -> "ARC_MENU"

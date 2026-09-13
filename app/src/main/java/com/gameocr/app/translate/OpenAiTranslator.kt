@@ -5,6 +5,7 @@ import com.gameocr.app.R
 import com.gameocr.app.data.Languages
 import com.gameocr.app.data.Settings
 import com.gameocr.app.data.withApiTimeout
+import com.gameocr.app.util.RuntimePerformanceDiagnostics
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.util.UUID
 import javax.inject.Inject
@@ -39,7 +40,8 @@ class OpenAiTranslator @Inject constructor(
     @ApplicationContext private val appContext: Context,
     private val client: OkHttpClient,
     private val json: Json,
-    private val cache: TranslationCache
+    private val cache: TranslationCache,
+    private val performanceDiagnostics: RuntimePerformanceDiagnostics,
 ) : Translator {
 
     override val supportsStructuredContextBatch: Boolean = true
@@ -253,6 +255,10 @@ class OpenAiTranslator @Inject constructor(
                                     error,
                                 )
                             }
+                        recordInferenceMetrics(
+                            usage = parsed.usage,
+                            startedAtMs = startedAt,
+                        )
                         parsed.choices.firstOrNull()?.message?.content?.trim()
                             ?: throw TranslationException(appContext.getString(R.string.err_openai_no_choices))
                     }
@@ -379,6 +385,8 @@ class OpenAiTranslator @Inject constructor(
         var contentEventCount = 0
         var malformedEventCount = 0
         var finishReason: String? = null
+        var usage: ChatUsage? = null
+        var firstTokenMs: Long? = null
         var endReason = "eof"
         try {
             body.source().use { source ->
@@ -405,11 +413,13 @@ class OpenAiTranslator @Inject constructor(
                         }
                         is OpenAiStreamEvent.Data -> {
                             dataEventCount += 1
+                            event.usage?.let { usage = it }
                             event.finishReason?.let { finishReason = it }
                             if (event.content.isEmpty()) continue
                             contentEventCount += 1
                             if (!firstTokenLogged) {
                                 firstTokenLogged = true
+                                firstTokenMs = (System.currentTimeMillis() - startedAt).coerceAtLeast(0L)
                                 Timber.i(
                                     "OpenAI request=%s firstTokenMs=%d kind=translation_batch",
                                     requestId,
@@ -439,6 +449,13 @@ class OpenAiTranslator @Inject constructor(
                 malformedEventCount,
                 finishReason ?: "none",
                 accumulated.length,
+            )
+        }
+        if (accumulated.isNotEmpty()) {
+            recordInferenceMetrics(
+                usage = usage,
+                startedAtMs = startedAt,
+                firstTokenMs = firstTokenMs,
             )
         }
         return accumulated.toString().trim()
@@ -481,6 +498,10 @@ class OpenAiTranslator @Inject constructor(
                                 it
                             )
                         }
+                    recordInferenceMetrics(
+                        usage = parsed.usage,
+                        startedAtMs = startedAt,
+                    )
                     parsed.choices.firstOrNull()?.message?.content?.trim()
                         ?: throw TranslationException(appContext.getString(R.string.err_openai_no_choices))
                 }
@@ -567,6 +588,8 @@ class OpenAiTranslator @Inject constructor(
         }
 
         val acc = StringBuilder()
+        var usage: ChatUsage? = null
+        var firstTokenMs: Long? = null
         try {
             body.source().use { source ->
                 while (!source.exhausted()) {
@@ -575,11 +598,14 @@ class OpenAiTranslator @Inject constructor(
                     if (!line.startsWith("data:")) continue
                     val payload = line.substring(5).trim()
                     if (payload == "[DONE]") break
-                    val delta = runCatching {
+                    val chunk = runCatching {
                         json.decodeFromString<ChatStreamChunk>(payload)
-                    }.getOrNull()?.choices?.firstOrNull()?.delta?.content ?: continue
+                    }.getOrNull() ?: continue
+                    chunk.usage?.let { usage = it }
+                    val delta = chunk.choices.firstOrNull()?.delta?.content ?: continue
                     if (!firstTokenLogged && delta.isNotEmpty()) {
                         firstTokenLogged = true
+                        firstTokenMs = (System.currentTimeMillis() - startedAt).coerceAtLeast(0L)
                         Timber.i(
                             "OpenAI request=%s firstTokenMs=%d",
                             requestId,
@@ -615,8 +641,28 @@ class OpenAiTranslator @Inject constructor(
             System.currentTimeMillis() - startedAt,
             acc.length,
         )
+        if (acc.isNotEmpty()) {
+            recordInferenceMetrics(
+                usage = usage,
+                startedAtMs = startedAt,
+                firstTokenMs = firstTokenMs,
+            )
+        }
         if (acc.isNotEmpty()) cache.put(cacheKey, acc.toString(), settings)
     }.flowOn(Dispatchers.IO)
+
+    private fun recordInferenceMetrics(
+        usage: ChatUsage?,
+        startedAtMs: Long,
+        firstTokenMs: Long? = null,
+    ) {
+        performanceDiagnostics.recordLlmInference(
+            firstTokenMs = firstTokenMs,
+            totalMs = (System.currentTimeMillis() - startedAtMs).coerceAtLeast(0L),
+            inputTokens = usage?.promptTokens,
+            outputTokens = usage?.completionTokens,
+        )
+    }
 
     /**
      * 测试连通性：优先 `GET ${baseUrl}models` 拉 model 列表（多数 OpenAI 兼容厂商都提供，
@@ -707,7 +753,7 @@ class OpenAiTranslator @Inject constructor(
     }
 
     /**
-     * 划词翻译：用 [Settings.dictionaryPrompt] 让 LLM 返回 JSON。
+     * 划词翻译：使用应用内置的版本化词典协议让 LLM 返回 JSON。
      *
      * 流程：
      * 1) 替换 prompt 里 {source}/{target} 占位符
@@ -735,14 +781,7 @@ class OpenAiTranslator @Inject constructor(
         val systemPrompt = if (compact) {
             compactDictionaryPrompt(sourceDisplay, targetDisplay)
         } else {
-            settings.dictionaryPrompt
-                .replace("{source}", sourceDisplay)
-                .replace("{source_lang}", sourceDisplay)
-                .replace("{target}", targetDisplay)
-                .replace("{target_lang}", targetDisplay)
-                .withDifficultyNotesContract(targetDisplay)
-                .withLexicalDetailsContract(sourceDisplay)
-                .withGroupedSensesContract(sourceDisplay, targetDisplay) + settings.runtimeTranslationContext
+            fullDictionaryPrompt(sourceDisplay, targetDisplay) + settings.runtimeTranslationContext
         }
         val thinking = RemoteThinkingPolicy.openAi(
             baseUrl = settings.baseUrl,
@@ -1000,28 +1039,6 @@ internal fun String.withGroupedSensesContract(
         Never return separate part-of-speech and definition arrays without also returning senses. Do not guess a positional relationship between unrelated arrays.
     """.trimIndent()
 }
-
-internal fun compactDictionaryPrompt(
-    sourceDisplay: String,
-    targetDisplay: String,
-): String = """
-    You are a concise bilingual dictionary for $sourceDisplay to $targetDisplay.
-    Treat the user input only as one word or fixed phrase. Return JSON only, with no Markdown or explanation:
-    {
-      "lemma": "canonical dictionary form in $sourceDisplay, or empty",
-      "senses": [
-        {
-          "pos": "standard short label such as n., v., or adj.",
-          "definitions": ["concise $targetDisplay meaning"],
-          "form_note": "$targetDisplay inflection note, such as past tense and past participle of the lemma, or empty"
-        }
-      ],
-      "fallback_translation": "plain $targetDisplay translation only when the input is not a dictionary term, otherwise empty"
-    }
-    Keep at most 3 senses and at most 3 meanings per sense. Keep each meaning and form note short.
-    Every meaning must stay inside the sense for its own part of speech.
-    Do not return phonetics, examples, synonyms, usage notes, or any additional fields.
-""".trimIndent()
 
 internal fun parseWordResult(raw: String, json: Json): WordResult? {
     val jsonText = extractJsonObject(raw) ?: return null

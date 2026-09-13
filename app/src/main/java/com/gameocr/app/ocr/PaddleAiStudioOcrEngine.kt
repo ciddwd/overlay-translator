@@ -43,7 +43,14 @@ class PaddleAiStudioOcrEngine @Inject constructor(
 ) : OcrEngine {
 
     override suspend fun recognize(bitmap: Bitmap, kind: OcrEngineKind): List<TextBlock> {
-        val settings = settingsRepository.get()
+        return recognize(bitmap, kind, settingsRepository.get())
+    }
+
+    override suspend fun recognize(
+        bitmap: Bitmap,
+        kind: OcrEngineKind,
+        settings: com.gameocr.app.data.Settings,
+    ): List<TextBlock> {
         val token = settings.paddleAiStudioToken.trim()
         if (token.isBlank()) {
             throw IllegalStateException(appContext.getString(R.string.err_paddle_ai_studio_no_token))

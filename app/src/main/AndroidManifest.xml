@@ -82,13 +82,20 @@
             </intent-filter>
         </activity>
 
-        <!-- 透明 Activity：用于接 MediaProjection 系统授权回调 -->
+        <!-- Unified user-initiated capture startup and optional system consent. -->
         <activity
-            android:name=".capture.MediaProjectionRequestActivity"
+            android:name=".capture.CaptureStartRequestActivity"
             android:exported="false"
             android:theme="@style/Theme.GameOcr.Transparent"
-            android:excludeFromRecents="true"
-            android:noHistory="true" />
+            android:taskAffinity=""
+            android:excludeFromRecents="true" />
+
+        <activity
+            android:name=".download.ModelDownloadCancelActivity"
+            android:exported="false"
+            android:theme="@style/Theme.GameOcr.Transparent"
+            android:taskAffinity=""
+            android:excludeFromRecents="true" />
 
         <!-- 区域选择 Activity：全屏拉框 -->
         <activity
@@ -97,6 +104,20 @@
             android:theme="@style/Theme.GameOcr.Transparent"
             android:excludeFromRecents="true"
             android:noHistory="true" />
+
+        <service
+            android:name=".service.CaptureQuickSettingsTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_quick_settings_tile"
+            android:label="@string/quick_settings_tile_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.quicksettings.TOGGLEABLE_TILE"
+                android:value="true" />
+        </service>
 
         <!-- 系统「文字选中」菜单入口：用户在任意 App 长按文字选词，系统菜单会列出本项。
              无 UI，立即 finish；翻译走 application scope；结果浮卡显示在原 App 上层。 -->
@@ -115,7 +136,7 @@
             </intent-filter>
         </activity>
 
-        <!-- 截屏前台服务：mediaProjection 用于默认截屏；specialUse 用于 Shizuku 路径 -->
+        <!-- 截屏前台服务：mediaProjection 用于投屏授权；specialUse 用于 Shizuku / 无障碍路径 -->
         <!-- configChanges 必须包含 orientation+screenSize+screenLayout+smallestScreenSize：
              旋转屏幕时由 Service 自己接 onConfigurationChanged，按比例重算悬浮窗位置 +
              updateViewLayout。否则旋转后悬浮窗位置会废（竖屏 y=200 横屏可能落到状态栏后）。 -->
@@ -126,7 +147,7 @@
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Shizuku-based on-demand screen capture for OCR translation" />
+                android:value="On-demand screen capture via Shizuku or an enabled accessibility service for OCR translation" />
         </service>
 
         <service
@@ -153,7 +174,7 @@
                 android:resource="@xml/log_file_paths" />
         </provider>
 
-        <!-- 可选无障碍服务：音量键触发器（仅用户在设置里启用后生效） -->
+        <!-- 可选无障碍服务：音量键触发器 + 用户主动执行的输入翻译。 -->
         <service
             android:name=".trigger.GameOcrAccessibilityService"
             android:exported="false"

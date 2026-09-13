@@ -79,7 +79,15 @@ internal fun buildOpenAiChatMessages(
 @Serializable
 internal data class ChatResponse(
     val id: String? = null,
-    val choices: List<ChatChoice> = emptyList()
+    val choices: List<ChatChoice> = emptyList(),
+    val usage: ChatUsage? = null,
+)
+
+@Serializable
+internal data class ChatUsage(
+    @SerialName("prompt_tokens") val promptTokens: Int? = null,
+    @SerialName("completion_tokens") val completionTokens: Int? = null,
+    @SerialName("total_tokens") val totalTokens: Int? = null,
 )
 
 @Serializable
@@ -93,7 +101,8 @@ internal data class ChatChoice(
 @Serializable
 internal data class ChatStreamChunk(
     val id: String? = null,
-    val choices: List<ChatStreamChoice> = emptyList()
+    val choices: List<ChatStreamChoice> = emptyList(),
+    val usage: ChatUsage? = null,
 )
 
 @Serializable
@@ -113,6 +122,7 @@ internal sealed interface OpenAiStreamEvent {
     data class Data(
         val content: String,
         val finishReason: String?,
+        val usage: ChatUsage? = null,
     ) : OpenAiStreamEvent
 
     data class Malformed(val payload: String) : OpenAiStreamEvent
@@ -136,6 +146,7 @@ internal fun parseOpenAiStreamLine(
     return OpenAiStreamEvent.Data(
         content = choice?.delta?.content.orEmpty(),
         finishReason = choice?.finishReason,
+        usage = chunk.usage,
     )
 }
 

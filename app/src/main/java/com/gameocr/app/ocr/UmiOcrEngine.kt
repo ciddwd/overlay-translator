@@ -160,7 +160,14 @@ class UmiOcrEngine @Inject constructor(
 ) : OcrEngine {
 
     override suspend fun recognize(bitmap: Bitmap, kind: OcrEngineKind): List<TextBlock> {
-        val settings = settingsRepository.get()
+        return recognize(bitmap, kind, settingsRepository.get())
+    }
+
+    override suspend fun recognize(
+        bitmap: Bitmap,
+        kind: OcrEngineKind,
+        settings: com.gameocr.app.data.Settings,
+    ): List<TextBlock> {
         val endpoint = umiOcrEndpointUrlOrNull(settings.umiOcrBaseUrl)
             ?: throw IllegalStateException(appContext.getString(R.string.err_umi_ocr_no_url))
         val languageConfig = umiOcrLanguageConfigFor(settings.sourceLang)

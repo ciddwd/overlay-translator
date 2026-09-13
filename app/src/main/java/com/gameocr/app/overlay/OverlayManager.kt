@@ -1,5 +1,6 @@
 package com.gameocr.app.overlay
 
+import android.annotation.SuppressLint
 import android.app.Dialog
 import android.content.Context
 import android.graphics.Bitmap
@@ -42,6 +43,8 @@ import com.gameocr.app.ocr.TextOrientation
 import com.gameocr.app.ocr.ShapeAwareBubblePatch
 import com.gameocr.app.translate.FloatingWordLookupOutcome
 import com.gameocr.app.util.VerticalDiagnosticLog
+import com.gameocr.app.util.RuntimePerformanceSnapshot
+import com.gameocr.app.util.RuntimePerformanceValueFormatter
 import com.gameocr.app.util.physicalDisplaySize
 import kotlin.math.ceil
 import kotlin.math.abs
@@ -94,6 +97,7 @@ class OverlayManager(
     @Volatile var customBorderWidthDp: Int = 0,
     /** 允许译文换行。关闭后强制单行（可能横向溢出原文宽度）。 */
     @Volatile var allowWrap: Boolean = true,
+    @Volatile var dictionaryTapLookupEnabled: Boolean = true,
     /** 启用碰撞检测：限制译文不挤进相邻原文的 box。关闭后只受屏幕边界约束。 */
     @Volatile var avoidCollision: Boolean = true,
     /** 悬浮窗口内容形态。CaptureService 在 applyOverlayConfig 时同步。 */
@@ -110,14 +114,24 @@ class OverlayManager(
     @Volatile var ocrDebugRedBoxActive: Boolean = false,
     @Volatile var ocrDebugShowSourceText: Boolean = true,
     @Volatile var ocrDebugShowTranslation: Boolean = false,
+    @Volatile var performanceOverlayEnabled: Boolean = false,
 ) {
 
     private val wm by lazy { context.getSystemService(Context.WINDOW_SERVICE) as WindowManager }
+
+    fun updateDictionaryTapLookupEnabled(enabled: Boolean) {
+        dictionaryTapLookupEnabled = enabled
+        if (!enabled) cancelFloatingWordLookup(dismissPreview = true)
+    }
     private var blocksView: View? = null
     private var blocksDialog: Dialog? = null
     private var loadingView: View? = null
     private var errorView: View? = null
     private var countdownView: View? = null
+    private var performanceView: StyledTranslationTextView? = null
+    private var performanceLayoutParams: WindowManager.LayoutParams? = null
+    private var performanceCaptureHidden: Boolean = false
+    private var latestPerformanceSnapshot = RuntimePerformanceSnapshot()
     // 译文 View 缓存：横排走 TextView，竖排走 VerticalTextView。updateBlockText 会按实际类型分支 setText
     private val blockViews = mutableMapOf<Int, View>()
     private val blockContents = mutableMapOf<Int, TranslationBlockContent>()
@@ -135,6 +149,226 @@ class OverlayManager(
         var source: String,
         var translation: String,
     )
+
+    internal fun setPerformanceOverlayEnabled(
+        enabled: Boolean,
+        snapshot: RuntimePerformanceSnapshot = latestPerformanceSnapshot,
+    ) {
+        performanceOverlayEnabled = enabled
+        latestPerformanceSnapshot = snapshot
+        if (enabled && !performanceCaptureHidden) {
+            showOrUpdatePerformanceOverlay()
+        } else {
+            dismissPerformanceOverlay()
+        }
+    }
+
+    internal fun updatePerformanceOverlay(snapshot: RuntimePerformanceSnapshot) {
+        latestPerformanceSnapshot = snapshot
+        if (performanceOverlayEnabled && !performanceCaptureHidden) {
+            showOrUpdatePerformanceOverlay()
+        }
+    }
+
+    internal fun setPerformanceOverlayHiddenForCapture(hidden: Boolean) {
+        performanceCaptureHidden = hidden
+        if (hidden) {
+            performanceView?.visibility = View.INVISIBLE
+        } else if (performanceOverlayEnabled) {
+            showOrUpdatePerformanceOverlay()
+            performanceView?.visibility = View.VISIBLE
+        }
+    }
+
+    private fun showOrUpdatePerformanceOverlay() {
+        val density = context.resources.displayMetrics.density
+        val view = performanceView ?: createPerformanceOverlayView(density) ?: return
+        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, textSizeSp.toFloat())
+        view.setTextColor(themeFgColor())
+        view.background = themeBg()
+        view.alpha = alpha
+        view.applyOverlayTextStyle(overlayTextStyle, overlayTypeface)
+        view.text = buildString {
+            append(context.getString(R.string.performance_overlay_title))
+            append('\n')
+            append(
+                context.getString(
+                    R.string.performance_overlay_ocr,
+                    RuntimePerformanceValueFormatter.duration(latestPerformanceSnapshot.ocrElapsedMs),
+                )
+            )
+            append('\n')
+            append(
+                context.getString(
+                    R.string.performance_overlay_init,
+                    RuntimePerformanceValueFormatter.duration(latestPerformanceSnapshot.translationInitMs),
+                )
+            )
+            append('\n')
+            append(
+                context.getString(
+                    R.string.performance_overlay_prefill,
+                    RuntimePerformanceValueFormatter.duration(latestPerformanceSnapshot.translationPrefillMs),
+                    RuntimePerformanceValueFormatter.estimatedTokensPerSecond(
+                        latestPerformanceSnapshot.translationPrefillTokensPerSecond
+                    ),
+                    RuntimePerformanceValueFormatter.estimatedTokens(
+                        latestPerformanceSnapshot.translationInputTokens
+                    ),
+                )
+            )
+            append('\n')
+            append(
+                context.getString(
+                    R.string.performance_overlay_decode,
+                    RuntimePerformanceValueFormatter.duration(latestPerformanceSnapshot.translationDecodeMs),
+                    RuntimePerformanceValueFormatter.tokensPerSecond(
+                        latestPerformanceSnapshot.translationDecodeTokensPerSecond
+                    ),
+                    RuntimePerformanceValueFormatter.tokens(
+                        latestPerformanceSnapshot.translationOutputTokens
+                    ),
+                )
+            )
+            append('\n')
+            append(
+                context.getString(
+                    R.string.performance_overlay_total,
+                    RuntimePerformanceValueFormatter.duration(
+                        latestPerformanceSnapshot.translationInferenceTotalMs
+                    ),
+                )
+            )
+            append('\n')
+            append(
+                context.getString(
+                    R.string.performance_overlay_memory,
+                    RuntimePerformanceValueFormatter.memory(latestPerformanceSnapshot.memoryMb),
+                )
+            )
+            append('\n')
+            append(
+                context.getString(
+                    R.string.performance_overlay_cpu,
+                    latestPerformanceSnapshot.cpuCoreUsage?.let { cores ->
+                        context.getString(
+                            R.string.performance_overlay_cpu_cores_value,
+                            RuntimePerformanceValueFormatter.cpuCores(cores),
+                        )
+                    } ?: "—",
+                )
+            )
+        }
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun createPerformanceOverlayView(density: Float): StyledTranslationTextView? {
+        val created = StyledTranslationTextView(context).apply {
+            includeFontPadding = false
+            setPadding(
+                (12 * density).toInt(),
+                (10 * density).toInt(),
+                (12 * density).toInt(),
+                (10 * density).toInt(),
+            )
+            isClickable = true
+            isFocusable = false
+        }
+        val params = newLayoutParams().apply {
+            width = WindowManager.LayoutParams.WRAP_CONTENT
+            height = WindowManager.LayoutParams.WRAP_CONTENT
+            x = (12 * density).toInt()
+            y = (48 * density).toInt()
+        }
+        configurePerformanceOverlayDrag(created)
+        return runCatching {
+            wm.addView(created, params)
+            performanceView = created
+            performanceLayoutParams = params
+            created
+        }.onFailure {
+            Timber.w(it, "Failed to show performance overlay")
+        }.getOrNull()
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun configurePerformanceOverlayDrag(view: View) {
+        var downRawX = 0f
+        var downRawY = 0f
+        var startX = 0
+        var startY = 0
+        view.setOnTouchListener { _, event ->
+            val params = performanceLayoutParams ?: return@setOnTouchListener false
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downRawX = event.rawX
+                    downRawY = event.rawY
+                    startX = params.x
+                    startY = params.y
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val screen = physicalDisplaySize(context)
+                    val position = PerformanceOverlayDragPolicy.resolve(
+                        startX = startX,
+                        startY = startY,
+                        deltaX = event.rawX - downRawX,
+                        deltaY = event.rawY - downRawY,
+                        overlayWidth = view.width,
+                        overlayHeight = view.height,
+                        screenWidth = screen.width,
+                        screenHeight = screen.height,
+                    )
+                    params.x = position.x
+                    params.y = position.y
+                    runCatching { wm.updateViewLayout(view, params) }
+                    true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> true
+                else -> false
+            }
+        }
+    }
+
+    private fun keepPerformanceOverlayOnScreen() {
+        val view = performanceView ?: return
+        val params = performanceLayoutParams ?: return
+        val screen = physicalDisplaySize(context)
+        val position = PerformanceOverlayDragPolicy.resolve(
+            startX = params.x,
+            startY = params.y,
+            deltaX = 0f,
+            deltaY = 0f,
+            overlayWidth = view.width,
+            overlayHeight = view.height,
+            screenWidth = screen.width,
+            screenHeight = screen.height,
+        )
+        params.x = position.x
+        params.y = position.y
+        runCatching { wm.updateViewLayout(view, params) }
+    }
+
+    /** Same-type overlay windows are stacked by add order, so re-add after a translation window is created. */
+    private fun raisePerformanceOverlayAboveTranslation() {
+        if (!performanceOverlayEnabled || performanceCaptureHidden) return
+        val view = performanceView ?: return
+        val params = performanceLayoutParams ?: return
+        if (!view.isAttachedToWindow) return
+        if (runCatching { wm.removeViewImmediate(view) }.isFailure) return
+        runCatching { wm.addView(view, params) }
+            .onFailure {
+                performanceView = null
+                performanceLayoutParams = null
+                Timber.w(it, "Failed to raise performance overlay")
+            }
+    }
+
+    private fun dismissPerformanceOverlay() {
+        performanceView?.let { view -> runCatching { wm.removeView(view) } }
+        performanceView = null
+        performanceLayoutParams = null
+    }
 
     private data class PendingOverlayTextUpdate(
         val text: String,
@@ -455,6 +689,7 @@ class OverlayManager(
         } else {
             floatingWindow.show(content, onDismiss = ::handleFloatingWindowUserDismiss)
         }
+        if (floatingWindow.isShown()) raisePerformanceOverlayAboveTranslation()
     }
 
     /**
@@ -484,6 +719,7 @@ class OverlayManager(
         } else {
             floatingWindow.show(content, onDismiss = ::handleFloatingWindowUserDismiss)
         }
+        if (floatingWindow.isShown()) raisePerformanceOverlayAboveTranslation()
     }
 
     /** 流式：更新第 [index] 段译文。需先调过 [prepareFloatingWindow]。 */
@@ -533,6 +769,19 @@ class OverlayManager(
     fun setFloatingWindowHiddenForCapture(hidden: Boolean): Boolean =
         floatingWindow.setHiddenForCapture(hidden)
 
+    /** Read-only: observing the source must never toggle the displayed translation. */
+    internal fun observationExclusionRects(): List<Rect> = buildList {
+        // The host covers the display but is transparent between text/repair patches.
+        // Exclude its actual children, never the full-screen transparent host.
+        (blocksView as? FrameLayout)?.let { root ->
+            for (i in 0 until root.childCount) root.getChildAt(i).observationBounds()?.let(::add)
+        }
+        listOfNotNull(loadingView, errorView, countdownView, performanceView).forEach { view ->
+            view.observationBounds()?.let(::add)
+        }
+        addAll(floatingWindow.observationExclusionRects())
+    }
+
     /**
      * 重新加载 DraggableOverlayWindow 字段：在 applyOverlayConfig 时由外部调用，确保
      * 已显示的窗口跟着主题 / contentMode 变化。
@@ -567,6 +816,7 @@ class OverlayManager(
                 "screen=${dm.widthPixels}x${dm.heightPixels} activeBlocks=${blockViews.size}"
         )
         floatingWindow.onConfigurationChanged()
+        keepPerformanceOverlayOnScreen()
     }
 
     /**
@@ -664,6 +914,10 @@ class OverlayManager(
                 }
 
                 MotionEvent.ACTION_UP -> {
+                    if (!dictionaryTapLookupEnabled) {
+                        cancelFloatingWordLookup(dismissPreview = true)
+                        return@setOnTouchListener false
+                    }
                     val deliberateTap = !moved &&
                         event.eventTime - downAtMs < longPressTimeout &&
                         textView.selectionStart == textView.selectionEnd
@@ -788,9 +1042,10 @@ class OverlayManager(
             translation = outcome.translation,
             wordResult = outcome.wordResult,
             loading = loading,
-            failed = !loading && !outcome.hasDetails,
+            failed = outcome.error != null,
             loadingLabel = context.getString(R.string.word_card_loading),
             failedLabel = context.getString(R.string.floating_word_lookup_failed),
+            notFoundLabel = context.getString(R.string.floating_word_lookup_not_found),
         )
         val speech = floatingWordSpeechAction
         floatingWindow.showWordPreview(
@@ -913,6 +1168,8 @@ class OverlayManager(
 
         blocks.forEachIndexed { idx, (block, dst) ->
             val b: Rect = block.boundingBox
+            val presentationRotation = ((block.presentationRotationDegrees % 360) + 360) % 360
+            val presentationQuarterTurn = presentationRotation == 90 || presentationRotation == 270
             val blockOrientation = resolveOverlayBlockOrientation(
                 pageOrientation = orientation,
                 blockOrientation = block.layoutOrientation,
@@ -949,14 +1206,19 @@ class OverlayManager(
                 null -> themeBg()
             }
             if (adaptiveStyle != null && pixelMaskPatchPipelineEnabled) {
-                blockPixelMaskFallbackBackgrounds[idx] = adaptiveBg(adaptiveStyle, block)
+                blockPixelMaskFallbackBackgrounds[idx] = adaptiveFallbackBg(adaptiveStyle, block)
             }
             blockContents[idx] = TranslationBlockContent(block.text, dst)
             val baseLeft = (b.left + regionOffset.x + offsetX).coerceAtLeast(0)
             val overlayRect = allOverlayRects[idx]
+            val rotatedLayout = if (presentationRotation != 0) {
+                OverlayPresentationGeometry.layout(overlayRect, presentationRotation)
+            } else null
             val origW = (b.right - b.left).coerceAtLeast(0)
             val origH = (b.bottom - b.top).coerceAtLeast(0)
-            val adaptiveSize = adaptiveStyle?.let { adaptiveOverlaySize(origW, origH) }
+            val logicalW = if (presentationQuarterTurn) origH else origW
+            val logicalH = if (presentationQuarterTurn) origW else origH
+            val adaptiveSize = adaptiveStyle?.let { adaptiveOverlaySize(logicalW, logicalH) }
             VerticalDiagnosticLog.i(
                 "${diagPrefix}overlay block#${idx + 1} pageOrientation=$orientation " +
                     "blockOrientation=$blockOrientation box=${b.toDiagString()} " +
@@ -1104,7 +1366,7 @@ class OverlayManager(
                             },
                         )
                         onAdaptiveTextFitResolved = { snapshot ->
-                            val expanded = expandAdaptiveVerticalViewport(
+                            val expanded = presentationRotation == 0 && expandAdaptiveVerticalViewport(
                                 view = this@verticalView,
                                 blockIndex = idx,
                                 sourceRect = overlayRect,
@@ -1181,7 +1443,7 @@ class OverlayManager(
                             )
                         }
                         onAdaptiveTextLayoutResolved = { snapshot ->
-                            val expanded = expandAdaptiveHorizontalViewport(
+                            val expanded = presentationRotation == 0 && expandAdaptiveHorizontalViewport(
                                 view = this@horizontalView,
                                 blockIndex = idx,
                                 topPx = resolvedBaseTop.coerceAtLeast(0),
@@ -1236,16 +1498,24 @@ class OverlayManager(
                     }
                     isHorizontalFadingEdgeEnabled = false
                     // 智能 maxWidth：受 (相邻块左边界, 屏幕右边) 双重约束
-                    maxWidth = minOf(collisionMaxW, screenW - baseLeft - 8)
-                        .coerceAtLeast(120)
+                    maxWidth = if (presentationQuarterTurn) {
+                        logicalW.coerceAtLeast(1)
+                    } else {
+                        minOf(collisionMaxW, screenW - baseLeft - 8).coerceAtLeast(120)
+                    }
                     if (adaptiveStyle != null) {
                         setPadding(0, 0, 0, 0)
                     } else if (placement == OverlayPlacement.OVERLAP) {
-                        minWidth = origW
-                        minHeight = origH
+                        minWidth = logicalW
+                        minHeight = logicalH
                         setPadding(8, 4, 8, 4)
                     }
                 }
+            }
+            if (presentationRotation != 0) {
+                view.pivotX = 0f
+                view.pivotY = 0f
+                view.rotation = presentationRotation.toFloat()
             }
 
             // 竖排位置：强制 OVERLAP。RTL 时把 View 右边缘锚到原文 box 右边缘，让新增列向左展开；
@@ -1253,7 +1523,11 @@ class OverlayManager(
             val finalLeft: Int
             val finalTop: Int
             val finalRight: Int
-            if (isVertical) {
+            if (presentationRotation != 0) {
+                finalLeft = requireNotNull(rotatedLayout).left
+                finalRight = 0
+                finalTop = rotatedLayout.top
+            } else if (isVertical) {
                 finalLeft = (b.left + regionOffset.x + offsetX).coerceAtLeast(0)
                 finalRight = (b.right + regionOffset.x + offsetX).coerceIn(0, screenW)
                 finalTop = (b.top + regionOffset.y + offsetY).coerceAtLeast(0)
@@ -1263,14 +1537,18 @@ class OverlayManager(
                 finalTop = resolvedBaseTop.coerceAtLeast(0)
             }
             val lp = FrameLayout.LayoutParams(
-                if (adaptiveSize != null) {
+                if (presentationRotation != 0) {
+                    requireNotNull(rotatedLayout).width
+                } else if (adaptiveSize != null) {
                     adaptiveSize.width
                 } else if (isVertical) {
                     verticalSlotForLayout?.width ?: FrameLayout.LayoutParams.WRAP_CONTENT
                 } else {
                     FrameLayout.LayoutParams.WRAP_CONTENT
                 },
-                if (adaptiveSize != null) {
+                if (presentationRotation != 0) {
+                    requireNotNull(rotatedLayout).height
+                } else if (adaptiveSize != null) {
                     adaptiveSize.height
                 } else if (isVertical) {
                     verticalHeightForLayout.coerceAtLeast(1)
@@ -1279,7 +1557,9 @@ class OverlayManager(
                 }
             ).apply {
                 topMargin = finalTop
-                if (isVertical && !leftToRight) {
+                if (presentationRotation != 0) {
+                    leftMargin = finalLeft
+                } else if (isVertical && !leftToRight) {
                     gravity = Gravity.TOP or Gravity.RIGHT
                     rightMargin = (screenW - (verticalSlotForLayout?.right ?: finalRight)).coerceAtLeast(0)
                 } else if (isVertical) {
@@ -1328,6 +1608,7 @@ class OverlayManager(
             .onSuccess { VerticalDiagnosticLog.i("${diagPrefix}overlay window added host=$host") }
             .onFailure { VerticalDiagnosticLog.w(it, "${diagPrefix}overlay window add failed host=$host") }
         blocksView = root
+        if (addResult.isSuccess) raisePerformanceOverlayAboveTranslation()
     }
 
     private fun showBlocksInActionModeDialog(
@@ -1429,6 +1710,7 @@ class OverlayManager(
         root.setOnClickListener { clear() }
         val params = newLayoutParams()
         runCatching { wm.addView(root, params) }
+            .onSuccess { raisePerformanceOverlayAboveTranslation() }
             .onFailure { Timber.w(it, "Failed to show OCR debug boxes") }
         blocksView = root
         VerticalDiagnosticLog.i(
@@ -1883,13 +2165,16 @@ class OverlayManager(
             view.background = fallbackBackground
             bubblePatchFallbackBlockIndices += index
         }
+        val missingFallbackBlockIndices = unresolvedBlockIndices - bubblePatchFallbackBlockIndices
         blockViews.forEach { (index, view) ->
             if (index !in bubblePatchHiddenBlockIndices) view.bringToFront()
         }
         VerticalDiagnosticLog.i(
             "${diagPrefix}adaptive patch coverage translated=${fallbackBlockIndices.size} " +
                 "covered=${displayedPatchBlockIndices.sorted()} " +
-                "fallback=${bubblePatchFallbackBlockIndices.sorted()}",
+                "fallbackRequested=${unresolvedBlockIndices.sorted()} " +
+                "fallbackApplied=${bubblePatchFallbackBlockIndices.sorted()} " +
+                "fallbackMissing=${missingFallbackBlockIndices.sorted()}",
         )
         return displayed
     }
@@ -2016,6 +2301,7 @@ class OverlayManager(
     fun clearForCapture(preserveFloatingWindow: Boolean) {
         clearBlocksAndLoading()
         if (!preserveFloatingWindow) clearFloatingWindow()
+        setPerformanceOverlayHiddenForCapture(hidden = true)
     }
 
     /**
@@ -2123,7 +2409,25 @@ class OverlayManager(
                 OverlayIntRect(source.left, source.top, source.right, source.bottom)
             },
         )
-        return AdaptiveEraseDrawable(style.backgroundColor, eraseRects)
+        return AdaptiveEraseDrawable(
+            style.backgroundColor,
+            OverlayPresentationGeometry.captureLocalRectsToView(
+                eraseRects, bounds.width(), bounds.height(), block.presentationRotationDegrees,
+            ),
+        )
+    }
+
+    private fun adaptiveFallbackBg(style: AdaptiveOverlayStyle, block: TextBlock): Drawable {
+        val bounds = block.boundingBox
+        return AdaptiveEraseDrawable(
+            style.backgroundColor,
+            OverlayPresentationGeometry.captureLocalRectsToView(
+                adaptiveFallbackEraseRects(
+                    OverlayIntRect(bounds.left, bounds.top, bounds.right, bounds.bottom),
+                ),
+                bounds.width(), bounds.height(), block.presentationRotationDegrees,
+            ),
+        )
     }
 }
 

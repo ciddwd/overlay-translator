@@ -10,6 +10,7 @@ import com.gameocr.app.llm.LlamaMultiSequence
 import com.gameocr.app.llm.LlamaPromptMetrics
 import com.gameocr.app.llm.LlmModelKind
 import com.gameocr.app.util.InferenceTiming
+import com.gameocr.app.util.RuntimePerformanceDiagnostics
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import timber.log.Timber
@@ -30,6 +31,7 @@ import timber.log.Timber
 abstract class LocalLlamaTranslator(
     protected val holder: LlamaEngineHolder,
     private val cache: TranslationCache,
+    private val performanceDiagnostics: RuntimePerformanceDiagnostics,
 ) : Translator {
 
     protected abstract val modelKind: LlmModelKind
@@ -378,13 +380,36 @@ abstract class LocalLlamaTranslator(
                         settings = settings,
                     ).coerceAtLeast(0)
                 }
-                val outputs = LlamaMultiSequence.generate(
+                val nativeResult = LlamaMultiSequence.generateWithMetrics(
                     prompts = plan.items.map { it.individualPrompt },
                     predictLengths = List(plan.items.size) { settings.localLlmMaxNewTokens },
                     maxOutputLines = lineCaps,
                     markLimitAsInvalid = markNativeBatchLineLimitAsInvalid && lineCaps.any { it > 0 },
-                )?.map { output -> output.trim().ifBlank { null } }
+                )
+                val outputs = nativeResult?.outputs?.map { output -> output.trim().ifBlank { null } }
                 val finishedAt = SystemClock.elapsedRealtime()
+                if (outputs != null && performanceDiagnostics.isPerformanceOverlayEnabled()) {
+                    nativeResult?.metrics?.let { metrics ->
+                        performanceDiagnostics.recordLlmInferencePhases(
+                            initMs = metrics.initMs,
+                            prefillMs = metrics.prefillMs,
+                            decodeMs = metrics.decodeMs,
+                            totalMs = metrics.totalMs,
+                            inputTokens = metrics.inputTokens,
+                            outputTokens = metrics.outputTokens,
+                        )
+                    } ?: performanceDiagnostics.recordLlmInference(
+                            firstTokenMs = null,
+                            totalMs = InferenceTiming.elapsedMs(startedAt, finishedAt),
+                            inputTokens = systemPromptTokens + plan.decodedPromptTokens,
+                            outputTokens = outputs.filterNotNull().sumOf { output ->
+                                LlamaPromptMetrics.countTextTokens(
+                                    output.replace(LlamaMultiSequence.TOKEN_LIMIT_SENTINEL, "")
+                                ).coerceAtLeast(0)
+                            },
+                            initMs = requestModelReadyMs.toDouble(),
+                        )
+                }
                 Timber.tag(PERF_TAG).i(
                     "native batch result kind=%s group=%d/%d B=%d promptTokens=%d " +
                         "decodedPromptTokens=%d requiredKv=%d lineCaps=%s " +
@@ -515,6 +540,7 @@ abstract class LocalLlamaTranslator(
             logGeneration(
                 mode = "full",
                 source = source,
+                userPrompt = userPrompt,
                 outputChars = sb.length,
                 modelReadyMs = modelReadyMs,
                 queuedAt = queuedAt,
@@ -582,6 +608,7 @@ abstract class LocalLlamaTranslator(
             logGeneration(
                 mode = "stream",
                 source = source,
+                userPrompt = userPrompt,
                 outputChars = sb.length,
                 modelReadyMs = modelReadyMs,
                 queuedAt = queuedAt,
@@ -666,13 +693,38 @@ abstract class LocalLlamaTranslator(
         return holder.withEngineSession(modelKind, systemPrompt) {
             val sessionReadyAt = SystemClock.elapsedRealtime()
             val startedAt = SystemClock.elapsedRealtime()
-            val outputs = LlamaMultiSequence.generate(
-                prompts = requests.map { runtimePrompt(it.userPrompt, settings) },
+            val prompts = requests.map { runtimePrompt(it.userPrompt, settings) }
+            val nativeResult = LlamaMultiSequence.generateWithMetrics(
+                prompts = prompts,
                 predictLengths = requests.map { it.predictLength.coerceAtLeast(1) },
                 maxOutputLines = requests.map { it.maxOutputLines.coerceAtLeast(0) },
                 markLimitAsInvalid = markLimitAsInvalid,
             ) ?: return@withEngineSession null
+            val outputs = nativeResult.outputs
             val finishedAt = SystemClock.elapsedRealtime()
+            if (performanceDiagnostics.isPerformanceOverlayEnabled()) {
+                nativeResult.metrics?.let { metrics ->
+                    performanceDiagnostics.recordLlmInferencePhases(
+                        initMs = metrics.initMs,
+                        prefillMs = metrics.prefillMs,
+                        decodeMs = metrics.decodeMs,
+                        totalMs = metrics.totalMs,
+                        inputTokens = metrics.inputTokens,
+                        outputTokens = metrics.outputTokens,
+                    )
+                } ?: performanceDiagnostics.recordLlmInference(
+                        firstTokenMs = null,
+                        totalMs = InferenceTiming.elapsedMs(startedAt, finishedAt),
+                        inputTokens = LlamaPromptMetrics.systemPromptTokens() +
+                            LlamaPromptMetrics.effectiveUserPromptBatchTokens(prompts.toTypedArray()),
+                        outputTokens = outputs.sumOf { output ->
+                            LlamaPromptMetrics.countTextTokens(
+                                output.replace(LlamaMultiSequence.TOKEN_LIMIT_SENTINEL, "")
+                            ).coerceAtLeast(0)
+                        },
+                        initMs = InferenceTiming.elapsedMs(modelReadyStartedAt, sessionReadyAt).toDouble(),
+                    )
+            }
             Timber.tag(PERF_TAG).i(
                 "native strict batch kind=%s B=%d modelReadyMs=%d totalMs=%d lineCaps=%s",
                 modelKind.name,
@@ -734,6 +786,7 @@ abstract class LocalLlamaTranslator(
         logGeneration(
             mode = mode,
             source = sourceForLog,
+            userPrompt = userPrompt,
             outputChars = output.length,
             modelReadyMs = modelReadyMs,
             queuedAt = queuedAt,
@@ -1073,6 +1126,7 @@ abstract class LocalLlamaTranslator(
     private fun logGeneration(
         mode: String,
         source: String,
+        userPrompt: String,
         outputChars: Int,
         modelReadyMs: Long,
         queuedAt: Long,
@@ -1089,6 +1143,16 @@ abstract class LocalLlamaTranslator(
             finishedAtMs = finishedAt,
             outputPieces = outputPieces,
         )
+        if (performanceDiagnostics.isPerformanceOverlayEnabled()) {
+            performanceDiagnostics.recordLlmInference(
+                firstTokenMs = timing.firstOutputMs,
+                totalMs = timing.totalMs,
+                inputTokens = LlamaPromptMetrics.systemPromptTokens() +
+                    LlamaPromptMetrics.countUserPromptTokens(userPrompt),
+                outputTokens = outputPieces,
+                initMs = modelReadyMs.toDouble(),
+            )
+        }
         Timber.tag(PERF_TAG).i(
             "generate kind=%s mode=%s modelReadyMs=%d queueMs=%d firstTokenMs=%d totalMs=%d " +
                 "pieces=%d piecesPerSec=%s inputChars=%d outputChars=%d maxNewTokens=%d",

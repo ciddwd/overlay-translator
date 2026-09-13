@@ -123,5 +123,5 @@ internal object MangaBubbleDetectionPostprocessor {
 
     const val DEFAULT_CONFIDENCE_THRESHOLD: Float = 0.30f
     const val DEFAULT_DUPLICATE_IOU_THRESHOLD: Float = 0.90f
-    private const val MIN_BOX_SIDE_PX: Float = 4f
+    internal const val MIN_BOX_SIDE_PX: Float = 4f
 }

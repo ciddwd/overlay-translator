@@ -1,11 +1,15 @@
 package com.gameocr.app.translate
 
 import android.graphics.Bitmap
+import android.os.SystemClock
 import com.gameocr.app.data.Settings
 import com.gameocr.app.data.TranslatorEngine
 import com.gameocr.app.glossary.TranslationContextResolver
 import com.gameocr.app.llm.LlamaEngineHolder
 import com.gameocr.app.ocr.TextBlock
+import com.gameocr.app.util.RuntimePerformanceDiagnostics
+import com.gameocr.app.util.RuntimePerformanceKeyPolicy
+import com.gameocr.app.util.RuntimePerformanceStage
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
@@ -14,13 +18,13 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import timber.log.Timber
 
-/** 按 [Settings.translatorEngine] 路由到 OpenAI / Anthropic 兼容、DeepL、有道图片翻译 / Google /
- *  火山 / 百度翻译 / 腾讯云翻译。新增引擎只需在此加构造参数 + [engineFor] 的 when 分支。 */
+/** 按 [Settings.translatorEngine] 路由到用户选择的翻译引擎。 */
 @Singleton
 class RoutingTranslator @Inject constructor(
     private val openAi: OpenAiTranslator,
     private val anthropic: AnthropicTranslator,
     private val deepl: DeepLTranslator,
+    private val niuTrans: NiuTransTranslator,
     private val youdaoPicTrans: YoudaoPicTransTranslator,
     private val google: GoogleTranslator,
     private val googleMlKit: MlKitOnDeviceTranslator,
@@ -32,8 +36,10 @@ class RoutingTranslator @Inject constructor(
     private val llamaEngineHolder: LlamaEngineHolder,
     private val translationContextResolver: TranslationContextResolver,
     private val translationMemory: TranslationMemoryService,
+    private val performanceDiagnostics: RuntimePerformanceDiagnostics,
 ) : Translator {
     override suspend fun translate(source: String, settings: Settings): String? {
+        performanceDiagnostics.beginTranslation()
         translationMemory.recall(source, settings)?.let { memory ->
             return normalizePlain(memory.correctedTranslation, settings)
         }
@@ -42,8 +48,19 @@ class RoutingTranslator @Inject constructor(
             return source
         }
         val enriched = translationContextResolver.enrich(source, settings)
+        val startedAt = SystemClock.elapsedRealtime()
+        val translated = engineFor(enriched).translate(source, enriched)
+        performanceDiagnostics.observe(
+            stage = RuntimePerformanceStage.TRANSLATION,
+            operationKey = RuntimePerformanceKeyPolicy.text(
+                operation = "${enriched.translatorEngine.name}/${enriched.translationContextMode.name}/single",
+                itemCount = 1,
+                characterCount = source.length,
+            ),
+            elapsedMs = (SystemClock.elapsedRealtime() - startedAt).coerceAtLeast(0L),
+        )
         return normalizeText(
-            text = engineFor(enriched).translate(source, enriched),
+            text = translated,
             settings = enriched,
             stage = "translate"
         )
@@ -51,6 +68,7 @@ class RoutingTranslator @Inject constructor(
 
     override fun translateStream(source: String, settings: Settings): Flow<String> =
         flow {
+            performanceDiagnostics.beginTranslation()
             translationMemory.recall(source, settings)?.let { memory ->
                 emit(memory.correctedTranslation)
                 return@flow
@@ -61,7 +79,24 @@ class RoutingTranslator @Inject constructor(
                 return@flow
             }
             val enriched = translationContextResolver.enrich(source, settings)
-            emitAll(engineFor(enriched).translateStream(source, enriched))
+            val startedAt = SystemClock.elapsedRealtime()
+            var completed = false
+            try {
+                emitAll(engineFor(enriched).translateStream(source, enriched))
+                completed = true
+            } finally {
+                if (completed) {
+                    performanceDiagnostics.observe(
+                        stage = RuntimePerformanceStage.TRANSLATION,
+                        operationKey = RuntimePerformanceKeyPolicy.text(
+                            operation = "${enriched.translatorEngine.name}/${enriched.translationContextMode.name}/stream",
+                            itemCount = 1,
+                            characterCount = source.length,
+                        ),
+                        elapsedMs = (SystemClock.elapsedRealtime() - startedAt).coerceAtLeast(0L),
+                    )
+                }
+            }
         }
             .map { ChineseScriptNormalizer.normalizeForTarget(it, settings.targetLang) }
 
@@ -69,7 +104,10 @@ class RoutingTranslator @Inject constructor(
     override val prefersBatch: Boolean
         get() = false // 不能静态判断；调用方应该用 [prefersBatchFor]
 
-    fun prefersBatchFor(settings: Settings): Boolean = engineFor(settings).prefersBatch
+    fun prefersBatchFor(settings: Settings): Boolean {
+        val engine = engineFor(settings)
+        return if (engine === niuTrans) niuTrans.prefersBatch(settings) else engine.prefersBatch
+    }
 
     fun supportsStructuredContextBatchFor(settings: Settings): Boolean =
         engineFor(settings).supportsStructuredContextBatch
@@ -77,8 +115,8 @@ class RoutingTranslator @Inject constructor(
     override fun handlesTranslationFailureRetry(settings: Settings): Boolean =
         engineFor(settings).handlesTranslationFailureRetry(settings)
 
-    suspend fun downloadMlKitLanguagePair(sourceLang: String, targetLang: String) {
-        googleMlKit.ensureLanguagePairModelsDownloaded(sourceLang, targetLang)
+    suspend fun downloadMlKitLanguagePair(sourceLang: String, targetLang: String, timeoutSeconds: Int) {
+        googleMlKit.ensureLanguagePairModelsDownloaded(sourceLang, targetLang, timeoutSeconds)
     }
 
     suspend fun areMlKitLanguagePairModelsDownloaded(
@@ -93,6 +131,9 @@ class RoutingTranslator @Inject constructor(
 
     suspend fun getDownloadedMlKitLanguageModels(): Set<String> =
         googleMlKit.getDownloadedLanguageModels()
+
+    suspend fun deleteMlKitSourceLanguageModel(sourceLang: String, targetLang: String) =
+        googleMlKit.deleteSourceLanguageModel(sourceLang, targetLang)
 
     internal suspend fun prewarmLocalModel(settings: Settings): LocalLlmPrewarmResult {
         val local = engineFor(settings) as? LocalLlamaTranslator
@@ -121,6 +162,7 @@ class RoutingTranslator @Inject constructor(
         onUpdate: (BatchTranslationUpdate) -> Unit,
     ): List<String?> {
         if (sources.isEmpty()) return emptyList()
+        performanceDiagnostics.beginTranslation()
         val selectedEngine = engineFor(settings)
         val promptScope = selectedEngine.batchPromptScope(settings)
         Timber.tag("TranslationBatch").i(
@@ -274,6 +316,7 @@ class RoutingTranslator @Inject constructor(
         bitmap: Bitmap,
         settings: Settings
     ): List<Pair<TextBlock, String>> {
+        performanceDiagnostics.beginTranslation()
         val normalized = normalizeOcrTranslations(
             results = engineFor(settings).ocrAndTranslate(bitmap, settings),
             settings = settings
@@ -290,12 +333,14 @@ class RoutingTranslator @Inject constructor(
     }
 
     override suspend fun translateWord(source: String, settings: Settings): WordResult? {
+        performanceDiagnostics.beginTranslation()
         val enriched = translationContextResolver.enrich(source, settings)
         return engineFor(enriched).translateWord(source, enriched)
             ?.let { normalizeWordResult(it, enriched) }
     }
 
     override suspend fun translateWordCompact(source: String, settings: Settings): WordResult? {
+        performanceDiagnostics.beginTranslation()
         val enriched = translationContextResolver.enrich(source, settings)
         return engineFor(enriched).translateWordCompact(source, enriched)
             ?.let { normalizeWordResult(it, enriched) }
@@ -426,6 +471,7 @@ class RoutingTranslator @Inject constructor(
         TranslatorEngine.OPENAI -> openAi
         TranslatorEngine.ANTHROPIC -> anthropic
         TranslatorEngine.DEEPL -> deepl
+        TranslatorEngine.NIUTRANS -> niuTrans
         TranslatorEngine.YOUDAO_PICTRANS -> youdaoPicTrans
         TranslatorEngine.GOOGLE -> google
         TranslatorEngine.GOOGLE_ML_KIT -> googleMlKit

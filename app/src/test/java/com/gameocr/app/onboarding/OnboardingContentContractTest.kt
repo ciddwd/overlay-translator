@@ -325,7 +325,7 @@ class OnboardingContentContractTest {
         ).readText()
 
         listOf(
-            "OnboardingPolicy.stepsFor(currentDraft, localLlmSupported)",
+            "OnboardingPolicy.stepsFor(currentDraft, localLlmSupported, cloudMangaOcrReady)",
             "includeSakura = localLlmSupported &&",
             "OnboardingPolicy.canUseOfflineTranslation(draft, localLlmSupported)",
             "SummaryPage(draft, localLlmSupported)",
@@ -370,7 +370,7 @@ class OnboardingContentContractTest {
                 name = "all rows keep two equal-width columns",
                 source = cloudPage,
                 requiredMarkers = listOf(
-                    "CloudProvider.entries.chunked(2)",
+                    "CloudProvider.sortedChoices.chunked(2)",
                     "modifier = Modifier.weight(1f)",
                     "if (rowProviders.size == 1) Spacer(Modifier.weight(1f))",
                 ),

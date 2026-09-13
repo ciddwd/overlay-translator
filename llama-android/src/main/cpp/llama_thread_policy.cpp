@@ -21,7 +21,7 @@
 #include "common.h"
 #include "ggml-backend.h"
 #include "llama.h"
-#include "logging.h"
+#include "gameocr_logging.h"
 #include "sampling.h"
 
 namespace {

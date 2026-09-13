@@ -30,7 +30,7 @@ object BubbleClusterer {
     data class Bubble(
         /** Crop rectangle used only by manga-ocr recognition. Includes [pad]. */
         val rect: IntRect,
-        /** Union of the detected member boxes before crop padding. Used for display geometry. */
+        /** Confirmed text extent (members plus assigned text evidence), excluding crop padding. */
         val contentRect: IntRect,
         /** 原 [rects] 数组中属于本气泡的索引（按输入顺序） */
         val memberIndices: List<Int>

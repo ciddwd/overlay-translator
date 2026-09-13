@@ -134,7 +134,14 @@ class LunaOcrEngine @Inject constructor(
 ) : OcrEngine {
 
     override suspend fun recognize(bitmap: Bitmap, kind: OcrEngineKind): List<TextBlock> {
-        val settings = settingsRepository.get()
+        return recognize(bitmap, kind, settingsRepository.get())
+    }
+
+    override suspend fun recognize(
+        bitmap: Bitmap,
+        kind: OcrEngineKind,
+        settings: com.gameocr.app.data.Settings,
+    ): List<TextBlock> {
         val endpoint = lunaOcrEndpointUrlOrNull(settings.lunaOcrBaseUrl)
             ?: throw IllegalStateException(appContext.getString(R.string.err_luna_ocr_no_url))
         val encoded = withContext(Dispatchers.Default) { encodePng(bitmap) }

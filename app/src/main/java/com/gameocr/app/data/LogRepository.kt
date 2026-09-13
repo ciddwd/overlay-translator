@@ -1,6 +1,5 @@
 package com.gameocr.app.data
 
-import com.gameocr.app.BuildConfig
 import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -44,16 +43,13 @@ class LogRepository @Inject constructor() {
     private val _entries = MutableStateFlow<List<Entry>>(emptyList())
     val entries: StateFlow<List<Entry>> = _entries.asStateFlow()
 
-    /**
-     * Normal release sessions do not build or copy verbose OCR/translation log entries. Users can
-     * explicitly opt into that diagnostic cost by enabling developer options.
-     */
+    /** App 内运行日志在 Debug / Release 都保留；系统 Logcat 由构建类型单独控制。 */
     @Volatile
-    internal var verboseEnabled: Boolean = BuildConfig.DEBUG
+    internal var verboseEnabled: Boolean = true
 
     internal fun configureVerbose(developerOptionsEnabled: Boolean) {
         verboseEnabled = RuntimeLogPolicy.verboseEnabled(
-            debugBuild = BuildConfig.DEBUG,
+            debugBuild = false,
             developerOptionsEnabled = developerOptionsEnabled,
         )
     }
@@ -146,8 +142,9 @@ class LogRepository @Inject constructor() {
 }
 
 internal object RuntimeLogPolicy {
+    @Suppress("UNUSED_PARAMETER")
     fun verboseEnabled(
         debugBuild: Boolean,
         developerOptionsEnabled: Boolean,
-    ): Boolean = debugBuild || developerOptionsEnabled
+    ): Boolean = true
 }

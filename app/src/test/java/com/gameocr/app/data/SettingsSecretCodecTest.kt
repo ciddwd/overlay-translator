@@ -34,13 +34,36 @@ class SettingsSecretCodecTest {
     }
 
     @Test
-    fun encryptPlainText_fallsBackToPlainTextWhenCipherIsUnavailable() {
+    fun nonCredentialMetadata_remainsSaveableWhenCipherIsUnavailable() {
         val unavailableCodec = SettingsSecretCodec(UnavailableCipher())
 
         val stored = unavailableCodec.encryptPlainText("still-saveable")
 
         assertEquals("still-saveable", stored)
         assertFalse(unavailableCodec.isEncrypted(stored))
+    }
+
+    @Test
+    fun encryptCredential_tableDriven_neverWritesPlaintextOnFailure() {
+        val cases = listOf(
+            FakeCipher() to "secret-value",
+            UnavailableCipher() to "secret-value",
+            UnavailableCipher() to "",
+            object : SettingsSecretCipher {
+                override fun encrypt(plainText: String) = plainText
+                override fun decrypt(cipherText: String) = cipherText
+            } to "secret-value",
+            object : SettingsSecretCipher {
+                override fun encrypt(plainText: String) = ""
+                override fun decrypt(cipherText: String) = ""
+            } to "secret-value",
+        )
+        cases.forEachIndexed { index, (cipher, value) ->
+            val codec = SettingsSecretCodec(cipher)
+            val stored = codec.encryptCredential(value)
+            if (index == 0) assertEquals(value, codec.decodeStored(stored))
+            else assertEquals("case $index", "", stored)
+        }
     }
 
     @Test

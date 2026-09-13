@@ -119,6 +119,7 @@ class MlKitOnDeviceTranslatorTest {
             translator(factory).ensureLanguagePairModelsDownloaded(
                 sourceTag = case.sourceLang,
                 targetTag = case.targetLang,
+                timeoutSeconds = Settings().apiTimeoutSeconds,
             )
 
             assertEquals(case.name, case.expectedClients, factory.clients.size)
@@ -193,7 +194,9 @@ class MlKitOnDeviceTranslatorTest {
         cases.forEach { case ->
             val error = runCatching {
                 runBlocking {
-                    translator(case.factory).ensureLanguagePairModelsDownloaded("ko", "zh-CN")
+                    translator(case.factory).ensureLanguagePairModelsDownloaded(
+                        "ko", "zh-CN", Settings().apiTimeoutSeconds,
+                    )
                 }
             }.exceptionOrNull()
 
@@ -270,6 +273,7 @@ class MlKitOnDeviceTranslatorTest {
         MlKitOnDeviceTranslator(
             clientFactory = factory,
             downloadedLanguageProvider = MlKitDownloadedLanguageProvider { downloadedLanguages },
+            modelDeleter = MlKitLanguageModelDeleter { error("Unexpected model deletion") },
             cache = TranslationCache(capacity = 16),
         )
 

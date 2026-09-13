@@ -154,9 +154,9 @@ class TencentTranslator @Inject constructor(
         val sample = translateResult.getOrThrow().take(40)
         val balance = runCatching { queryBalance(settings) }.getOrNull()
         val msg = if (balance != null) {
-            "OK · 余额 ¥%.2f · 样例: %s".format(balance, sample)
+            "OK 余额 ¥%.2f 样例: %s".format(balance, sample)
         } else {
-            "OK · 样例: $sample （余额查询需要财务读权限，可忽略）"
+            "OK 样例: $sample （余额查询需要财务读权限，可忽略）"
         }
         return TestResult(true, msg)
     }

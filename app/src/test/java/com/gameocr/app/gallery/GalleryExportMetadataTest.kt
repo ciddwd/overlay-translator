@@ -20,7 +20,7 @@ class GalleryExportMetadataTest {
         ).forEach { case ->
             assertEquals(
                 case.field,
-                "屏译 · Screen Translator",
+                "屏译 Screen Translator",
                 case.actual,
             )
         }

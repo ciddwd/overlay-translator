@@ -1,6 +1,7 @@
 package com.gameocr.app.data
 
 import android.content.Context
+import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
@@ -20,6 +21,10 @@ import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
@@ -31,10 +36,15 @@ private fun normalizeLoopFrameSimilarity(value: Float): Float =
 private fun normalizeLoopTextStableDuration(value: Long): Long = value.coerceIn(200L, 2000L)
 
 @Singleton
-class SettingsRepository @Inject constructor(
-    @ApplicationContext private val context: Context,
-    secretCipher: SettingsSecretCipher
+class SettingsRepository internal constructor(
+    private val context: Context,
+    secretCipher: SettingsSecretCipher,
+    private val settingsStore: DataStore<Preferences>,
 ) {
+    @Inject
+    constructor(@ApplicationContext context: Context, secretCipher: SettingsSecretCipher) :
+        this(context, secretCipher, context.dataStore)
+
     private object Keys {
         val BaseUrl = stringPreferencesKey("base_url")
         val ApiKey = stringPreferencesKey("api_key")
@@ -47,6 +57,7 @@ class SettingsRepository @Inject constructor(
         val Prompt = stringPreferencesKey("prompt")
         val OpenAiRequestOptions = stringPreferencesKey("openai_request_options_json")
         val OcrEngine = stringPreferencesKey("ocr_engine")
+        val AutoOcr = stringPreferencesKey("auto_ocr")
         val LoopInterval = longPreferencesKey("loop_interval_ms")
         val LoopTriggerMode = stringPreferencesKey("loop_trigger_mode")
         val LoopTextStableDuration = longPreferencesKey("loop_text_stable_duration_ms")
@@ -55,6 +66,7 @@ class SettingsRepository @Inject constructor(
         val LoopTextRegionMode = stringPreferencesKey("loop_text_region_mode")
         val LoopTranslateRegionOnly = booleanPreferencesKey("loop_translate_region_only")
         val DeveloperOptionsEnabled = booleanPreferencesKey("developer_options_enabled")
+        val PerformanceOverlayEnabled = booleanPreferencesKey("performance_overlay_enabled")
         val OcrScreenshotSavingEnabled = booleanPreferencesKey("ocr_screenshot_saving_enabled")
         val DisableTranslationCache = booleanPreferencesKey("disable_translation_cache")
         val BatchCumulativeCompletionTimeEnabled =
@@ -74,9 +86,11 @@ class SettingsRepository @Inject constructor(
         val RegionSavedW = intPreferencesKey("capture_region_saved_screen_w")
         val RegionSavedH = intPreferencesKey("capture_region_saved_screen_h")
         val RegionBorderEnabled = booleanPreferencesKey("capture_region_border_enabled")
+        val RegionHideOnCapture = booleanPreferencesKey("capture_region_hide_on_capture")
         val RegionBorderColor = intPreferencesKey("capture_region_border_color")
         val RegionBorderWidth = intPreferencesKey("capture_region_border_width_dp")
         val RegionBorderStyle = stringPreferencesKey("capture_region_border_style")
+        val RegionAdjustmentEnabled = booleanPreferencesKey("capture_region_adjustment_enabled")
         val Streaming = booleanPreferencesKey("streaming_translate")
         val RetryFailedTranslation = booleanPreferencesKey("retry_failed_translation")
         val LegacyRetryEmptyTranslation = booleanPreferencesKey("retry_empty_translation")
@@ -126,7 +140,6 @@ class SettingsRepository @Inject constructor(
         val TencentId = stringPreferencesKey("tencent_secret_id")
         val TencentKey = stringPreferencesKey("tencent_secret_key")
         val TencentRegion = stringPreferencesKey("tencent_region")
-        val PreferShizuku = booleanPreferencesKey("prefer_shizuku")
         val Placement = stringPreferencesKey("overlay_placement")
         val PaddleVersion = stringPreferencesKey("paddle_model_version")
         val PaddleDetectionProfile = stringPreferencesKey("paddle_detection_profile")
@@ -147,7 +160,13 @@ class SettingsRepository @Inject constructor(
         val DeeplBaseUrl = stringPreferencesKey("deepl_base_url")
         val DeeplBearerAuth = booleanPreferencesKey("deepl_bearer_auth")
         val DeeplCustomToken = stringPreferencesKey("deepl_custom_token")
+        val NiuTransMode = stringPreferencesKey("niutrans_mode")
+        val NiuTransApiKey = stringPreferencesKey("niutrans_api_key")
+        val NiuTransAppId = stringPreferencesKey("niutrans_app_id")
+        val NiuTransTermLibraryId = stringPreferencesKey("niutrans_term_library_id")
+        val NiuTransMemoryLibraryId = stringPreferencesKey("niutrans_memory_library_id")
         val FloatingSize = intPreferencesKey("floating_button_size_dp")
+        val FloatingAlpha = floatPreferencesKey("floating_button_alpha")
         val FloatingX = intPreferencesKey("floating_button_x")
         val FloatingY = intPreferencesKey("floating_button_y")
         val FloatingSnapEdge = booleanPreferencesKey("floating_button_snap_edge")
@@ -181,6 +200,7 @@ class SettingsRepository @Inject constructor(
         val MergeStrengthKey = stringPreferencesKey("ocr_merge_strength")
         val TextOrientAutoDetect = booleanPreferencesKey("text_orient_auto_detect")
         val TextOrientAutoDefaultOnMigrated = booleanPreferencesKey("text_orient_auto_default_on_migrated")
+        val CaptureContentOrientation = stringPreferencesKey("capture_content_orientation")
         val ManualTextOrient = stringPreferencesKey("manual_text_orient")
         val TranslationOutputFollowRecognition =
             booleanPreferencesKey("translation_output_follow_recognition")
@@ -188,6 +208,7 @@ class SettingsRepository @Inject constructor(
         val TranslationOutputDirection = stringPreferencesKey("translation_output_direction")
         val TranslationGlossaryEnabled = booleanPreferencesKey("translation_glossary_enabled")
         val SourcePreservationEnabled = booleanPreferencesKey("source_preservation_enabled")
+        val TranslationMemoryEnabled = booleanPreferencesKey("translation_memory_enabled")
         val ForegroundAppDetectionMode = stringPreferencesKey("foreground_app_detection_mode")
         val SendAppNameToTranslator = booleanPreferencesKey("send_app_name_to_translator")
         val YoudaoAppKey = stringPreferencesKey("youdao_app_key")
@@ -206,13 +227,18 @@ class SettingsRepository @Inject constructor(
         val ActiveTranslationPresetId = stringPreferencesKey("active_translation_preset_id")
         // 主球当前技能（FULL_SCREEN / WORD_SELECT）
         val FloatingSkillKey = stringPreferencesKey("floating_button_skill")
+        val InputTranslationDoubleAction =
+            stringPreferencesKey("input_translation_double_action")
         // 划词翻译行为开关
         val WordSelectPreciseAdjust = booleanPreferencesKey("word_select_precise_adjust")
         val WordSelectCardMode = booleanPreferencesKey("word_select_card_mode")
+        val WordSelectExtractOnly = booleanPreferencesKey("word_select_extract_only")
         val WordSelectRememberRegion = booleanPreferencesKey("word_select_remember_region")
         val WordSelectLastRegion = stringPreferencesKey("word_select_last_region_json")
         val WordSelectLastRegionSavedW = intPreferencesKey("word_select_last_region_saved_screen_w")
         val WordSelectLastRegionSavedH = intPreferencesKey("word_select_last_region_saved_screen_h")
+        val DictionaryLookupMode = stringPreferencesKey("dictionary_lookup_mode")
+        val DictionaryTapLookupEnabled = booleanPreferencesKey("dictionary_tap_lookup_enabled")
         // 划词翻译词典 prompt
         val DictionaryPrompt = stringPreferencesKey("dictionary_prompt")
         // 端侧 LLM 推理参数
@@ -236,6 +262,14 @@ class SettingsRepository @Inject constructor(
 
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
     private val secretCodec = SettingsSecretCodec(secretCipher)
+    private val credentialStringKeys = setOf(
+        Keys.ApiKey, Keys.AnthropicApiKey, Keys.BaiduKey, Keys.BaiduSecret,
+        Keys.TencentId, Keys.TencentKey, Keys.DeeplKey, Keys.DeeplCustomToken,
+        Keys.NiuTransApiKey, Keys.NiuTransAppId, Keys.YoudaoAppKey, Keys.YoudaoAppSecret,
+        Keys.PaddleAiStudioToken, Keys.VolcAccessKeyId, Keys.VolcSecretAccessKey,
+        Keys.BaiduFanyiAppId, Keys.BaiduFanyiSecretKey, Keys.TtsHttpBearerToken,
+        Keys.TtsVolcengineApiKey, Keys.TtsMiniMaxApiKey, Keys.TtsMimoApiKey,
+    )
     private var defaultPromptProvider: () -> String = { context.getString(R.string.default_prompt) }
     private var defaultDictionaryPromptProvider: () -> String = {
         context.getString(R.string.default_dictionary_prompt)
@@ -243,6 +277,8 @@ class SettingsRepository @Inject constructor(
     private val secureStringKeys = listOf(
         Keys.BaseUrl,
         Keys.ApiKey,
+        Keys.AnthropicBaseUrl,
+        Keys.AnthropicApiKey,
         Keys.Prompt,
         Keys.OpenAiRequestOptions,
         Keys.BaiduKey,
@@ -255,6 +291,8 @@ class SettingsRepository @Inject constructor(
         Keys.DeeplKey,
         Keys.DeeplBaseUrl,
         Keys.DeeplCustomToken,
+        Keys.NiuTransApiKey,
+        Keys.NiuTransAppId,
         Keys.YoudaoAppKey,
         Keys.YoudaoAppSecret,
         Keys.PaddleAiStudioToken,
@@ -278,13 +316,15 @@ class SettingsRepository @Inject constructor(
         Keys.TranslationPresets
     )
 
-    val settings: Flow<Settings> = context.dataStore.data.map { prefs -> prefs.toSettings() }
+    val settings: Flow<Settings> = settingsStore.data
+        .map { prefs -> prefs.toSettings() }
+        .flowOn(Dispatchers.IO)
 
     suspend fun get(): Settings = settings.first()
 
     suspend fun recordMainScreenEntryForSharePrompt(): Boolean {
         var eligibleToShow = false
-        context.dataStore.edit { prefs ->
+        settingsStore.edit { prefs ->
             val decision = SharePromptPolicy.onMainScreenEntry(
                 storedEntryCount = prefs[Keys.SharePromptMainEntryCount] ?: 0,
                 promptAlreadyShown = prefs[Keys.SharePromptShown] ?: false,
@@ -296,34 +336,34 @@ class SettingsRepository @Inject constructor(
     }
 
     suspend fun markSharePromptShown() {
-        context.dataStore.edit { prefs ->
+        settingsStore.edit { prefs ->
             prefs[Keys.SharePromptShown] = true
         }
     }
 
     suspend fun hasSeenMainStatusPreset(): Boolean =
-        context.dataStore.data.first()[Keys.MainStatusPresetSeen] ?: false
+        settingsStore.data.first()[Keys.MainStatusPresetSeen] ?: false
 
     suspend fun markMainStatusPresetSeen() {
-        context.dataStore.edit { prefs ->
+        settingsStore.edit { prefs ->
             prefs[Keys.MainStatusPresetSeen] = true
         }
     }
 
     suspend fun hasSeenMainPresetCarousel(): Boolean =
-        context.dataStore.data.first()[Keys.MainPresetCarouselSeen] ?: false
+        settingsStore.data.first()[Keys.MainPresetCarouselSeen] ?: false
 
     suspend fun markMainPresetCarouselSeen() {
-        context.dataStore.edit { prefs ->
+        settingsStore.edit { prefs ->
             prefs[Keys.MainPresetCarouselSeen] = true
         }
     }
 
     suspend fun hasSeenMainCaptureGallery(): Boolean =
-        context.dataStore.data.first()[Keys.MainCaptureGallerySeen] ?: false
+        settingsStore.data.first()[Keys.MainCaptureGallerySeen] ?: false
 
     suspend fun markMainCaptureGallerySeen() {
-        context.dataStore.edit { prefs ->
+        settingsStore.edit { prefs ->
             prefs[Keys.MainCaptureGallerySeen] = true
         }
     }
@@ -338,11 +378,11 @@ class SettingsRepository @Inject constructor(
 
     suspend fun migratePlaintextSecretsIfNeeded(): Int {
         var migrated = 0
-        context.dataStore.edit { prefs ->
+        settingsStore.edit { prefs ->
             secureStringKeys.forEach { key ->
                 val raw = prefs[key]
                 if (secretCodec.needsMigration(raw)) {
-                    prefs[key] = secretCodec.encryptPlainText(raw.orEmpty())
+                    prefs.putSecure(key, raw.orEmpty())
                     migrated++
                 }
             }
@@ -352,7 +392,7 @@ class SettingsRepository @Inject constructor(
 
     suspend fun migrateTextOrientationAutoDetectDefaultOnIfNeeded(): Boolean {
         var changed = false
-        context.dataStore.edit { prefs ->
+        settingsStore.edit { prefs ->
             if (prefs[Keys.TextOrientAutoDefaultOnMigrated] == true) return@edit
             if (prefs[Keys.TextOrientAutoDetect] == false) {
                 prefs[Keys.TextOrientAutoDetect] = true
@@ -365,7 +405,7 @@ class SettingsRepository @Inject constructor(
 
     suspend fun migrateRetiredMangaOcrAdvancedSettingsIfNeeded(): Boolean {
         var changed = false
-        context.dataStore.edit { prefs ->
+        settingsStore.edit { prefs ->
             if (prefs[Keys.BubbleClusterGap]?.let {
                     MangaOcrAdvancedSettingsPolicy.effectiveBubbleClusterGap(it)
                 } != prefs[Keys.BubbleClusterGap]
@@ -399,7 +439,7 @@ class SettingsRepository @Inject constructor(
 
     suspend fun migrateMangaOcrDetectorToV6SmallIfNeeded(): Boolean {
         var changed = false
-        context.dataStore.edit { prefs ->
+        settingsStore.edit { prefs ->
             val engine = runCatching {
                 OcrEngineKind.valueOf(prefs[Keys.OcrEngine].orEmpty())
             }.getOrDefault(Settings().ocrEngine)
@@ -443,33 +483,45 @@ class SettingsRepository @Inject constructor(
      *
      * 返回 rescale 后的 region（已经写回 DataStore）。
      */
-    suspend fun rescaleCaptureRegionIfNeeded(currentW: Int, currentH: Int) {
-        if (currentW <= 0 || currentH <= 0) return
-        val s = get()
-        val region = s.captureRegion ?: return
-        val savedW = s.captureRegionSavedScreenW
-        val savedH = s.captureRegionSavedScreenH
-        if (savedW <= 0 || savedH <= 0) {
-            update { it.copy(
-                captureRegionSavedScreenW = currentW,
-                captureRegionSavedScreenH = currentH
-            ) }
-            return
+    suspend fun rescaleCaptureRegionIfNeeded(currentW: Int, currentH: Int): CaptureRegion? =
+        withContext(Dispatchers.IO) {
+            if (currentW <= 0 || currentH <= 0) return@withContext null
+            var result: CaptureRegion? = null
+            settingsStore.edit { prefs ->
+                val region = prefs[Keys.Region]?.takeIf(String::isNotBlank)?.let {
+                    runCatching { json.decodeFromString<CaptureRegion>(it) }.getOrNull()
+                } ?: return@edit
+                val savedW = prefs[Keys.RegionSavedW] ?: 0
+                val savedH = prefs[Keys.RegionSavedH] ?: 0
+                result = if (savedW <= 0 || savedH <= 0 || (savedW == currentW && savedH == currentH)) {
+                    region
+                } else {
+                    val scaleX = currentW.toFloat() / savedW
+                    val scaleY = currentH.toFloat() / savedH
+                    CaptureRegion(
+                        (region.left * scaleX).toInt().coerceIn(0, currentW),
+                        (region.top * scaleY).toInt().coerceIn(0, currentH),
+                        (region.right * scaleX).toInt().coerceIn(0, currentW),
+                        (region.bottom * scaleY).toInt().coerceIn(0, currentH),
+                    )
+                }
+                prefs.writeCaptureRegion(result, currentW, currentH)
+            }
+            result
         }
-        if (savedW == currentW && savedH == currentH) return
-        val scaleX = currentW.toFloat() / savedW
-        val scaleY = currentH.toFloat() / savedH
-        val newRegion = CaptureRegion(
-            left = (region.left * scaleX).toInt().coerceIn(0, currentW),
-            top = (region.top * scaleY).toInt().coerceIn(0, currentH),
-            right = (region.right * scaleX).toInt().coerceIn(0, currentW),
-            bottom = (region.bottom * scaleY).toInt().coerceIn(0, currentH)
-        )
-        update { it.copy(
-            captureRegion = newRegion,
-            captureRegionSavedScreenW = currentW,
-            captureRegionSavedScreenH = currentH
-        ) }
+
+    /** Region gestures must not decrypt/re-encrypt every credential and preset in Settings. */
+    suspend fun setCaptureRegion(region: CaptureRegion?, screenWidth: Int, screenHeight: Int) =
+        withContext(Dispatchers.IO) {
+            require(screenWidth > 0 && screenHeight > 0)
+            settingsStore.edit { prefs -> prefs.writeCaptureRegion(region, screenWidth, screenHeight) }
+            Unit
+        }
+
+    private fun MutablePreferences.writeCaptureRegion(region: CaptureRegion?, width: Int, height: Int) {
+        this[Keys.Region] = region?.let { json.encodeToString(it) }.orEmpty()
+        this[Keys.RegionSavedW] = width
+        this[Keys.RegionSavedH] = height
     }
 
     suspend fun rescaleWordSelectLastRegionIfNeeded(currentW: Int, currentH: Int) {
@@ -498,7 +550,113 @@ class SettingsRepository @Inject constructor(
     }
 
     private fun MutablePreferences.putSecure(key: Preferences.Key<String>, value: String) {
-        this[key] = secretCodec.encryptPlainText(value)
+        this[key] = if (key in credentialStringKeys) secretCodec.encryptCredential(value)
+            else secretCodec.encryptPlainText(value)
+    }
+
+    // Kept outside both Settings and TranslationPreset: no export/diagnostic serializer sees these records.
+    private fun presetCredentialKey(id: String) = stringPreferencesKey("local_preset_credentials_v1_$id")
+
+    private fun Preferences.presetCredentials(id: String): PresetCredentialRecord? =
+        this[presetCredentialKey(id)]?.takeIf(secretCodec::isEncrypted)
+            ?.let(secretCodec::decodeStored)?.let { raw ->
+                runCatching { json.decodeFromString<PresetCredentialRecord>(raw) }.getOrNull()
+            }?.takeIf { it.ownerId == id }
+
+    private fun MutablePreferences.rememberCredentials(id: String, source: Settings) {
+        this[presetCredentialKey(id)] = secretCodec.encryptCredential(
+            json.encodeToString(PresetCredentialPolicy.capture(id, source)),
+        )
+    }
+
+    suspend fun saveTranslationPreset(
+        preset: TranslationPreset,
+        source: Settings? = null,
+    ): TranslationPreset {
+        require(!TranslationPresetCatalog.isBuiltIn(preset.id))
+        updateWithPreferences { current, prefs ->
+            prefs.rememberCredentials(preset.id, source ?: current)
+            val next = preset.applyTo(current).copy(
+                translationPresets = TranslationPresetCatalog.upsertCustom(current.translationPresets, preset),
+                activeTranslationPresetId = preset.id,
+            )
+            PresetCredentialPolicy.apply(preset.id, next, prefs.presetCredentials(preset.id))
+        }
+        return preset
+    }
+
+    suspend fun duplicateTranslationPreset(id: String, name: String, shortName: String): TranslationPreset? {
+        var duplicated: TranslationPreset? = null
+        updateWithPreferences { current, prefs ->
+            val source = TranslationPresetCatalog.find(current.translationPresets, id)
+                ?: return@updateWithPreferences current
+            val copy = source.copy(
+                id = "custom_${java.util.UUID.randomUUID()}", name = name, shortName = shortName,
+            )
+            val credentials = prefs.presetCredentials(id)?.copy(ownerId = copy.id)
+            prefs[presetCredentialKey(copy.id)] = credentials?.let {
+                secretCodec.encryptCredential(json.encodeToString(it))
+            }.orEmpty()
+            duplicated = copy
+            current.copy(translationPresets = TranslationPresetCatalog.upsertCustom(current.translationPresets, copy))
+        }
+        return duplicated
+    }
+
+    suspend fun applyTranslationPreset(id: String, presetToSave: TranslationPreset? = null): Settings? {
+        var found = false
+        val committed = updateWithPreferences(readBack = true) { current, prefs ->
+            if (TranslationPresetCatalog.find(current.translationPresets, id) == null) {
+                return@updateWithPreferences current
+            }
+            val prepared = if (presetToSave != null && !TranslationPresetCatalog.isBuiltIn(presetToSave.id)) {
+                prefs.rememberCredentials(presetToSave.id, current)
+                current.copy(translationPresets = TranslationPresetCatalog.upsertCustom(
+                    current.translationPresets, presetToSave,
+                ))
+            } else current
+            val preset = requireNotNull(TranslationPresetCatalog.find(prepared.translationPresets, id))
+            found = true
+            PresetCredentialPolicy.apply(
+                id, preset.applyTo(prepared).copy(activeTranslationPresetId = id), prefs.presetCredentials(id),
+            )
+        }
+        return committed.takeIf { found }
+    }
+
+    suspend fun updateAfterPresetImport(importedNames: Set<String>, transform: (Settings) -> Settings): Settings =
+        updateWithPreferences(readBack = true) { current, prefs ->
+            val next = transform(current)
+            val normalizedNames = importedNames.mapTo(mutableSetOf()) { it.trim().lowercase(java.util.Locale.ROOT) }
+            val importedIds = next.translationPresets.filter {
+                it.name.trim().lowercase(java.util.Locale.ROOT) in normalizedNames
+            }.mapTo(mutableSetOf()) { it.id }
+            importedIds.forEach { prefs.remove(presetCredentialKey(it)) }
+            if (next.activeTranslationPresetId in importedIds) {
+                PresetCredentialPolicy.apply(next.activeTranslationPresetId, next, null)
+            } else next
+        }
+
+    suspend fun rememberSnapshotCredentials(snapshot: TranslationPreset, source: Settings) = withContext(Dispatchers.IO) {
+        settingsStore.edit { it.rememberCredentials(snapshot.id, source) }
+        Unit
+    }
+
+    suspend fun forgetSnapshotCredentials(id: String) = withContext(Dispatchers.IO) {
+        settingsStore.edit { it.remove(presetCredentialKey(id)) }
+        Unit
+    }
+
+    suspend fun settingsForSnapshot(snapshot: TranslationPreset): Settings = withContext(Dispatchers.IO) {
+        val prefs = settingsStore.data.first()
+        PresetCredentialPolicy.apply(snapshot.id, snapshot.applyTo(prefs.toSettings()), prefs.presetCredentials(snapshot.id))
+    }
+
+    suspend fun matchingCredentialPresetIds(source: Settings): Set<String> = withContext(Dispatchers.IO) {
+        val prefs = settingsStore.data.first()
+        TranslationPresetCatalog.all(prefs.toSettings().translationPresets).filter {
+            PresetCredentialPolicy.matches(it.id, source, prefs.presetCredentials(it.id))
+        }.mapTo(mutableSetOf()) { it.id }
     }
 
     private fun Preferences.secureString(
@@ -507,9 +665,17 @@ class SettingsRepository @Inject constructor(
     ): String = this[key]?.let { secretCodec.decodeStored(it) } ?: defaultValue
 
     suspend fun update(transform: (Settings) -> Settings) {
-        context.dataStore.edit { prefs ->
+        updateWithPreferences { current, _ -> transform(current) }
+    }
+
+    private suspend fun updateWithPreferences(
+        readBack: Boolean = false,
+        transform: (Settings, MutablePreferences) -> Settings,
+    ): Settings = withContext(Dispatchers.IO) {
+        var committed: Settings? = null
+        settingsStore.edit { prefs ->
             val current = prefs.toSettings()
-            val requested = transform(current)
+            val requested = transform(current, prefs)
             val languageSafe = if (
                 translationLanguageCodesConflict(requested.sourceLang, requested.targetLang)
             ) {
@@ -521,6 +687,9 @@ class SettingsRepository @Inject constructor(
                 requested
             }
             val next = MangaOcrSettingsPolicy.normalize(languageSafe)
+            val remainingPresetIds = next.translationPresets.mapTo(mutableSetOf()) { it.id }
+            current.translationPresets.filterNot { it.id in remainingPresetIds }
+                .forEach { prefs.remove(presetCredentialKey(it.id)) }
             prefs.putSecure(Keys.BaseUrl, next.baseUrl)
             prefs.putSecure(Keys.ApiKey, next.apiKey)
             prefs[Keys.Model] = next.model
@@ -535,6 +704,7 @@ class SettingsRepository @Inject constructor(
                 json.encodeToString(next.openAiRequestOptions.normalized()),
             )
             prefs[Keys.OcrEngine] = next.ocrEngine.name
+            prefs[Keys.AutoOcr] = json.encodeToString(AutoOcrSettings.serializer(), next.autoOcr.normalized())
             prefs[Keys.LoopInterval] = next.captureLoopIntervalMs
             prefs[Keys.LoopTriggerMode] = next.loopTriggerMode.name
             prefs[Keys.LoopTextStableDuration] =
@@ -545,6 +715,7 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.LoopTextRegionMode] = next.loopTextRegionMode.name
             prefs[Keys.LoopTranslateRegionOnly] = next.loopTranslateRegionOnly
             prefs[Keys.DeveloperOptionsEnabled] = next.developerOptionsEnabled
+            prefs[Keys.PerformanceOverlayEnabled] = next.performanceOverlayEnabled
             prefs[Keys.OcrScreenshotSavingEnabled] = next.ocrScreenshotSavingEnabled
             prefs[Keys.DisableTranslationCache] = next.disableTranslationCache
             prefs[Keys.BatchCumulativeCompletionTimeEnabled] =
@@ -566,10 +737,12 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.RegionSavedW] = next.captureRegionSavedScreenW
             prefs[Keys.RegionSavedH] = next.captureRegionSavedScreenH
             prefs[Keys.RegionBorderEnabled] = next.captureRegionBorderEnabled
+            prefs[Keys.RegionHideOnCapture] = next.captureRegionHideOnCapture
             prefs[Keys.RegionBorderColor] = next.captureRegionBorderColor
             prefs[Keys.RegionBorderWidth] =
                 normalizedCaptureRegionBorderWidthDp(next.captureRegionBorderWidthDp)
             prefs[Keys.RegionBorderStyle] = next.captureRegionBorderStyle.name
+            prefs[Keys.RegionAdjustmentEnabled] = next.captureRegionAdjustmentEnabled
             prefs[Keys.Streaming] = next.streamingTranslate
             prefs[Keys.RetryFailedTranslation] = next.retryFailedTranslation
             prefs.remove(Keys.LegacyRetryEmptyTranslation)
@@ -621,7 +794,6 @@ class SettingsRepository @Inject constructor(
             prefs.putSecure(Keys.TencentId, next.tencentSecretId)
             prefs.putSecure(Keys.TencentKey, next.tencentSecretKey)
             prefs[Keys.TencentRegion] = next.tencentRegion
-            prefs[Keys.PreferShizuku] = next.preferShizukuCapture
             prefs[Keys.Placement] = next.overlayPlacement.name
             prefs[Keys.PaddleVersion] = next.paddleModelVersion.name
             prefs[Keys.PaddleDetectionProfile] = next.paddleDetectionProfile.name
@@ -638,6 +810,7 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.TranslatorEng] = next.translatorEngine.name
             prefs[Keys.TranslationGlossaryEnabled] = next.translationGlossaryEnabled
             prefs[Keys.SourcePreservationEnabled] = next.sourcePreservationEnabled
+            prefs[Keys.TranslationMemoryEnabled] = next.translationMemoryEnabled
             prefs[Keys.ForegroundAppDetectionMode] = next.foregroundAppDetectionMode.name
             prefs[Keys.SendAppNameToTranslator] = next.sendAppNameToTranslator
             prefs.putSecure(Keys.DeeplKey, next.deeplApiKey)
@@ -646,7 +819,13 @@ class SettingsRepository @Inject constructor(
             prefs.putSecure(Keys.DeeplBaseUrl, next.deeplBaseUrl)
             prefs[Keys.DeeplBearerAuth] = next.deeplBearerAuth
             prefs.putSecure(Keys.DeeplCustomToken, next.deeplCustomToken)
+            prefs[Keys.NiuTransMode] = next.niuTransMode.name
+            prefs.putSecure(Keys.NiuTransApiKey, next.niuTransApiKey)
+            prefs.putSecure(Keys.NiuTransAppId, next.niuTransAppId)
+            prefs[Keys.NiuTransTermLibraryId] = next.niuTransTermLibraryId
+            prefs[Keys.NiuTransMemoryLibraryId] = next.niuTransMemoryLibraryId
             prefs[Keys.FloatingSize] = next.floatingButtonSizeDp
+            prefs[Keys.FloatingAlpha] = normalizedFloatingButtonAlpha(next.floatingButtonAlpha)
             prefs[Keys.FloatingX] = next.floatingButtonX
             prefs[Keys.FloatingY] = next.floatingButtonY
             prefs[Keys.FloatingSnapEdge] = next.floatingButtonSnapToEdge
@@ -676,6 +855,7 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.MergeAdjacent] = next.mergeAdjacentBlocks
             prefs[Keys.MergeStrengthKey] = next.mergeStrength.name
             prefs[Keys.TextOrientAutoDetect] = next.textOrientationAutoDetect
+            prefs[Keys.CaptureContentOrientation] = next.captureContentOrientation.name
             // null 用 remove 而非写空串：toSettings 用 runCatching valueOf 解析，空串会 fallback 到 null
             // 但显式 remove 让 DataStore 文件更干净，未来 grep 无歧义
             next.manualTextOrientation?.let { prefs[Keys.ManualTextOrient] = it.name }
@@ -695,7 +875,10 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.VolcRegion] = next.volcRegion
             prefs.putSecure(Keys.BaiduFanyiAppId, next.baiduFanyiAppId)
             prefs.putSecure(Keys.BaiduFanyiSecretKey, next.baiduFanyiSecretKey)
-            prefs.putSecure(Keys.CleartextHosts, next.cleartextAllowedHosts.joinToString("\n"))
+            prefs.putSecure(
+                Keys.CleartextHosts,
+                CleartextHostPolicy.normalize(next.cleartextAllowedHosts).joinToString("\n")
+            )
             prefs[Keys.FloatingMenuOrder] = next.floatingMenuItemOrder.joinToString(",") { it.name }
             prefs[Keys.ArcMenuPageSize] = FloatingMenu.coercePageSize(next.arcMenuPageSize)
             prefs.putSecure(
@@ -708,12 +891,16 @@ class SettingsRepository @Inject constructor(
             )
             prefs[Keys.ActiveTranslationPresetId] = next.activeTranslationPresetId
             prefs[Keys.FloatingSkillKey] = next.floatingButtonSkill.name
+            prefs[Keys.InputTranslationDoubleAction] = next.inputTranslationDoubleAction.name
             prefs[Keys.WordSelectPreciseAdjust] = next.wordSelectPreciseAdjust
             prefs[Keys.WordSelectCardMode] = next.wordSelectCardMode
+            prefs[Keys.WordSelectExtractOnly] = next.wordSelectExtractOnly
             prefs[Keys.WordSelectRememberRegion] = next.wordSelectRememberRegion
             prefs[Keys.WordSelectLastRegion] = next.wordSelectLastRegion?.let { json.encodeToString(it) } ?: ""
             prefs[Keys.WordSelectLastRegionSavedW] = next.wordSelectLastRegionSavedScreenW
             prefs[Keys.WordSelectLastRegionSavedH] = next.wordSelectLastRegionSavedScreenH
+            prefs[Keys.DictionaryLookupMode] = next.dictionaryLookupMode.name
+            prefs[Keys.DictionaryTapLookupEnabled] = next.dictionaryTapLookupEnabled
             prefs.putSecure(Keys.DictionaryPrompt, next.dictionaryPrompt)
             prefs[Keys.LocalLlmCtxSize] = next.localLlmContextSize
             prefs[Keys.LocalLlmMaxNewTokens] = next.localLlmMaxNewTokens
@@ -725,7 +912,9 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.MangaOcrDbnetUnclipRatio] = next.mangaOcrDbnetUnclipRatio
             prefs[Keys.BubbleClusterGap] = MangaOcrAdvancedSettingsPolicy.BUBBLE_CLUSTER_GAP
             prefs[Keys.MangaOcrCropPaddingPx] = MangaOcrAdvancedSettingsPolicy.CROP_PADDING_PX
+            committed = if (readBack) prefs.toSettings() else next
         }
+        requireNotNull(committed)
     }
 
     private fun Preferences.toSettings(): Settings {
@@ -780,6 +969,9 @@ class SettingsRepository @Inject constructor(
                 ?: default.openAiRequestOptions,
             ocrEngine = runCatching { OcrEngineKind.valueOf(this[Keys.OcrEngine] ?: "") }
                 .getOrDefault(default.ocrEngine),
+            autoOcr = runCatching {
+                json.decodeFromString<AutoOcrSettings>(this[Keys.AutoOcr] ?: "{}").normalized()
+            }.getOrDefault(default.autoOcr),
             captureLoopIntervalMs = this[Keys.LoopInterval] ?: default.captureLoopIntervalMs,
             loopTriggerMode = this[Keys.LoopTriggerMode]
                 ?.let { runCatching { LoopTriggerMode.valueOf(it) }.getOrNull() }
@@ -798,6 +990,8 @@ class SettingsRepository @Inject constructor(
                 ?: default.loopTranslateRegionOnly,
             developerOptionsEnabled = this[Keys.DeveloperOptionsEnabled]
                 ?: default.developerOptionsEnabled,
+            performanceOverlayEnabled = this[Keys.PerformanceOverlayEnabled]
+                ?: default.performanceOverlayEnabled,
             ocrScreenshotSavingEnabled = this[Keys.OcrScreenshotSavingEnabled]
                 ?: default.ocrScreenshotSavingEnabled,
             disableTranslationCache = this[Keys.DisableTranslationCache]
@@ -844,6 +1038,8 @@ class SettingsRepository @Inject constructor(
             captureRegionSavedScreenH = this[Keys.RegionSavedH] ?: default.captureRegionSavedScreenH,
             captureRegionBorderEnabled = this[Keys.RegionBorderEnabled]
                 ?: default.captureRegionBorderEnabled,
+            captureRegionHideOnCapture = this[Keys.RegionHideOnCapture]
+                ?: default.captureRegionHideOnCapture,
             captureRegionBorderColor = this[Keys.RegionBorderColor]
                 ?: default.captureRegionBorderColor,
             captureRegionBorderWidthDp = normalizedCaptureRegionBorderWidthDp(
@@ -852,6 +1048,8 @@ class SettingsRepository @Inject constructor(
             captureRegionBorderStyle = runCatching {
                 CaptureRegionBorderStyle.valueOf(this[Keys.RegionBorderStyle] ?: "")
             }.getOrDefault(default.captureRegionBorderStyle),
+            captureRegionAdjustmentEnabled = this[Keys.RegionAdjustmentEnabled]
+                ?: default.captureRegionAdjustmentEnabled,
             streamingTranslate = this[Keys.Streaming] ?: default.streamingTranslate,
             retryFailedTranslation = this[Keys.RetryFailedTranslation]
                 ?: this[Keys.LegacyRetryEmptyTranslation]
@@ -934,7 +1132,6 @@ class SettingsRepository @Inject constructor(
             tencentSecretId = secureString(Keys.TencentId, default.tencentSecretId),
             tencentSecretKey = secureString(Keys.TencentKey, default.tencentSecretKey),
             tencentRegion = this[Keys.TencentRegion] ?: default.tencentRegion,
-            preferShizukuCapture = this[Keys.PreferShizuku] ?: default.preferShizukuCapture,
             overlayPlacement = runCatching { OverlayPlacement.valueOf(this[Keys.Placement] ?: "") }
                 .getOrDefault(default.overlayPlacement),
             paddleModelVersion = runCatching { PaddleModelVersion.valueOf(this[Keys.PaddleVersion] ?: "") }
@@ -962,6 +1159,8 @@ class SettingsRepository @Inject constructor(
                 ?: default.translationGlossaryEnabled,
             sourcePreservationEnabled = this[Keys.SourcePreservationEnabled]
                 ?: default.sourcePreservationEnabled,
+            translationMemoryEnabled = this[Keys.TranslationMemoryEnabled]
+                ?: default.translationMemoryEnabled,
             foregroundAppDetectionMode = runCatching {
                 ForegroundAppDetectionMode.valueOf(this[Keys.ForegroundAppDetectionMode] ?: "")
             }.getOrDefault(default.foregroundAppDetectionMode),
@@ -974,7 +1173,16 @@ class SettingsRepository @Inject constructor(
             deeplBaseUrl = secureString(Keys.DeeplBaseUrl, default.deeplBaseUrl),
             deeplBearerAuth = this[Keys.DeeplBearerAuth] ?: default.deeplBearerAuth,
             deeplCustomToken = secureString(Keys.DeeplCustomToken, default.deeplCustomToken),
+            niuTransMode = runCatching { NiuTransMode.valueOf(this[Keys.NiuTransMode] ?: "") }
+                .getOrDefault(default.niuTransMode),
+            niuTransApiKey = secureString(Keys.NiuTransApiKey, default.niuTransApiKey),
+            niuTransAppId = secureString(Keys.NiuTransAppId, default.niuTransAppId),
+            niuTransTermLibraryId = this[Keys.NiuTransTermLibraryId]
+                ?: default.niuTransTermLibraryId,
+            niuTransMemoryLibraryId = this[Keys.NiuTransMemoryLibraryId]
+                ?: default.niuTransMemoryLibraryId,
             floatingButtonSizeDp = this[Keys.FloatingSize] ?: default.floatingButtonSizeDp,
+            floatingButtonAlpha = normalizedFloatingButtonAlpha(this[Keys.FloatingAlpha] ?: default.floatingButtonAlpha),
             floatingButtonX = this[Keys.FloatingX] ?: default.floatingButtonX,
             floatingButtonY = this[Keys.FloatingY] ?: default.floatingButtonY,
             floatingButtonSnapToEdge = this[Keys.FloatingSnapEdge] ?: default.floatingButtonSnapToEdge,
@@ -1022,6 +1230,9 @@ class SettingsRepository @Inject constructor(
             mergeStrength = runCatching { MergeStrength.valueOf(this[Keys.MergeStrengthKey] ?: "") }
                 .getOrDefault(default.mergeStrength),
             textOrientationAutoDetect = this[Keys.TextOrientAutoDetect] ?: default.textOrientationAutoDetect,
+            captureContentOrientation = runCatching {
+                CaptureContentOrientation.valueOf(this[Keys.CaptureContentOrientation] ?: "")
+            }.getOrDefault(default.captureContentOrientation),
             manualTextOrientation = this[Keys.ManualTextOrient]
                 ?.let { raw ->
                     runCatching { com.gameocr.app.ocr.TextOrientation.valueOf(raw) }.getOrNull()
@@ -1041,8 +1252,7 @@ class SettingsRepository @Inject constructor(
                 default.cleartextAllowedHosts.joinToString("\n")
             )
                 .split('\n')
-                .map { it.trim() }
-                .filter { it.isNotEmpty() },
+                .let(CleartextHostPolicy::normalize),
             // 弧菜单按钮顺序：脏数据 / 未知 id silently 丢弃；丢失的已知 id 自动补齐到末尾，
             // 保证 ALL_ORDER 里所有 id 都出现一次。这样后续新版本加新菜单项，老用户也能看到。
             floatingMenuItemOrder = run {
@@ -1054,18 +1264,7 @@ class SettingsRepository @Inject constructor(
                     .mapNotNull { tok -> runCatching { MenuItemId.valueOf(tok) }.getOrNull() }
                     .distinct()
                 if (parsed.isEmpty()) return@run default.floatingMenuItemOrder
-                // 补齐缺失的已知 id
-                val missing = FloatingMenu.ALL_ORDER.filter { it !in parsed }
-                val normalized = parsed + missing
-                if (
-                    normalized == FloatingMenu.LEGACY_DEFAULT_ORDER_BEFORE_SKILL_SWAP ||
-                    normalized == FloatingMenu.LEGACY_DEFAULT_ORDER_BEFORE_PRESET_SKILL_SWAP ||
-                    normalized == FloatingMenu.LEGACY_DEFAULT_ORDER_BEFORE_PRESET_LANGUAGE_SWAP
-                ) {
-                    default.floatingMenuItemOrder
-                } else {
-                    normalized
-                }
+                FloatingMenu.normalizeOrder(parsed)
             },
             arcMenuPageSize = FloatingMenu.coercePageSize(
                 this[Keys.ArcMenuPageSize] ?: default.arcMenuPageSize
@@ -1082,14 +1281,25 @@ class SettingsRepository @Inject constructor(
                 ?: default.activeTranslationPresetId,
             floatingButtonSkill = runCatching { FloatingSkill.valueOf(this[Keys.FloatingSkillKey] ?: "") }
                 .getOrDefault(default.floatingButtonSkill),
+            inputTranslationDoubleAction = runCatching {
+                InputTranslationDoubleAction.valueOf(
+                    this[Keys.InputTranslationDoubleAction].orEmpty()
+                )
+            }.getOrDefault(default.inputTranslationDoubleAction),
             wordSelectPreciseAdjust = this[Keys.WordSelectPreciseAdjust] ?: default.wordSelectPreciseAdjust,
             wordSelectCardMode = this[Keys.WordSelectCardMode] ?: default.wordSelectCardMode,
+            wordSelectExtractOnly = this[Keys.WordSelectExtractOnly] ?: default.wordSelectExtractOnly,
             wordSelectRememberRegion = this[Keys.WordSelectRememberRegion] ?: default.wordSelectRememberRegion,
             wordSelectLastRegion = this[Keys.WordSelectLastRegion]?.takeIf { it.isNotBlank() }?.let {
                 runCatching { json.decodeFromString<CaptureRegion>(it) }.getOrNull()
             },
             wordSelectLastRegionSavedScreenW = this[Keys.WordSelectLastRegionSavedW] ?: default.wordSelectLastRegionSavedScreenW,
             wordSelectLastRegionSavedScreenH = this[Keys.WordSelectLastRegionSavedH] ?: default.wordSelectLastRegionSavedScreenH,
+            dictionaryLookupMode = runCatching {
+                DictionaryLookupMode.valueOf(this[Keys.DictionaryLookupMode].orEmpty())
+            }.getOrDefault(default.dictionaryLookupMode),
+            dictionaryTapLookupEnabled = this[Keys.DictionaryTapLookupEnabled]
+                ?: default.dictionaryTapLookupEnabled,
             dictionaryPrompt = secureString(
                 Keys.DictionaryPrompt,
                 defaultDictionaryPromptProvider()

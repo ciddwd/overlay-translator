@@ -307,6 +307,32 @@ class GlossaryScreenUiAuditTest {
     }
 
     @Test
+    fun translationMemoryHelp_tableDriven_explainsApplicationAndGlobalScopes() {
+        data class Case(val locale: String, val strings: String, val approvedParagraph: String, val obsoleteRule: String)
+        listOf(
+            Case(
+                "Chinese",
+                chineseStrings,
+                "识别到当前应用时，翻译记忆按应用保存；未识别到时，保存为全局记忆。翻译时优先使用当前应用的记忆，再查找全局记忆。",
+                "必须先识别出当前游戏",
+            ),
+            Case(
+                "English",
+                englishStrings,
+                "When the current app is identified, memories are saved for that app; otherwise, they are saved as global memories. During translation, memories for the current app are used first, followed by global memories.",
+                "must identify the current game",
+            ),
+        ).forEach { case ->
+            val body = case.strings.substringAfter("<string name=\"translation_library_help_memory_body\">")
+                .substringBefore("</string>")
+            val paragraphs = body.split("\\n\\n")
+            assertEquals("${case.locale}: preserve the three-paragraph layout", 3, paragraphs.size)
+            assertEquals(case.locale, case.approvedParagraph, paragraphs.last())
+            assertFalse("${case.locale}: no outdated application requirement", body.contains(case.obsoleteRule))
+        }
+    }
+
+    @Test
     fun translationLibraryCards_tableDriven_shareTheSourceTranslationLayout() {
         val termCard = source.substring(
             source.indexOf("private fun GlossaryTermCard("),

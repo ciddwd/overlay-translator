@@ -12,6 +12,19 @@ internal object LoopFrameFingerprintFactory {
     private const val FNV_OFFSET_BASIS = -3750763034362895579L
     private const val FNV_PRIME = 1099511628211L
 
+    /** Observation only needs a small sample, not a full-resolution pixel hash on every poll. */
+    fun createObservation(
+        bitmap: Bitmap,
+        contextId: Int,
+        excludedRects: List<Rect>,
+    ): SettledPageFrame {
+        val visible = SettledPageVisualPolicy.visibility(
+            bitmap.width, bitmap.height, SAMPLE_SIZE,
+            excludedRects.map { OverlayCaptureRect(it.left, it.top, it.right, it.bottom) },
+        )
+        return SettledPageFrame(bitmap.width, bitmap.height, contextId, luminanceSample(bitmap, null), visible)
+    }
+
     fun create(
         bitmap: Bitmap,
         contextId: Int,

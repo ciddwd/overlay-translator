@@ -53,6 +53,7 @@ internal fun TranslationMemoryPane(
     query: String,
     onUpdate: (id: Long, correctedSource: String, correctedTranslation: String) -> Unit,
     onDelete: (id: Long) -> Unit,
+    masterSwitch: @Composable () -> Unit = {},
 ) {
     var editing by remember { mutableStateOf<TranslationMemoryEntity?>(null) }
     var pendingDelete by remember { mutableStateOf<TranslationMemoryEntity?>(null) }
@@ -66,6 +67,7 @@ internal fun TranslationMemoryPane(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            item(key = "memory-master") { masterSwitch() }
             if (visibleEntries.isEmpty()) {
                 item {
                     Text(
@@ -121,7 +123,9 @@ private fun TranslationMemoryCard(
     onDelete: () -> Unit,
 ) {
     val context = LocalContext.current
-    val appLabel = entry.appLabel.ifBlank { entry.scopePackage }
+    val appLabel = if (entry.scopePackage.isBlank()) {
+        stringResource(R.string.glossary_scope_global)
+    } else entry.appLabel.ifBlank { entry.scopePackage }
     val sourceLanguage = Languages.nameOf(context, entry.sourceLang)
     val targetLanguage = Languages.nameOf(context, entry.targetLang)
     Card(

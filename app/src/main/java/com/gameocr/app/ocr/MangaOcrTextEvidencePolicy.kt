@@ -84,6 +84,9 @@ internal object MangaOcrTextEvidencePolicy {
                     entry.copy(
                         bubble = entry.bubble.copy(
                             rect = recognitionBounds,
+                            // TEXT_BUBBLE is text extent, not padding or the enclosing balloon.
+                            // Recognition, erasure and rendering must retain the same content.
+                            contentRect = union(entry.bubble.contentRect, evidenceBounds),
                         ),
                     )
                 } else {

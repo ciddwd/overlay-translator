@@ -1,6 +1,8 @@
 package com.gameocr.app.service
 
 import android.app.Service
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -21,7 +23,10 @@ import android.widget.Toast
 import androidx.core.app.ServiceCompat
 import com.gameocr.app.R
 import com.gameocr.app.capture.CaptureCoordinateRelation
+import com.gameocr.app.capture.CaptureContentOrientationPolicy
 import com.gameocr.app.capture.CaptureRegion
+import com.gameocr.app.capture.captureRegionOrigin
+import com.gameocr.app.capture.wordSelectCapturePlan
 import com.gameocr.app.capture.FloatingWindowCaptureAction
 import com.gameocr.app.capture.LoopFrameChangePolicy
 import com.gameocr.app.capture.LoopFrameFingerprint
@@ -46,8 +51,13 @@ import com.gameocr.app.capture.LoopActiveResultDecision
 import com.gameocr.app.capture.LoopIndicatorMode
 import com.gameocr.app.capture.LoopRuntimePolicy
 import com.gameocr.app.capture.MediaProjectionScreenshotter
+import com.gameocr.app.capture.AccessibilityScreenshotter
+import com.gameocr.app.capture.CaptureBackend
 import com.gameocr.app.capture.OverlayCaptureRect
 import com.gameocr.app.capture.Screenshotter
+import com.gameocr.app.capture.SettledPagePolicy
+import com.gameocr.app.capture.SettledPageFrame
+import com.gameocr.app.capture.SettledPageVisualPolicy
 import com.gameocr.app.capture.ShizukuScreenshotter
 import com.gameocr.app.capture.diagnoseCaptureGeometry
 import com.gameocr.app.capture.floatingWindowCaptureAction
@@ -56,6 +66,7 @@ import com.gameocr.app.capture.shouldHideFloatingButtonForCapture
 import com.gameocr.app.shizuku.ShizukuCapabilities
 import com.gameocr.app.data.LogRepository
 import com.gameocr.app.data.LoopTriggerMode
+import com.gameocr.app.data.CaptureContentOrientation
 import com.gameocr.app.data.LoopTextRegionMode
 import com.gameocr.app.data.OcrEngineKind
 import com.gameocr.app.data.OverlayFontManager
@@ -70,10 +81,12 @@ import com.gameocr.app.data.TranslationPresetCatalog
 import com.gameocr.app.data.translationLanguageCodesConflict
 import com.gameocr.app.data.needsRawBitmap
 import com.gameocr.app.data.Languages
+import com.gameocr.app.appcontext.ForegroundAppResolver
 import com.gameocr.app.glossary.GlossaryTermCategory
 import com.gameocr.app.glossary.GlossaryTermEntity
 import com.gameocr.app.glossary.SourcePreservationService
 import com.gameocr.app.glossary.TranslationGlossaryRepository
+import com.gameocr.app.dictionary.OfflineDictionaryRepository
 import com.gameocr.app.ocr.BitmapPreprocessor
 import com.gameocr.app.ocr.MangaOcrEngine
 import com.gameocr.app.ocr.MangaDelayedMaskDebugSessionManager
@@ -98,9 +111,11 @@ import com.gameocr.app.ocr.sortTextBlocksForMergedPage
 import com.gameocr.app.ocr.sortTextBlocksForReading
 import com.gameocr.app.data.resolveTranslationOutputSettings
 import com.gameocr.app.data.FloatingSkill
+import com.gameocr.app.data.InputTranslationDoubleAction
 import com.gameocr.app.tts.ttsFailureMessage
 import com.gameocr.app.overlay.FloatingButtonManager
 import com.gameocr.app.overlay.FloatingMenuTourPrefs
+import com.gameocr.app.overlay.InputTranslationGuidePrefs
 import com.gameocr.app.overlay.CaptureRegionBorderOverlay
 import com.gameocr.app.overlay.AdaptiveOverlayStyle
 import com.gameocr.app.overlay.AdaptiveOverlayStyleAnalyzer
@@ -128,6 +143,10 @@ import com.gameocr.app.translate.DialogueHistorySession
 import com.gameocr.app.translate.DialogueTranslationContextPolicy
 import com.gameocr.app.translate.FloatingWordLookupCoordinator
 import com.gameocr.app.translate.FloatingWordLookupOutcome
+import com.gameocr.app.translate.InputTranslationPolicy
+import com.gameocr.app.translate.InputTranslationAppPolicy
+import com.gameocr.app.translate.InputTranslationPreparation
+import com.gameocr.app.translate.InputTranslationPreparationError
 import com.gameocr.app.translate.ContinuousTranslationReusePolicy
 import com.gameocr.app.translate.TranslationException
 import com.gameocr.app.translate.TranslationMemoryService
@@ -144,8 +163,15 @@ import com.gameocr.app.translate.WordResult
 import com.gameocr.app.translate.WordSelectTranslationCoordinator
 import com.gameocr.app.translate.WordSelectTranslationStage
 import com.gameocr.app.translate.forFloatingEnglishWordLookup
+import com.gameocr.app.trigger.FocusedInputCaptureResult
+import com.gameocr.app.trigger.FocusedInputReadError
+import com.gameocr.app.trigger.FocusedInputReplaceResult
+import com.gameocr.app.trigger.GameOcrAccessibilityService
 import com.gameocr.app.tts.TtsEngine
 import com.gameocr.app.util.InferenceTiming
+import com.gameocr.app.util.RuntimePerformanceDiagnostics
+import com.gameocr.app.util.RuntimePerformanceKeyPolicy
+import com.gameocr.app.util.RuntimePerformanceStage
 import com.gameocr.app.util.VerticalDiagnosticLog
 import com.gameocr.app.util.physicalDisplaySize
 import dagger.hilt.android.AndroidEntryPoint
@@ -209,6 +235,33 @@ internal fun supportsShapeAwareBubblePatches(engine: OcrEngineKind): Boolean =
 @AndroidEntryPoint
 class CaptureService : Service() {
 
+    private data class DelayedMaskRenderSession(
+        val batch: MangaDelayedMaskDebugSessionManager.Batch,
+        val originalImageWidth: Int,
+        val originalImageHeight: Int,
+        val counterClockwiseDegrees: Int,
+    ) {
+        suspend fun mapPatchesToDisplay(patches: List<ShapeAwareBubblePatch>): List<ShapeAwareBubblePatch> {
+            if (counterClockwiseDegrees == 0) return patches
+            // Both display phases may call from Main. Pixel permutation must not block drawing.
+            return withContext(Dispatchers.Default) {
+                val startedNs = System.nanoTime()
+                val mapped = CaptureContentOrientationPolicy.mapPatchesToOriginal(
+                    patches = patches,
+                    originalImageWidth = originalImageWidth,
+                    originalImageHeight = originalImageHeight,
+                    counterClockwiseDegrees = counterClockwiseDegrees,
+                )
+                VerticalDiagnosticLog.i(
+                    "content-orientation patches restored rotation=$counterClockwiseDegrees " +
+                        "patches=${mapped.size}/${patches.size} image=${originalImageWidth}x$originalImageHeight " +
+                        "elapsedUs=${(System.nanoTime() - startedNs) / 1_000}",
+                )
+                mapped
+            }
+        }
+    }
+
     private data class PendingLoopRoiResult(
         val blocks: List<TextBlock>,
         val renderOrientation: TextOrientation,
@@ -219,11 +272,13 @@ class CaptureService : Service() {
     )
 
     @Inject lateinit var settingsRepository: SettingsRepository
+    @Inject lateinit var foregroundAppResolver: ForegroundAppResolver
     @Inject lateinit var overlayFontManager: OverlayFontManager
     @Inject lateinit var ocrEngine: OcrEngine
     @Inject lateinit var translator: Translator
     @Inject lateinit var shizukuCapabilities: ShizukuCapabilities
     @Inject lateinit var logRepository: LogRepository
+    @Inject lateinit var performanceDiagnostics: RuntimePerformanceDiagnostics
     // 端侧 LLM 翻译共享层。设置里切走 LOCAL_* 引擎或 Service 销毁时主动 unload 释放 ~500 MB 内存。
     @Inject lateinit var llamaEngineHolder: com.gameocr.app.llm.LlamaEngineHolder
     // 文本方向自动判别 + 路由。仅在 settings.textOrientationAutoDetect = true 时启用。
@@ -235,22 +290,30 @@ class CaptureService : Service() {
     @Inject lateinit var translationMemoryService: TranslationMemoryService
     @Inject lateinit var translationGlossaryRepository: TranslationGlossaryRepository
     @Inject lateinit var sourcePreservationService: SourcePreservationService
+    @Inject lateinit var offlineDictionaryRepository: OfflineDictionaryRepository
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val captureLock = Mutex()
+    private val screenshotLock = Mutex()
     private val translationVisualDebugStore by lazy {
         TranslationVisualDebugStore.forContext(this)
     }
     private val translationBatchGate = TranslationBatchGate()
-    private val floatingWordLookupCoordinator by lazy { FloatingWordLookupCoordinator(translator, scope) }
+    private val floatingWordLookupCoordinator by lazy {
+        FloatingWordLookupCoordinator(translator, scope, offlineDictionaryRepository)
+    }
 
     private var screenshotter: Screenshotter? = null
+    private var captureStopRequested = false
+    private var captureUiStartupJob: Job? = null
+    private var captureProbeJob: Job? = null
     private var projection: MediaProjection? = null
     private var floatingButton: FloatingButtonManager? = null
     private var overlay: OverlayManager? = null
     private var captureRegionBorder: CaptureRegionBorderOverlay? = null
     private var regionPicker: RegionPickerOverlay? = null
+    private var regionPickerJob: Job? = null
     private var languageQuickSwitch: LanguageQuickSwitchOverlay? = null
     private var presetQuickSwitch: PresetQuickSwitchOverlay? = null
     private var wordSelect: WordSelectOverlay? = null
@@ -261,8 +324,11 @@ class CaptureService : Service() {
     private var translationCardWordLookupId: Long = 0L
     private var floatingWordDetailsJob: Job? = null
     private var floatingWordDetailsRequestId: Long = 0L
+    private var inputTranslationJob: Job? = null
+    private var inputTranslationRequestId: Long = 0L
 
     private var loopJob: Job? = null
+    private var settledPageExecutionJob: Job? = null
     private var translationRenderJob: Job? = null
     private var ocrWarmupJob: Job? = null
     private var localLlmWarmupJob: Job? = null
@@ -271,15 +337,20 @@ class CaptureService : Service() {
     private val dialogueHistorySession = DialogueHistorySession()
     private val floatingDialogueHistorySession = DialogueHistorySession()
     private var loopFrameStabilityState = LoopFrameStabilityState()
+    private val settledPagePolicy = SettledPagePolicy()
+    private var settledPageAnchor: SettledPageFrame? = null
     private var pendingLoopRoiResult: PendingLoopRoiResult? = null
     private var loopRoiTextFallbackActive: Boolean = false
     @Volatile private var loopTranslationInFlight = false
     @Volatile private var loopSessionId = 0L
     @Volatile private var lastLoopRuntimeLogState: String? = null
+    private data class ActiveCaptureDisplayRegion(val region: CaptureRegion?)
+    @Volatile private var activeCaptureDisplayRegion: ActiveCaptureDisplayRegion? = null
     // 订阅 SettingsRepository.settings flow，让设置页保存后所有显示项立即生效
     // （悬浮按钮大小、配色主题、字号、透明度、紧贴文位置 …）。原先只在 captureOnce
     // 时读 settings，导致用户必须停止/重启服务或触发一次截屏才能看到改动。
     private var settingsCollectJob: Job? = null
+    private var performanceOverlayCollectJob: Job? = null
     @Volatile private var loopMode: Boolean = false
     private val captureSequence = AtomicLong(0L)
 
@@ -306,7 +377,10 @@ class CaptureService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> handleStart(intent)
-            ACTION_STOP -> stopSelf()
+            ACTION_STOP -> {
+                captureStopRequested = true
+                stopSelf()
+            }
             ACTION_TRIGGER_ONCE -> triggerOnce()
             ACTION_PICK_REGION -> showRegionPickerOverlay()
             ACTION_RUN_FLOATING_TOUR -> {
@@ -318,6 +392,26 @@ class CaptureService : Service() {
     }
 
     private fun handleStart(intent: Intent) {
+        if (CaptureServiceState.running.value) {
+            Timber.i("[capture-start] ignore duplicate start for the running session")
+            return
+        }
+        captureStopRequested = false
+        try {
+            initializeCapture(intent)
+        } catch (error: Exception) {
+            failCaptureStart(error)
+        }
+    }
+
+    private fun failCaptureStart(error: Exception? = null) {
+        if (captureStopRequested) return
+        logRepository.error(LogRepository.Category.CAPTURE, getString(R.string.log_msg_capture_failed), error)
+        captureStopRequested = true
+        stopSelf()
+    }
+
+    private fun initializeCapture(intent: Intent) {
         // Service 启动时主动 rescale 一次 captureRegion——如果用户在 service 没跑时旋转了屏幕，
         // 这里把 region 校正到当前屏幕方向。
         scope.launch {
@@ -328,18 +422,28 @@ class CaptureService : Service() {
         // 用户重复点"启动"按钮、或者切换 Shizuku ↔ MediaProjection 路径都走这条。
         cleanupCapture()
 
-        // 先判断要走的截屏路径：用户启用 Shizuku 且就绪 → Shizuku；否则 → MediaProjection
-        val useShizuku = intent.getBooleanExtra(EXTRA_USE_SHIZUKU, false) &&
-            shizukuCapabilities.availability(this) == ShizukuCapabilities.Availability.READY
+        // Execute the coordinator's decision. A disconnected backend must NEVER turn into projection.
+        val backend = intent.getStringExtra(EXTRA_CAPTURE_BACKEND)?.let {
+            runCatching { CaptureBackend.valueOf(it) }.getOrNull()
+        } ?: if (intent.getBooleanExtra(EXTRA_USE_SHIZUKU, false)) CaptureBackend.SHIZUKU
+        else CaptureBackend.MEDIA_PROJECTION
+        val useShizuku = backend == CaptureBackend.SHIZUKU
+        val useAccessibility = backend == CaptureBackend.ACCESSIBILITY
+        if ((useShizuku && shizukuCapabilities.availability(this) != ShizukuCapabilities.Availability.READY) ||
+            (useAccessibility && !GameOcrAccessibilityService.isScreenshotReady())) {
+            Timber.w("[capture-start] selected backend no longer available: %s", backend)
+            failCaptureStart()
+            return
+        }
 
         // 前台服务：Android 14+ 必须显式传非零 type，否则 InvalidForegroundServiceTypeException。
         // MediaProjection 路径走 MEDIA_PROJECTION；Shizuku 路径走 SPECIAL_USE。
         val fgType = when {
             Build.VERSION.SDK_INT < Build.VERSION_CODES.Q -> 0
-            useShizuku -> android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            useShizuku || useAccessibility -> android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
             else -> android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
         }
-        // Android 14+ HyperOS/MIUI 上常见 race：MediaProjectionRequestActivity onActivityResult
+            // Android 14+ HyperOS/MIUI 上常见 race：CaptureStartRequestActivity onActivityResult
         // 收到 RESULT_OK 后立即 startForegroundService，此时 `android:project_media` app-op
         // grant 尚未异步落地，startForeground 抛 SecurityException 闪退。
         // workaround：捕获异常后 postDelayed 重试一次，给 op 200ms 落地时间；仍失败再 stopSelf。
@@ -350,6 +454,9 @@ class CaptureService : Service() {
         if (useShizuku) {
             screenshotter = ShizukuScreenshotter()
             Timber.i("CaptureService started with Shizuku path")
+        } else if (useAccessibility) {
+            screenshotter = AccessibilityScreenshotter()
+            Timber.i("CaptureService started with Accessibility path")
         } else {
             val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, 0)
             val data = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -359,7 +466,7 @@ class CaptureService : Service() {
             }
             if (data == null) {
                 Timber.w("MediaProjection result data is null")
-                stopSelf()
+                failCaptureStart()
                 return
             }
             val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
@@ -367,7 +474,7 @@ class CaptureService : Service() {
             val mp = projection
             if (mp == null) {
                 Timber.w("getMediaProjection returned null")
-                stopSelf()
+                failCaptureStart()
                 return
             }
             screenshotter = MediaProjectionScreenshotter(this, mp)
@@ -389,7 +496,11 @@ class CaptureService : Service() {
             onFloatingWordLookupRequested = ::lookupFloatingEnglishWord,
             onFloatingWordDetailsRequested = ::showFloatingEnglishWordDetails,
         )
-        captureRegionBorder = CaptureRegionBorderOverlay(this)
+        captureRegionBorder = CaptureRegionBorderOverlay(this) { region, screenWidth, screenHeight ->
+            scope.launch {
+                settingsRepository.setCaptureRegion(region, screenWidth, screenHeight)
+            }
+        }
         floatingButton = FloatingButtonManager(
             this,
             // 主球单击：按当前 skill 路由。FloatingButtonManager.skill 由 settings collect 同步保持最新；
@@ -399,6 +510,16 @@ class CaptureService : Service() {
                     FloatingSkill.FULL_SCREEN -> triggerOnce()
                     FloatingSkill.WORD_SELECT -> triggerWordSelect()
                     FloatingSkill.LOOP -> toggleLoopMode()
+                    FloatingSkill.INPUT_TRANSLATE -> triggerInputTranslation()
+                }
+            },
+            onDoubleTap = {
+                when (
+                    floatingButton?.inputTranslationDoubleAction
+                        ?: InputTranslationDoubleAction.FULL_SCREEN
+                ) {
+                    InputTranslationDoubleAction.FULL_SCREEN -> triggerOnce()
+                    InputTranslationDoubleAction.WORD_SELECT -> triggerWordSelect()
                 }
             },
             onSwitchToLoop = { applyFloatingSkill(FloatingSkill.LOOP) },
@@ -409,6 +530,9 @@ class CaptureService : Service() {
                 FloatingMenuTourPrefs.shouldShow(this@CaptureService)
             it.onFirstUseTourCompleted = {
                 FloatingMenuTourPrefs.markCompleted(this@CaptureService)
+            }
+            it.onInputTranslationGuideCompleted = {
+                InputTranslationGuidePrefs.markCompleted(this@CaptureService)
             }
             // 截图区域调整：用悬浮窗版替代旧的 Activity 跳转——不再切走游戏 / 漫画，且重复
             // 点菜单也只弹一次（show 内部去重）。
@@ -432,18 +556,29 @@ class CaptureService : Service() {
             it.onSwitchSkill = { newSkill -> applyFloatingSkill(newSkill) }
         }
         // 异步读 settings 应用大小 + 还原上次松手位置后再 show，避免阻塞 startForeground 流程
-        scope.launch {
-            val s = settingsRepository.get()
-            floatingButton?.sizeDp = s.floatingButtonSizeDp
-            floatingButton?.initialX = s.floatingButtonX
-            floatingButton?.initialY = s.floatingButtonY
-            floatingButton?.snapToEdgeEnabled = s.floatingButtonSnapToEdge
-            floatingButton?.autoDockEnabled = s.floatingButtonAutoDock
-            floatingButton?.dockEdgeInsetPx = (s.floatingButtonDockInsetDp * resources.displayMetrics.density).toInt()
-            floatingButton?.menuItemOrder = s.floatingMenuItemOrder
-            floatingButton?.arcMenuPageSize = s.arcMenuPageSize
-            floatingButton?.skill = s.floatingButtonSkill
-            mainScope.launch { floatingButton?.show() }
+        captureUiStartupJob = scope.launch {
+            try {
+                val s = settingsRepository.get()
+                withContext(Dispatchers.Main.immediate) {
+                    if (captureStopRequested) return@withContext
+                    floatingButton?.sizeDp = s.floatingButtonSizeDp
+                    floatingButton?.initialX = s.floatingButtonX
+                    floatingButton?.initialY = s.floatingButtonY
+                    floatingButton?.snapToEdgeEnabled = s.floatingButtonSnapToEdge
+                    floatingButton?.autoDockEnabled = s.floatingButtonAutoDock
+                    floatingButton?.dockEdgeInsetPx = (s.floatingButtonDockInsetDp * resources.displayMetrics.density).toInt()
+                    floatingButton?.menuItemOrder = s.floatingMenuItemOrder
+                    floatingButton?.arcMenuPageSize = s.arcMenuPageSize
+                    floatingButton?.skill = s.floatingButtonSkill
+                    floatingButton?.inputTranslationDoubleAction = s.inputTranslationDoubleAction
+                    floatingButton?.applyOpacity(s.floatingButtonAlpha)
+                    floatingButton?.show()
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                withContext(Dispatchers.Main.immediate) { failCaptureStart(error) }
+            }
         }
 
         // Settings flow 是悬浮窗锁状态的唯一权威来源，首次 emit 同样需要应用初始状态。
@@ -462,34 +597,44 @@ class CaptureService : Service() {
                 lastEngine = s.translatorEngine
             }
         }
+        performanceOverlayCollectJob?.cancel()
+        performanceOverlayCollectJob = scope.launch {
+            performanceDiagnostics.performanceSnapshot.collect { snapshot ->
+                withContext(Dispatchers.Main) {
+                    overlay?.updatePerformanceOverlay(snapshot)
+                }
+            }
+        }
 
         CaptureServiceState.setRunning(true)
         startOcrWarmupIfNeeded()
         startLocalLlmWarmupIfNeeded()
 
-        // Shizuku 路径 dry-run：即使 availability == READY，未通过 ADB / root 配对的 Shizuku 也会
-        // 让 newProcess(screencap) 失败（exit=1）。立刻跑一次截屏，失败则用悬浮错误条引导用户改
-        // 用 MediaProjection 并 stopSelf——比让他看到通用「截屏失败」反复试错好。
+        // Keep the existing Shizuku trial capture and its failure hint.
         if (useShizuku) {
-            scope.launch {
-                val shotter = screenshotter ?: return@launch
-                val test = shotter.capture()
-                if (test == null) {
-                    Timber.w("Shizuku dry-run failed; stopping service")
-                    logRepository.error(
-                        LogRepository.Category.CAPTURE,
-                        getString(R.string.log_msg_shizuku_dry_run_failed)
-                    )
-                    mainScope.launch {
-                        overlay?.showErrorHint(
-                            getString(R.string.toast_shizuku_dry_run_failed),
-                            durationMs = 8000L
-                        )
+            captureProbeJob = scope.launch {
+                try {
+                    val shotter = screenshotter ?: return@launch
+                    val test = shotter.capture()
+                    try {
+                        withContext(Dispatchers.Main.immediate) {
+                            if (captureStopRequested) return@withContext
+                            if (test == null) {
+                                Timber.w("Shizuku dry-run failed; stopping service")
+                                logRepository.error(LogRepository.Category.CAPTURE,
+                                    getString(R.string.log_msg_shizuku_dry_run_failed))
+                                overlay?.showErrorHint(getString(R.string.toast_shizuku_dry_run_failed), durationMs = 8000L)
+                                delay(8500L)
+                                if (!captureStopRequested) stopSelf()
+                            }
+                        }
+                    } finally {
+                        test?.recycle()
                     }
-                    kotlinx.coroutines.delay(8500L)
-                    stopSelf()
-                } else {
-                    test.recycle()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    withContext(Dispatchers.Main.immediate) { failCaptureStart(error) }
                 }
             }
         }
@@ -567,6 +712,7 @@ class CaptureService : Service() {
 
     private fun restoreCaptureChrome(showLoading: Boolean, restoreFloatingButton: Boolean) {
         mainScope.launch {
+            overlay?.setPerformanceOverlayHiddenForCapture(hidden = false)
             captureRegionBorder?.setHiddenForCapture(hidden = false)
             if (restoreFloatingButton) floatingButton?.show()
             if (showLoading) overlay?.showLoadingHint()
@@ -580,7 +726,7 @@ class CaptureService : Service() {
 
     /**
      * 包裹 [ServiceCompat.startForeground]，处理 Android 14+ HyperOS/MIUI 上的 `android:project_media`
-     * app-op race：MediaProjectionRequestActivity 拿到 RESULT_OK 后 op grant 是异步的，立刻 startForeground
+     * app-op race：CaptureStartRequestActivity 拿到 RESULT_OK 后 op grant 是异步的，立刻 startForeground
      * 可能在 op 还没落地时抛 `SecurityException`。
      *
      * 流程：
@@ -606,21 +752,23 @@ class CaptureService : Service() {
             true
         } catch (se: SecurityException) {
             Timber.w(se, "startForeground SecurityException; retry in 200ms")
-            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            mainScope.launch {
+                delay(200L)
+                if (captureStopRequested) return@launch
                 try {
                     tryStart()
                     Timber.i("startForeground retry succeeded; rerunning handleStart")
                     handleStart(originalIntent)
-                } catch (e2: SecurityException) {
+                } catch (e2: Exception) {
                     Timber.e(e2, "startForeground retry also failed")
                     logRepository.error(
                         LogRepository.Category.CAPTURE,
                         "startForeground SecurityException after retry: ${e2.message}",
                         e2
                     )
-                    stopSelf()
+                    failCaptureStart(e2)
                 }
-            }, 200L)
+            }
             false
         }
     }
@@ -644,6 +792,192 @@ class CaptureService : Service() {
     }
 
     /**
+     * 翻译当前获得输入焦点的可编辑文本。读取与替换都由无障碍服务在主线程重新获取焦点；
+     * 翻译期间如果输入框、窗口或原文发生变化，就拒绝覆盖，避免把结果写进错误位置。
+     */
+    private fun triggerInputTranslation() {
+        if (inputTranslationJob?.isActive == true) {
+            cancelInputTranslation(silent = false)
+            return
+        }
+        val requestId = ++inputTranslationRequestId
+        inputTranslationJob = scope.launch {
+            val startedAt = SystemClock.elapsedRealtime()
+            try {
+                val currentSettings = settingsRepository.get()
+                val foregroundApp = foregroundAppResolver.resolve(
+                    currentSettings.foregroundAppDetectionMode,
+                )
+                if (InputTranslationAppPolicy.isBlocked(foregroundApp?.packageName)) {
+                    logRepository.warn(LogRepository.Category.TRANSLATE, getString(R.string.input_translation_wechat_unsupported))
+                    withContext(Dispatchers.Main.immediate) {
+                        overlay?.showErrorHint(
+                            getString(R.string.input_translation_wechat_unsupported)
+                        )
+                    }
+                    return@launch
+                }
+                val captured = withContext(Dispatchers.Main.immediate) {
+                    GameOcrAccessibilityService.captureFocusedInput()
+                }
+                val focused = when (captured) {
+                    is FocusedInputCaptureResult.Ready -> captured.descriptor
+                    is FocusedInputCaptureResult.Error -> {
+                        showInputTranslationReadError(captured.reason)
+                        return@launch
+                    }
+                }
+                val prepared = InputTranslationPolicy.prepare(focused.text, currentSettings)
+                val ready = when (prepared) {
+                    is InputTranslationPreparation.Ready -> prepared
+                    is InputTranslationPreparation.Rejected -> {
+                        showInputTranslationPreparationError(
+                            error = prepared.error,
+                            settings = currentSettings,
+                        )
+                        return@launch
+                    }
+                }
+                val requestSettings = ready.requestSettings.copy(
+                    runtimeTranslationScopePackage = focused.packageName.takeIf(String::isNotBlank),
+                )
+                withContext(Dispatchers.Main.immediate) {
+                    floatingButton?.setInputTranslationBusy(true)
+                    overlay?.showInfoHint(getString(R.string.input_translation_translating))
+                }
+                val translated = translator.translate(ready.sourceText, requestSettings)
+                    ?.trim()
+                    .orEmpty()
+                if (translated.isBlank()) {
+                    logRepository.warn(LogRepository.Category.TRANSLATE, getString(R.string.input_translation_empty_result), elapsedMs = SystemClock.elapsedRealtime() - startedAt)
+                    withContext(Dispatchers.Main.immediate) {
+                        overlay?.showErrorHint(getString(R.string.input_translation_empty_result))
+                    }
+                    return@launch
+                }
+
+                when (withContext(Dispatchers.Main.immediate) {
+                    GameOcrAccessibilityService.replaceFocusedInput(focused, translated)
+                }) {
+                    FocusedInputReplaceResult.TARGET_CHANGED ->
+                        withContext(Dispatchers.Main.immediate) {
+                            logRepository.warn(LogRepository.Category.TRANSLATE, getString(R.string.input_translation_target_changed))
+                            overlay?.showErrorHint(
+                                getString(R.string.input_translation_target_changed)
+                            )
+                        }
+                    FocusedInputReplaceResult.ACTION_ACCEPTED -> {
+                        val verified = com.gameocr.app.trigger.awaitInputReplacement {
+                            withContext(Dispatchers.Main.immediate) {
+                                GameOcrAccessibilityService.verifyFocusedInput(focused, translated)
+                            }
+                        }
+                        if (verified) {
+                            logRepository.pair(LogRepository.Category.TRANSLATE, ready.sourceText, translated, elapsedMs = SystemClock.elapsedRealtime() - startedAt)
+                            val language = Languages.nameOf(this@CaptureService, requestSettings.targetLang)
+                            withContext(Dispatchers.Main.immediate) {
+                                overlay?.showInfoHint(
+                                    getString(R.string.input_translation_success_format, language)
+                                )
+                            }
+                        } else {
+                            copyInputTranslationAndShowFallback(translated, R.string.input_translation_replace_unconfirmed_copied)
+                        }
+                    }
+                    FocusedInputReplaceResult.ACTION_REJECTED ->
+                        copyInputTranslationAndShowFallback(translated)
+                    FocusedInputReplaceResult.SERVICE_UNAVAILABLE ->
+                        copyInputTranslationAndShowFallback(translated, R.string.input_translation_service_disconnected_copied)
+                }
+            } catch (cancelled: CancellationException) {
+                logRepository.info(LogRepository.Category.TRANSLATE, getString(R.string.input_translation_cancelled), elapsedMs = SystemClock.elapsedRealtime() - startedAt)
+                throw cancelled
+            } catch (error: Throwable) {
+                logRepository.error(LogRepository.Category.TRANSLATE, getString(R.string.input_translation_failed), error, elapsedMs = SystemClock.elapsedRealtime() - startedAt)
+                Timber.w(error, "Focused input translation failed")
+                withContext(Dispatchers.Main.immediate) {
+                    overlay?.showErrorHint(getString(R.string.input_translation_failed))
+                }
+            } finally {
+                if (requestId == inputTranslationRequestId) {
+                    inputTranslationJob = null
+                    withContext(Dispatchers.Main.immediate) {
+                        floatingButton?.setInputTranslationBusy(false)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun cancelInputTranslation(silent: Boolean) {
+        if (inputTranslationJob?.isActive != true) return
+        inputTranslationRequestId++
+        inputTranslationJob?.cancel()
+        inputTranslationJob = null
+        mainScope.launch {
+            floatingButton?.setInputTranslationBusy(false)
+            if (!silent) {
+                overlay?.showInfoHint(getString(R.string.input_translation_cancelled))
+            }
+        }
+    }
+
+    private suspend fun showInputTranslationReadError(error: FocusedInputReadError) {
+        val message = when (error) {
+            FocusedInputReadError.SERVICE_UNAVAILABLE ->
+                R.string.input_translation_accessibility_required
+            FocusedInputReadError.NO_FOCUSED_INPUT ->
+                R.string.input_translation_no_focused_input
+            FocusedInputReadError.PASSWORD -> R.string.input_translation_password_rejected
+            FocusedInputReadError.NOT_EDITABLE -> R.string.input_translation_not_editable
+            FocusedInputReadError.EMPTY -> R.string.input_translation_empty_input
+        }
+        withContext(Dispatchers.Main.immediate) {
+            logRepository.warn(LogRepository.Category.TRANSLATE, getString(message))
+            overlay?.showErrorHint(getString(message))
+        }
+    }
+
+    private suspend fun showInputTranslationPreparationError(
+        error: InputTranslationPreparationError,
+        settings: Settings,
+    ) {
+        val message = when (error) {
+            InputTranslationPreparationError.EMPTY_INPUT ->
+                getString(R.string.input_translation_empty_input)
+            InputTranslationPreparationError.AUTO_TARGET ->
+                getString(R.string.input_translation_explicit_source_required)
+            InputTranslationPreparationError.UNSUPPORTED_ENGINE ->
+                getString(
+                    R.string.input_translation_engine_unsupported_format,
+                    Languages.nameOf(this, settings.sourceLang),
+                )
+        }
+        logRepository.warn(LogRepository.Category.TRANSLATE, message)
+        withContext(Dispatchers.Main.immediate) { overlay?.showErrorHint(message) }
+    }
+
+    private suspend fun copyInputTranslationAndShowFallback(
+        translated: String,
+        messageRes: Int = R.string.input_translation_replace_failed_copied,
+    ) {
+        withContext(Dispatchers.Main.immediate) {
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(
+                ClipData.newPlainText(
+                    getString(R.string.input_translation_clip_label),
+                    translated,
+                )
+            )
+            logRepository.warn(LogRepository.Category.TRANSLATE, getString(messageRes))
+            overlay?.showInfoHint(
+                getString(messageRes),
+                durationMs = 6000L,
+            )
+        }
+    }
+
+    /**
      * 划词翻译入口：先 hide 球，弹 WordSelectOverlay 让用户拖矩形，确认后截屏 → crop 该区域 →
      * OCR → 判定单词 → translate / translateWord → 弹 TranslationCardOverlay。
      *
@@ -662,41 +996,63 @@ class CaptureService : Service() {
                 }
             } else null
 
+            captureRegionBorder?.setHiddenForWordSelect(hidden = true)
             floatingButton?.hide()
             ws.show(
                 initial = initialRect,
                 skipAdjustment = !settings.wordSelectPreciseAdjust,
+                extractTextOnly = settings.wordSelectExtractOnly,
                 onTranslate = { rect ->
                     scope.launch {
-                        // 保存本次选框
-                        if (settings.wordSelectRememberRegion) {
-                            val s = physicalDisplaySize(this@CaptureService)
-                            settingsRepository.update { it.copy(
-                                wordSelectLastRegion = com.gameocr.app.capture.CaptureRegion(rect.left, rect.top, rect.right, rect.bottom),
-                                wordSelectLastRegionSavedScreenW = s.width,
-                                wordSelectLastRegionSavedScreenH = s.height,
-                            ) }
-                        }
-                        prepareCleanCaptureFrame(hideFloatingButton = true)
-                        if (settings.wordSelectCardMode) {
-                            runWordSelectPipeline(rect, restoreFloatingButtonAfterScreenshot = true)
-                        } else {
-                            // 叠加模式：把选框写入 captureRegion，走全屏叠加管线
-                            val s = physicalDisplaySize(this@CaptureService)
-                            settingsRepository.update { it.copy(
-                                captureRegion = com.gameocr.app.capture.CaptureRegion(rect.left, rect.top, rect.right, rect.bottom),
-                                captureRegionSavedScreenW = s.width,
-                                captureRegionSavedScreenH = s.height,
-                            ) }
-                            captureOnce(
-                                showLoadingAfterScreenshot = true,
-                                restoreFloatingButtonAfterScreenshot = true,
+                        try {
+                            val selectedRegion = com.gameocr.app.capture.CaptureRegion(
+                                rect.left,
+                                rect.top,
+                                rect.right,
+                                rect.bottom,
                             )
+                            val plan = wordSelectCapturePlan(
+                                rememberLastSelection = settings.wordSelectRememberRegion,
+                                useTranslationCard = settings.wordSelectCardMode,
+                                selectedRegion = selectedRegion,
+                                extractTextOnly = settings.wordSelectExtractOnly,
+                            )
+                            // 保存本次选框
+                            if (plan.saveLastSelection) {
+                                val s = physicalDisplaySize(this@CaptureService)
+                                settingsRepository.update { it.copy(
+                                    wordSelectLastRegion = selectedRegion,
+                                    wordSelectLastRegionSavedScreenW = s.width,
+                                    wordSelectLastRegionSavedScreenH = s.height,
+                                ) }
+                            }
+                            prepareCleanCaptureFrame(hideFloatingButton = true)
+                            if (plan.useTranslationCard) {
+                                runWordSelectPipeline(
+                                    rect,
+                                    restoreFloatingButtonAfterScreenshot = true,
+                                    extractTextOnly = plan.extractTextOnly,
+                                )
+                            } else {
+                                // 叠加模式仅为本次捕获传入选框，不修改用户配置的截屏区域。
+                                captureOnce(
+                                    showLoadingAfterScreenshot = true,
+                                    restoreFloatingButtonAfterScreenshot = true,
+                                    transientCaptureRegion = plan.captureRegionOverride,
+                                )
+                            }
+                        } finally {
+                            mainScope.launch {
+                                captureRegionBorder?.setHiddenForWordSelect(hidden = false)
+                            }
                         }
                     }
                 },
                 onCancel = {
-                    mainScope.launch { floatingButton?.show() }
+                    mainScope.launch {
+                        captureRegionBorder?.setHiddenForWordSelect(hidden = false)
+                        floatingButton?.show()
+                    }
                 }
             )
         }
@@ -705,7 +1061,8 @@ class CaptureService : Service() {
     /** 框选后真正跑流水线。screenshot → crop → OCR → translate → 弹卡片。 */
     private suspend fun runWordSelectPipeline(
         rect: android.graphics.Rect,
-        restoreFloatingButtonAfterScreenshot: Boolean = false
+        restoreFloatingButtonAfterScreenshot: Boolean = false,
+        extractTextOnly: Boolean = false,
     ) {
         if (!captureLock.tryLock()) {
             restoreCaptureChrome(
@@ -762,7 +1119,7 @@ class CaptureService : Service() {
                 diagId = diagId,
             )
             if (floatingWindowPreparation.hidden) delay(CAPTURE_CHROME_SETTLE_MS)
-            var full = shotter.capture()
+            var full = captureScreenshotWithTiming(shotter, diagId)
             restoreFloatingWindowAfterCapture(floatingWindowPreparation)
             floatingWindowPreparation = floatingWindowPreparation.copy(hidden = false)
             if (full == null) {
@@ -787,19 +1144,21 @@ class CaptureService : Service() {
             }
             logWordSelectPerf("screenshot_ready", "frame=${full.width}x${full.height}")
             restoreCaptureChromeOnce(showLoading = false)
+            var sourceLanguageEvidence = emptyList<com.gameocr.app.tts.TtsLanguageEvidence>()
             val sourceSpeech = wordSelectTtsAction(
-                settings = settings.copy(targetLang = settings.sourceLang),
+                settings = settings,
                 diagId = diagId,
                 role = "source",
                 playbackId = "word-select:$diagId:source",
+                sourceEvidence = { sourceLanguageEvidence },
             )
-            val translationSpeech = wordSelectTtsAction(
+            val translationSpeech = if (extractTextOnly) null else wordSelectTtsAction(
                 settings = settings,
                 diagId = diagId,
                 role = "translation",
                 playbackId = "word-select:$diagId:translation",
             )
-            val dictionarySpeech = wordSelectTtsAction(
+            val dictionarySpeech = if (extractTextOnly) null else wordSelectTtsAction(
                 settings = settings,
                 diagId = diagId,
                 role = "dictionary",
@@ -818,17 +1177,20 @@ class CaptureService : Service() {
                         wordResult = null,
                         settings = settings,
                         loading = true,
+                        textOnly = extractTextOnly,
                         onSpeakSource = sourceSpeech,
                         onSpeakTranslation = translationSpeech,
                         onSpeakDictionary = dictionarySpeech,
-                        onCorrectTranslation = { source, translation ->
+                        onCorrectTranslation = if (extractTextOnly) null else { source, translation ->
                             showTranslationCorrection(
                                 TranslationCorrectionRequest(source, translation)
                             )
                         },
-                        onEnglishWordTapped = { word, anchor ->
-                            lookupEnglishWordInTranslationCard(shownCard, word, anchor, settings)
-                        },
+                        onEnglishWordTapped = if (!extractTextOnly && settings.dictionaryTapLookupEnabled) {
+                            { word, anchor ->
+                                lookupEnglishWordInTranslationCard(shownCard, word, anchor, settings)
+                            }
+                        } else null,
                     )
                 }
             }
@@ -895,17 +1257,23 @@ class CaptureService : Service() {
             logVerticalBlocks(diagId, "wordSelect rawBlocks engine=${settings.ocrEngine.name}", ocrBlocks)
             val orderedOcrBlocks = sortTextBlocksForReading(ocrBlocks)
             logVerticalBlocks(diagId, "wordSelect orderedBlocks", orderedOcrBlocks)
-            val translationRequestSettings = prepareVisualTranslationSettings(
-                bitmap = cropped,
-                blocks = orderedOcrBlocks,
-                settings = settings,
-                diagId = diagId,
-                presentation = RenderMode.FLOATING_WINDOW,
-                combineIntoSingleOutput = true,
-                origin = "word-select-$diagId",
+            // Extraction must not prepare/upload an image or enter any translation path.
+            val translationRequestSettings = try {
+                if (extractTextOnly) settings else prepareVisualTranslationSettings(
+                    bitmap = cropped,
+                    blocks = orderedOcrBlocks,
+                    settings = settings,
+                    diagId = diagId,
+                    presentation = RenderMode.FLOATING_WINDOW,
+                    combineIntoSingleOutput = true,
+                    origin = "word-select-$diagId",
+                )
+            } finally {
+                cropped.recycle()
+            }
+            val text = com.gameocr.app.capture.wordSelectRecognizedText(
+                orderedOcrBlocks.map { it.text }, extractTextOnly,
             )
-            cropped.recycle()
-            val text = orderedOcrBlocks.joinToString(" ") { it.text.trim() }.trim()
             logVerticalDiag(diagId, "wordSelect joined ${text.toDiagText()}")
             if (text.isEmpty()) {
                 dismissActiveCard()
@@ -913,13 +1281,23 @@ class CaptureService : Service() {
                 mainScope.launch { overlay?.showErrorHint(msg) }
                 return
             }
-            withContext(Dispatchers.Main) { card.updateSource(text) }
+            withContext(Dispatchers.Main) {
+                // Only Auto+automatic source has independently identified tags. Other engines can return
+                // configured-language placeholders; let the shared identifier inspect those texts on demand.
+                sourceLanguageEvidence = if (settings.ocrEngine == OcrEngineKind.ML_KIT_AUTO &&
+                    settings.sourceLang == "auto") orderedOcrBlocks.map {
+                    com.gameocr.app.tts.TtsLanguageEvidence(it.text, it.recognizedLanguage)
+                } else emptyList()
+                card.updateSource(text)
+            }
             logWordSelectPerf("source_visible")
             logRepository.info(
                 LogRepository.Category.OCR,
                 getString(R.string.log_msg_ocr_results_format, ocrBlocks.size, settings.ocrEngine.name, text),
                 elapsedMs = elapsedSince(ocrStartedAt)
             )
+
+            if (extractTextOnly) return
 
             val dictionaryCandidate = WordHeuristic.dictionaryTermOrNull(text, settings.sourceLang)
             // 词典化：只在「单词 + OpenAI 兼容引擎」时尝试 LLM JSON prompt；其他全部走纯翻译
@@ -1081,6 +1459,7 @@ class CaptureService : Service() {
      */
     private fun applyFloatingSkill(newSkill: FloatingSkill) {
         if (newSkill != FloatingSkill.LOOP && loopMode) toggleLoopMode()
+        if (newSkill != FloatingSkill.INPUT_TRANSLATE) cancelInputTranslation(silent = true)
         scope.launch {
             settingsRepository.update { it.copy(floatingButtonSkill = newSkill) }
         }
@@ -1090,8 +1469,30 @@ class CaptureService : Service() {
             FloatingSkill.FULL_SCREEN -> R.string.toast_skill_switched_full_screen
             FloatingSkill.WORD_SELECT -> R.string.toast_skill_switched_word_select
             FloatingSkill.LOOP -> R.string.toast_skill_switched_loop
+            FloatingSkill.INPUT_TRANSLATE -> R.string.toast_skill_switched_input_translate
         }
-        mainScope.launch { overlay?.showInfoHint(getString(msgRes)) }
+        mainScope.launch {
+            overlay?.showInfoHint(getString(msgRes))
+            if (
+                newSkill == FloatingSkill.INPUT_TRANSLATE &&
+                !InputTranslationGuidePrefs.shouldShow(this@CaptureService)
+            ) {
+                return@launch
+            }
+            if (newSkill == FloatingSkill.INPUT_TRANSLATE) {
+                delay(INPUT_TRANSLATION_GUIDE_DELAY_MS)
+                val actionLabel = when (
+                    floatingButton?.inputTranslationDoubleAction
+                        ?: InputTranslationDoubleAction.FULL_SCREEN
+                ) {
+                    InputTranslationDoubleAction.FULL_SCREEN ->
+                        getString(R.string.menu_full_screen_skill)
+                    InputTranslationDoubleAction.WORD_SELECT ->
+                        getString(R.string.menu_word_select)
+                }
+                floatingButton?.showInputTranslationGuide(actionLabel)
+            }
+        }
     }
 
     private fun showLanguageQuickSwitchOverlay() {
@@ -1132,9 +1533,7 @@ class CaptureService : Service() {
             mainScope.launch {
                 panel.show(settings) { preset ->
                     scope.launch {
-                        settingsRepository.update { current ->
-                            preset.applyTo(current).copy(activeTranslationPresetId = preset.id)
-                        }
+                        settingsRepository.applyTranslationPreset(preset.id)
                     }
                     overlay?.showInfoHint(
                         getString(
@@ -1158,6 +1557,9 @@ class CaptureService : Service() {
             loopMode = false
             loopJob?.cancel()
             loopJob = null
+            settledPageExecutionJob?.cancel()
+            settledPageExecutionJob = null
+            cancelActiveTranslationBatch("loopModeOff")
             resetLoopCaptureState()
             resetLoopRuntimeState()
             mainScope.launch {
@@ -1184,16 +1586,20 @@ class CaptureService : Service() {
                 } else {
                     String.format(java.util.Locale.US, "%.1f", interval / 1000.0)
                 }
-                val smartTrigger = s.loopTriggerMode == LoopTriggerMode.WAIT_FOR_TEXT_COMPLETE
-                val msg = if (smartTrigger) {
+                val stabilityTrigger = LoopRuntimePolicy.usesStabilityPolling(s.loopTriggerMode)
+                val msg = if (stabilityTrigger) {
                     getString(R.string.toast_loop_on_smart, s.loopTextStableDurationMs)
                 } else {
                     getString(R.string.toast_loop_on, secsStr)
                 }
-                val indicator = LoopRuntimePolicy.indicatorSpec(interval, smartTrigger)
+                val indicator = LoopRuntimePolicy.indicatorSpec(interval, stabilityTrigger)
                 VerticalDiagnosticLog.i(
                     "loop start mode=${s.loopTriggerMode.name} intervalMs=$interval " +
-                        "pollMs=${LoopFrameStabilityPolicy.pollingIntervalMs(interval, smartTrigger)} " +
+                        "pollMs=${LoopRuntimePolicy.pollingIntervalMs(
+                            interval,
+                            s.loopTriggerMode,
+                            screenshotter?.minimumLoopObservationIntervalMs ?: 0L,
+                        )} " +
                         "stableMs=${s.loopTextStableDurationMs} skipSimilar=${s.loopSkipSimilarFrames} " +
                         "similarity=${s.loopFrameSimilarityThreshold.toDiagFloat()} " +
                         "textRegion=${s.loopTextRegionMode.name} regionOnly=${s.loopTranslateRegionOnly} " +
@@ -1217,11 +1623,16 @@ class CaptureService : Service() {
                         )
                         loopJob = scope.launch {
                             while (isActive && loopMode) {
-                                captureOnce()
                                 val s2 = settingsRepository.get()
-                                val ivl = LoopFrameStabilityPolicy.pollingIntervalMs(
+                                if (s2.loopTriggerMode == LoopTriggerMode.SETTLED_PAGE) {
+                                    observeSettledPage()
+                                } else {
+                                    captureOnce()
+                                }
+                                val ivl = LoopRuntimePolicy.pollingIntervalMs(
                                     configuredLoopIntervalMs = s2.captureLoopIntervalMs,
-                                    enabled = s2.loopTriggerMode == LoopTriggerMode.WAIT_FOR_TEXT_COMPLETE,
+                                    mode = s2.loopTriggerMode,
+                                    backendMinimumMs = screenshotter?.minimumLoopObservationIntervalMs ?: 0L,
                                 )
                                 delay(ivl)
                             }
@@ -1252,10 +1663,11 @@ class CaptureService : Service() {
                     translation = translation,
                     settings = settings,
                     onSpeakSourceSelection = wordSelectTtsAction(
-                        settings = settings.copy(targetLang = settings.sourceLang),
+                        settings = settings,
                         diagId = diagId,
                         role = "block_source_selection",
                         playbackId = "translation-block:$diagId:source",
+                        sourceEvidence = { emptyList() },
                     ),
                     onSpeakTranslationSelection = wordSelectTtsAction(
                         settings = settings,
@@ -1303,13 +1715,13 @@ class CaptureService : Service() {
     private fun persistTranslationCorrection(
         draft: TranslationCorrectionDraft,
         settings: Settings,
-        memoryScope: com.gameocr.app.translate.TranslationMemoryScope?,
+        memoryScope: com.gameocr.app.translate.TranslationMemoryScope,
     ) {
         scope.launch {
             val result = runCatching {
                 var memorySaved = false
                 var glossarySaved = false
-                if (memoryScope != null && draft.rememberTranslation) {
+                if (draft.rememberTranslation) {
                     translationMemoryService.remember(
                         observedSource = draft.observedSource,
                         correctedSource = draft.correctedSource,
@@ -1322,8 +1734,8 @@ class CaptureService : Service() {
                 draft.glossary?.let { glossary ->
                     translationGlossaryRepository.upsert(
                         GlossaryTermEntity(
-                            scopePackage = memoryScope?.packageName.orEmpty(),
-                            appLabel = memoryScope?.appLabel.orEmpty(),
+                            scopePackage = memoryScope.packageName,
+                            appLabel = memoryScope.appLabel,
                             sourceLang = settings.sourceLang,
                             targetLang = settings.targetLang,
                             sourceTerm = glossary.sourceTerm,
@@ -1333,17 +1745,20 @@ class CaptureService : Service() {
                     )
                     glossarySaved = true
                 }
+                val scopeLabel = if (memoryScope.packageName.isBlank()) {
+                    getString(R.string.glossary_scope_global)
+                } else memoryScope.appLabel
                 when {
                     memorySaved && glossarySaved -> getString(
                         R.string.translation_correction_saved_memory_and_glossary,
-                        memoryScope?.appLabel.orEmpty(),
+                        scopeLabel,
                     )
                     glossarySaved -> getString(
                         R.string.translation_correction_saved_glossary,
                     )
                     memorySaved -> getString(
                         R.string.translation_correction_saved_memory,
-                        memoryScope?.appLabel.orEmpty(),
+                        scopeLabel,
                     )
                     else -> getString(R.string.translation_correction_saved_current)
                 }
@@ -1362,6 +1777,12 @@ class CaptureService : Service() {
     }
 
     private fun resetLoopCaptureState() {
+        resetLegacyLoopCaptureState()
+        settledPageAnchor = null
+        settledPagePolicy.reset()
+    }
+
+    private fun resetLegacyLoopCaptureState() {
         previousLoopFingerprint = null
         previousLoopOcrText = null
         loopFrameStabilityState = LoopFrameStabilityState()
@@ -1400,6 +1821,13 @@ class CaptureService : Service() {
     private fun ensureCurrentTranslationBatch(batchId: Long?) {
         if (!translationBatchGate.accepts(batchId)) {
             throw CancellationException("Stale translation batch")
+        }
+    }
+
+    private fun ensureCurrentSettledPage(revision: Long?, recycleOnReject: Bitmap? = null) {
+        if (revision != null && (!loopMode || !settledPagePolicy.accepts(revision))) {
+            recycleOnReject?.let { if (!it.isRecycled) it.recycle() }
+            throw CancellationException("Stale settled page")
         }
     }
 
@@ -1471,7 +1899,7 @@ class CaptureService : Service() {
         settings: Settings,
     ): LoopFrameFingerprint? {
         val needsFingerprint = settings.loopSkipSimilarFrames ||
-            settings.loopTriggerMode == LoopTriggerMode.WAIT_FOR_TEXT_COMPLETE
+            LoopRuntimePolicy.usesStabilityPolling(settings.loopTriggerMode)
         if (!loopMode || !needsFingerprint) {
             if (loopMode) resetLoopCaptureState()
             return null
@@ -1487,6 +1915,127 @@ class CaptureService : Service() {
             contextId = settings.hashCode(),
             excludedRect = exclusion,
         )
+    }
+
+    private suspend fun invalidateSettledPageWork(diagId: Long, reason: String) {
+        settledPageExecutionJob?.cancel(CancellationException("Settled page changed: $reason"))
+        settledPageExecutionJob = null
+        cancelActiveTranslationBatch("settledPage:$reason")
+        loopSessionId += 1L
+        loopTranslationInFlight = false
+        lastLoopRuntimeLogState = "settled_page_invalidated"
+        resetLegacyLoopCaptureState()
+        withContext(Dispatchers.Main.immediate) {
+            overlay?.clear()
+            ttsEngine.stop()
+        }
+        logVerticalDiag(diagId, "settled page invalidated reason=$reason")
+    }
+
+    /**
+     * Read-only observation continues during OCR/translation, without hiding the displayed result.
+     * Only common, unobscured source pixels are compared. The worker takes a clean OCR screenshot
+     * once a new page is stable; observation frames can contain our own UI and must not reach OCR.
+     */
+    private suspend fun observeSettledPage() {
+        val diagId = captureSequence.incrementAndGet()
+        var full: Bitmap? = null
+        try {
+            val screenNow = physicalDisplaySize(this@CaptureService)
+            settingsRepository.rescaleCaptureRegionIfNeeded(screenNow.width, screenNow.height)
+            val settings = settingsRepository.get()
+            if (settings.loopTriggerMode != LoopTriggerMode.SETTLED_PAGE) return
+            val shotter = screenshotter ?: return
+            suspend fun readExclusions(): List<Rect> = withContext(Dispatchers.Main.immediate) {
+                overlay?.observationExclusionRects().orEmpty() +
+                    floatingButton?.observationExclusionRects().orEmpty()
+            }
+            val beforeExclusions = readExclusions()
+            full = captureScreenshotWithTiming(shotter, diagId)
+            val captured = full ?: run {
+                // A failed sample proves neither a page turn nor stability.
+                settledPagePolicy.pauseObservation(SystemClock.elapsedRealtime())
+                return
+            }
+            val exclusions = beforeExclusions + readExclusions()
+            val workBitmap = cropIfNeeded(captured, settings.captureRegion) ?: run {
+                invalidateSettledPageWork(diagId, "invalid_region")
+                settledPageAnchor = null
+                settledPagePolicy.reset()
+                return
+            }
+            val fingerprint = try {
+                val offsetX = if (workBitmap !== captured) settings.captureRegion?.left?.coerceAtLeast(0) ?: 0 else 0
+                val offsetY = if (workBitmap !== captured) settings.captureRegion?.top?.coerceAtLeast(0) ?: 0 else 0
+                val masks = exclusions.mapNotNull { rect ->
+                    mapOverlayBoundsToCapture(
+                        OverlayCaptureRect(rect.left, rect.top, rect.right, rect.bottom),
+                        screenNow.width, screenNow.height, captured.width, captured.height,
+                    )?.let { mapped ->
+                        Rect(mapped.left, mapped.top, mapped.right, mapped.bottom).apply {
+                            offset(-offsetX, -offsetY)
+                        }
+                    }
+                }
+                LoopFrameFingerprintFactory.createObservation(workBitmap, settings.hashCode(), masks)
+            } finally {
+                if (workBitmap !== captured) workBitmap.recycle()
+            }
+            val previousAnchor = settledPageAnchor
+            val comparable = previousAnchor?.let { SettledPageVisualPolicy.comparable(it, fingerprint) } ?: true
+            val similarity = previousAnchor?.takeIf { comparable }?.let { anchor ->
+                SettledPageVisualPolicy.similarity(anchor, fingerprint)
+            }
+            // Do not mistake an occluded frame (including a full-screen menu) for a new page.
+            if (SettledPageVisualPolicy.similarity(fingerprint, fingerprint) == null ||
+                (previousAnchor != null && comparable && similarity == null)
+            ) {
+                settledPagePolicy.pauseObservation(SystemClock.elapsedRealtime())
+                logVerticalDiag(diagId, "settled page observe paused reason=source_occluded masks=${exclusions.size}")
+                return
+            }
+            val sameAsAnchor = similarity?.let {
+                it >= LoopFrameChangePolicy.normalizeThreshold(settings.loopFrameSimilarityThreshold)
+            } ?: false
+            val decision = settledPagePolicy.observe(
+                sameAsAnchor = sameAsAnchor,
+                contextUnchanged = comparable,
+                nowMs = SystemClock.elapsedRealtime(),
+                stableDurationMs = settings.loopTextStableDurationMs,
+            )
+            if (decision.replaceAnchor) settledPageAnchor = fingerprint
+            val firstAnchor = previousAnchor == null
+            logVerticalDiag(
+                diagId,
+                "settled page observe revision=${decision.revision} same=$sameAsAnchor " +
+                    "similarity=${similarity?.toDiagFloat() ?: "n/a"} masks=${exclusions.size} " +
+                    "replace=${decision.replaceAnchor} invalidate=${decision.invalidatePrevious} " +
+                    "ready=${decision.ready} busy=${settledPageExecutionJob?.isActive == true || captureLock.isLocked}",
+            )
+            if (firstAnchor || decision.invalidatePrevious) {
+                invalidateSettledPageWork(
+                    diagId,
+                    if (firstAnchor) "initial_anchor" else "page_changed",
+                )
+            }
+            if (!decision.ready) return
+            if (settledPageExecutionJob?.isActive == true || captureLock.isLocked) return
+            if (!settledPagePolicy.claim(decision.revision)) return
+
+            val job = scope.launch(start = CoroutineStart.LAZY) {
+                captureOnce(
+                    preparedSettings = settings,
+                    settledPageRevision = decision.revision,
+                )
+            }
+            settledPageExecutionJob = job
+            job.invokeOnCompletion {
+                if (settledPageExecutionJob === job) settledPageExecutionJob = null
+            }
+            job.start()
+        } finally {
+            full?.let { if (!it.isRecycled) it.recycle() }
+        }
     }
 
     private fun selectLoopTextRoi(
@@ -1683,12 +2232,12 @@ class CaptureService : Service() {
      */
     private fun showRegionPickerOverlay() {
         val picker = regionPicker ?: RegionPickerOverlay(this).also { regionPicker = it }
-        if (picker.isShown()) return
-        mainScope.launch {
+        if (picker.isShown() || regionPickerJob?.isActive == true) return
+        regionPickerJob = mainScope.launch {
+            val startedAt = SystemClock.elapsedRealtime()
             // 拿当前屏幕尺寸先把 region rescale 一遍，确保 initial 显示在当前方向的正确位置。
             val screen = physicalDisplaySize(this@CaptureService)
-            settingsRepository.rescaleCaptureRegionIfNeeded(screen.width, screen.height)
-            val initial = settingsRepository.get().captureRegion?.let {
+            val initial = settingsRepository.rescaleCaptureRegionIfNeeded(screen.width, screen.height)?.let {
                 android.graphics.Rect(it.left, it.top, it.right, it.bottom)
             }
             captureRegionBorder?.setHiddenForEditor(hidden = true)
@@ -1696,22 +2245,7 @@ class CaptureService : Service() {
             picker.show(
                 initial = initial,
                 onConfirm = { rect ->
-                    scope.launch {
-                        val savedScreen = physicalDisplaySize(this@CaptureService)
-                        settingsRepository.update {
-                            it.copy(
-                                captureRegion = CaptureRegion(rect.left, rect.top, rect.right, rect.bottom),
-                                captureRegionSavedScreenW = savedScreen.width,
-                                captureRegionSavedScreenH = savedScreen.height
-                            )
-                        }
-                        val updated = settingsRepository.get()
-                        withContext(Dispatchers.Main) {
-                            captureRegionBorder?.applySettings(updated)
-                            captureRegionBorder?.setHiddenForEditor(hidden = false)
-                            floatingButton?.show()
-                        }
-                    }
+                    commitPickedRegion(CaptureRegion(rect.left, rect.top, rect.right, rect.bottom))
                 },
                 onCancel = {
                     mainScope.launch {
@@ -1721,17 +2255,29 @@ class CaptureService : Service() {
                 },
                 onClearAll = {
                     // 双击 = 选择整屏：跟主屏「清除选框」按钮完全一致——captureRegion=null，下次截屏走整屏。
-                    scope.launch {
-                        settingsRepository.update { it.copy(captureRegion = null) }
-                        val updated = settingsRepository.get()
-                        withContext(Dispatchers.Main) {
-                            captureRegionBorder?.applySettings(updated)
-                            captureRegionBorder?.setHiddenForEditor(hidden = false)
-                            floatingButton?.show()
-                        }
-                    }
+                    commitPickedRegion(null)
                 }
             )
+            Timber.d("RegionPicker ready elapsedMs=%d", SystemClock.elapsedRealtime() - startedAt)
+        }
+    }
+
+    private fun commitPickedRegion(region: CaptureRegion?) {
+        regionPickerJob = mainScope.launch {
+            val startedAt = SystemClock.elapsedRealtime()
+            try {
+                val screen = physicalDisplaySize(this@CaptureService)
+                settingsRepository.setCaptureRegion(region, screen.width, screen.height)
+                captureRegionBorder?.applyCommittedRegion(region)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                Timber.e(failure, "RegionPicker commit failed")
+            } finally {
+                captureRegionBorder?.setHiddenForEditor(hidden = false)
+                floatingButton?.show()
+                Timber.d("RegionPicker restored elapsedMs=%d", SystemClock.elapsedRealtime() - startedAt)
+            }
         }
     }
 
@@ -1805,11 +2351,47 @@ class CaptureService : Service() {
     private fun elapsedSince(startMs: Long): Long =
         (System.currentTimeMillis() - startMs).coerceAtLeast(0L)
 
+    private suspend fun captureScreenshotWithTiming(
+        screenshotter: Screenshotter,
+        diagId: Long,
+    ): Bitmap? = screenshotLock.withLock {
+        val startedAt = SystemClock.elapsedRealtime()
+        val bitmap = screenshotter.capture()
+        val elapsedMs = (SystemClock.elapsedRealtime() - startedAt).coerceAtLeast(0L)
+        val wakeContext = performanceDiagnostics.currentWakeContext()
+        val wakeSuffix = wakeContext?.let {
+            " afterWakeWindow=true wakeAgeMs=${it.wakeAgeMs} " +
+                "screenOffMs=${it.screenOffDurationMs ?: -1}"
+        }.orEmpty()
+        logVerticalDiag(
+            diagId,
+            "screenshot completed type=${screenshotter.javaClass.simpleName} elapsedMs=$elapsedMs " +
+                "success=${bitmap != null}$wakeSuffix",
+        )
+        if (bitmap != null) {
+            performanceDiagnostics.observe(
+                stage = RuntimePerformanceStage.CAPTURE,
+                operationKey = RuntimePerformanceKeyPolicy.bitmap(
+                    operation = screenshotter.javaClass.simpleName,
+                    width = bitmap.width,
+                    height = bitmap.height,
+                ),
+                elapsedMs = elapsedMs,
+            )
+        }
+        bitmap
+    }
+
     private suspend fun captureOnce(
         showLoadingAfterScreenshot: Boolean = false,
-        restoreFloatingButtonAfterScreenshot: Boolean = false
+        restoreFloatingButtonAfterScreenshot: Boolean = false,
+        transientCaptureRegion: CaptureRegion? = null,
+        preparedFullScreen: Bitmap? = null,
+        preparedSettings: Settings? = null,
+        settledPageRevision: Long? = null,
     ) {
         if (!captureLock.tryLock()) {
+            preparedFullScreen?.let { if (!it.isRecycled) it.recycle() }
             restoreCaptureChrome(
                 showLoading = false,
                 restoreFloatingButton = restoreFloatingButtonAfterScreenshot
@@ -1823,6 +2405,7 @@ class CaptureService : Service() {
         var floatingButtonHiddenForCapture = false
         var captureRegionBorderHiddenForCapture = false
         var floatingWindowPreparation = PreparedFloatingWindowCapture()
+        var unclaimedPreparedFull = preparedFullScreen
         fun restoreCaptureChromeOnce(showLoading: Boolean) {
             if (captureChromeRestored) return
             captureChromeRestored = true
@@ -1847,9 +2430,19 @@ class CaptureService : Service() {
         }
         try {
             val screenNow = physicalDisplaySize(this@CaptureService)
-            settingsRepository.rescaleCaptureRegionIfNeeded(screenNow.width, screenNow.height)
-            val settings = settingsRepository.get()
-            if (loopMode) {
+            if (preparedSettings == null) {
+                settingsRepository.rescaleCaptureRegionIfNeeded(screenNow.width, screenNow.height)
+            }
+            val persistedSettings = preparedSettings ?: settingsRepository.get()
+            val settings = transientCaptureRegion?.let { region ->
+                persistedSettings.copy(captureRegion = region)
+            } ?: persistedSettings
+            ensureCurrentSettledPage(settledPageRevision)
+            // The settings flow remains live while a capture is running. Keep this capture's
+            // coordinate space independent so an unrelated settings emission cannot reset a
+            // transient region to the full-screen origin before its OCR boxes are rendered.
+            activeCaptureDisplayRegion = ActiveCaptureDisplayRegion(settings.captureRegion)
+            if (loopMode && settledPageRevision == null) {
                 val hasBlockingResult = overlay?.hasBlockingLoopResult() == true
                 val activeResultDecision = LoopRuntimePolicy.activeResultDecision(
                     hasBlockingResult = hasBlockingResult,
@@ -1879,43 +2472,48 @@ class CaptureService : Service() {
             captureAttemptStarted = true
             beginTranslationBatch(diagId)
             logVerticalDiag(diagId, "start loopMode=$loopMode")
-            val shotter = screenshotter ?: run {
-                restoreCaptureChromeOnce(showLoading = false)
-                return
-            }
-            var captureChromeChanged = false
-            captureRegionBorderHiddenForCapture = withContext(Dispatchers.Main) {
-                captureRegionBorder?.setHiddenForCapture(hidden = true) == true
-            }
-            captureChromeChanged = captureRegionBorderHiddenForCapture
-            if (loopMode) {
-                val floatingButtonShown = withContext(Dispatchers.Main) {
-                    floatingButton?.isShown() == true
+            var full = preparedFullScreen
+            if (full != null) {
+                unclaimedPreparedFull = null
+            } else {
+                val shotter = screenshotter ?: run {
+                    restoreCaptureChromeOnce(showLoading = false)
+                    return
                 }
-                if (
-                    shouldHideFloatingButtonForCapture(
-                        loopMode = true,
-                        isFloatingButtonShown = floatingButtonShown,
-                    )
-                ) {
-                    floatingButtonHiddenForCapture = withContext(Dispatchers.Main) {
-                        floatingButton?.setHiddenForCapture(hidden = true) == true
+                var captureChromeChanged = false
+                captureRegionBorderHiddenForCapture = withContext(Dispatchers.Main) {
+                    captureRegionBorder?.setHiddenForCapture(hidden = true) == true
+                }
+                captureChromeChanged = captureRegionBorderHiddenForCapture
+                if (loopMode) {
+                    val floatingButtonShown = withContext(Dispatchers.Main) {
+                        floatingButton?.isShown() == true
                     }
-                    captureChromeChanged = floatingButtonHiddenForCapture
+                    if (
+                        shouldHideFloatingButtonForCapture(
+                            loopMode = true,
+                            isFloatingButtonShown = floatingButtonShown,
+                        )
+                    ) {
+                        floatingButtonHiddenForCapture = withContext(Dispatchers.Main) {
+                            floatingButton?.setHiddenForCapture(hidden = true) == true
+                        }
+                        captureChromeChanged = floatingButtonHiddenForCapture
+                    }
                 }
+                floatingWindowPreparation = prepareFloatingWindowForCapture(
+                    settings = settings,
+                    captureRegion = settings.captureRegion,
+                    diagId = diagId,
+                )
+                captureChromeChanged = captureChromeChanged || floatingWindowPreparation.hidden
+                if (captureChromeChanged) delay(CAPTURE_CHROME_SETTLE_MS)
+                full = captureScreenshotWithTiming(shotter, diagId)
+                restoreCaptureRegionBorderAfterCapture()
+                restoreFloatingButtonAfterCapture()
+                restoreFloatingWindowAfterCapture(floatingWindowPreparation)
+                floatingWindowPreparation = floatingWindowPreparation.copy(hidden = false)
             }
-            floatingWindowPreparation = prepareFloatingWindowForCapture(
-                settings = settings,
-                captureRegion = settings.captureRegion,
-                diagId = diagId,
-            )
-            captureChromeChanged = captureChromeChanged || floatingWindowPreparation.hidden
-            if (captureChromeChanged) delay(CAPTURE_CHROME_SETTLE_MS)
-            var full = shotter.capture()
-            restoreCaptureRegionBorderAfterCapture()
-            restoreFloatingButtonAfterCapture()
-            restoreFloatingWindowAfterCapture(floatingWindowPreparation)
-            floatingWindowPreparation = floatingWindowPreparation.copy(hidden = false)
             if (full == null) {
                 // 截屏链路返回 null（MediaProjection token 失效 / Shizuku 调用失败等），
                 // 之前直接 return，用户只看到圈转一下；现在显式提示。
@@ -1926,6 +2524,7 @@ class CaptureService : Service() {
                 mainScope.launch { overlay?.showErrorHint(msg) }
                 return
             }
+            ensureCurrentSettledPage(settledPageRevision, recycleOnReject = full)
             // 在拿 settings 之前先 rescale region，免得拿到的是旧屏幕方向的坐标。
             restoreCaptureChromeOnce(showLoading = showLoadingAfterScreenshot)
             val captureMask = mapOverlayBoundsToCapture(
@@ -2221,6 +2820,7 @@ class CaptureService : Service() {
                     diagId,
                 )
                 workBitmap.recycle()
+                ensureCurrentSettledPage(settledPageRevision)
                 val normalizedEndToEndText = LoopFrameChangePolicy.normalizeOcrText(
                     translatedBlocks.map { (block, _) -> block.text }
                 )
@@ -2271,6 +2871,33 @@ class CaptureService : Service() {
 
             // 需要保留灰阶/颜色细节的 OCR 跳过 invert / binarize。upscale2x 仍保留：Manga
             // OCR 的 DBNet 用它改善小字检测，日文 ML Kit 会在内部限制最终输入尺寸并回映坐标。
+            val contentOrientationModelHint = if (
+                settings.captureContentOrientation != CaptureContentOrientation.AUTO &&
+                ((settings.captureContentOrientation == CaptureContentOrientation.LANDSCAPE) !=
+                    (workBitmap.width >= workBitmap.height))
+            ) {
+                orientationCoordinator.classifyPreOcr(workBitmap)
+            } else {
+                null
+            }
+            val contentRotationDegrees = CaptureContentOrientationPolicy.resolveRotationDegrees(
+                requested = settings.captureContentOrientation,
+                imageWidth = workBitmap.width,
+                imageHeight = workBitmap.height,
+                modelAngle = contentOrientationModelHint?.rawAngle ?: 0,
+            )
+            val ocrBitmap = CaptureContentOrientationPolicy.rotateForOcr(
+                bitmap = workBitmap,
+                counterClockwiseDegrees = contentRotationDegrees,
+            )
+            logVerticalDiag(
+                diagId,
+                "content orientation requested=${settings.captureContentOrientation.name} " +
+                    "modelAngle=${contentOrientationModelHint?.rawAngle ?: 0} " +
+                    "modelConf=${contentOrientationModelHint?.confidence?.toDiagFloat() ?: "n/a"} " +
+                    "rotation=$contentRotationDegrees input=${workBitmap.width}x${workBitmap.height} " +
+                    "ocr=${ocrBitmap.width}x${ocrBitmap.height}",
+            )
             // 第一次 OCR：用用户在 settings 选的引擎跑
             var effectiveEngine = settings.ocrEngine
             var orientationHint: OrientationResult? = null
@@ -2288,14 +2915,24 @@ class CaptureService : Service() {
             if (settings.textOrientationAutoDetect) {
                 val preHint = settings.manualTextOrientation
                     ?.let { OrientationResult(it, 1f, 0, "manual") }
-                    ?: orientationCoordinator.classifyPreOcr(workBitmap)
+                    ?: if (contentRotationDegrees == 0 && contentOrientationModelHint != null) {
+                        contentOrientationModelHint
+                    } else if (contentRotationDegrees != 0) {
+                        // The document model already selected and applied the whole-frame turn.
+                        // Text layout (horizontal/vertical) is resolved from OCR boxes afterwards;
+                        // running the same whole-frame classifier again would only add latency.
+                        OrientationResult(TextOrientation.UNKNOWN, 1f, 0, "content-normalized")
+                    } else {
+                        orientationCoordinator.classifyPreOcr(ocrBitmap)
+                    }
                 logVerticalOrientation(diagId, "pre", preHint)
                 if (preHint.orientation != TextOrientation.UNKNOWN ||
                     preHint.source != "heuristic-bitmap-na"
                 ) {
                     orientationHint = preHint
                 }
-                val preEngine = OrientationRouting.resolveEngine(
+                // Auto owns language-to-engine routing; page orientation cannot override its mapping.
+                val preEngine = if (effectiveEngine == OcrEngineKind.ML_KIT_AUTO) null else OrientationRouting.resolveEngine(
                     orientation = preHint.orientation,
                     sourceLangBcp47 = settings.sourceLang,
                     userEngine = effectiveEngine,
@@ -2330,14 +2967,15 @@ class CaptureService : Service() {
                     "paddleVersion=${settings.paddleModelVersion.name} " +
                     "needsRaw=${effectiveEngine.needsRawBitmap}"
             )
-            var preprocessed: Bitmap = BitmapPreprocessor.apply(workBitmap, firstPreprocess)
+            var preprocessed: Bitmap = BitmapPreprocessor.apply(ocrBitmap, firstPreprocess)
             logVerticalDiag(diagId, "preprocessed=${preprocessed.width}x${preprocessed.height}")
             val firstBlocks = try {
                 ocrEngine.recognize(preprocessed, effectiveEngine, settings)
             } catch (ce: kotlinx.coroutines.CancellationException) {
                 // 协程取消（用户长按关循环 / Service 销毁）不是真错误，让它传播出去，
                 // 不要记为 OCR 失败也不要弹错误条。Bitmap 在 finally 里没法回收，这里手动清。
-                if (preprocessed !== workBitmap) preprocessed.recycle()
+                if (preprocessed !== ocrBitmap) preprocessed.recycle()
+                if (ocrBitmap !== workBitmap) ocrBitmap.recycle()
                 workBitmap.recycle()
                 throw ce
             } catch (t: Throwable) {
@@ -2354,7 +2992,8 @@ class CaptureService : Service() {
                 // Service Toast 在 HyperOS / MIUI 等国产 ROM 上会被静默丢弃。
                 val msg = getString(R.string.toast_ocr_failed_format, effectiveEngine.name, shortError(t))
                 mainScope.launch { overlay?.showErrorHint(msg) }
-                if (preprocessed !== workBitmap) preprocessed.recycle()
+                if (preprocessed !== ocrBitmap) preprocessed.recycle()
+                if (ocrBitmap !== workBitmap) ocrBitmap.recycle()
                 workBitmap.recycle()
                 return
             }
@@ -2432,7 +3071,8 @@ class CaptureService : Service() {
                         )
                         rerun
                     } catch (ce: kotlinx.coroutines.CancellationException) {
-                        if (preprocessed !== workBitmap) preprocessed.recycle()
+                        if (preprocessed !== ocrBitmap) preprocessed.recycle()
+                        if (ocrBitmap !== workBitmap) ocrBitmap.recycle()
                         workBitmap.recycle()
                         throw ce
                     } catch (t: Throwable) {
@@ -2449,7 +3089,7 @@ class CaptureService : Service() {
                 if (upsideDownRerun != null) {
                     upsideDownRerun
                 } else {
-                    val newEngine = OrientationRouting.resolveEngine(
+                    val newEngine = if (effectiveEngine == OcrEngineKind.ML_KIT_AUTO) null else OrientationRouting.resolveEngine(
                         orientation = hint.orientation,
                         sourceLangBcp47 = settings.sourceLang,
                         userEngine = effectiveEngine,
@@ -2481,7 +3121,7 @@ class CaptureService : Service() {
                             "rerun requested by $rerunReason: ${effectiveEngine.name} -> ${rerunEngine.name}"
                         )
                         // 切引擎重跑：新引擎可能 needsRawBitmap 不同（如 manga-ocr 要原图），重做预处理
-                        if (preprocessed !== workBitmap) preprocessed.recycle()
+                        if (preprocessed !== ocrBitmap) preprocessed.recycle()
                         val rerunPreprocess = if (rerunEngine.needsRawBitmap) {
                             settings.preprocess.copy(invert = false, binarize = false)
                         } else {
@@ -2492,11 +3132,12 @@ class CaptureService : Service() {
                             "rerun OCR engine=${rerunEngine.name} preprocess=${rerunPreprocess.toDiagString()} " +
                                 "needsRaw=${rerunEngine.needsRawBitmap}"
                         )
-                        preprocessed = BitmapPreprocessor.apply(workBitmap, rerunPreprocess)
+                        preprocessed = BitmapPreprocessor.apply(ocrBitmap, rerunPreprocess)
                         val rerunBlocks = try {
                             ocrEngine.recognize(preprocessed, rerunEngine, settings)
                         } catch (ce: kotlinx.coroutines.CancellationException) {
-                            if (preprocessed !== workBitmap) preprocessed.recycle()
+                            if (preprocessed !== ocrBitmap) preprocessed.recycle()
+                            if (ocrBitmap !== workBitmap) ocrBitmap.recycle()
                             workBitmap.recycle()
                             throw ce
                         } catch (t: Throwable) {
@@ -2564,7 +3205,8 @@ class CaptureService : Service() {
                 firstBlocks
             }
 
-            if (preprocessed !== workBitmap) preprocessed.recycle()
+            if (preprocessed !== ocrBitmap) preprocessed.recycle()
+            if (ocrBitmap !== workBitmap) ocrBitmap.recycle()
             logVerticalDiag(
                 diagId,
                 "ocr final engine=${effectiveEngine.name} paddleVersion=${settings.paddleModelVersion.name} " +
@@ -2594,7 +3236,7 @@ class CaptureService : Service() {
             val ocrElapsedMs = elapsedSince(ocrStartedAt)
 
             // 预处理 upscale 会让 boundingBox 坐标变成 2 倍，渲染前缩回
-            val blocks = if (settings.preprocess.upscale2x) {
+            val scaledBlocks = if (settings.preprocess.upscale2x) {
                 orderedRawBlocks.map { tb ->
                     val r = tb.boundingBox
                     tb.copy(
@@ -2605,8 +3247,17 @@ class CaptureService : Service() {
                     )
                 }
             } else orderedRawBlocks
+            val blocks = CaptureContentOrientationPolicy.mapBlocksToOriginal(
+                blocks = scaledBlocks,
+                originalWidth = workBitmap.width,
+                originalHeight = workBitmap.height,
+                counterClockwiseDegrees = contentRotationDegrees,
+            )
             if (settings.preprocess.upscale2x) {
                 logVerticalBlocks(diagId, "scaledBlocks for overlay", blocks)
+            }
+            if (contentRotationDegrees != 0) {
+                logVerticalBlocks(diagId, "content-orientation blocks mapped to capture", blocks)
             }
             val normalizedLoopOcrText = LoopFrameChangePolicy.normalizeOcrText(blocks.map { it.text })
             if (blocks.isEmpty()) {
@@ -2709,8 +3360,26 @@ class CaptureService : Service() {
                 logVerticalDiag(diagId, "first OCR produced no usable ROI; fallback to OCR text stability")
             }
             val delayedMaskCoordinateScale = if (settings.preprocess.upscale2x) 2f else 1f
-            val delayedMaskImageWidth = (workBitmap.width * delayedMaskCoordinateScale).toInt()
-            val delayedMaskImageHeight = (workBitmap.height * delayedMaskCoordinateScale).toInt()
+            val delayedMaskOriginalDisplayWidth = workBitmap.width
+            val delayedMaskOriginalDisplayHeight = workBitmap.height
+            val delayedMaskOriginalImageWidth =
+                (delayedMaskOriginalDisplayWidth * delayedMaskCoordinateScale).toInt()
+            val delayedMaskOriginalImageHeight =
+                (delayedMaskOriginalDisplayHeight * delayedMaskCoordinateScale).toInt()
+            val delayedMaskOcrImageWidth = (
+                CaptureContentOrientationPolicy.rotatedWidth(
+                    workBitmap.width,
+                    workBitmap.height,
+                    contentRotationDegrees,
+                ) * delayedMaskCoordinateScale
+            ).toInt()
+            val delayedMaskOcrImageHeight = (
+                CaptureContentOrientationPolicy.rotatedHeight(
+                    workBitmap.width,
+                    workBitmap.height,
+                    contentRotationDegrees,
+                ) * delayedMaskCoordinateScale
+            ).toInt()
             val postOcrStability = LoopFrameStabilityPolicy.afterOcr(
                 state = loopFrameStabilityState,
                 current = currentLoopFingerprint,
@@ -2779,6 +3448,7 @@ class CaptureService : Service() {
                 workBitmap.recycle()
                 return
             }
+            ensureCurrentSettledPage(settledPageRevision, recycleOnReject = workBitmap)
             if (logRepository.verboseEnabled) {
                 val joined = orderedRawBlocks.mapIndexed { i, b ->
                     "#${i + 1} ${b.text}"
@@ -2839,6 +3509,7 @@ class CaptureService : Service() {
                 diagId,
             )
             workBitmap.recycle()
+            ensureCurrentSettledPage(settledPageRevision)
             if (translationBlocks.isEmpty()) {
                 logVerticalDiag(
                     diagId,
@@ -2859,27 +3530,45 @@ class CaptureService : Service() {
                 "render mode=${settings.renderMode.name} recognizedOrientation=$recognizedReadingOrientation " +
                     "renderOrientation=$renderOrientation blocks=${translationBlocks.size}"
             )
-            val delayedMaskDebugBatch = if (
+            val delayedMaskRenderSession = if (
                 supportsShapeAwareBubblePatches(effectiveEngine) &&
                 mangaOcrEngine.isShapeAwareRenderingEnabled(settings) &&
                 settings.renderMode == RenderMode.BLOCKS &&
                 adaptiveOverlayActive(settings.overlayStyleMode, settings.renderMode) &&
                 !redBoxActive
             ) {
-                mangaOcrEngine.claimDelayedMaskDebugBatch(
-                    imageWidth = delayedMaskImageWidth,
-                    imageHeight = delayedMaskImageHeight,
-                    coordinateScale = delayedMaskCoordinateScale,
+                val maskCoordinateBlocks = CaptureContentOrientationPolicy.mapBlocksToOcr(
                     blocks = translationBlocks,
+                    originalWidth = delayedMaskOriginalDisplayWidth,
+                    originalHeight = delayedMaskOriginalDisplayHeight,
+                    counterClockwiseDegrees = contentRotationDegrees,
                 )
+                val claimedBatch = mangaOcrEngine.claimDelayedMaskDebugBatch(
+                    imageWidth = delayedMaskOcrImageWidth,
+                    imageHeight = delayedMaskOcrImageHeight,
+                    coordinateScale = delayedMaskCoordinateScale,
+                    blocks = maskCoordinateBlocks,
+                )
+                // Prepare masks in the bitmap space that produced them. The session restores
+                // complete patches (bounds AND pixels) to capture space at the display boundary.
+                claimedBatch?.let { batch ->
+                    DelayedMaskRenderSession(
+                        batch = batch,
+                        originalImageWidth = delayedMaskOriginalImageWidth,
+                        originalImageHeight = delayedMaskOriginalImageHeight,
+                        counterClockwiseDegrees = contentRotationDegrees,
+                    )
+                }
             } else {
                 null
             }
-            delayedMaskDebugBatch?.let { batch ->
+            delayedMaskRenderSession?.let { session ->
                 logVerticalDiag(
                     diagId,
-                    "delayed mask debug claimed blocks=${batch.blockCount} " +
-                        "image=${delayedMaskImageWidth}x$delayedMaskImageHeight"
+                    "delayed mask debug claimed blocks=${session.batch.blockCount} " +
+                        "ocrImage=${delayedMaskOcrImageWidth}x$delayedMaskOcrImageHeight " +
+                        "displayImage=${delayedMaskOriginalImageWidth}x$delayedMaskOriginalImageHeight " +
+                        "rotation=$contentRotationDegrees"
                 )
             }
             when {
@@ -2889,7 +3578,7 @@ class CaptureService : Service() {
                     renderOrientation,
                     diagId,
                     adaptiveStyles,
-                    delayedMaskDebugBatch,
+                    delayedMaskRenderSession,
                 )
                 settings.renderMode == RenderMode.BLOCKS ->
                     renderBlocks(
@@ -2898,11 +3587,12 @@ class CaptureService : Service() {
                         renderOrientation,
                         diagId,
                         adaptiveStyles,
-                        delayedMaskDebugBatch,
+                        delayedMaskRenderSession,
                     )
                 else -> renderFloatingWindow(translationBlocks, translationRequestSettings, diagId)
             }
         } finally {
+            unclaimedPreparedFull?.let { if (!it.isRecycled) it.recycle() }
             restoreCaptureRegionBorderAfterCapture()
             restoreFloatingButtonAfterCapture()
             restoreFloatingWindowAfterCapture(floatingWindowPreparation)
@@ -2918,6 +3608,7 @@ class CaptureService : Service() {
                     logVerticalDiag(diagId, "loading retained until translation batch finishes")
                 }
             }
+            activeCaptureDisplayRegion = null
             captureLock.unlock()
         }
     }
@@ -3145,6 +3836,9 @@ class CaptureService : Service() {
 
     private suspend fun lookupFloatingEnglishWord(word: String): FloatingWordLookupOutcome {
         val settings = settingsRepository.get()
+        if (!settings.dictionaryTapLookupEnabled) {
+            return FloatingWordLookupOutcome(word, null, null, null)
+        }
         val startedAt = SystemClock.elapsedRealtime()
         val outcome = floatingWordLookupCoordinator.execute(word, settings)
         logVerticalDiag(
@@ -3159,7 +3853,9 @@ class CaptureService : Service() {
         floatingWordDetailsJob?.cancel()
         val requestId = ++floatingWordDetailsRequestId
         floatingWordDetailsJob = scope.launch {
-            val settings = settingsRepository.get().forFloatingEnglishWordLookup()
+            val storedSettings = settingsRepository.get()
+            if (!storedSettings.dictionaryTapLookupEnabled) return@launch
+            val settings = storedSettings.forFloatingEnglishWordLookup()
             val diagId = captureSequence.incrementAndGet()
             val sourceSpeech = wordSelectTtsAction(
                 settings = settings.copy(targetLang = "en"),
@@ -3182,7 +3878,9 @@ class CaptureService : Service() {
             val loadingContent = floatingWordDetailsContent(
                 completed = false,
                 wordResult = null,
+                failed = false,
                 failedLabel = getString(R.string.floating_word_lookup_failed),
+                notFoundLabel = getString(R.string.floating_word_lookup_not_found),
             )
             withContext(Dispatchers.Main) {
                 if (requestId != floatingWordDetailsRequestId) return@withContext
@@ -3205,22 +3903,29 @@ class CaptureService : Service() {
                             TranslationCorrectionRequest(source, translation)
                         )
                     },
-                    onEnglishWordTapped = { word, anchor ->
-                        lookupEnglishWordInTranslationCard(card, word, anchor, settings)
-                    },
+                    onEnglishWordTapped = if (settings.dictionaryTapLookupEnabled) {
+                        { word, anchor ->
+                            lookupEnglishWordInTranslationCard(card, word, anchor, settings)
+                        }
+                    } else null,
                 )
             }
             val fullStartedAt = SystemClock.elapsedRealtime()
-            val fullResult = runCatching {
-                withContext(Dispatchers.IO) {
-                    translator.translateWord(outcome.word, settings)
-                }
-            }.onFailure { error ->
+            val fullOutcome = try {
+                floatingWordLookupCoordinator.executeFull(outcome.word, settings)
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (error: Throwable) {
+                FloatingWordLookupOutcome(outcome.word, null, null, error)
+            }
+            fullOutcome.error?.let { error ->
+                Timber.w(error, "Floating word full dictionary lookup failed")
                 logVerticalDiag(
                     diagId,
                     "floatingWord full dictionary failed error=${shortError(error)}",
                 )
-            }.getOrNull()?.takeUnless(WordResult::isEmpty)
+            }
+            val fullResult = fullOutcome.wordResult
             logVerticalDiag(
                 diagId,
                 "floatingWord full dictionary ready=${fullResult != null} " +
@@ -3230,7 +3935,9 @@ class CaptureService : Service() {
             val finalContent = floatingWordDetailsContent(
                 completed = true,
                 wordResult = fullResult,
+                failed = fullOutcome.error != null,
                 failedLabel = getString(R.string.floating_word_lookup_failed),
+                notFoundLabel = getString(R.string.floating_word_lookup_not_found),
             )
             withContext(Dispatchers.Main) {
                 if (requestId != floatingWordDetailsRequestId) return@withContext
@@ -3257,6 +3964,7 @@ class CaptureService : Service() {
                 failed = false,
                 loadingLabel = getString(R.string.word_card_loading),
                 failedLabel = getString(R.string.floating_word_lookup_failed),
+                notFoundLabel = getString(R.string.floating_word_lookup_not_found),
             ),
             settings = settings,
             onSpeak = null,
@@ -3280,9 +3988,10 @@ class CaptureService : Service() {
                         translation = outcome.translation,
                         wordResult = outcome.wordResult,
                         loading = false,
-                        failed = !outcome.hasDetails,
+                        failed = outcome.error != null,
                         loadingLabel = getString(R.string.word_card_loading),
                         failedLabel = getString(R.string.floating_word_lookup_failed),
+                        notFoundLabel = getString(R.string.floating_word_lookup_not_found),
                     ),
                     settings = settings,
                     onSpeak = speech?.let { { it.onToggle(word) } },
@@ -3345,7 +4054,7 @@ class CaptureService : Service() {
         orientation: TextOrientation = TextOrientation.HORIZONTAL_LTR,
         diagId: Long? = null,
         adaptiveStyles: List<AdaptiveOverlayStyle> = emptyList(),
-        delayedMaskDebugBatch: MangaDelayedMaskDebugSessionManager.Batch? = null,
+        delayedMaskRenderSession: DelayedMaskRenderSession? = null,
     ) {
         val translationOutput = resolveTranslationOutputSettings(
             settings.translationOutputFollowRecognition,
@@ -3360,9 +4069,12 @@ class CaptureService : Service() {
             direction = translationOutput.direction,
         )
         val preparedDelayedMask = prepareDelayedMaskBeforeTranslation(
-            batch = delayedMaskDebugBatch,
+            batch = delayedMaskRenderSession?.batch,
             diagId = diagId,
         )
+        val preparedDisplayPatches = preparedDelayedMask?.let {
+            requireNotNull(delayedMaskRenderSession).mapPatchesToDisplay(it.backgroundPatches)
+        }
         val showRecognizedSource = preparedDelayedMask != null
         diagId?.let {
             logVerticalDiag(
@@ -3382,12 +4094,12 @@ class CaptureService : Service() {
                 diagnosticId = diagId,
                 adaptiveStyles = adaptiveStyles,
                 followBlockOrientations = followBlockOrientations,
-                pixelMaskPatchPipelineEnabled = delayedMaskDebugBatch != null,
+                pixelMaskPatchPipelineEnabled = delayedMaskRenderSession != null,
                 recognizedSourcePending = showRecognizedSource,
             )
             if (preparedDelayedMask != null) {
                 overlay?.showShapeAwareBubblePatches(
-                    patches = preparedDelayedMask.backgroundPatches,
+                    patches = requireNotNull(preparedDisplayPatches),
                     fallbackBlockIndices = preparedDelayedMask.blockIndices,
                     diagnosticId = diagId,
                 )
@@ -3442,7 +4154,7 @@ class CaptureService : Service() {
             },
             onFinished = { completed ->
                 finishDelayedMaskDebug(
-                    batch = delayedMaskDebugBatch,
+                    session = delayedMaskRenderSession,
                     prepared = preparedDelayedMask,
                     successfulBlockIndices = successfulMaskBlockIndices,
                     translatedBlockTexts = translatedMaskBlockTexts,
@@ -3649,7 +4361,7 @@ class CaptureService : Service() {
     }
 
     private suspend fun finishDelayedMaskDebug(
-        batch: MangaDelayedMaskDebugSessionManager.Batch?,
+        session: DelayedMaskRenderSession?,
         prepared: MangaDelayedMaskDebugSessionManager.Prepared?,
         successfulBlockIndices: Set<Int>,
         translatedBlockTexts: Map<Int, String>,
@@ -3658,7 +4370,8 @@ class CaptureService : Service() {
         completed: Boolean,
         diagId: Long?,
     ) {
-        if (batch == null) return
+        if (session == null) return
+        val batch = session.batch
         if (!completed) {
             diagId?.let {
                 logVerticalDiag(
@@ -3691,10 +4404,11 @@ class CaptureService : Service() {
         val finishResult = runCatching {
             val displayPatches: suspend (List<ShapeAwareBubblePatch>) -> Int =
                 { patches ->
+                    val mappedPatches = session.mapPatchesToDisplay(patches)
                     withContext(Dispatchers.Main) {
                         if (translationBatchGate.accepts(diagId)) {
                             overlay?.showShapeAwareBubblePatches(
-                                patches = patches,
+                                patches = mappedPatches,
                                 fallbackBlockIndices = fallbackBlockIndices,
                                 diagnosticId = diagId,
                             ) ?: 0
@@ -3749,6 +4463,9 @@ class CaptureService : Service() {
                 "textDisplayable=${dump.textRepairResult.displayableBlockCount}/" +
                 "${dump.textRepairResult.blocks.size} " +
                 "textRepairPixels=${dump.textRepairResult.repairedPixelCount} " +
+                "textResidualPasses=${dump.textRepairResult.residualRepairBlockCount} " +
+                "textResidualRepaired=${dump.textRepairResult.residualRepairPixelCount} " +
+                "textResidualRemaining=${dump.textRepairResult.residualPixelCount} " +
                 "textRepairWorkingPx=${dump.textRepairResult.totalWorkingPixels} " +
                 "textRepairMs=${dump.textRepairDurationMs} " +
                 "textMaskUs=${dump.textMaskDurationUs} " +
@@ -3769,6 +4486,9 @@ class CaptureService : Service() {
                 val detail = "delayed repair model=${crop.modelBubbleIndex} " +
                     "components=${crop.acceptedComponentCount}/${crop.componentCount} " +
                     "repairedPixels=${crop.repairedPixels}/${crop.erasePixels} " +
+                    "completion=${crop.repairedCompletionPixels}/${crop.completionPixels} " +
+                    "completionStrategy=${crop.completionStrategy.name} " +
+                    "completionReliable=${crop.completionReliable} " +
                     "patchEligible=${crop.fullyRepaired}"
                 if (diagId != null) logVerticalDiag(diagId, detail) else Timber.i(detail)
             }
@@ -3802,7 +4522,23 @@ class CaptureService : Service() {
                     "repairedPixels=${repair.repairedPixels} " +
                     "solidExpansion=${repair.coverage.solidExpansionPx} " +
                     "coveragePixels=${repair.coverage.repairPixelCount} " +
+                    "initialResidualPixels=${repair.initialResidualPixels} " +
+                    "residualPasses=${repair.residualRepairPasses} " +
+                    "residualRepairedPixels=${repair.residualRepairPixels} " +
                     "residualPixels=${repair.residualPixels} " +
+                    "eraseCoverage=${repair.repairedRequiredErasePixels}/${repair.requiredErasePixels} " +
+                    "regionForeground=${repair.regionForegroundAddedPixels}/${repair.regionForegroundReason} " +
+                    "semanticCoverage=${repair.repairedSemanticPixels}/" +
+                    "${repair.completion.semanticPixels} " +
+                    "completionStrategy=${repair.completion.strategy.name} " +
+                    "completionReliable=${repair.completion.reliable} " +
+                    "completionBoundary=${repair.completion.boundarySamples}/" +
+                    String.format(
+                        Locale.US,
+                        "%.3f/%.1f",
+                        repair.completion.boundaryInlierFraction,
+                        repair.completion.boundaryColorSpread,
+                    ) + " " +
                     "modes=$repairModes references=$repairReferences " +
                     "boundaryLuma=$boundaryLuminanceMin..$boundaryLuminanceMax " +
                     "outputLuma=$outputLuminanceMin..$outputLuminanceMax " +
@@ -3924,6 +4660,7 @@ class CaptureService : Service() {
             }
         }
         val translateStartedAt = System.currentTimeMillis()
+        val translatePerformanceStartedAt = SystemClock.elapsedRealtime()
         val updates = Channel<BatchTranslationUpdate>(capacity = Channel.UNLIMITED)
         val progress = BatchTranslationProgressState(translationUnits.size)
         val consumer = launch {
@@ -3990,6 +4727,17 @@ class CaptureService : Service() {
         }
         consumer.join()
         val translateElapsedMs = elapsedSince(translateStartedAt)
+        val translatePerformanceElapsedMs =
+            (SystemClock.elapsedRealtime() - translatePerformanceStartedAt).coerceAtLeast(0L)
+        performanceDiagnostics.observe(
+            stage = RuntimePerformanceStage.TRANSLATION,
+            operationKey = RuntimePerformanceKeyPolicy.text(
+                operation = "${settings.translatorEngine.name}/${settings.translationContextMode.name}/batch",
+                itemCount = sources.size,
+                characterCount = sources.sumOf { it.length },
+            ),
+            elapsedMs = translatePerformanceElapsedMs,
+        )
         translationUnits.forEachIndexed { idx, unit ->
             if (progress.isEmitted(idx)) return@forEachIndexed
             emit(
@@ -4400,6 +5148,7 @@ class CaptureService : Service() {
         diagId: Long,
         role: String,
         playbackId: String,
+        sourceEvidence: (() -> List<com.gameocr.app.tts.TtsLanguageEvidence>)? = null,
     ): TtsPlaybackAction? {
         if (!settings.ttsEnabled) return null
         fun dispatch(text: String, toggle: Boolean) {
@@ -4411,6 +5160,7 @@ class CaptureService : Service() {
                     role = role,
                     playbackId = playbackId,
                     toggle = toggle,
+                    sourceEvidence = sourceEvidence?.invoke(),
                 )
             }
         }
@@ -4429,10 +5179,14 @@ class CaptureService : Service() {
         role: String,
         playbackId: String,
         toggle: Boolean,
+        sourceEvidence: List<com.gameocr.app.tts.TtsLanguageEvidence>? = null,
     ) {
         if (!settings.ttsEnabled) return
         runCatching {
-            if (toggle) {
+            if (sourceEvidence != null) {
+                if (toggle) ttsEngine.toggleSource(text, settings, playbackId, sourceEvidence)
+                else ttsEngine.speakSource(text, settings, playbackId, sourceEvidence)
+            } else if (toggle) {
                 ttsEngine.toggle(text, settings, playbackId)
             } else {
                 ttsEngine.speak(text, settings, playbackId)
@@ -4444,7 +5198,7 @@ class CaptureService : Service() {
                 logVerticalDiag(error, diagId, "wordSelect $role tts failed")
                 logRepository.warn(
                     LogRepository.Category.TRANSLATE,
-                    "TTS failed: ${error.javaClass.simpleName}: ${error.message.orEmpty().take(160)}"
+                    ttsFailureMessage(error)
                 )
                 overlay?.showErrorHint(ttsFailureMessage(error), durationMs = 6000L)
             }
@@ -4475,9 +5229,10 @@ class CaptureService : Service() {
                 "render=${settings.renderMode.name} streaming=${settings.streamingTranslate} " +
             "retryFailedTranslation=${settings.retryFailedTranslation} " +
                 "loopTrigger=${settings.loopTriggerMode.name} loopIntervalMs=${settings.captureLoopIntervalMs} " +
-                "loopPollMs=${LoopFrameStabilityPolicy.pollingIntervalMs(
+                "loopPollMs=${LoopRuntimePolicy.pollingIntervalMs(
                     settings.captureLoopIntervalMs,
-                    settings.loopTriggerMode == LoopTriggerMode.WAIT_FOR_TEXT_COMPLETE,
+                    settings.loopTriggerMode,
+                    screenshotter?.minimumLoopObservationIntervalMs ?: 0L,
                 )} loopStableMs=${settings.loopTextStableDurationMs} " +
                 "loopSkipSimilar=${settings.loopSkipSimilarFrames} " +
                 "loopSimilarity=${settings.loopFrameSimilarityThreshold.toDiagFloat()} " +
@@ -4594,6 +5349,12 @@ class CaptureService : Service() {
         settings: Settings,
         syncFloatingWindowLock: Boolean,
     ) {
+        val performanceOverlayActive =
+            settings.developerOptionsEnabled && settings.performanceOverlayEnabled
+        performanceDiagnostics.setPerformanceOverlayEnabled(performanceOverlayActive)
+        val activeRegion = activeCaptureDisplayRegion
+        val displayRegion = if (activeRegion != null) activeRegion.region else settings.captureRegion
+        val displayOrigin = captureRegionOrigin(displayRegion)
         val typeface = overlayFontManager.typefaceFor(settings)
         val dockEdgeInsetPx = (settings.floatingButtonDockInsetDp * resources.displayMetrics.density).toInt()
         val adaptiveBlocksEnabled =
@@ -4601,6 +5362,7 @@ class CaptureService : Service() {
         val effectiveOverlaySettings = settings.effectiveOverlayRenderSettings()
         withContext(Dispatchers.Main) {
             captureRegionBorder?.applySettings(settings)
+            translationCard?.setSourceWordLookupEnabled(settings.dictionaryTapLookupEnabled)
             overlay?.apply {
                 overlayStyleMode = if (adaptiveBlocksEnabled) {
                     OverlayStyleMode.ADAPTIVE
@@ -4609,7 +5371,7 @@ class CaptureService : Service() {
                 }
                 textSizeSp = effectiveOverlaySettings.overlayTextSizeSp
                 alpha = effectiveOverlaySettings.overlayAlpha
-                regionOffset = settings.captureRegion?.let { Point(it.left, it.top) } ?: Point(0, 0)
+                regionOffset = Point(displayOrigin.x, displayOrigin.y)
                 placement = effectiveOverlaySettings.overlayPlacement
                 offsetX = effectiveOverlaySettings.overlayOffsetX
                 offsetY = effectiveOverlaySettings.overlayOffsetY
@@ -4620,6 +5382,7 @@ class CaptureService : Service() {
                 customBorderWidthDp = settings.customBorderWidth
                 allowWrap = effectiveOverlaySettings.overlayAllowWrap
                 avoidCollision = effectiveOverlaySettings.overlayAvoidCollision
+                updateDictionaryTapLookupEnabled(settings.dictionaryTapLookupEnabled)
                 translationBlockInteractionMode = settings.translationBlockInteractionMode
                 translationBlockSelectionSpeechAction = wordSelectTtsAction(
                     settings = settings,
@@ -4643,6 +5406,10 @@ class CaptureService : Service() {
                 )
                 ocrDebugShowSourceText = settings.ocrRedBoxShowSourceText
                 ocrDebugShowTranslation = settings.ocrRedBoxShowTranslation
+                setPerformanceOverlayEnabled(
+                    enabled = performanceOverlayActive,
+                    snapshot = performanceDiagnostics.performanceSnapshot.value,
+                )
                 syncFloatingWindowFromSettings(
                     effectiveOverlaySettings,
                     syncLockedState = syncFloatingWindowLock,
@@ -4650,6 +5417,7 @@ class CaptureService : Service() {
             }
             // Overlay / floating button both own Android Views; keep every visible update on main.
             floatingButton?.let {
+                it.applyOpacity(settings.floatingButtonAlpha)
                 if (it.sizeDp != settings.floatingButtonSizeDp) {
                     it.sizeDp = settings.floatingButtonSizeDp
                     it.applyResize()
@@ -4659,6 +5427,7 @@ class CaptureService : Service() {
                 it.dockEdgeInsetPx = dockEdgeInsetPx
                 it.menuItemOrder = settings.floatingMenuItemOrder
                 it.arcMenuPageSize = settings.arcMenuPageSize
+                it.inputTranslationDoubleAction = settings.inputTranslationDoubleAction
                 if (it.skill != settings.floatingButtonSkill) {
                     it.skill = settings.floatingButtonSkill
                     it.applySkillIcon()
@@ -4669,10 +5438,17 @@ class CaptureService : Service() {
 
     /** 释放截屏相关资源（不停 Service），用于 handleStart 重入时去重 + onDestroy 兜底。 */
     private fun cleanupCapture() {
+        captureUiStartupJob?.cancel()
+        captureUiStartupJob = null
+        captureProbeJob?.cancel()
+        captureProbeJob = null
         cancelActiveTranslationBatch("cleanupCapture")
+        cancelInputTranslation(silent = true)
         loopMode = false
         loopJob?.cancel()
         loopJob = null
+        settledPageExecutionJob?.cancel()
+        settledPageExecutionJob = null
         ocrWarmupJob?.cancel()
         ocrWarmupJob = null
         localLlmWarmupJob?.cancel()
@@ -4683,6 +5459,10 @@ class CaptureService : Service() {
         resetLoopRuntimeState()
         settingsCollectJob?.cancel()
         settingsCollectJob = null
+        performanceOverlayCollectJob?.cancel()
+        performanceOverlayCollectJob = null
+        performanceDiagnostics.setPerformanceOverlayEnabled(false)
+        overlay?.setPerformanceOverlayEnabled(false)
         overlay?.clear()
         overlay = null
         captureRegionBorder?.hide()
@@ -4711,6 +5491,7 @@ class CaptureService : Service() {
     }
 
     override fun onDestroy() {
+        captureStopRequested = true
         cleanupCapture()
         // 释放端侧 LLM 权重。runBlocking 在 onDestroy 是可接受的——cleanUp 内部是同步 JNI 调用，
         // 几十毫秒级；不阻塞主线程没意义，等 Mutex 拿到锁就立刻返回。
@@ -4735,7 +5516,9 @@ class CaptureService : Service() {
         const val EXTRA_RESULT_CODE = "extra_result_code"
         const val EXTRA_RESULT_DATA = "extra_result_data"
         const val EXTRA_USE_SHIZUKU = "extra_use_shizuku"
+        const val EXTRA_CAPTURE_BACKEND = "extra_capture_backend"
         private const val CAPTURE_CHROME_SETTLE_MS = 80L
+        private const val INPUT_TRANSLATION_GUIDE_DELAY_MS = 250L
 
         fun stopIntent(context: Context): Intent =
             Intent(context, CaptureService::class.java).apply { action = ACTION_STOP }

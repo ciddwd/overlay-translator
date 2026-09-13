@@ -623,7 +623,7 @@ class MangaOcrEngine @Inject constructor(
             )
         }
         val detectMs = InferenceTiming.elapsedMs(detectStartedAt, SystemClock.elapsedRealtime())
-        if (quads.isEmpty()) {
+        if (quads.isEmpty() && !shapeAwareFrameDecision.runBoxDetector) {
             Timber.i("MangaOcr: DBNet returned 0 quads")
             Timber.tag(PERF_TAG).i(
                 "run totalMs=%d detectMs=%d clusterMs=0 bubblesMs=0 bitmap=%dx%d quads=0 bubbles=0 blocks=0",
@@ -720,11 +720,18 @@ class MangaOcrEngine @Inject constructor(
             entries = bubbleSelection.entries,
             memberBounds = rects,
         )
-        val textEvidenceResult = MangaOcrTextEvidencePolicy.filter(
+        val filteredTextEvidence = MangaOcrTextEvidencePolicy.filter(
             entries = freeTextParagraphs.entries,
             textDetections = shapeAwareReport?.boxDetection?.textDetections.orEmpty(),
             evidenceAvailable = shapeAwareReport?.boxDetection != null,
         )
+        val textRecovery = MangaTextRegionRecoveryPolicy.recover(
+            evidence = filteredTextEvidence,
+            textDetections = shapeAwareReport?.boxDetection?.textDetections.orEmpty(),
+            imageWidth = bitmap.width,
+            imageHeight = bitmap.height,
+        )
+        val textEvidenceResult = textRecovery.evidence
         val selectedEntries = textEvidenceResult.entries
         val bubbles = selectedEntries.map(MangaOcrBubbleGroupingPolicy.Entry::bubble)
         val splitByTextBandBubbleIndices = selectedEntries.mapIndexedNotNull { index, entry ->
@@ -749,12 +756,14 @@ class MangaOcrEngine @Inject constructor(
             splitByTextBandBubbleIndices,
         )
         Timber.i(
-            "MangaOcr evidence assignments=%s unassignedTextBubble=%s duplicateCrops=%s",
+            "MangaOcr evidence assignments=%s unassignedTextBubble=%s duplicateCrops=%s recoveredText=%s recoverySkipped=%s",
             textEvidenceResult.assignments.map { assignment ->
                 "${assignment.detectionIndex}->${assignment.entryIndex}"
             },
             textEvidenceResult.unassignedTextBubbleDetectionIndices,
             textEvidenceResult.duplicateCropEntryIndices,
+            textRecovery.recoveredDetectionIndices,
+            textRecovery.skippedDetectionIndices,
         )
         Timber.i(
             "MangaOcr: %d quads -> %d bubbles (profile=%s maxSide=%d tiling=%s gap=%d cropPad=%d dbnet=%.2f/%.2f×%.2f)",

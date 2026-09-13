@@ -6,9 +6,11 @@ import android.content.Context
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.os.Build
+import android.os.SystemClock
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -18,8 +20,10 @@ import androidx.dynamicanimation.animation.SpringForce
 import com.gameocr.app.R
 import com.gameocr.app.data.FloatingMenu
 import com.gameocr.app.data.FloatingSkill
+import com.gameocr.app.data.InputTranslationDoubleAction
 import com.gameocr.app.data.MenuItemId
 import com.gameocr.app.data.SettingsRepository
+import com.gameocr.app.data.normalizedFloatingButtonAlpha
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -48,11 +52,23 @@ internal object ArcMenuGeometry {
 class FloatingButtonManager(
     private val context: Context,
     private val onSingleTap: () -> Unit,
+    private val onDoubleTap: () -> Unit,
     private val onSwitchToLoop: () -> Unit,
     private val settingsRepository: SettingsRepository,
     private val ioScope: CoroutineScope
 ) {
     @Volatile var sizeDp: Int = 56
+    @Volatile private var buttonAlpha: Float = 1f
+
+    /** Call on main. Window opacity composes with existing dock/drag animations without replacing them. */
+    fun applyOpacity(value: Float) {
+        buttonAlpha = normalizedFloatingButtonAlpha(value)
+        val params = layoutParams ?: return
+        val button = view ?: return
+        if (params.alpha == buttonAlpha) return
+        params.alpha = buttonAlpha
+        runCatching { wm.updateViewLayout(button, params) }
+    }
     /** 初始位置：构造后由 CaptureService 注入；若 ≥ 0 则 show() 时优先使用。 */
     @Volatile var initialX: Int = -1
     @Volatile var initialY: Int = -1
@@ -92,12 +108,16 @@ class FloatingButtonManager(
      * 由 CaptureService 在 settings collect 同步；菜单点「技能切换」按钮时也走它。
      */
     @Volatile var skill: FloatingSkill = FloatingSkill.FULL_SCREEN
+    /** 输入翻译模式下的双击动作；由 CaptureService 跟随设置实时同步。 */
+    @Volatile var inputTranslationDoubleAction: InputTranslationDoubleAction =
+        InputTranslationDoubleAction.FULL_SCREEN
 
     /** 弧菜单按钮顺序（来自 Settings.floatingMenuItemOrder）。CaptureService 在 settings collect 时同步。 */
     @Volatile var menuItemOrder: List<MenuItemId> = FloatingMenu.DEFAULT_ORDER
     @Volatile var arcMenuPageSize: Int = FloatingMenu.DEFAULT_PAGE_SIZE
     @Volatile var firstUseTourPending: Boolean = false
     @Volatile var onFirstUseTourCompleted: () -> Unit = {}
+    @Volatile var onInputTranslationGuideCompleted: () -> Unit = {}
 
     /**
      * 主球技能切换回调：菜单里点了「划词翻译 / 全屏翻译」时调用。
@@ -159,6 +179,15 @@ class FloatingButtonManager(
     }
     private val longPressCueOverlay by lazy {
         FloatingLongPressCueOverlay(context, wm, overlayType)
+    }
+    private val inputTapHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var inputSingleTapPending = false
+    private var lastInputTapAtMs = 0L
+    private var inputTranslationGuideVisible = false
+    private val inputSingleTapRunnable = Runnable {
+        if (!inputSingleTapPending) return@Runnable
+        inputSingleTapPending = false
+        onSingleTap()
     }
 
     private val autoDockHandler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -231,6 +260,9 @@ class FloatingButtonManager(
         return Rect(params.x, params.y, params.x + width, params.y + height)
     }
 
+    internal fun observationExclusionRects(): List<Rect> =
+        listOfNotNull(view?.observationBounds(), arcMenuView?.observationBounds())
+
     @SuppressLint("ClickableViewAccessibility")
     fun show() {
         if (view != null) return
@@ -276,6 +308,7 @@ class FloatingButtonManager(
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
+            alpha = buttonAlpha
             if (initialX >= 0 && initialY >= 0) {
                 x = initialX.coerceIn(0, (screenW - containerW).coerceAtLeast(0))
                 y = initialY.coerceIn(0, (screenH - containerH).coerceAtLeast(0))
@@ -296,7 +329,7 @@ class FloatingButtonManager(
         container.isClickable = true
         container.isFocusable = true
         container.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
-        container.setOnClickListener { onSingleTap() }
+        container.setOnClickListener { handleTap() }
         container.setOnLongClickListener {
             showArcMenu()
             true
@@ -449,6 +482,11 @@ class FloatingButtonManager(
         longPressGuideView?.stop()
         longPressGuideView = null
         mainIcon = null
+        cancelPendingInputTap()
+        if (inputTranslationGuideVisible) {
+            tourOverlay.dismiss()
+            inputTranslationGuideVisible = false
+        }
         // 保留 hide 前的最后位置——下次 show() 用 initialX/initialY 重建，否则会回到 service 启动
         // 时灌入的旧 settings 值（用户在弧菜单选区域后，调整完区域回来球就跳回原点的根因）。
         layoutParams?.let {
@@ -674,8 +712,19 @@ class FloatingButtonManager(
         updateAccessibilityDescription()
     }
 
+    /** 输入翻译请求期间复用主球外圈的无限进度提示，结束后由调用方显式关闭。 */
+    fun setInputTranslationBusy(active: Boolean) {
+        if (skill != FloatingSkill.INPUT_TRANSLATE) return
+        if (active) {
+            progressView?.startIndeterminate(INPUT_TRANSLATION_PROGRESS_PERIOD_MS)
+        } else {
+            progressView?.stop()
+        }
+    }
+
     /** 立即把球的主图标按当前 [skill] 切换。CaptureService 在切技能时 + settings collect 同步时调。 */
     fun applySkillIcon() {
+        if (skill != FloatingSkill.INPUT_TRANSLATE) cancelPendingInputTap()
         mainIcon?.setImageResource(skillIconRes())
         updateAccessibilityDescription()
     }
@@ -684,6 +733,7 @@ class FloatingButtonManager(
         FloatingSkill.FULL_SCREEN -> R.drawable.ic_overlay_button
         FloatingSkill.WORD_SELECT -> R.drawable.ic_overlay_button_word
         FloatingSkill.LOOP -> R.drawable.ic_overlay_button_loop
+        FloatingSkill.INPUT_TRANSLATE -> R.drawable.ic_overlay_button_input_translate
     }
 
     private fun updateAccessibilityDescription() {
@@ -694,6 +744,8 @@ class FloatingButtonManager(
                 if (isLooping) R.string.a11y_floating_mode_loop_running
                 else R.string.a11y_floating_mode_loop_stopped
             )
+            FloatingSkill.INPUT_TRANSLATE ->
+                context.getString(R.string.a11y_floating_mode_input_translate)
         }
         val hint = when (skill) {
             FloatingSkill.FULL_SCREEN -> context.getString(R.string.a11y_floating_hint_full_screen)
@@ -702,6 +754,8 @@ class FloatingButtonManager(
                 if (isLooping) R.string.a11y_floating_hint_loop_stop
                 else R.string.a11y_floating_hint_loop_start
             )
+            FloatingSkill.INPUT_TRANSLATE ->
+                context.getString(R.string.a11y_floating_hint_input_translate)
         }
         view?.contentDescription = OverlayAccessibilityLabels.actionWithState(
             action = context.getString(R.string.a11y_floating_ball),
@@ -746,8 +800,31 @@ class FloatingButtonManager(
             FloatingSkill.FULL_SCREEN -> R.string.floating_skill_full_screen_label
             FloatingSkill.WORD_SELECT -> R.string.floating_skill_word_select_label
             FloatingSkill.LOOP -> R.string.menu_loop_translate
+            FloatingSkill.INPUT_TRANSLATE -> R.string.menu_input_translate
         }
     )
+
+    /** 首次切换到输入翻译时显示一次单页说明，样式与现有操作球引导保持一致。 */
+    fun showInputTranslationGuide(doubleActionLabel: String): Boolean {
+        if (view == null || tourStage != TourStage.NONE || inputTranslationGuideVisible) return false
+        cancelAutoDock()
+        inputTranslationGuideVisible = true
+        tourOverlay.show(
+            anchorCenterY = currentBallCenterY(),
+            progress = context.getString(R.string.input_translation_guide_progress),
+            title = context.getString(R.string.menu_input_translate),
+            body = context.getString(R.string.input_translation_guide_body, doubleActionLabel),
+            actionLabel = context.getString(R.string.input_translation_guide_done),
+            onAction = {
+                tourOverlay.dismiss()
+                inputTranslationGuideVisible = false
+                onInputTranslationGuideCompleted()
+                scheduleAutoDock()
+            },
+            onSkip = null,
+        )
+        return true
+    }
 
     private fun currentBallCenterY(): Int {
         val params = layoutParams ?: return currentScreenSize().second / 2
@@ -884,6 +961,7 @@ class FloatingButtonManager(
             R.string.menu_open_main -> R.string.floating_tour_home_body
             R.string.menu_word_select -> R.string.floating_tour_word_select_body
             R.string.menu_full_screen_skill -> R.string.floating_tour_full_screen_body
+            R.string.menu_input_translate -> R.string.floating_tour_input_translation_body
             R.string.menu_next_page -> if (
                 target is FloatingMenuTourTarget.NextPage && target.wrapsToFirstPage
             ) {
@@ -1109,7 +1187,7 @@ class FloatingButtonManager(
                         if (tourStage == TourStage.WAITING_FOR_LONG_PRESS) {
                             longPressGuideView?.start()
                         } else {
-                            onSingleTap()
+                            handleTap()
                         }
                     } else if (moved) {
                         // 拖动后松手 → 弹性吸附到最近的左/右边
@@ -1140,6 +1218,30 @@ class FloatingButtonManager(
      *     这样按钮**不需要缩小、不需要折叠**，避免越界；菜单关闭时 spring 回原位（仿 MIUI 悬浮球）；
      *  3) 翻页时不回滚球位置（保留腾位状态，下一页用同一位置展开）。
      */
+    private fun handleTap() {
+        if (skill != FloatingSkill.INPUT_TRANSLATE) {
+            cancelPendingInputTap()
+            onSingleTap()
+            return
+        }
+        val now = SystemClock.uptimeMillis()
+        if (inputSingleTapPending && now - lastInputTapAtMs <= INPUT_DOUBLE_TAP_TIMEOUT_MS) {
+            inputTapHandler.removeCallbacks(inputSingleTapRunnable)
+            inputSingleTapPending = false
+            onDoubleTap()
+            return
+        }
+        inputSingleTapPending = true
+        lastInputTapAtMs = now
+        inputTapHandler.removeCallbacks(inputSingleTapRunnable)
+        inputTapHandler.postDelayed(inputSingleTapRunnable, INPUT_DOUBLE_TAP_TIMEOUT_MS)
+    }
+
+    private fun cancelPendingInputTap() {
+        inputTapHandler.removeCallbacks(inputSingleTapRunnable)
+        inputSingleTapPending = false
+    }
+
     private fun showArcMenu() = openArcMenuPage(0)
 
     /** 真正展开某一页菜单（含必要时的腾位 spring）。翻页按钮 / 入口都走这里。 */
@@ -1165,7 +1267,11 @@ class FloatingButtonManager(
                 onOpenSettings = { dismissArcMenu(); onMenuOpenSettings() },
                 onPresetSwitch = { dismissArcMenu(); onMenuPresetSwitch() },
                 onSwitchToFullScreen = { dismissArcMenu(); onSwitchSkill(FloatingSkill.FULL_SCREEN) },
-                onSwitchToWordSelect = { dismissArcMenu(); onSwitchSkill(FloatingSkill.WORD_SELECT) }
+                onSwitchToWordSelect = { dismissArcMenu(); onSwitchSkill(FloatingSkill.WORD_SELECT) },
+                onSwitchToInputTranslate = {
+                    dismissArcMenu()
+                    onSwitchSkill(FloatingSkill.INPUT_TRANSLATE)
+                },
             )
         )
         val pages = MenuItemRegistry.paginate(allItems, pageSize = arcMenuPageSize) { nextIdx ->
@@ -1431,6 +1537,9 @@ class FloatingButtonManager(
         private const val TOUR_PULSE_DURATION_MS: Long = 650L
         private const val TOUR_PULSE_SCALE: Float = 1.14f
         private const val TOUR_DIMMED_ALPHA: Float = 0.32f
+        private val INPUT_DOUBLE_TAP_TIMEOUT_MS: Long =
+            ViewConfiguration.getDoubleTapTimeout().toLong()
+        private const val INPUT_TRANSLATION_PROGRESS_PERIOD_MS: Long = 900L
         /** 弧形菜单按钮稳定后的 alpha。略低于 1，给点透明感能透出后面的内容但又不影响图标识别。 */
         private const val MENU_ITEM_ALPHA: Float = 0.85f
         /** 弧菜单调试 logcat tag。`adb logcat -s FBM-Menu:D` 一键过滤。 */

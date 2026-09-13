@@ -131,6 +131,9 @@ class DraggableOverlayWindow(
 
     fun isShown(): Boolean = rootView != null
 
+    internal fun observationExclusionRects(): List<Rect> =
+        listOfNotNull(rootView?.observationBounds(), wordPreviewView?.observationBounds())
+
     /**
      * 循环截图时临时停止绘制窗口，但保留同一个 window、内容和几何状态。
      * 返回 false 表示窗口当前未显示，调用方无需安排恢复。

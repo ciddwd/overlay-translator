@@ -38,7 +38,15 @@ class YoudaoOcrEngine @Inject constructor(
 ) : OcrEngine {
 
     override suspend fun recognize(bitmap: Bitmap, kind: OcrEngineKind): List<TextBlock> {
-        val s = settingsRepository.get()
+        return recognize(bitmap, kind, settingsRepository.get())
+    }
+
+    override suspend fun recognize(
+        bitmap: Bitmap,
+        kind: OcrEngineKind,
+        settings: com.gameocr.app.data.Settings,
+    ): List<TextBlock> {
+        val s = settings
         if (s.youdaoAppKey.isBlank() || s.youdaoAppSecret.isBlank()) {
             throw IllegalStateException("有道 AppKey/AppSecret 未配置")
         }

@@ -2,11 +2,15 @@ package com.gameocr.app.ocr
 
 import android.graphics.Bitmap
 import android.graphics.Rect
+import android.os.SystemClock
 import com.gameocr.app.data.MergeStrength
 import com.gameocr.app.data.OcrEngineKind
 import com.gameocr.app.data.Settings
 import com.gameocr.app.data.SettingsRepository
 import com.gameocr.app.ocr.BubbleClusterer.IntRect
+import com.gameocr.app.util.RuntimePerformanceDiagnostics
+import com.gameocr.app.util.RuntimePerformanceKeyPolicy
+import com.gameocr.app.util.RuntimePerformanceStage
 import javax.inject.Inject
 import javax.inject.Singleton
 import timber.log.Timber
@@ -28,7 +32,9 @@ class RoutingOcrEngine @Inject constructor(
     private val umi: UmiOcrEngine,
     private val luna: LunaOcrEngine,
     private val manga: MangaOcrEngine,
-    private val settingsRepository: SettingsRepository
+    private val settingsRepository: SettingsRepository,
+    private val performanceDiagnostics: RuntimePerformanceDiagnostics,
+    private val automatic: AutomaticOcrRecognizer,
 ) : OcrEngine {
 
     override suspend fun recognize(bitmap: Bitmap, kind: OcrEngineKind): List<TextBlock> {
@@ -46,17 +52,21 @@ class RoutingOcrEngine @Inject constructor(
         kind: OcrEngineKind,
         settings: Settings,
     ): List<TextBlock> {
-        val raw = when (kind) {
-            OcrEngineKind.BAIDU -> baidu.recognize(bitmap, kind)
-            OcrEngineKind.TENCENT -> tencent.recognize(bitmap, kind)
-            OcrEngineKind.YOUDAO -> youdao.recognize(bitmap, kind)
-            OcrEngineKind.UMI_OCR -> umi.recognize(bitmap, kind)
-            OcrEngineKind.LUNA_OCR -> luna.recognize(bitmap, kind)
-            OcrEngineKind.PADDLE_AI_STUDIO -> paddleAiStudio.recognize(bitmap, kind)
-            OcrEngineKind.PADDLE_ONNX -> paddle.recognize(bitmap, kind, settings)
-            OcrEngineKind.MANGA_OCR_JA -> manga.recognize(bitmap, kind, settings)
-            else -> mlKit.recognize(bitmap, kind, settings)
-        }
+        val ocrStartedAt = SystemClock.elapsedRealtime()
+        val autoResult = if (kind == OcrEngineKind.ML_KIT_AUTO) {
+            automatic.recognize(bitmap, settings, ::recognizeRaw)
+        } else null
+        val raw = autoResult?.blocks ?: recognizeRaw(bitmap, kind, settings)
+        val mergeMangaFreeText = autoResult?.manga ?: (kind == OcrEngineKind.MANGA_OCR_JA)
+        performanceDiagnostics.observe(
+            stage = RuntimePerformanceStage.OCR,
+            operationKey = RuntimePerformanceKeyPolicy.bitmap(
+                operation = kind.name,
+                width = bitmap.width,
+                height = bitmap.height,
+            ),
+            elapsedMs = (SystemClock.elapsedRealtime() - ocrStartedAt).coerceAtLeast(0L),
+        )
         Timber.tag("OcrMerge").i(
             "engine=%s raw=%d merge=%s strength=%s",
             kind, raw.size, settings.mergeAdjacentBlocks, settings.mergeStrength
@@ -85,7 +95,7 @@ class RoutingOcrEngine @Inject constructor(
             !SemanticBoxMergePolicy.isMergeEligible(
                 granularity = block.regionGranularity,
                 parentRegionId = block.parentRegionId,
-                mergeStandaloneFreeText = kind == OcrEngineKind.MANGA_OCR_JA,
+                mergeStandaloneFreeText = mergeMangaFreeText,
             )
         }
         val merged = SemanticBoxMergePolicy.mergeEligibleRuns(
@@ -94,7 +104,7 @@ class RoutingOcrEngine @Inject constructor(
                 SemanticBoxMergePolicy.isMergeEligible(
                     granularity = block.regionGranularity,
                     parentRegionId = block.parentRegionId,
-                    mergeStandaloneFreeText = kind == OcrEngineKind.MANGA_OCR_JA,
+                    mergeStandaloneFreeText = mergeMangaFreeText,
                 )
             },
         ) { lineLevelRun ->
@@ -107,6 +117,19 @@ class RoutingOcrEngine @Inject constructor(
         logBoxes("after", merged)
         return merged
     }
+
+    private suspend fun recognizeRaw(bitmap: Bitmap, kind: OcrEngineKind, settings: Settings): List<TextBlock> =
+        when (kind) {
+            OcrEngineKind.BAIDU -> baidu.recognize(bitmap, kind, settings)
+            OcrEngineKind.TENCENT -> tencent.recognize(bitmap, kind, settings)
+            OcrEngineKind.YOUDAO -> youdao.recognize(bitmap, kind, settings)
+            OcrEngineKind.UMI_OCR -> umi.recognize(bitmap, kind, settings)
+            OcrEngineKind.LUNA_OCR -> luna.recognize(bitmap, kind, settings)
+            OcrEngineKind.PADDLE_AI_STUDIO -> paddleAiStudio.recognize(bitmap, kind, settings)
+            OcrEngineKind.PADDLE_ONNX -> paddle.recognize(bitmap, kind, settings)
+            OcrEngineKind.MANGA_OCR_JA -> manga.recognize(bitmap, kind, settings)
+            else -> mlKit.recognize(bitmap, kind, settings)
+        }
 
     private fun logBoxes(label: String, blocks: List<TextBlock>) {
         blocks.forEachIndexed { i, b ->
@@ -338,17 +361,15 @@ class RoutingOcrEngine @Inject constructor(
      * 就用错了"水平相交"判据，导致即使激进档也合不上。
      */
     private fun mergeSameLine(blocks: List<TextBlock>, params: MergeParams): List<TextBlock> {
-        val sorted = blocks.sortedWith(compareBy({ it.boundingBox.top }, { it.boundingBox.left }))
-        val result = mutableListOf<TextBlock>()
-        for (b in sorted) {
-            val last = result.lastOrNull()
-            if (last != null && sameLineAdjacent(last, b, params)) {
-                result[result.size - 1] = unionMerge(last, b, separator = " ")
-            } else {
-                result.add(b)
-            }
+        val groups = groupHorizontalLineRects(
+            blocks.map { it.boundingBox.toMergeDebugRect() },
+            blocks.map(TextBlock::bubbleGroupId),
+            params.sameLineTopTolerance, params.adjacentGapRatio, params.heightRatioLimit,
+        )
+        return groups.map { indices ->
+            Timber.tag("OcrMerge").i("[H] stage1 sameLine immutableGroup members=%s", indices.joinToString(","))
+            indices.map(blocks::get).reduce { a, b -> unionMerge(a, b, separator = " ") }
         }
-        return result
     }
 
     /**
@@ -392,50 +413,6 @@ class RoutingOcrEngine @Inject constructor(
             boundingBox = unionBox,
             sourceBoxes = mergeSourceBoxes(a, b),
         )
-    }
-
-    private fun sameLineAdjacent(a: TextBlock, b: TextBlock, params: MergeParams): Boolean {
-        if (!bubbleMergeCompatible(a, b)) return false
-        // 左右 normalize：让 ra 总是更左的，rb 总是更右的。否则 unionMerge 后 box 的 right 扩张，
-        // 后续比较时 gap = b.left - last.right 会出现严重的负值（-100+），所有竖排日漫这种
-        // "右列 top 反而更小、排序后被先处理"的场景全部漏合。
-        val (ra, rb) = if (a.boundingBox.left <= b.boundingBox.left)
-            a.boundingBox to b.boundingBox
-        else
-            b.boundingBox to a.boundingBox
-        val ha = ra.height().coerceAtLeast(1)
-        val hb = rb.height().coerceAtLeast(1)
-        val avgH = (ha + hb) / 2
-        val gap = rb.left - ra.right
-        val topDelta = kotlin.math.abs(ra.top - rb.top)
-        val heightRatio = maxOf(ha, hb).toFloat() / minOf(ha, hb)
-        val maxTopDelta = avgH * params.sameLineTopTolerance
-        val maxGap = avgH * params.adjacentGapRatio
-        val reason = when {
-            heightRatio > params.heightRatioLimit -> "heightRatio"
-            topDelta >= maxTopDelta -> "topDelta"
-            gap < -5 -> "backtrack"
-            gap > maxGap -> "gap"
-            else -> "merge"
-        }
-        val allowed = reason == "merge"
-        Timber.tag("OcrMerge").i(
-            "[H] stage1 sameLine allow=%s reason=%s gap=%d maxGap=%.1f topDelta=%d maxTopDelta=%.1f " +
-                "heightRatio=%.2f maxHeightRatio=%.2f left=%s right=%s text=%s + %s",
-            allowed,
-            reason,
-            gap,
-            maxGap,
-            topDelta,
-            maxTopDelta,
-            heightRatio,
-            params.heightRatioLimit,
-            ra.toMergeDebugRect().toLogString(),
-            rb.toMergeDebugRect().toLogString(),
-            previewForLog(a.text),
-            previewForLog(b.text)
-        )
-        return allowed
     }
 
     /**

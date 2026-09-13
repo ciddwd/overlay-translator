@@ -61,6 +61,18 @@ class LocalBubbleBackgroundRepairerTest {
                 crops = listOf(crop(5, repairedPixels = 0, acceptedComponents = 1, totalComponents = 1)),
                 expectedModelIndices = emptySet(),
             ),
+            Case(
+                name = "accepted strokes with incomplete semantic coverage are rejected",
+                crops = listOf(
+                    crop(6, repairedPixels = 20, acceptedComponents = 2, totalComponents = 2)
+                        .copy(
+                            completionPixels = 100,
+                            repairedCompletionPixels = 20,
+                            completionReliable = false,
+                        ),
+                ),
+                expectedModelIndices = emptySet(),
+            ),
         )
 
         cases.forEach { case ->
@@ -188,6 +200,32 @@ class LocalBubbleBackgroundRepairerTest {
         assertEquals(white, result.repairResult.pixels[25 * width + 25])
         assertEquals(black, result.repairResult.pixels[73 * width + 73])
         assertFalse(result.repairResult.repairedMask[73 * width + 73])
+    }
+
+    @Test
+    fun `flat bubble completion includes scale-aware glyph outline margin`() {
+        val width = 100
+        val height = 100
+        val white = argb(255, 248, 248, 248)
+        val black = argb(255, 8, 8, 8)
+        val source = IntArray(width * height) { white }
+        val erase = BooleanArray(source.size)
+        fillRect(width, source, erase, IntRect(34, 34, 38, 38), black)
+        val outlineIndex = 40 * width + 28
+        source[outlineIndex] = black
+
+        val result = LocalBubbleBackgroundRepairer.repair(
+            width = width,
+            height = height,
+            sourceArgb = source,
+            eraseMask = erase,
+            regions = listOf(
+                region(0, IntRect(30, 30, 50, 50), solidMask(10, 10, 60, 60)),
+            ),
+        )
+
+        assertEquals(white, result.repairResult.pixels[outlineIndex])
+        assertTrue(result.repairResult.repairedMask[outlineIndex])
     }
 
     @Test

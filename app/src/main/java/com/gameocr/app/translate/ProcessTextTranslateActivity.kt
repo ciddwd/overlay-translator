@@ -86,7 +86,10 @@ class ProcessTextTranslateActivity : ComponentActivity() {
                     appScope.launch(Dispatchers.Main.immediate) {
                         runCatching {
                             val spokenSettings = processTextSpeechSettings(settings, role)
-                            if (toggle) {
+                            if (role == ProcessTextSpeechRole.SOURCE) {
+                                if (toggle) speechEngine.toggleSource(spokenText, spokenSettings, playbackId)
+                                else speechEngine.speakSource(spokenText, spokenSettings, playbackId)
+                            } else if (toggle) {
                                 speechEngine.toggle(spokenText, spokenSettings, playbackId)
                             } else {
                                 speechEngine.speak(spokenText, spokenSettings, playbackId)
@@ -96,8 +99,7 @@ class ProcessTextTranslateActivity : ComponentActivity() {
                             Timber.w(error, "PROCESS_TEXT %s TTS failed", role.name.lowercase())
                             speechLogRepository.warn(
                                 LogRepository.Category.TRANSLATE,
-                                "TTS failed: ${error.javaClass.simpleName}: " +
-                                    error.message.orEmpty().take(160),
+                                ttsFailureMessage(error),
                             )
                             Toast.makeText(
                                 app,

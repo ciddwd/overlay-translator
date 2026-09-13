@@ -49,7 +49,11 @@ class ModelReadinessChecker @Inject constructor(
     private val llmInstaller: LlmModelInstaller,
     private val localLlmDeviceCapability: LocalLlmDeviceCapability,
 ) {
-    fun check(spec: ModelDownloadSpec): ModelReadiness = when (spec.type) {
+    fun check(spec: ModelDownloadSpec): ModelReadiness =
+        modelReadinessWithDependencies(spec, ::checkArtifact)
+
+    /** Downloads skip valid files independently even when another required component is missing. */
+    fun checkArtifact(spec: ModelDownloadSpec): ModelReadiness = when (spec.type) {
         ModelDownloadType.PADDLE -> {
             val files = paddleInstaller.checkInstalled(PaddleModelVersion.valueOf(spec.variant))
             ModelReadiness(

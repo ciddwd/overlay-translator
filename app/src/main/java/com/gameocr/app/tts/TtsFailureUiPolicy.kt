@@ -38,7 +38,7 @@ internal fun Context.ttsFailureMessage(error: Throwable): String =
     when (val reason = ttsFailureUiReason(error)) {
         is TtsFailureUiReason.LanguageUnavailable -> getString(
             R.string.toast_tts_language_unavailable_format,
-            reason.languageTag,
+            com.gameocr.app.data.Languages.nameOf(this, reason.languageTag),
         )
         is TtsFailureUiReason.MiniMaxApi -> getString(
             R.string.toast_tts_failed_format,

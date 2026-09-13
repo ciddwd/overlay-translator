@@ -58,7 +58,7 @@ class GoogleTranslator @Inject constructor(
             val timedClient = client.withApiTimeout(settings.apiTimeoutSeconds)
             val to = mapLang(settings.targetLang).ifEmpty { "zh-CN" }
             val result = callEndpoint("hello", "en", to, timedClient)
-            TestResult(true, "OK · hello→$result")
+            TestResult(true, "OK hello→$result")
         }.getOrElse { TestResult(false, it.message ?: it.javaClass.simpleName) }
     }
 

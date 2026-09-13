@@ -103,13 +103,14 @@ class ModelDownloadSpecTest {
         val sakura = ModelDownloadSpec(ModelDownloadType.LLM, "SAKURA_1_5B_Q4")
         val paddle = ModelDownloadSpec(ModelDownloadType.PADDLE, "V5_MOBILE")
         val manga = ModelDownloadSpec(ModelDownloadType.MANGA_OCR)
+        val mangaDetector = ModelDownloadSpec(ModelDownloadType.PADDLE, "V6_SMALL")
         listOf(
             Case("empty request", emptyList(), emptyList()),
             Case("single model", listOf(sakura), listOf(listOf(sakura))),
             Case(
                 "three models become independent requests",
                 listOf(sakura, paddle, manga),
-                listOf(listOf(sakura), listOf(paddle), listOf(manga)),
+                listOf(listOf(sakura), listOf(paddle), listOf(mangaDetector, manga)),
             ),
             Case(
                 "duplicate model is downloaded once",

@@ -17,6 +17,7 @@ import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.CancellationException
 import kotlin.math.max
 import kotlin.math.min
 import timber.log.Timber
@@ -170,7 +171,21 @@ data class TranslationMemoryMatch(
 data class TranslationMemoryScope(
     val packageName: String,
     val appLabel: String,
-)
+) {
+    companion object {
+        // Same empty-package convention as global glossary terms; not a fabricated app ID.
+        val GLOBAL = TranslationMemoryScope(packageName = "", appLabel = "")
+    }
+}
+
+internal fun translationMemoryScope(packageName: String?, appLabel: String?): TranslationMemoryScope {
+    val normalizedPackage = packageName.orEmpty().trim()
+    return if (normalizedPackage.isEmpty()) {
+        TranslationMemoryScope.GLOBAL
+    } else {
+        TranslationMemoryScope(normalizedPackage, appLabel?.takeIf(String::isNotBlank) ?: normalizedPackage)
+    }
+}
 
 @Singleton
 class TranslationMemoryRepository @Inject constructor(
@@ -184,9 +199,21 @@ class TranslationMemoryRepository @Inject constructor(
         targetLang: String,
         scopePackage: String,
     ): TranslationMemoryMatch? {
-        if (scopePackage.isBlank()) return null
         val normalizedSource = normalizeTranslationMemorySource(source)
         if (normalizedSource.isBlank()) return null
+        // Preserve the current app's corrections first; global memories supplement them.
+        for (candidateScope in listOf(scopePackage.trim(), "").distinct()) {
+            recallInScope(normalizedSource, sourceLang, targetLang, candidateScope)?.let { return it }
+        }
+        return null
+    }
+
+    private suspend fun recallInScope(
+        normalizedSource: String,
+        sourceLang: String,
+        targetLang: String,
+        scopePackage: String,
+    ): TranslationMemoryMatch? {
         val exact = dao.findExact(
             scopePackage = scopePackage,
             sourceLang = sourceLang,
@@ -225,22 +252,22 @@ class TranslationMemoryRepository @Inject constructor(
     ): Long {
         val normalizedObserved = normalizeTranslationMemorySource(observedSource)
         val normalizedCorrected = normalizeTranslationMemorySource(correctedSource)
-        require(scopePackage.isNotBlank()) { "Translation memory requires an application scope." }
+        val memoryScope = translationMemoryScope(scopePackage, appLabel)
         require(normalizedObserved.isNotBlank()) { "Observed source is empty." }
         require(normalizedCorrected.isNotBlank()) { "Corrected source is empty." }
         require(correctedTranslation.isNotBlank()) { "Corrected translation is empty." }
 
         val now = System.currentTimeMillis()
         val existing = dao.findObserved(
-            scopePackage = scopePackage,
+            scopePackage = memoryScope.packageName,
             sourceLang = sourceLang,
             targetLang = targetLang,
             normalizedSource = normalizedObserved,
         )
         val entry = TranslationMemoryEntity(
             id = existing?.id ?: 0,
-            scopePackage = scopePackage,
-            appLabel = appLabel,
+            scopePackage = memoryScope.packageName,
+            appLabel = memoryScope.appLabel,
             sourceLang = sourceLang,
             targetLang = targetLang,
             observedSource = observedSource.trim(),
@@ -262,7 +289,7 @@ class TranslationMemoryRepository @Inject constructor(
             existing.id
         }
         dao.trimScope(
-            scopePackage = scopePackage,
+            scopePackage = memoryScope.packageName,
             sourceLang = sourceLang,
             targetLang = targetLang,
             keepCount = MAX_MEMORY_ENTRIES_PER_SCOPE,
@@ -310,26 +337,20 @@ class TranslationMemoryService @Inject constructor(
     private val repository: TranslationMemoryRepository,
     private val foregroundAppResolver: ForegroundAppResolver,
 ) {
-    suspend fun currentScope(settings: Settings): TranslationMemoryScope? {
+    suspend fun currentScope(settings: Settings): TranslationMemoryScope {
         val explicitScope = settings.runtimeTranslationScopePackage
         return if (explicitScope != null) {
-            explicitScope.takeIf(String::isNotBlank)?.let {
-                TranslationMemoryScope(
-                    packageName = it,
-                    appLabel = settings.runtimeTranslationScopeLabel.ifBlank { it },
-                )
-            }
+            translationMemoryScope(explicitScope, settings.runtimeTranslationScopeLabel)
         } else {
-            runCatching {
-                foregroundAppResolver.resolve(settings.foregroundAppDetectionMode)?.let {
-                    TranslationMemoryScope(
-                        packageName = it.packageName,
-                        appLabel = it.displayName,
-                    )
-                }
-            }.onFailure {
-                Timber.w(it, "Translation memory could not resolve the current game")
-            }.getOrNull()
+            try {
+                val app = foregroundAppResolver.resolve(settings.foregroundAppDetectionMode)
+                translationMemoryScope(app?.packageName, app?.displayName)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Timber.w(error, "Translation memory could not resolve the current application; using global scope")
+                TranslationMemoryScope.GLOBAL
+            }
         }
     }
 
@@ -337,8 +358,8 @@ class TranslationMemoryService @Inject constructor(
         source: String,
         settings: Settings,
     ): TranslationMemoryMatch? {
-        if (!isTranslationMemoryRecallEligible(source)) return null
-        val scope = currentScope(settings) ?: return null
+        if (!settings.translationMemoryEnabled || !isTranslationMemoryRecallEligible(source)) return null
+        val scope = currentScope(settings)
         return runCatching {
             repository.recall(
                 source = source,
@@ -356,9 +377,10 @@ class TranslationMemoryService @Inject constructor(
         settings: Settings,
     ): List<TranslationMemoryMatch?> {
         if (sources.isEmpty()) return emptyList()
+        if (!settings.translationMemoryEnabled) return List(sources.size) { null }
         val eligible = sources.map(::isTranslationMemoryRecallEligible)
         if (eligible.none { it }) return List(sources.size) { null }
-        val scope = currentScope(settings) ?: return List(sources.size) { null }
+        val scope = currentScope(settings)
         return runCatching {
             sources.mapIndexed { index, source ->
                 if (!eligible[index]) {

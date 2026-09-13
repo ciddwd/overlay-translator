@@ -10,6 +10,30 @@ import org.junit.Test
 class ShizukuRawScreencapDecoderTest {
 
     @Test
+    fun probeHeader_sizesFinalAllocationWithoutReadingTheFrameBody() {
+        data class Case(
+            val name: String,
+            val width: Int,
+            val height: Int,
+            val format: Int,
+            val expectedPixelBytes: Int?,
+        )
+
+        listOf(
+            Case("rgba", 3, 2, PixelFormat.RGBA_8888, 24),
+            Case("rgb565", 3, 2, PixelFormat.RGB_565, 12),
+            Case("rgb888", 3, 2, PixelFormat.RGB_888, 18),
+            Case("unsupported", 3, 2, 99, null),
+            Case("unsafe dimensions", 10_001, 2, PixelFormat.RGBA_8888, null),
+        ).forEach { case ->
+            val probe = ShizukuRawScreencapDecoder.probeHeader(
+                headerOnly(case.width, case.height, case.format)
+            )
+            assertEquals(case.name, case.expectedPixelBytes, probe?.pixelByteCount)
+        }
+    }
+
+    @Test
     fun parseSupportedRawFrames_tableDriven() {
         data class Case(
             val name: String,

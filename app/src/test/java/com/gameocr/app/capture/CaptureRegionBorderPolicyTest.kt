@@ -10,6 +10,29 @@ import org.junit.Test
 class CaptureRegionBorderPolicyTest {
 
     @Test
+    fun captureAutoHide_onlyControlsScreenshotSuppression_tableDriven() {
+        data class Case(val name: String, val autoHide: Boolean, val capture: Boolean, val editor: Boolean, val wordSelect: Boolean, val hidden: Boolean)
+        listOf(
+            Case("enabled idle", true, false, false, false, false),
+            Case("enabled capture", true, true, false, false, true),
+            Case("disabled idle", false, false, false, false, false),
+            Case("disabled capture keeps region visible", false, true, false, false, false),
+            Case("disabled still hides for region editor", false, false, true, false, true),
+            Case("disabled still hides for word selection", false, false, false, true, true),
+            Case("capture ends while editor remains open", false, false, true, true, true),
+            Case("overlapping capture and editor", false, true, true, false, true),
+            Case("overlapping capture and selection", false, true, false, true, true),
+        ).forEach { case ->
+            assertEquals(case.name, case.hidden, shouldHideCaptureRegionBorder(
+                hiddenForCapture = case.capture,
+                hiddenForEditor = case.editor,
+                hiddenForWordSelect = case.wordSelect,
+                autoHideOnCapture = case.autoHide,
+            ))
+        }
+    }
+
+    @Test
     fun visibility_tableDriven_requiresEnabledValidRegion() {
         data class Case(
             val name: String,
@@ -128,13 +151,186 @@ class CaptureRegionBorderPolicyTest {
     }
 
     @Test
+    fun temporaryVisibilitySuppression_tableDriven_hidesForEveryActiveCaptureSurface() {
+        data class Case(
+            val name: String,
+            val hiddenForCapture: Boolean,
+            val hiddenForEditor: Boolean,
+            val hiddenForWordSelect: Boolean,
+            val expectedHidden: Boolean,
+        )
+
+        listOf(
+            Case("normal display", false, false, false, false),
+            Case("screenshot in progress", true, false, false, true),
+            Case("region editor", false, true, false, true),
+            Case("word selection", false, false, true, true),
+            Case("overlapping reasons", true, true, true, true),
+        ).forEach { case ->
+            assertEquals(
+                case.name,
+                case.expectedHidden,
+                shouldHideCaptureRegionBorder(
+                    hiddenForCapture = case.hiddenForCapture,
+                    hiddenForEditor = case.hiddenForEditor,
+                    hiddenForWordSelect = case.hiddenForWordSelect,
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun move_tableDriven_preservesSizeAndClampsToDisplay() {
+        data class Case(
+            val name: String,
+            val region: CaptureRegion,
+            val dx: Int,
+            val dy: Int,
+            val screenWidth: Int,
+            val screenHeight: Int,
+            val expected: CaptureRegion?,
+        )
+
+        listOf(
+            Case(
+                "moves freely",
+                CaptureRegion(100, 200, 500, 700),
+                40,
+                -60,
+                1080,
+                2400,
+                CaptureRegion(140, 140, 540, 640),
+            ),
+            Case(
+                "clamps top left",
+                CaptureRegion(100, 200, 500, 700),
+                -1000,
+                -1000,
+                1080,
+                2400,
+                CaptureRegion(0, 0, 400, 500),
+            ),
+            Case(
+                "clamps bottom right",
+                CaptureRegion(100, 200, 500, 700),
+                5000,
+                5000,
+                1080,
+                2400,
+                CaptureRegion(680, 1900, 1080, 2400),
+            ),
+            Case(
+                "overflow safe",
+                CaptureRegion(100, 200, 500, 700),
+                Int.MAX_VALUE,
+                Int.MIN_VALUE,
+                1080,
+                2400,
+                CaptureRegion(680, 0, 1080, 500),
+            ),
+            Case(
+                "region larger than display rejected",
+                CaptureRegion(0, 0, 1200, 500),
+                1,
+                1,
+                1080,
+                2400,
+                null,
+            ),
+        ).forEach { case ->
+            assertEquals(
+                case.name,
+                case.expected,
+                movedCaptureRegion(
+                    case.region,
+                    case.dx,
+                    case.dy,
+                    case.screenWidth,
+                    case.screenHeight,
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun resize_tableDriven_keepsOppositeCornerAndMinimumSize() {
+        data class Case(
+            val name: String,
+            val corner: CaptureRegionResizeCorner,
+            val dx: Int,
+            val dy: Int,
+            val expected: CaptureRegion?,
+        )
+
+        val region = CaptureRegion(100, 200, 500, 700)
+        listOf(
+            Case(
+                "top left expands to display edge",
+                CaptureRegionResizeCorner.TOP_LEFT,
+                -500,
+                -500,
+                CaptureRegion(0, 0, 500, 700),
+            ),
+            Case(
+                "top right resizes independently",
+                CaptureRegionResizeCorner.TOP_RIGHT,
+                200,
+                100,
+                CaptureRegion(100, 300, 700, 700),
+            ),
+            Case(
+                "bottom left respects minimum",
+                CaptureRegionResizeCorner.BOTTOM_LEFT,
+                1000,
+                -1000,
+                CaptureRegion(460, 200, 500, 240),
+            ),
+            Case(
+                "bottom right clamps to display",
+                CaptureRegionResizeCorner.BOTTOM_RIGHT,
+                5000,
+                5000,
+                CaptureRegion(100, 200, 1080, 2400),
+            ),
+        ).forEach { case ->
+            assertEquals(
+                case.name,
+                case.expected,
+                resizedCaptureRegion(
+                    region = region,
+                    corner = case.corner,
+                    deltaX = case.dx,
+                    deltaY = case.dy,
+                    screenWidth = 1080,
+                    screenHeight = 2400,
+                    minSidePx = 40,
+                ),
+            )
+        }
+
+        assertNull(
+            resizedCaptureRegion(
+                region = region,
+                corner = CaptureRegionResizeCorner.TOP_LEFT,
+                deltaX = 0,
+                deltaY = 0,
+                screenWidth = 20,
+                screenHeight = 20,
+                minSidePx = 40,
+            )
+        )
+    }
+
+    @Test
     fun defaults_useIconBlueAndSolidTwoDpBorder() {
         val settings = Settings()
 
         assertTrue(settings.captureRegionBorderEnabled)
+        assertTrue(settings.captureRegionHideOnCapture)
         assertEquals(0xFF1976D2.toInt(), settings.captureRegionBorderColor)
         assertEquals(2, settings.captureRegionBorderWidthDp)
         assertEquals(CaptureRegionBorderStyle.SOLID, settings.captureRegionBorderStyle)
+        assertFalse(settings.captureRegionAdjustmentEnabled)
         assertFalse(shouldShowCaptureRegionBorder(settings.captureRegionBorderEnabled, null))
         assertNull(
             captureRegionBorderRect(

@@ -60,6 +60,17 @@ class SettingsSingleChoiceSegmentedControlsUiTest {
                     "if (mergeStrength != strength)",
                 ),
             ),
+            Case(
+                name = "NiuTrans version",
+                startMarker = "val niuTransModes =",
+                endMarker = "SecretTextField(",
+                requiredMarkers = listOf(
+                    "NiuTransMode.FLASH",
+                    "NiuTransMode.PRO",
+                    "selected = niuTransMode == mode",
+                    "if (niuTransMode != mode)",
+                ),
+            ),
         )
 
         cases.forEach { case ->

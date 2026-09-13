@@ -115,13 +115,9 @@ class MlKitOcrEngine @Inject constructor(
     }
 
     private suspend fun autoRecognize(bitmap: Bitmap): List<TextBlock> {
-        val ko = runRecognizer(korean, bitmap, "ko", "auto")
-        if (ko.any { containsHangul(it.text) }) return ko
-        val ja = runRecognizer(japanese, bitmap, "ja", "auto")
-        if (ja.any { containsKana(it.text) }) return ja
-        val latinResult = runRecognizer(latin, bitmap, "latin", "auto")
-        if (latinResult.isNotEmpty()) return latinResult
-        return runRecognizer(chinese, bitmap, "zh", "auto")
+        // Bootstrap only. AutomaticOcrRecognizer owns language ID and engine selection;
+        // this primitive must not run a second independent routing policy.
+        return recognizeJapanese(bitmap)
     }
 
     private suspend fun runRecognizer(

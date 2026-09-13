@@ -59,6 +59,28 @@ class GlossaryViewModel @Inject constructor(
         return foregroundAppResolver.resolve(settings.foregroundAppDetectionMode)
     }
 
+    val glossaryEnabled: StateFlow<Boolean?> = settingsRepository.settings
+        .map { it.translationGlossaryEnabled }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    val memoryEnabled: StateFlow<Boolean?> = settingsRepository.settings
+        .map { it.translationMemoryEnabled }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    fun setGlossaryEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsRepository.update { it.copy(translationGlossaryEnabled = enabled) }
+        }
+    }
+
+    fun setMemoryEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsRepository.update { it.copy(translationMemoryEnabled = enabled) }
+        }
+    }
+
     suspend fun defaultLanguages(): Pair<String, String> {
         val settings = settingsRepository.get()
         return settings.sourceLang to settings.targetLang

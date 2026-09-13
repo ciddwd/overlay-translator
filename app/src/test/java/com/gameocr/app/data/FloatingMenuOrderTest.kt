@@ -18,14 +18,14 @@ class FloatingMenuOrderTest {
     }
 
     @Test
-    fun defaultOrder_placesLanguageThenPresetAfterSkillSlot() {
+    fun defaultOrder_placesLanguageThenPresetAfterAllModeSlots() {
         assertEquals(
             listOf(
                 MenuItemId.LOOP,
                 MenuItemId.REGION,
                 MenuItemId.FULL_SCREEN_SKILL,
+                MenuItemId.INPUT_TRANSLATE_SKILL,
                 MenuItemId.LANGUAGE_PAIR,
-                MenuItemId.PRESET_SWITCH
             ),
             FloatingMenu.DEFAULT_ORDER.take(5)
         )
@@ -35,6 +35,34 @@ class FloatingMenuOrderTest {
     fun defaultOrderIncludesPresetAndSettingsEntries() {
         assertTrue(MenuItemId.PRESET_SWITCH in FloatingMenu.DEFAULT_ORDER)
         assertTrue(MenuItemId.SETTINGS in FloatingMenu.DEFAULT_ORDER)
+    }
+
+    @Test
+    fun oldCustomOrder_insertsInputTranslationBesideTheExistingSkillSlot() {
+        val oldCustom = listOf(
+            MenuItemId.REGION,
+            MenuItemId.FULL_SCREEN_SKILL,
+            MenuItemId.LOOP,
+            MenuItemId.HOME,
+            MenuItemId.SETTINGS,
+            MenuItemId.LANGUAGE_PAIR,
+            MenuItemId.PRESET_SWITCH,
+        )
+
+        val normalized = FloatingMenu.normalizeOrder(oldCustom)
+
+        assertEquals(
+            normalized.indexOf(MenuItemId.FULL_SCREEN_SKILL) + 1,
+            normalized.indexOf(MenuItemId.INPUT_TRANSLATE_SKILL),
+        )
+        assertEquals(MenuItemId.entries.toSet(), normalized.toSet())
+    }
+
+    @Test
+    fun normalizedOrder_preservesACompleteCustomOrder() {
+        val custom = FloatingMenu.DEFAULT_ORDER.reversed()
+
+        assertEquals(custom, FloatingMenu.normalizeOrder(custom))
     }
 
     @Test
@@ -104,23 +132,48 @@ class FloatingMenuOrderTest {
             onPresetSwitch = {},
             onSwitchToFullScreen = {},
             onSwitchToWordSelect = {},
+            onSwitchToInputTranslate = {},
         )
         listOf(
             Case(
                 FloatingSkill.FULL_SCREEN,
-                listOf(R.string.menu_loop_translate, R.string.menu_word_select),
+                listOf(
+                    R.string.menu_loop_translate,
+                    R.string.menu_word_select,
+                    R.string.menu_input_translate,
+                ),
             ),
             Case(
                 FloatingSkill.WORD_SELECT,
-                listOf(R.string.menu_loop_translate, R.string.menu_full_screen_skill),
+                listOf(
+                    R.string.menu_loop_translate,
+                    R.string.menu_full_screen_skill,
+                    R.string.menu_input_translate,
+                ),
             ),
             Case(
                 FloatingSkill.LOOP,
-                listOf(R.string.menu_full_screen_skill, R.string.menu_word_select),
+                listOf(
+                    R.string.menu_full_screen_skill,
+                    R.string.menu_word_select,
+                    R.string.menu_input_translate,
+                ),
+            ),
+            Case(
+                FloatingSkill.INPUT_TRANSLATE,
+                listOf(
+                    R.string.menu_loop_translate,
+                    R.string.menu_full_screen_skill,
+                    R.string.menu_word_select,
+                ),
             ),
         ).forEach { case ->
             val items = MenuItemRegistry.build(
-                ids = listOf(MenuItemId.LOOP, MenuItemId.FULL_SCREEN_SKILL),
+                ids = listOf(
+                    MenuItemId.LOOP,
+                    MenuItemId.FULL_SCREEN_SKILL,
+                    MenuItemId.INPUT_TRANSLATE_SKILL,
+                ),
                 currentSkill = case.current,
                 callbacks = callbacks,
             )
@@ -141,9 +194,15 @@ class FloatingMenuOrderTest {
             Case(MenuItemId.LOOP, FloatingSkill.FULL_SCREEN, FloatingSkill.LOOP),
             Case(MenuItemId.LOOP, FloatingSkill.WORD_SELECT, FloatingSkill.LOOP),
             Case(MenuItemId.LOOP, FloatingSkill.LOOP, FloatingSkill.FULL_SCREEN),
+            Case(MenuItemId.LOOP, FloatingSkill.INPUT_TRANSLATE, FloatingSkill.LOOP),
             Case(MenuItemId.FULL_SCREEN_SKILL, FloatingSkill.FULL_SCREEN, FloatingSkill.WORD_SELECT),
             Case(MenuItemId.FULL_SCREEN_SKILL, FloatingSkill.WORD_SELECT, FloatingSkill.FULL_SCREEN),
             Case(MenuItemId.FULL_SCREEN_SKILL, FloatingSkill.LOOP, FloatingSkill.WORD_SELECT),
+            Case(MenuItemId.FULL_SCREEN_SKILL, FloatingSkill.INPUT_TRANSLATE, FloatingSkill.FULL_SCREEN),
+            Case(MenuItemId.INPUT_TRANSLATE_SKILL, FloatingSkill.FULL_SCREEN, FloatingSkill.INPUT_TRANSLATE),
+            Case(MenuItemId.INPUT_TRANSLATE_SKILL, FloatingSkill.WORD_SELECT, FloatingSkill.INPUT_TRANSLATE),
+            Case(MenuItemId.INPUT_TRANSLATE_SKILL, FloatingSkill.LOOP, FloatingSkill.INPUT_TRANSLATE),
+            Case(MenuItemId.INPUT_TRANSLATE_SKILL, FloatingSkill.INPUT_TRANSLATE, FloatingSkill.WORD_SELECT),
         ).forEach { case ->
             assertEquals(
                 "${case.slot} from ${case.current}",
@@ -156,7 +215,11 @@ class FloatingMenuOrderTest {
     @Test
     fun nonModeSlots_doNotReportASkillTarget() {
         MenuItemId.entries
-            .filterNot { it == MenuItemId.LOOP || it == MenuItemId.FULL_SCREEN_SKILL }
+            .filterNot {
+                it == MenuItemId.LOOP ||
+                    it == MenuItemId.FULL_SCREEN_SKILL ||
+                    it == MenuItemId.INPUT_TRANSLATE_SKILL
+            }
             .forEach { id ->
                 FloatingSkill.entries.forEach { current ->
                     assertEquals("$id from $current", null, MenuItemRegistry.targetSkill(id, current))
@@ -169,12 +232,13 @@ class FloatingMenuOrderTest {
         val callbacks = MenuItemRegistry.Callbacks(
             onSwitchToLoop = {}, onRegion = {}, onLanguagePair = {}, onOpenMain = {},
             onOpenSettings = {}, onPresetSwitch = {}, onSwitchToFullScreen = {},
-            onSwitchToWordSelect = {},
+            onSwitchToWordSelect = {}, onSwitchToInputTranslate = {},
         )
         data class Case(val id: MenuItemId, val expectedLabel: Int)
         listOf(
             Case(MenuItemId.LOOP, R.string.menu_full_screen_skill),
             Case(MenuItemId.FULL_SCREEN_SKILL, R.string.menu_word_select),
+            Case(MenuItemId.INPUT_TRANSLATE_SKILL, R.string.menu_input_translate),
         ).forEach { case ->
             val items = MenuItemRegistry.build(
                 ids = listOf(case.id),

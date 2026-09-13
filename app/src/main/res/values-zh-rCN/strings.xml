@@ -1,5 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="translation_library_disable_all">全部停用</string>
+    <string name="settings_auto_ocr_title">自动识别设置</string>
+    <string name="settings_auto_ocr_group_on_device">端侧</string>
+    <string name="settings_auto_ocr_group_local">本机</string>
+    <string name="settings_auto_ocr_group_cloud">云端</string>
+    <string name="settings_auto_ocr_unconfigured">未配置</string>
+    <string name="settings_auto_ocr_unsupported">不支持</string>
+    <string name="settings_auto_ocr_add_language">添加语言</string>
+    <string name="settings_auto_ocr_delete_language_confirm">确认删除%1$s？</string>
+    <string name="settings_auto_ocr_description">为不同语言选择识别方式，仅在使用“自动”时生效。</string>
     <string name="app_name">屏译</string>
 
     <!-- 通用 -->
@@ -39,6 +49,11 @@
     <string name="main_btn_open_autostart">打开自启动设置</string>
     <string name="main_btn_battery_already_ok">已加入电池白名单 ✓</string>
     <string name="main_btn_open_battery_whitelist">打开电池白名单设置</string>
+    <string name="quick_settings_tile_label">屏译服务</string>
+    <string name="quick_settings_tile_title">快捷设置磁贴</string>
+    <string name="quick_settings_tile_description">在快捷设置中启动或停止截屏服务。</string>
+    <string name="quick_settings_tile_add">添加到快捷设置</string>
+    <string name="settings_btn_a11y_enabled">无障碍服务已开启 ✓</string>
     <string name="main_btn_pick_region">框选区域</string>
     <string name="main_btn_clear_region">清除区域，恢复整屏</string>
     <string name="main_clear_region_dialog_title">清除截屏区域？</string>
@@ -49,8 +64,9 @@
     <string name="main_label_usage">使用说明</string>
     <string name="main_usage_text">悬浮圆球：单击 = 执行当前操作；长按 = 打开弧形菜单；拖动 = 移动位置</string>
     <string name="main_usage_overlay_permission_required">请点击上方按钮，先授予悬浮窗权限。</string>
-    <string name="main_hint_media_projection">每次启动会弹一次系统授权窗</string>
-    <string name="main_hint_shizuku_ready">Shizuku 就绪，免每次授权弹窗</string>
+    <string name="main_capture_system">系统截屏</string>
+    <string name="main_hint_media_projection">根据设备和授权状态选择截屏方式，必要时需要确认授权。</string>
+    <string name="main_hint_shizuku_ready">Shizuku 已就绪，可使用更高的系统权限。</string>
     <string name="main_hint_shizuku_not_granted">Shizuku 已安装但未授权，启动时会请求授权</string>
     <string name="main_hint_shizuku_not_running">请先在系统中启动 Shizuku 应用</string>
     <string name="main_hint_shizuku_not_installed">未安装 Shizuku</string>
@@ -74,6 +90,7 @@
     <string name="main_status_shizuku_not_paired">未配对（无 shell 特权）</string>
     <string name="main_status_shizuku_compatibility_required">需要开启 Compat Hub</string>
     <string name="main_status_battery_whitelist">电池白名单</string>
+    <string name="main_status_accessibility_service">无障碍服务</string>
     <string name="main_status_enabled">已开</string>
     <string name="main_status_disabled">未开</string>
     <string name="main_preset_title">预设</string>
@@ -93,7 +110,6 @@
     <string name="gallery_main_latest_task">最近一次任务</string>
     <string name="gallery_main_no_history_task">暂无历史任务</string>
     <string name="gallery_main_progress">已处理 %1$d / %2$d</string>
-    <string name="gallery_main_recent">最近：成功 %1$d · 失败 %2$d</string>
     <string name="gallery_confirm_title">创建翻译任务</string>
     <string name="gallery_confirm_count">已选择 %1$d 张图片</string>
     <string name="gallery_confirm_add_photos">继续添加图片</string>
@@ -261,7 +277,7 @@
     <string name="settings_about_open_github">在浏览器打开</string>
     <string name="settings_about_tagline">开源屏幕实时翻译工具</string>
     <string name="settings_about_qq_group_label">QQ 交流群</string>
-    <string name="settings_about_qq_group_name_format">屏译-ScreenTranslator交流群 · 群号 %1$s</string>
+    <string name="settings_about_qq_group_name_format">屏译-ScreenTranslator交流群 群号 %1$s</string>
     <string name="settings_about_join_qq_group">点击链接加入群聊</string>
     <string name="settings_about_open_source_licenses">开源许可证</string>
     <string name="settings_about_third_party_notice_summary">本应用所含依赖项及内置或按需下载模型的第三方声明</string>
@@ -302,6 +318,12 @@
     <string name="settings_section_preprocess">图像预处理 (OCR 前)</string>
     <string name="settings_section_capture_region">截屏区域</string>
     <string name="settings_capture_region_border_enabled">显示截屏区域边框</string>
+    <string name="settings_capture_region_hide_on_capture">截屏时自动隐藏</string>
+    <string name="settings_capture_region_move_enabled">允许调整截屏区域</string>
+    <string name="settings_capture_region_move_help">拖动中间图标可移动区域，拖动四角可调整大小。</string>
+    <string name="capture_region_move_handle">移动截屏区域</string>
+    <string name="capture_region_resize_handle">调整截屏区域大小</string>
+    <string name="settings_capture_region_style_customization">区域样式自定义</string>
     <string name="settings_capture_region_border_color">边框颜色</string>
     <string name="settings_capture_region_border_width_format">边框粗细：%1$d dp</string>
     <string name="settings_section_overlay">译文显示</string>
@@ -312,11 +334,16 @@
     <string name="settings_section_network">网络</string>
     <string name="settings_cleartext_hosts_label">明文 HTTP 白名单 host</string>
     <string name="settings_cleartext_hosts_placeholder">每行一个 host\n例如 myhost.example.com</string>
-    <string name="settings_cleartext_hosts_hint">默认仅允许私有/回环地址走明文。这里追加的 host 也允许 http:// 访问。⚠ 明文可被中间人窃听/篡改，仅在你确认链路可信时启用。</string>
+    <string name="settings_cleartext_hosts_hint">这里只填写域名或 IP，不要包含协议、端口和路径。加入后将允许该 host 使用明文 HTTP。⚠ 明文可能被窃听或篡改，仅在链路可信时启用。</string>
+    <string name="settings_cleartext_hosts_error_scheme">第 %1$d 行：请移除 http:// 或 https://，只填写 host。</string>
+    <string name="settings_cleartext_hosts_error_path">第 %1$d 行：不能包含路径、查询参数或锚点。</string>
+    <string name="settings_cleartext_hosts_error_port">第 %1$d 行：请移除端口，只填写 host。</string>
+    <string name="settings_cleartext_hosts_error_invalid">第 %1$d 行：请输入有效的域名或 IP 地址。</string>
     <string name="settings_label_translator_engine">翻译引擎</string>
     <string name="settings_engine_openai_llm">OpenAI 兼容 LLM</string>
     <string name="settings_engine_anthropic_llm">Anthropic 兼容 LLM</string>
     <string name="settings_engine_deepl">DeepL</string>
+    <string name="settings_engine_niutrans">小牛翻译</string>
     <string name="settings_engine_youdao_pictrans">有道图翻</string>
     <string name="settings_engine_google">Google</string>
     <string name="settings_on_device_translation_english">英语</string>
@@ -344,8 +371,12 @@
     <string name="settings_mlkit_data_disclosure">ML Kit 可能连接 Google 下载或更新模型及兼容性信息，并发送性能与使用指标；截屏、原文和译文不会发送给 Google。</string>
     <string name="settings_mlkit_download_pair">下载 %1$s → %2$s 模型</string>
     <string name="settings_mlkit_model_downloading">正在下载模型…</string>
+    <string name="settings_mlkit_model_stop_waiting">停止等待</string>
+    <string name="settings_mlkit_model_waiting_stopped">已停止等待。Google 的后台任务可能仍会完成；再次进入时会重新检查。</string>
     <string name="settings_mlkit_model_ready">当前语言模型已就绪，可以离线翻译。</string>
     <string name="settings_mlkit_model_download_failed">模型下载失败：%1$s</string>
+    <string name="settings_mlkit_download_timeout_help">下载超时，可尝试以下方式：\n1. 切换到移动网络后重试。\n2. 找一台能正常下载该模型的设备开启热点，连接热点后重试。</string>
+    <string name="settings_mlkit_download_open_browser">打开浏览器</string>
     <string name="settings_mlkit_unsupported_source_language">ML Kit 不支持所选源语言：%1$s</string>
     <string name="settings_mlkit_unsupported_target_language">ML Kit 不支持所选目标语言：%1$s</string>
     <string name="mlkit_missing_models_dialog_title">端侧语言模型未就绪</string>
@@ -385,6 +416,15 @@
     <string name="settings_deepl_custom_token_hint">**与上方"DeepL API Key"完全隔离**——切到自定义 URL 时不会把官方 key 发给第三方。这里填你自架服务设置的访问 token；如果服务无鉴权，留空即可。</string>
     <string name="settings_deepl_bearer_label">使用 Bearer 鉴权 (Authorization: Bearer ...)</string>
     <string name="settings_deepl_bearer_hint">仅自定义 URL 时生效。默认走 DeepL 官方格式 DeepL-Auth-Key；多数 deeplx 部署用 Bearer。鉴权用的是上方"自定义端点 Token"字段，不会触碰 DeepL 官方 Key。</string>
+    <string name="settings_niutrans_mode">翻译版本</string>
+    <string name="settings_niutrans_flash">Flash</string>
+    <string name="settings_niutrans_pro">Pro</string>
+    <string name="settings_niutrans_api_key">API Key</string>
+    <string name="settings_niutrans_app_id">App ID</string>
+    <string name="settings_niutrans_term_library_id">术语词典库 ID（可选）</string>
+    <string name="settings_niutrans_memory_library_id">翻译记忆库 ID（可选）</string>
+    <string name="settings_niutrans_tip">Flash 支持批量翻译；Pro 支持流式翻译。</string>
+    <string name="settings_niutrans_advanced">高级设置</string>
 
     <!-- 翻译引擎连接测试 -->
     <string name="settings_tts_enable">启用 TTS 朗读</string>
@@ -530,8 +570,8 @@
     <string name="settings_tts_invalid_base_url">请输入有效的 HTTP 或 HTTPS Base URL。</string>
     <string name="settings_tts_endpoint_volcengine_official">官方地址</string>
     <string name="settings_tts_volcengine_resource">资源类型</string>
-    <string name="settings_tts_volcengine_preset_resource">预置音色 2.0 · seed-tts-2.0</string>
-    <string name="settings_tts_volcengine_clone_resource">声音复刻 2.0 · seed-icl-2.0</string>
+    <string name="settings_tts_volcengine_preset_resource">预置音色 2.0 seed-tts-2.0</string>
+    <string name="settings_tts_volcengine_clone_resource">声音复刻 2.0 seed-icl-2.0</string>
     <string name="settings_tts_volcengine_context">语音指令</string>
     <string name="settings_tts_volcengine_context_placeholder">例如：用温暖、克制而自信的语气说话</string>
     <string name="settings_tts_volcengine_pitch_format">音高：%1$d 半音</string>
@@ -580,12 +620,12 @@
 
     <string name="settings_test_connection">测试连接</string>
     <string name="settings_test_testing">测试中…</string>
-    <string name="settings_test_ok_deepl_format">OK · 已用 %1$s / %2$s 字符（剩 %3$d%%）</string>
-    <string name="settings_test_ok_deepl_custom_format">OK · 自定义端点连通，样例译文：%1$s</string>
-    <string name="settings_test_ok_openai_models_format">OK · 已拉到 %1$d 个 model，点选即填入模型名</string>
-    <string name="settings_test_ok_openai_chat_format">OK · model=%1$s · %2$d ms</string>
-    <string name="settings_test_ok_anthropic_models_format">OK · 已拉到 %1$d 个 Anthropic model，点选即填入模型名</string>
-    <string name="settings_test_ok_anthropic_message_format">OK · Anthropic model=%1$s · %2$d ms</string>
+    <string name="settings_test_ok_deepl_format">OK 已用 %1$s / %2$s 字符（剩 %3$d%%）</string>
+    <string name="settings_test_ok_deepl_custom_format">OK 自定义端点连通，样例译文：%1$s</string>
+    <string name="settings_test_ok_openai_models_format">OK 已拉到 %1$d 个 model，点选即填入模型名</string>
+    <string name="settings_test_ok_openai_chat_format">OK model=%1$s %2$d ms</string>
+    <string name="settings_test_ok_anthropic_models_format">OK 已拉到 %1$d 个 Anthropic model，点选即填入模型名</string>
+    <string name="settings_test_ok_anthropic_message_format">OK Anthropic model=%1$s %2$d ms</string>
     <string name="settings_test_deepl_403_hint">检查 Free/Pro 端点开关是否与 Key 匹配</string>
     <string name="settings_test_pick_model">从列表选择 model</string>
 
@@ -631,7 +671,7 @@
     <string name="settings_baidu_endpoint_webimage">网络图片</string>
     <string name="settings_baidu_endpoint_accurate">高精度</string>
     <string name="settings_baidu_endpoint_accurate_loc">高精度+位置</string>
-    <string name="settings_baidu_current_format">当前：%1$s · %2$s%3$s</string>
+    <string name="settings_baidu_current_format">当前：%1$s %2$s%3$s</string>
     <string name="settings_baidu_with_loc_hint">\n含位置版：译文会紧贴每段原文 box 显示</string>
     <string name="settings_baidu_no_loc_hint">\n无位置版：所有文字垂直排列在屏幕左侧</string>
     <string name="settings_tencent_id_label">腾讯云 SecretId</string>
@@ -640,7 +680,7 @@
     <string name="settings_tencent_endpoint_general_basic">通用印刷体</string>
     <string name="settings_tencent_endpoint_general_accurate">高精度</string>
     <string name="settings_tencent_endpoint_recognize_agent">Agent 智能</string>
-    <string name="settings_tencent_current_format">当前：%1$s · %2$s</string>
+    <string name="settings_tencent_current_format">当前：%1$s %2$s</string>
     <string name="settings_preprocess_upscale">2× 上采样 (提升小字识别率)</string>
     <string name="settings_preprocess_upscale_help">2× 会先放大截图再送 OCR，端侧小字可能更准。云端 OCR 不建议开启：服务端返回的位置可能按放大后的图片计算，叠回原截图时会有偏差；同时上传图片也会变大。</string>
     <string name="settings_preprocess_upscale_cloud_warning">云端 OCR 不建议开启 2× 上采样，可能导致译文位置偏差。</string>
@@ -755,6 +795,7 @@
     <string name="settings_loop_trigger_mode_label">循环触发方式</string>
     <string name="settings_loop_trigger_fixed">固定间隔</string>
     <string name="settings_loop_trigger_smart">智能等待文字完成</string>
+    <string name="settings_loop_trigger_settled">停稳翻译</string>
     <string name="settings_loop_interval_label">自动循环间隔 (毫秒)</string>
     <string name="settings_loop_text_stable_duration_format">文字稳定等待：%1$d ms</string>
     <string name="settings_loop_text_stable_faster">更快</string>
@@ -780,6 +821,17 @@
     <string name="settings_btn_open_a11y">打开系统无障碍设置</string>
     <string name="settings_developer_mode_label">开发者模式</string>
     <string name="settings_developer_mode_hint">显示用于排查 OCR 与翻译问题的诊断选项。</string>
+    <string name="settings_performance_overlay_label">性能悬浮窗</string>
+    <string name="settings_performance_overlay_hint">在屏幕上显示 OCR、翻译、Token、内存和 CPU 指标。</string>
+    <string name="performance_overlay_title">STATS:</string>
+    <string name="performance_overlay_ocr">OCR：%1$s</string>
+    <string name="performance_overlay_init">Init：%1$s</string>
+    <string name="performance_overlay_prefill">Prefill：%1$s（%2$s，%3$s）</string>
+    <string name="performance_overlay_decode">Decode：%1$s（%2$s，%3$s）</string>
+    <string name="performance_overlay_total">Total：%1$s</string>
+    <string name="performance_overlay_memory">内存：%1$s</string>
+    <string name="performance_overlay_cpu">CPU：%1$s</string>
+    <string name="performance_overlay_cpu_cores_value">%1$s 核</string>
     <string name="settings_batch_cumulative_completion_time_label">批次累计完成时间</string>
     <string name="settings_batch_cumulative_completion_time_hint">开启后，翻译日志显示从整批开始到当前条完成的累计时间；关闭时显示单条或单个原生批组耗时。</string>
     <string name="settings_ocr_screenshot_saving_label">保存 OCR 截图</string>
@@ -804,15 +856,18 @@
     <string name="settings_paddle_model_version_label">模型版本：</string>
     <string name="settings_paddle_model_name">PP-OCRv5 mobile</string>
     <string name="paddle_version_v5_mobile">PP-OCRv5 mobile</string>
-    <string name="paddle_version_v5_mobile_desc">约 20MB · 约 530 万参数 · 4 种语言</string>
+    <string name="paddle_version_v5_mobile_desc">约 20MB 约 530 万参数 4 种语言</string>
     <string name="paddle_version_v5_mobile_languages">简体中文、繁体中文、英文、日文</string>
+    <string name="paddle_version_v5_korean">PP-OCRv5 韩文</string>
+    <string name="paddle_version_v5_korean_desc">约 18MB 针对韩文优化 2 种语言</string>
+    <string name="paddle_version_v5_korean_languages">韩文、英文</string>
     <string name="paddle_version_v6_tiny">PP-OCRv6 tiny</string>
-    <string name="paddle_version_v6_tiny_desc">约 6MB · 约 150 万参数 · 49 种语言</string>
+    <string name="paddle_version_v6_tiny_desc">约 6MB 约 150 万参数 49 种语言</string>
     <string name="paddle_version_v6_tiny_languages">简体中文、繁体中文、英文、法文、德文、意大利文、西班牙文、葡萄牙文、荷兰文、波兰文、罗马尼亚文、捷克文、瑞典文、挪威文、丹麦文、芬兰文、匈牙利文、土耳其文、越南文、印度尼西亚文、马来文、阿塞拜疆文、南非荷兰文、波斯尼亚文、克罗地亚文、威尔士文、爱沙尼亚文、爱尔兰文、冰岛文、库尔德文、立陶宛文、拉脱维亚文、马耳他文、毛利文、欧西坦文、斯洛伐克文、斯洛文尼亚文、阿尔巴尼亚文、斯瓦希里文、塔加洛文、乌兹别克文、拉丁文、塞尔维亚文（拉丁字母）、加泰罗尼亚文、巴斯克文、加利西亚文、卢森堡文、罗曼什文、克丘亚文</string>
     <string name="paddle_version_v6_small">PP-OCRv6 small</string>
-    <string name="paddle_version_v6_small_desc">约 30MB · 约 770 万参数 · 50 种语言</string>
+    <string name="paddle_version_v6_small_desc">约 30MB 约 770 万参数 50 种语言</string>
     <string name="paddle_version_v6_medium">PP-OCRv6 medium</string>
-    <string name="paddle_version_v6_medium_desc">约 132MB · 约 3450 万参数 · 50 种语言</string>
+    <string name="paddle_version_v6_medium_desc">约 132MB 约 3450 万参数 50 种语言</string>
     <string name="paddle_version_v6_full_languages">简体中文、繁体中文、英文、日文、法文、德文、意大利文、西班牙文、葡萄牙文、荷兰文、波兰文、罗马尼亚文、捷克文、瑞典文、挪威文、丹麦文、芬兰文、匈牙利文、土耳其文、越南文、印度尼西亚文、马来文、阿塞拜疆文、南非荷兰文、波斯尼亚文、克罗地亚文、威尔士文、爱沙尼亚文、爱尔兰文、冰岛文、库尔德文、立陶宛文、拉脱维亚文、马耳他文、毛利文、欧西坦文、斯洛伐克文、斯洛文尼亚文、阿尔巴尼亚文、斯瓦希里文、塔加洛文、乌兹别克文、拉丁文、塞尔维亚文（拉丁字母）、加泰罗尼亚文、巴斯克文、加利西亚文、卢森堡文、罗曼什文、克丘亚文</string>
     <string name="settings_paddle_supported_languages_button">查看支持语言（%1$d 种）</string>
     <string name="settings_paddle_supported_languages_title">%1$s 支持的语言</string>
@@ -887,6 +942,7 @@
     <string name="settings_search_item_baidu_fanyi">百度翻译开放平台（APPID / 密钥）</string>
     <string name="settings_search_item_tencent_translator">腾讯云翻译（TMT）</string>
     <string name="settings_search_item_deepl_advanced">DeepL 高级（自定义 URL / Bearer / 协议 / DeepLX）</string>
+    <string name="settings_search_item_niutrans">小牛翻译</string>
     <string name="settings_search_item_baidu_endpoint">百度 OCR 接口类型</string>
     <string name="settings_search_item_baidu_lang">百度 OCR 识别语种</string>
     <string name="settings_search_item_tencent_endpoint">腾讯 OCR 接口类型</string>
@@ -1054,12 +1110,12 @@
     <!-- 通知 -->
     <string name="notif_channel_name">截屏翻译服务</string>
     <string name="notif_channel_desc">前台运行截屏 + OCR + 翻译</string>
-    <string name="notif_title">屏译 · 运行中</string>
-    <string name="notif_text">点击悬浮球执行当前模式 · 长按打开菜单</string>
+    <string name="notif_title">屏译 运行中</string>
+    <string name="notif_text">点击悬浮球执行当前模式 长按打开菜单</string>
 
     <!-- 无障碍 -->
-    <string name="a11y_desc">监听音量键组合（同时按音量+ 和 音量- 0.3 秒）作为全局快捷键触发截屏翻译。只在设置里手动开启后生效，不读取屏幕内容、不解析窗口。</string>
-    <string name="a11y_summary">屏译 · 音量键触发器</string>
+    <string name="a11y_desc">用于音量键快捷操作和输入翻译。输入框文字只会在你主动点击操作球时读取；不会读取密码类型的输入框。</string>
+    <string name="a11y_summary">屏译 快捷操作</string>
 
     <!-- 百度 OCR endpoint 显示名 / 免费配额 -->
     <string name="baidu_endpoint_general_basic_name">标准版（无位置）</string>
@@ -1117,7 +1173,7 @@
     <string name="tencent_endpoint_recognize_agent_desc">LLM 增强，适合复杂排版 / 手写</string>
 
     <!-- 区域选择器 -->
-    <string name="region_picker_hint_drawing">拖动框选要翻译的区域 · 双击使用整屏</string>
+    <string name="region_picker_hint_drawing">拖动框选要翻译的区域 双击使用整屏</string>
     <string name="region_picker_btn_confirm">确认</string>
     <string name="region_picker_btn_cancel">取消</string>
     <string name="region_picker_btn_redo">重画</string>
@@ -1365,6 +1421,7 @@
     <string name="floating_tour_home_body">返回屏译首页。</string>
     <string name="floating_tour_word_select_body">把主球切换为划词翻译；之后单击主球，再拖框选择需要翻译的文字。</string>
     <string name="floating_tour_full_screen_body">把主球切换为全屏翻译；之后单击主球即可截取并翻译当前设定区域。</string>
+    <string name="floating_tour_input_translation_body">把主球切换为输入翻译；之后单击主球即可翻译当前输入框内的文字。</string>
     <string name="floating_tour_next_page_body">一页放不下全部功能时，用这个球打开下一组。点击“演示翻页”，引导会在下一页继续。</string>
     <string name="floating_tour_next_page_wrap_body">这也是菜单翻页球；在最后一页点击它，会循环回到第一组。</string>
     <string name="floating_tour_generic_item_body">执行这个弧形菜单功能。</string>
@@ -1372,6 +1429,39 @@
     <string name="floating_skill_word_select_label">划词翻译</string>
     <string name="toast_skill_switched_full_screen">主球已切换：单击=全屏翻译</string>
     <string name="toast_skill_switched_word_select">主球已切换：单击=拖动框选翻译</string>
+    <string name="menu_input_translate">输入翻译</string>
+    <string name="toast_skill_switched_input_translate">主球已切换：单击=翻译当前输入框</string>
+    <string name="a11y_floating_mode_input_translate">输入翻译模式</string>
+    <string name="a11y_floating_hint_input_translate">双击翻译当前输入框。长按打开菜单</string>
+    <string name="settings_section_input_translation">输入翻译</string>
+    <string name="settings_input_translation_desc">将当前输入框内的文字翻译为预设的源语言，并替换原内容。</string>
+    <string name="settings_input_translation_double_action">双击功能</string>
+    <string name="settings_input_translation_double_full_screen">全屏翻译</string>
+    <string name="settings_input_translation_double_word_select">划词翻译</string>
+    <string name="settings_input_translation_double_help">设置输入翻译模式下，双击操作球执行的功能。</string>
+    <string name="settings_input_translation_permission">需要无障碍权限。仅在点击操作球时读取并替换输入内容，不会读取密码框。</string>
+    <string name="settings_search_item_input_translation">输入翻译 / 双击功能</string>
+    <string name="input_translation_guide_progress">输入翻译</string>
+    <string name="input_translation_guide_body">在输入翻译模式下：\n单击：翻译当前输入框内的文字。\n双击：执行%1$s。\n可在设置中修改双击功能。</string>
+    <string name="input_translation_guide_done">知道了</string>
+    <string name="input_translation_translating">正在翻译输入内容…</string>
+    <string name="input_translation_cancelled">已取消输入翻译</string>
+    <string name="input_translation_accessibility_required">请先在系统设置中开启屏译无障碍服务</string>
+    <string name="input_translation_no_focused_input">请先点击需要翻译的输入框</string>
+    <string name="input_translation_wechat_unsupported">微信暂不支持输入翻译。</string>
+    <string name="input_translation_password_rejected">不会读取密码类型的输入框</string>
+    <string name="input_translation_not_editable">此输入框不支持读取和替换</string>
+    <string name="input_translation_empty_input">当前输入框没有文字</string>
+    <string name="input_translation_explicit_source_required">请先选择明确的源语言</string>
+    <string name="input_translation_engine_unsupported_format">当前翻译服务不支持翻译为%1$s</string>
+    <string name="input_translation_empty_result">翻译服务没有返回译文</string>
+    <string name="input_translation_target_changed">输入框内容已变化，未进行替换</string>
+    <string name="input_translation_success_format">已翻译为%1$s</string>
+    <string name="input_translation_failed">输入翻译失败，请重试</string>
+    <string name="input_translation_clip_label">输入翻译结果</string>
+    <string name="input_translation_replace_failed_copied">输入框不支持替换，译文已复制</string>
+    <string name="input_translation_replace_unconfirmed_copied">无法确认文字是否已替换，译文已复制</string>
+    <string name="input_translation_service_disconnected_copied">无障碍服务未连接，无法替换，译文已复制</string>
 
     <!-- 划词选区 overlay -->
     <string name="word_select_hint_drawing">拖一个矩形框选要翻译的文字</string>
@@ -1379,6 +1469,9 @@
     <string name="word_select_btn_cancel">取消</string>
     <string name="word_select_btn_redraw">重画</string>
     <string name="settings_section_word_select">划词翻译</string>
+    <string name="settings_word_select_extract_only">仅提取文字</string>
+    <string name="settings_word_select_extract_only_help">开启后，仅识别选框内的文字，不进行翻译。</string>
+    <string name="word_select_btn_extract">提取文字</string>
     <string name="settings_word_select_precise_adjust">精确调整（翻译前可微调选框）</string>
     <string name="settings_word_select_precise_adjust_help">开启后，画框结束进入调整阶段，可拖动 8 个把手微调后再点翻译。关闭后松手即翻译，不进入调整阶段。</string>
     <string name="settings_word_select_card_mode">弹出翻译卡片</string>
@@ -1424,6 +1517,7 @@
     <!-- 划词翻译卡片 -->
     <string name="word_card_loading">翻译中…</string>
     <string name="floating_word_lookup_failed">查询失败</string>
+    <string name="floating_word_lookup_not_found">未找到释义</string>
     <string name="floating_word_open_details">查看 %1$s 的完整释义</string>
     <string name="floating_word_view_details">查看完整释义</string>
     <string name="word_card_recognizing">正在识别选中文字…</string>
@@ -1544,6 +1638,11 @@
 
     <!-- 文本方向自动判别 -->
     <string name="settings_text_orientation_section_title">自动判别方向</string>
+    <string name="settings_capture_content_orientation_label">画面方向修正</string>
+    <string name="settings_capture_content_orientation_auto">不调整</string>
+    <string name="settings_capture_content_orientation_landscape">横向画面</string>
+    <string name="settings_capture_content_orientation_portrait">纵向画面</string>
+    <string name="settings_capture_content_orientation_summary">用于画面方向与设备方向不一致的场景。</string>
     <string name="settings_orient_auto_detect_title">自动判别排版方向</string>
     <string name="settings_orient_auto_detect_summary">这个功能主要用于横排以外文字的增强，例如竖排文字增强。它会根据 OCR 文字框判断排版方向，必要时自动用更合适的引擎重新识别。如不需要，关闭此功能即可提升翻译速度。</string>
     <string name="settings_orient_manual_label">手动锁定方向</string>
@@ -1597,6 +1696,30 @@
     <string name="settings_permission_not_granted">未授权</string>
     <string name="settings_usage_access_unavailable">无法打开使用情况访问设置</string>
     <string name="settings_manage_glossary">翻译库</string>
+    <string name="settings_manage_dictionary_library">词典库</string>
+    <string name="dictionary_library_title">词典库</string>
+    <string name="dictionary_library_summary">用于点击单词时显示读音、词性和释义，不参与 OCR、正文翻译或术语替换。</string>
+    <string name="dictionary_lookup_source">查询方式</string>
+    <string name="dictionary_tap_lookup_enabled">点击原文显示词义</string>
+    <string name="dictionary_tap_lookup_enabled_summary">点击原文中的英文单词时，显示词义浮层。</string>
+    <string name="dictionary_mode_offline">离线</string>
+    <string name="dictionary_mode_online">在线</string>
+    <string name="dictionary_mode_offline_summary">只查询已安装的离线词典；没有命中时直接显示未找到。</string>
+    <string name="dictionary_mode_online_summary">只使用当前云端 LLM 查询；不会读取离线词典。</string>
+    <string name="dictionary_online_unavailable">当前翻译服务只能使用离线词典。在线查询需要 OpenAI 或 Anthropic 兼容的云端 LLM。</string>
+    <string name="dictionary_offline_packs">离线词典</string>
+    <string name="dictionary_pack_checking">正在检查词典包…</string>
+    <string name="dictionary_pack_installed">已安装</string>
+    <string name="dictionary_pack_not_installed">未安装</string>
+    <string name="dictionary_pack_import">导入词典包</string>
+    <string name="dictionary_pack_replace">替换词典包</string>
+    <string name="dictionary_pack_action_import">导入</string>
+    <string name="dictionary_pack_action_replace">替换</string>
+    <string name="dictionary_pack_delete">删除</string>
+    <string name="dictionary_pack_imported">词典包已导入</string>
+    <string name="dictionary_pack_deleted">词典包已删除</string>
+    <string name="dictionary_pack_delete_failed">无法删除词典包</string>
+    <string name="dictionary_pack_import_note">仅接受本项目词典包格式。导入时会检查来源、版本、数据库结构和完整性；词典文件不会随设置导出。</string>
     <string name="settings_prompt_advanced_header">提示词高级设置</string>
     <string name="settings_openai_request_options_title">LLM 请求参数</string>
     <string name="settings_openai_user_template">用户消息模板</string>
@@ -1633,7 +1756,7 @@
     <string name="translation_library_help_terms_title">术语：统一角色名和专有名词</string>
     <string name="translation_library_help_terms_body">术语适合保存角色名、地名、组织名、物品名等固定说法。\n\n例如，把“セイバー”保存为“阿尔托莉雅”。以后原文中再次出现这个词时，应用会尽量使用你指定的译名。\n\n术语可以设为所有游戏通用，也可以只对某个游戏生效。游戏专用术语和全局术语同时匹配时，优先使用游戏专用术语。部分翻译方式暂时无法使用术语；遇到术语没有生效时，可以检查当前使用的翻译引擎。</string>
     <string name="translation_library_help_memory_title">翻译记忆：记住你改过的整句话</string>
-    <string name="translation_library_help_memory_body">翻译记忆适合保存完整句子或一整块对话。\n\n当相同或非常相似的原文再次出现时，应用会直接使用你修改后的译文，不再重新翻译。因此，常见台词、人物语气和固定表达会越来越稳定。\n\n翻译记忆会按游戏和翻译语言分别保存。应用必须先识别出当前游戏，才能保存和使用该游戏的翻译记忆。</string>
+    <string name="translation_library_help_memory_body">翻译记忆适合保存完整句子或一整块对话。\n\n当相同或非常相似的原文再次出现时，应用会直接使用你修改后的译文，不再重新翻译。因此，常见台词、人物语气和固定表达会越来越稳定。\n\n识别到当前应用时，翻译记忆按应用保存；未识别到时，保存为全局记忆。翻译时优先使用当前应用的记忆，再查找全局记忆。</string>
     <string name="translation_library_help_priority_title">优先顺序</string>
     <string name="translation_library_help_priority_body">应用会先检查原文保留；精确命中的文本会留在画面中，不进入涂抹和翻译。\n\n剩余文本先查找翻译记忆；没有命中时，再查找术语并正常翻译。\n\n拟声词字效需要保留 → 添加到原文保留\n整句话改错了 → 保存到翻译记忆\n角色名或固定词翻错了 → 添加到术语</string>
     <string name="translation_library_help_add_title">如何添加</string>
@@ -1719,7 +1842,6 @@
     <string name="glossary_import_conflict_skip">跳过</string>
     <string name="glossary_import_conflict_overwrite">覆盖</string>
     <string name="glossary_import_preview_title">导入预览</string>
-    <string name="glossary_import_preview_summary">共 %1$d 条 · 可导入 %2$d · 覆盖 %3$d · 跳过 %4$d · 无效 %5$d</string>
     <string name="glossary_import_filter_all">全部 %1$d</string>
     <string name="glossary_import_filter_importable">可导入 %1$d</string>
     <string name="glossary_import_filter_overwrite">覆盖 %1$d</string>
@@ -1747,15 +1869,37 @@
     <string name="glossary_save_failed">保存术语失败</string>
     <string name="model_download_channel_name">模型下载</string>
     <string name="model_download_notification_title">正在下载模型</string>
-    <string name="model_download_starting_format">%1$s · 正在连接下载源（%2$d/%3$d）</string>
-    <string name="model_download_progress_batch_format">%1$s · %2$d%% · %3$s（%4$d/%5$d）</string>
-    <string name="model_download_progress_bytes_batch_format">%1$s · %2$d MB · %3$s（%4$d/%5$d）</string>
+    <string name="model_download_preparing_format">%1$s 正在准备下载（%2$d/%3$d）</string>
+    <string name="model_download_starting_format">%1$s 正在检查下载源（%2$d/%3$d）</string>
+    <string name="model_download_progress_batch_format">%1$s %2$d%% %3$s（%4$d/%5$d）</string>
+    <string name="model_download_progress_bytes_batch_format">%1$s %2$d MB %3$s（%4$d/%5$d）</string>
     <string name="model_download_complete">模型下载完成</string>
+    <string name="settings_auto_ocr_download_complete">下载完成</string>
     <string name="model_download_failed_format">模型下载失败：%1$s</string>
     <string name="model_download_retrying_format">下载中断，等待重试：%1$s</string>
     <string name="model_download_cancel">取消</string>
+    <string name="model_download_cancel_confirm_title">取消当前下载？</string>
+    <string name="model_download_cancel_confirm_ok">确定</string>
     <string name="model_download_in_app_title">后台模型下载</string>
     <string name="model_download_waiting">正在准备下载…</string>
+    <string name="settings_model_network_test_label">模型下载网络</string>
+    <string name="settings_model_network_test_hint">检查当前模型下载源是否可用</string>
+    <string name="settings_model_network_test_action">开始检测</string>
+    <string name="settings_model_network_test_running">正在检测…</string>
+    <string name="settings_model_network_test_success">%1$s：耗时 %2$d ms</string>
+    <string name="settings_model_network_test_failure">%1$s</string>
+    <string name="settings_model_network_target_llm">端侧 LLM</string>
+    <string name="settings_model_network_target_paddle">Paddle OCR</string>
+    <string name="settings_model_network_target_manga">日漫 OCR</string>
+    <string name="settings_model_network_target_orientation">方向模型</string>
+    <string name="settings_model_network_failure_no_network">未连接网络</string>
+    <string name="settings_model_network_failure_dns">无法解析下载地址</string>
+    <string name="settings_model_network_failure_tls">安全连接失败</string>
+    <string name="settings_model_network_failure_timeout">连接超时</string>
+    <string name="settings_model_network_failure_connection">无法连接</string>
+    <string name="settings_model_network_failure_http">下载源拒绝请求</string>
+    <string name="settings_model_network_failure_invalid_source">下载地址无效</string>
+    <string name="settings_model_network_failure_unknown">检测失败</string>
     <string name="model_download_failure_card_title">模型下载失败</string>
     <string name="model_download_failure_model_format">模型：%1$s</string>
     <string name="model_download_failure_downloaded_format">已下载：%1$s</string>
@@ -1881,8 +2025,15 @@
     <string name="onboarding_model_not_downloaded">未下载</string>
 
     <string name="onboarding_cloud_title">选择并配置云端 LLM</string>
-    <string name="onboarding_cloud_body">选择服务商后会填入已核验的默认值。若你使用区域端点、订阅专线或兼容网关，三个字段仍可编辑。</string>
+    <string name="onboarding_cloud_body">服务商按名称排序，顺序不代表推荐或排名。\n请按照所选服务商官网的说明获取 API Key，并填写到下方。地址和模型名可按需修改。</string>
+    <string name="settings_test_balance_format">余额：%1$s</string>
+    <string name="settings_test_balance_failed">余额查询失败</string>
     <string name="onboarding_cloud_custom">自定义</string>
+    <string name="onboarding_cloud_region">接口区域</string>
+    <string name="onboarding_cloud_region_mainland">中国大陆</string>
+    <string name="onboarding_cloud_region_international">国际</string>
+    <string name="onboarding_cloud_provider_modelscope">魔搭 ModelScope</string>
+    <string name="onboarding_cloud_provider_scnet">国家超算互联网（SCNet）</string>
     <string name="onboarding_cloud_url">Base URL</string>
     <string name="onboarding_cloud_api_key">API Key</string>
     <string name="onboarding_cloud_model">模型名称</string>
@@ -1942,4 +2093,5 @@
     <string name="source_preservation_delete_message">“%1$s”下次识别时将恢复普通翻译，并可能被涂抹替换。</string>
     <string name="translation_library_help_preserve_title">保留原文字效</string>
     <string name="translation_library_help_preserve_body">OCR 文本块精确命中后，不翻译、不显示，也不涂抹原图。适合把日漫拟声词字形作为画面的一部分保留。匹配会忽略空白和安全的首尾标点，但不会进行模糊匹配或包含匹配。</string>
+    <string name="settings_search_item_floating_alpha">悬浮按钮透明度</string>
 </resources>

@@ -1,5 +1,6 @@
 package com.gameocr.app.ocr
 
+import com.gameocr.app.data.PaddleModelVersion
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
@@ -74,6 +75,46 @@ class PaddleRecognitionSizingTest {
                 PaddleRecognitionSizing.plan(case.cropWidth, case.cropHeight)
             }
             assertFalse(case.name, error.message.isNullOrBlank())
+        }
+    }
+
+    @Test
+    fun tensorWidth_tableDriven_onlyPadsKoreanV5ShortLines() {
+        data class Case(
+            val name: String,
+            val modelVersion: PaddleModelVersion?,
+            val contentWidth: Int,
+            val expectedTensorWidth: Int,
+        )
+
+        val cases = listOf(
+            Case("Korean short crop", PaddleModelVersion.V5_KOREAN, 76, 320),
+            Case("Korean boundary", PaddleModelVersion.V5_KOREAN, 320, 320),
+            Case("Korean long crop", PaddleModelVersion.V5_KOREAN, 476, 476),
+            Case("v5 mobile unchanged", PaddleModelVersion.V5_MOBILE, 76, 76),
+            Case("v6 small unchanged", PaddleModelVersion.V6_SMALL, 153, 153),
+            Case("unknown model unchanged", null, 120, 120),
+        )
+
+        cases.forEach { case ->
+            assertEquals(
+                case.name,
+                case.expectedTensorWidth,
+                PaddleRecognitionSizing.tensorWidth(case.modelVersion, case.contentWidth),
+            )
+        }
+    }
+
+    @Test
+    fun tensorWidth_rejectsInvalidWidths_tableDriven() {
+        listOf(
+            "below minimum" to PaddleRecognitionSizing.MIN_WIDTH - 1,
+            "above maximum" to PaddleRecognitionSizing.MAX_DYNAMIC_WIDTH + 1,
+        ).forEach { (name, width) ->
+            val error = assertThrows(name, IllegalArgumentException::class.java) {
+                PaddleRecognitionSizing.tensorWidth(PaddleModelVersion.V5_KOREAN, width)
+            }
+            assertFalse(name, error.message.isNullOrBlank())
         }
     }
 }

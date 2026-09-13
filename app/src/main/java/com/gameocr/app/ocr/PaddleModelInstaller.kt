@@ -5,7 +5,8 @@ import com.gameocr.app.R
 import com.gameocr.app.data.LlmMirrorChoice
 import com.gameocr.app.data.PaddleModelVersion
 import com.gameocr.app.data.SettingsRepository
-import com.gameocr.app.util.HttpResumePolicy
+import com.gameocr.app.download.ModelFileDownloader
+import com.gameocr.app.download.ModelDownloadWorkPolicy
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -15,13 +16,9 @@ import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.runInterruptible
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import timber.log.Timber
 import java.io.File
 import java.io.FileOutputStream
-import java.io.RandomAccessFile
 
 /**
  * PaddleOCR PP-OCRv5 mobile 模型安装器。
@@ -37,7 +34,7 @@ import java.io.RandomAccessFile
 @Singleton
 class PaddleModelInstaller @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val client: OkHttpClient,
+    private val downloader: ModelFileDownloader,
     private val settingsRepository: SettingsRepository
 ) {
 
@@ -73,6 +70,21 @@ class PaddleModelInstaller @Inject constructor(
         val error: String? = null
     )
 
+    internal suspend fun downloadProbeUrl(version: PaddleModelVersion): String {
+        val settings = settingsRepository.get()
+        val legacyMirror = settings.paddleModelMirrorUrl.trim().takeIf { it.isNotBlank() }
+        val networkMirror = settings.localLlmMirrorUrl
+            .trim()
+            .takeIf { settings.localLlmMirror == LlmMirrorChoice.CUSTOM && it.isNotBlank() }
+        val defaults = defaultModelUrls(version).det
+        return urlsFor(
+            userMirror = legacyMirror ?: networkMirror,
+            file = FILE_DET,
+            defaults = defaults,
+            choice = settings.localLlmMirror,
+        ).first()
+    }
+
     fun downloadAll(): Flow<Progress> = downloadAll(PaddleModelVersion.V5_MOBILE)
 
     fun downloadAll(version: PaddleModelVersion): Flow<Progress> = channelFlow {
@@ -99,7 +111,7 @@ class PaddleModelInstaller @Inject constructor(
                 continue
             }
             var ok = false
-            var lastErr: String? = null
+            var lastErr: Exception? = null
             for (url in urls) {
                 val mirror = url.substringAfter("//").substringBefore("/")
                 try {
@@ -107,19 +119,14 @@ class PaddleModelInstaller @Inject constructor(
                     ok = true
                     send(Progress(name, mirror, dest.length(), dest.length(), true))
                     break
-                } catch (t: Throwable) {
+                } catch (t: Exception) {
                     if (t is CancellationException) throw t
-                    lastErr = "${t.javaClass.simpleName}: ${t.message}"
+                    lastErr = t
+                    if (!ModelDownloadWorkPolicy.mayTryAnotherSource(t)) throw t
                     Timber.w(t, "镜像失败: $url")
-                    send(Progress(name, mirror, 0, 0, false, error = lastErr))
                 }
             }
-            if (!ok) {
-                send(Progress(name, "(all failed)", 0, 0, false, error = lastErr ?: "unknown"))
-                throw RuntimeException(
-                    context.getString(R.string.err_paddle_all_mirrors_failed_format, name, lastErr ?: "")
-                )
-            }
+            if (!ok) throw lastErr ?: IllegalArgumentException("Model download source is empty")
         }
         if (version == PaddleModelVersion.V5_MOBILE) deleteLegacyV5Files()
     }.flowOn(Dispatchers.IO)
@@ -129,51 +136,10 @@ class PaddleModelInstaller @Inject constructor(
         dest: File,
         channel: SendChannel<Progress>,
         name: String,
-        mirror: String
-    ) = runInterruptible {
-        val tmp = File(dest.parentFile, dest.name + ".tmp")
-        val resumeFrom = tmp.length().takeIf { tmp.exists() } ?: 0L
-        Timber.i("Trying: $url resumeFrom=$resumeFrom")
-        val request = Request.Builder().url(url).apply {
-            HttpResumePolicy.rangeHeader(resumeFrom)?.let { header("Range", it) }
-        }.build()
-        var expectedTotal = -1L
-        var downloaded = 0L
-        client.newCall(request).execute().use { r ->
-            if (!r.isSuccessful) throw RuntimeException("HTTP ${r.code}")
-            val body = r.body ?: throw RuntimeException("empty body")
-            val contentLength = body.contentLength().takeIf { it > 0 } ?: -1L
-            val resumePlan = HttpResumePolicy.responsePlan(resumeFrom, r.code, contentLength)
-            expectedTotal = resumePlan.expectedTotal
-            downloaded = resumePlan.initialDownloaded
-            var lastReported = downloaded
-            val output = RandomAccessFile(tmp, "rw")
-            body.byteStream().use { input ->
-                output.use {
-                    if (resumePlan.append) output.seek(resumeFrom) else output.setLength(0)
-                    val buf = ByteArray(64 * 1024)
-                    while (true) {
-                        val n = input.read(buf)
-                        if (n <= 0) break
-                        output.write(buf, 0, n)
-                        downloaded += n
-                        // 节流：每 200KB 报一次，避免 UI 刷新过频
-                        if (downloaded - lastReported >= 200 * 1024) {
-                            lastReported = downloaded
-                            channel.trySend(Progress(name, mirror, downloaded, expectedTotal, false))
-                        }
-                    }
-                }
-            }
-        }
-        if (expectedTotal > 0 && downloaded != expectedTotal) {
-            throw RuntimeException("download truncated: got $downloaded of $expectedTotal bytes")
-        }
-        if (dest.exists()) dest.delete()
-        if (!tmp.renameTo(dest)) {
-            throw RuntimeException(
-                context.getString(R.string.err_paddle_rename_failed_format, tmp.name, dest.name)
-            )
+        mirror: String,
+    ) {
+        downloader.download(url, dest, { validateDownloadedFile(name, it) }) { downloaded, total ->
+            channel.trySend(Progress(name, mirror, downloaded, total, false))
         }
     }
 
@@ -233,6 +199,16 @@ class PaddleModelInstaller @Inject constructor(
     }.getOrNull()
 
     companion object {
+        internal fun validateDownloadedFile(name: String, file: File): String? {
+            if (!file.isFile || file.length() == 0L) return "empty model file"
+            val header = ByteArray(256)
+            val count = file.inputStream().use { it.read(header) }
+            val text = String(header, 0, count.coerceAtLeast(0), Charsets.UTF_8).trimStart().lowercase()
+            return if (text.startsWith("<!doctype") || text.startsWith("<html") ||
+                text.startsWith("<?xml") || text.startsWith("version https://git-lfs") ||
+                (name.endsWith(".onnx") && text.startsWith("{"))) "looks like error response" else null
+        }
+
         const val FILE_DET = "det.onnx"
         const val FILE_REC = "rec.onnx"
         /** PaddleOCR 官方字典内嵌在 inference.yml，下载后统一保存为 keys.yml。 */
@@ -267,6 +243,17 @@ class PaddleModelInstaller @Inject constructor(
         private val DEFAULT_KEYS_URLS = listOf(
             "https://huggingface.co/PaddlePaddle/PP-OCRv5_mobile_rec_onnx/resolve/$V5_REC_REVISION/inference.yml",
             "https://hf-mirror.com/PaddlePaddle/PP-OCRv5_mobile_rec_onnx/resolve/$V5_REC_REVISION/inference.yml"
+        )
+
+        /** Official Korean PP-OCRv5 recognition model, pinned to a verified repository revision. */
+        private const val V5_KOREAN_REC_REVISION = "5c6f574b8e2230adf4287b33e736d71b9fabd28e"
+        private val V5_KOREAN_REC_URLS = listOf(
+            "https://huggingface.co/PaddlePaddle/korean_PP-OCRv5_mobile_rec_onnx/resolve/$V5_KOREAN_REC_REVISION/inference.onnx",
+            "https://hf-mirror.com/PaddlePaddle/korean_PP-OCRv5_mobile_rec_onnx/resolve/$V5_KOREAN_REC_REVISION/inference.onnx"
+        )
+        private val V5_KOREAN_YML_URLS = listOf(
+            "https://huggingface.co/PaddlePaddle/korean_PP-OCRv5_mobile_rec_onnx/resolve/$V5_KOREAN_REC_REVISION/inference.yml",
+            "https://hf-mirror.com/PaddlePaddle/korean_PP-OCRv5_mobile_rec_onnx/resolve/$V5_KOREAN_REC_REVISION/inference.yml"
         )
 
         /**
@@ -328,6 +315,7 @@ class PaddleModelInstaller @Inject constructor(
 
         internal fun defaultModelUrls(version: PaddleModelVersion): ModelUrls = when (version) {
             PaddleModelVersion.V5_MOBILE -> ModelUrls(DEFAULT_DET_URLS, DEFAULT_REC_URLS, DEFAULT_KEYS_URLS)
+            PaddleModelVersion.V5_KOREAN -> ModelUrls(DEFAULT_DET_URLS, V5_KOREAN_REC_URLS, V5_KOREAN_YML_URLS)
             PaddleModelVersion.V6_TINY -> ModelUrls(V6_TINY_DET_URLS, V6_TINY_REC_URLS, V6_TINY_YML_URLS)
             PaddleModelVersion.V6_SMALL -> ModelUrls(V6_SMALL_DET_URLS, V6_SMALL_REC_URLS, V6_SMALL_YML_URLS)
             PaddleModelVersion.V6_MEDIUM -> ModelUrls(V6_MEDIUM_DET_URLS, V6_MEDIUM_REC_URLS, V6_MEDIUM_YML_URLS)

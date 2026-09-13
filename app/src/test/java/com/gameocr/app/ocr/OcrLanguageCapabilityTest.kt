@@ -21,6 +21,10 @@ class OcrLanguageCapabilityTest {
         val cases = listOf(
             Case("v5 supports Japanese", PaddleModelVersion.V5_MOBILE, "ja", true),
             Case("v5 does not bundle French", PaddleModelVersion.V5_MOBILE, "fr", false),
+            Case("Korean v5 supports Korean locale", PaddleModelVersion.V5_KOREAN, "ko-KR", true),
+            Case("Korean v5 recommends a Latin OCR for English pages", PaddleModelVersion.V5_KOREAN, "en", false),
+            Case("Korean v5 does not bundle Japanese", PaddleModelVersion.V5_KOREAN, "ja", false),
+            Case("Korean v5 does not bundle Chinese", PaddleModelVersion.V5_KOREAN, "zh-CN", false),
             Case("v6 tiny omits Japanese", PaddleModelVersion.V6_TINY, "ja", false),
             Case("v6 tiny supports French", PaddleModelVersion.V6_TINY, "fr", true),
             Case("v6 tiny supports Traditional Chinese", PaddleModelVersion.V6_TINY, "zh-TW", true),

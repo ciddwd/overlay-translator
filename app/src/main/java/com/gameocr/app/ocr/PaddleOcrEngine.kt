@@ -65,6 +65,7 @@ internal data class PaddleRecognitionResizePlan(
 internal object PaddleRecognitionSizing {
     const val TARGET_HEIGHT = 48
     const val MIN_WIDTH = 8
+    const val OFFICIAL_BASE_WIDTH = 320
 
     /**
      * The official PP-OCRv5 mobile and PP-OCRv6 tiny/small/medium inference
@@ -85,6 +86,22 @@ internal object PaddleRecognitionSizing {
             targetWidth = targetWidth,
             capped = targetWidth != naturalWidth,
         )
+    }
+
+    /**
+     * The official Korean PP-OCRv5 recognizer keeps short lines at their natural width and
+     * right-pads the input tensor to 3x48x320. Other already-deployed model paths retain their
+     * existing dynamic-width behavior until they have separate device benchmarks.
+     */
+    fun tensorWidth(modelVersion: PaddleModelVersion?, contentWidth: Int): Int {
+        require(contentWidth in MIN_WIDTH..MAX_DYNAMIC_WIDTH) {
+            "contentWidth must be within the supported recognition range"
+        }
+        return if (modelVersion == PaddleModelVersion.V5_KOREAN) {
+            contentWidth.coerceAtLeast(OFFICIAL_BASE_WIDTH)
+        } else {
+            contentWidth
+        }
     }
 }
 
@@ -586,7 +603,6 @@ class PaddleOcrEngine @Inject constructor(
                 )
             }.onSuccess { report ->
                 shapeAwareReport = report
-                report?.delayedMaskInput?.let(shapeAwareSessionStore.manager::publish)
             }.onFailure { error ->
                 Timber.w(error, "Unable to prepare shape-aware Paddle frame")
             }
@@ -629,8 +645,9 @@ class PaddleOcrEngine @Inject constructor(
                 paddleLogTextStats(text).toLogString(),
                 text.forPaddleOcrLog(),
             )
-            if (text.isEmpty()) {
-                Timber.i("PaddleOCR run#%d result[%d] dropped empty text rect=%s", runId, i, rect.toPaddleLogString())
+            if (!PaddleRecognitionAcceptancePolicy.accepts(text, recognition.confidence)) {
+                Timber.i("PaddleOCR run#%d result[%d] rejected recognition score=%.3f minimum=%.3f empty=%s rect=%s", runId, i,
+                    recognition.confidence, PaddleRecognitionAcceptancePolicy.MINIMUM_SCORE, text.isEmpty(), rect.toPaddleLogString())
                 null
             } else {
                 i to TextBlock(
@@ -641,6 +658,25 @@ class PaddleOcrEngine @Inject constructor(
                     sourceBoxes = listOf(Rect(rect)),
                 )
             }
+        }
+        // Keep original member indices for bubble assignment. Rejecting a line must not renumber
+        // the detector/mask relationship, nor let whole-bubble repair erase that line later.
+        val acceptedIndices = indexedResults.mapTo(hashSetOf()) { it.first }
+        shapeAwareReport?.delayedMaskInput?.let { input ->
+            val scaleX = input.width.toFloat() / bitmap.width
+            val scaleY = input.height.toFloat() / bitmap.height
+            val protected = sorted.mapIndexedNotNull { index, quad ->
+                if (index in acceptedIndices) null else {
+                    val b = quad.axisAlignedBounds()
+                    BubbleClusterer.IntRect(
+                        kotlin.math.floor(b[0] * scaleX).toInt().coerceAtLeast(0),
+                        kotlin.math.floor(b[1] * scaleY).toInt().coerceAtLeast(0),
+                        kotlin.math.ceil(b[2] * scaleX).toInt().coerceAtMost(input.width),
+                        kotlin.math.ceil(b[3] * scaleY).toInt().coerceAtMost(input.height),
+                    )
+                }
+            }
+            shapeAwareSessionStore.manager.publish(input.copy(protectedSourceBounds = protected))
         }
         val rawResults = indexedResults.map { it.second }
         val memberDetectionIndices =
@@ -721,6 +757,8 @@ class PaddleOcrEngine @Inject constructor(
             profile = profile,
             runId = runId,
             passLabel = "full",
+            retainSupport = loadedVersion == PaddleModelVersion.V5_KOREAN,
+            splitTextColumns = loadedVersion == PaddleModelVersion.V6_SMALL,
             probabilityMapObserver = probabilityMask?.let { accumulator ->
                 { map, scaleX, scaleY ->
                     accumulator.merge(
@@ -744,7 +782,7 @@ class PaddleOcrEngine @Inject constructor(
                 bitmap.height,
                 MangaOcrTiling.DEFAULT_TILE_SIDE,
             )
-            return base
+            return recoverLargeTextQuads(bitmap, base, binThresh, scoreThresh, unclipRatio, profile, runId, probabilityMask)
         }
 
         val tiles = MangaOcrTiling.tilesFor(bitmap.width, bitmap.height)
@@ -760,6 +798,8 @@ class PaddleOcrEngine @Inject constructor(
                     profile = profile,
                     runId = runId,
                     passLabel = "tile[$tile]",
+                    retainSupport = loadedVersion == PaddleModelVersion.V5_KOREAN,
+                    splitTextColumns = loadedVersion == PaddleModelVersion.V6_SMALL,
                     probabilityMapObserver = probabilityMask?.let { accumulator ->
                         { map, scaleX, scaleY ->
                             accumulator.merge(
@@ -793,7 +833,69 @@ class PaddleOcrEngine @Inject constructor(
             bitmap.width,
             bitmap.height,
         )
-        return merged
+        return recoverLargeTextQuads(bitmap, merged, binThresh, scoreThresh, unclipRatio, profile, runId, probabilityMask)
+    }
+
+    private fun recoverLargeTextQuads(
+        bitmap: Bitmap,
+        normal: List<DBPostprocessor.Quad>,
+        binThresh: Float,
+        scoreThresh: Float,
+        unclipRatio: Float,
+        profile: PaddleDetectionProfile,
+        runId: Long,
+        probabilityMask: MangaProbabilityMaskAccumulator?,
+    ): List<DBPostprocessor.Quad> {
+        val coarseLimit = PaddleMultiScaleDetectionPolicy.coarseLimit(
+            loadedVersion, PaddleDetectionSizing.plan(bitmap.width, bitmap.height, profile),
+        ) ?: return normal
+        if (normal.isEmpty()) return normal
+        var coarseProbability: Array<FloatArray>? = null
+        var coarseScaleX = 1f
+        var coarseScaleY = 1f
+        // A supplemental pass may fail without discarding the normal detection results.
+        return try {
+            val coarse = detectQuads(
+                bitmap = bitmap,
+                binThresh = binThresh,
+                scoreThresh = scoreThresh,
+                unclipRatio = unclipRatio,
+                profile = profile,
+                runId = runId,
+                passLabel = "coarse",
+                maxSideOverride = coarseLimit,
+                probabilityMapObserver = if (probabilityMask == null) null else { map, scaleX, scaleY ->
+                    coarseProbability = map
+                    coarseScaleX = scaleX
+                    coarseScaleY = scaleY
+                },
+            )
+            val selection = PaddleMultiScaleDetectionPolicy.select(normal, coarse)
+            if (selection.recovered.isNotEmpty()) {
+                coarseProbability?.let { map ->
+                    probabilityMask?.merge(
+                        probabilityMap = map,
+                        scaleX = coarseScaleX,
+                        scaleY = coarseScaleY,
+                        offsetX = 0,
+                        offsetY = 0,
+                        threshold = binThresh,
+                        allowedQuads = selection.recovered,
+                    )
+                }
+            }
+            Timber.i(
+                "PaddleOCR run#%d multiScale normal=%d coarse=%d replaced=%d recovered=%d selected=%d coarseLimit=%d",
+                runId, normal.size, coarse.size, selection.replacedCount, selection.recovered.size,
+                selection.quads.size, coarseLimit,
+            )
+            selection.quads
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Timber.w(error, "PaddleOCR run#%d coarse detection failed; retaining normal boxes", runId)
+            normal
+        }
     }
 
     /**
@@ -815,6 +917,9 @@ class PaddleOcrEngine @Inject constructor(
             scaleX: Float,
             scaleY: Float,
         ) -> Unit)? = null,
+        maxSideOverride: Int? = null,
+        retainSupport: Boolean = false,
+        splitTextColumns: Boolean = false,
     ): List<DBPostprocessor.Quad> {
         val trace = runId?.let { "run#$it " }.orEmpty()
         val detectCallId = detectCallCounter.incrementAndGet()
@@ -828,7 +933,7 @@ class PaddleOcrEngine @Inject constructor(
         }
         val pipelineStartedAtNs = SystemClock.elapsedRealtimeNanos()
         val resizeStartedAtNs = SystemClock.elapsedRealtimeNanos()
-        val plan = PaddleDetectionSizing.plan(bitmap.width, bitmap.height, profile)
+        val plan = PaddleDetectionSizing.plan(bitmap.width, bitmap.height, profile, maxSideOverride)
         val resized = if (plan.resized) {
             Bitmap.createScaledBitmap(bitmap, plan.targetWidth, plan.targetHeight, true)
         } else {
@@ -842,7 +947,7 @@ class PaddleOcrEngine @Inject constructor(
             detectCallId,
             passLabel,
             profile.name,
-            profile.maxSideLen,
+            maxSideOverride ?: profile.maxSideLen,
             bitmap.width,
             bitmap.height,
             rW,
@@ -933,7 +1038,24 @@ class PaddleOcrEngine @Inject constructor(
                             scaleY = outputScale.y,
                             binThresh = binThresh,
                             scoreThresh = scoreThresh,
-                            unclipRatio = unclipRatio
+                            unclipRatio = unclipRatio,
+                            retainSupport = retainSupport,
+                            columnCutValidator = if (!splitTextColumns) null else { x, top, bottom ->
+                                val center = (x * outputScale.x).toInt().coerceIn(0, bitmap.width - 1)
+                                val left = (center - 1).coerceAtLeast(0)
+                                val right = (center + 2).coerceAtMost(bitmap.width)
+                                val y0 = (top * outputScale.y).toInt().coerceIn(0, bitmap.height - 1)
+                                val y1 = kotlin.math.ceil(bottom * outputScale.y).toInt().coerceIn(y0 + 1, bitmap.height)
+                                val pixels = IntArray((right - left) * (y1 - y0))
+                                bitmap.getPixels(pixels, 0, right - left, left, y0, right - left, y1 - y0)
+                                PaddleTextColumnSplitPolicy.clearSeparator(IntArray(pixels.size) { i ->
+                                    val color = pixels[i]
+                                    (((color ushr 16) and 255) * 77 + ((color ushr 8) and 255) * 150 + (color and 255) * 29) ushr 8
+                                }).also { clear ->
+                                    Timber.i("PaddleOCR run#%s column separator pass=%s sourceX=%d sourceY=%d..%d clear=%s",
+                                        runId, passLabel, center, y0, y1, clear)
+                                }
+                            },
                         )
                         val postUs = InferenceTiming.elapsedUs(postStartedAtNs, SystemClock.elapsedRealtimeNanos())
                         val postMs = postUs / 1_000L
@@ -1071,10 +1193,72 @@ class PaddleOcrEngine @Inject constructor(
                     results[item.boxIndex] = candidate
                 }
             }
+            refineKoreanRecognitionCrops(prepared, indexedQuads.toMap(), results, session, e, runId)
             results
         } finally {
             prepared.forEach { item ->
                 if (!item.crop.isRecycled) item.crop.recycle()
+            }
+        }
+    }
+
+    private fun refineKoreanRecognitionCrops(
+        prepared: List<PreparedRecognitionCrop>,
+        quads: Map<Int, DBPostprocessor.Quad>,
+        results: MutableMap<Int, PaddleRecognitionCandidate?>,
+        session: OrtSession,
+        e: OrtEnvironment,
+        runId: Long,
+    ) {
+        if (loadedVersion != PaddleModelVersion.V5_KOREAN) return
+        val budget = PaddleRecognitionCropPolicy.Budget()
+        // Reuse already warped source pixels. No extra detector pass, no change to quad IDs,
+        // sourceBoxes, masks or render coordinates, and never recursively retry a candidate.
+        for (item in prepared.sortedByDescending { it.crop.width.toLong() * it.crop.height }) {
+            val original = results[item.boxIndex] ?: continue
+            if (!PaddleRecognitionCropPolicy.shouldRefine(original.score) ||
+                item.orientation != PaddleCropOrientation.ORIGINAL || item.crop.width < item.crop.height * 1.5f) continue
+            val quad = quads[item.boxIndex] ?: continue
+            val support = quad.support ?: continue
+            if (!budget.reserve(item.crop.width, item.crop.height)) continue
+            val started = SystemClock.elapsedRealtime()
+            var candidateCrop: Bitmap? = null
+            try {
+                fun points(q: DBPostprocessor.Quad) = floatArrayOf(q.p0.x, q.p0.y, q.p1.x, q.p1.y,
+                    q.p2.x, q.p2.y, q.p3.x, q.p3.y)
+                val transform = Matrix()
+                if (!transform.setPolyToPoly(points(quad), 0, floatArrayOf(0f, 0f, item.crop.width.toFloat(), 0f,
+                        item.crop.width.toFloat(), item.crop.height.toFloat(), 0f, item.crop.height.toFloat()), 0, 4)) continue
+                val mapped = points(support)
+                transform.mapPoints(mapped)
+                if (mapped.any { !it.isFinite() }) continue
+                val xs = listOf(mapped[0], mapped[2], mapped[4], mapped[6])
+                val ys = listOf(mapped[1], mapped[3], mapped[5], mapped[7])
+                val supportBounds = PaddleRecognitionCropPolicy.Bounds(
+                    kotlin.math.floor(xs.min()).toInt(), kotlin.math.floor(ys.min()).toInt(),
+                    kotlin.math.ceil(xs.max()).toInt() + 1, kotlin.math.ceil(ys.max()).toInt() + 1,
+                )
+                val pixels = IntArray(item.crop.width * item.crop.height)
+                item.crop.getPixels(pixels, 0, item.crop.width, 0, 0, item.crop.width, item.crop.height)
+                val bounds = PaddleRecognitionCropPolicy.propose(item.crop.width, item.crop.height, pixels, supportBounds)
+                if (bounds == null) {
+                    Timber.i("PaddleOCR run#%d rec[%d] inkCrop skipped unsafe geometry elapsed=%dms",
+                        runId, item.boxIndex, SystemClock.elapsedRealtime() - started)
+                    continue
+                }
+                val crop = Bitmap.createBitmap(item.crop, bounds.left, bounds.top, bounds.width, bounds.height)
+                candidateCrop = crop
+                val candidate = recognizeCrop(crop, item.orientation, session, e, runId, item.boxIndex)
+                val accepted = candidate.text.isNotBlank() && PaddleRecognitionCropPolicy.accept(original.score, candidate.score)
+                if (accepted) results[item.boxIndex] = candidate
+                Timber.i("PaddleOCR run#%d rec[%d] inkCrop bounds=%s score=%.3f->%.3f accepted=%s elapsed=%dms",
+                    runId, item.boxIndex, bounds, original.score, candidate.score, accepted, SystemClock.elapsedRealtime() - started)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Timber.w(error, "PaddleOCR run#%d rec[%d] inkCrop failed; retaining original", runId, item.boxIndex)
+            } finally {
+                candidateCrop?.let { if (it !== item.crop && !it.isRecycled) it.recycle() }
             }
         }
     }
@@ -1164,13 +1348,14 @@ class PaddleOcrEngine @Inject constructor(
                 Bitmap.createScaledBitmap(item.crop, item.resizePlan.targetWidth, targetHeight, true)
             }
         }
-        val maxWidth = resized.maxOf { it.width }
+        val contentWidth = resized.maxOf { it.width }
+        val tensorWidth = PaddleRecognitionSizing.tensorWidth(loadedVersion, contentWidth)
         return try {
-            val input = bitmapBatchToNCHW(resized, maxWidth, REC_MEAN, REC_STD)
+            val input = bitmapBatchToNCHW(resized, tensorWidth, REC_MEAN, REC_STD)
             val tensor = OnnxTensor.createTensor(
                 e,
                 FloatBuffer.wrap(input),
-                longArrayOf(batch.size.toLong(), 3, targetHeight.toLong(), maxWidth.toLong()),
+                longArrayOf(batch.size.toLong(), 3, targetHeight.toLong(), tensorWidth.toLong()),
             )
             tensor.use { t ->
                 session.run(mapOf(session.inputNames.first() to t)).use { result ->
@@ -1185,7 +1370,7 @@ class PaddleOcrEngine @Inject constructor(
                         runId,
                         batchIndex,
                         batch.size,
-                        maxWidth,
+                        tensorWidth,
                         targetHeight,
                         elapsedMs,
                         batch.joinToString(",") { it.boxIndex.toString() },
@@ -1236,6 +1421,7 @@ class PaddleOcrEngine @Inject constructor(
         val resizePlan = PaddleRecognitionSizing.plan(crop.width, crop.height)
         val targetW = resizePlan.targetWidth
         val targetHeight = PaddleRecognitionSizing.TARGET_HEIGHT
+        val tensorWidth = PaddleRecognitionSizing.tensorWidth(loadedVersion, targetW)
         val resized = if (crop.width == targetW && crop.height == targetHeight) {
             crop
         } else {
@@ -1245,8 +1431,10 @@ class PaddleOcrEngine @Inject constructor(
         return try {
             val tensor = OnnxTensor.createTensor(
                 e,
-                FloatBuffer.wrap(bitmapToNCHW(resized, REC_MEAN, REC_STD)),
-                longArrayOf(1, 3, targetHeight.toLong(), targetW.toLong())
+                FloatBuffer.wrap(
+                    bitmapBatchToNCHW(listOf(resized), tensorWidth, REC_MEAN, REC_STD)
+                ),
+                longArrayOf(1, 3, targetHeight.toLong(), tensorWidth.toLong())
             )
             tensor.use { t ->
                 session.run(mapOf(session.inputNames.first() to t)).use { res ->
@@ -1275,7 +1463,7 @@ class PaddleOcrEngine @Inject constructor(
                         crop.width,
                         crop.height,
                         resizePlan.naturalWidth,
-                        targetW,
+                        tensorWidth,
                         targetHeight,
                         resizePlan.capped,
                         elapsedMs,

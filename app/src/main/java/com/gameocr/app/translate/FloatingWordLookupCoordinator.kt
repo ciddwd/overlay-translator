@@ -1,8 +1,12 @@
 package com.gameocr.app.translate
 
 import com.gameocr.app.data.RuntimeTranslationPromptContext
+import com.gameocr.app.data.DictionaryLookupMode
 import com.gameocr.app.data.Settings
 import com.gameocr.app.data.TranslationContextMode
+import com.gameocr.app.dictionary.EmptyOfflineWordDictionary
+import com.gameocr.app.dictionary.OfflineWordDictionary
+import com.gameocr.app.dictionary.supportsOnlineDictionaryLookup
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -34,6 +38,7 @@ internal fun Settings.forFloatingEnglishWordLookup(): Settings = copy(
 internal class FloatingWordLookupCoordinator(
     private val translator: Translator,
     private val lookupScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+    private val offlineDictionary: OfflineWordDictionary = EmptyOfflineWordDictionary,
     private val nowMs: () -> Long = System::currentTimeMillis,
 ) {
     private data class CacheEntry(val outcome: FloatingWordLookupOutcome, val storedAtMs: Long)
@@ -49,9 +54,32 @@ internal class FloatingWordLookupCoordinator(
     suspend fun execute(
         word: String,
         settings: Settings,
+    ): FloatingWordLookupOutcome = execute(word, settings, compact = true)
+
+    suspend fun executeFull(
+        word: String,
+        settings: Settings,
+    ): FloatingWordLookupOutcome = execute(word, settings, compact = false)
+
+    private suspend fun execute(
+        word: String,
+        settings: Settings,
+        compact: Boolean,
     ): FloatingWordLookupOutcome {
         val isolated = settings.forFloatingEnglishWordLookup()
-        val key = lookupKey(word, isolated)
+        if (isolated.dictionaryLookupMode == DictionaryLookupMode.OFFLINE) {
+            return executeOffline(word, isolated)
+        }
+        if (!supportsOnlineDictionaryLookup(isolated.translatorEngine)) {
+            return FloatingWordLookupOutcome(
+                word = word,
+                translation = null,
+                wordResult = null,
+                error = OnlineDictionaryUnavailableException(isolated.translatorEngine.name),
+            )
+        }
+
+        val key = lookupKey(word, isolated, compact)
         val request = mutex.withLock {
             cache[key]
                 ?.takeIf { nowMs() - it.storedAtMs <= CACHE_TTL_MS }
@@ -59,7 +87,7 @@ internal class FloatingWordLookupCoordinator(
                 ?.let { return it }
             inFlight[key] ?: lookupScope.async(start = kotlinx.coroutines.CoroutineStart.LAZY) {
                 try {
-                    executeUncached(word, isolated).also { outcome ->
+                    executeOnlineUncached(word, isolated, compact).also { outcome ->
                         if (outcome.hasDetails) {
                             mutex.withLock { cache[key] = CacheEntry(outcome, nowMs()) }
                         }
@@ -73,64 +101,66 @@ internal class FloatingWordLookupCoordinator(
         return request.await()
     }
 
-    private suspend fun executeUncached(
+    private suspend fun executeOffline(
         word: String,
         isolated: Settings,
+    ): FloatingWordLookupOutcome = try {
+        val result = withContext(Dispatchers.IO) {
+            offlineDictionary.lookup(word, isolated.sourceLang)
+        }?.takeIf(WordResult::hasFloatingWordDetails)
+        FloatingWordLookupOutcome(
+            word = word,
+            translation = result.compactTranslation(),
+            wordResult = result,
+            error = null,
+        )
+    } catch (cancellation: CancellationException) {
+        throw cancellation
+    } catch (error: Throwable) {
+        FloatingWordLookupOutcome(
+            word = word,
+            translation = null,
+            wordResult = null,
+            error = error,
+        )
+    }
+
+    private suspend fun executeOnlineUncached(
+        word: String,
+        isolated: Settings,
+        compact: Boolean,
     ): FloatingWordLookupOutcome {
-        var dictionaryError: Throwable? = null
         val wordResult = try {
             withContext(Dispatchers.IO) {
-                translator.translateWordCompact(word, isolated)
+                if (compact) {
+                    translator.translateWordCompact(word, isolated)
+                } else {
+                    translator.translateWord(word, isolated)
+                }
             }?.takeIf(WordResult::hasFloatingWordDetails)
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (error: Throwable) {
-            dictionaryError = error
-            null
-        }
-
-        val dictionaryTranslation = wordResult?.effectiveDefinitions()
-            ?.asSequence()
-            ?.map(String::trim)
-            ?.filter(String::isNotEmpty)
-            ?.distinct()
-            ?.joinToString("、")
-            ?.takeIf(String::isNotBlank)
-            ?: wordResult?.fallbackTranslation?.takeIf(String::isNotBlank)
-        if (dictionaryTranslation != null) {
             return FloatingWordLookupOutcome(
                 word = word,
-                translation = dictionaryTranslation,
-                wordResult = wordResult,
-                error = dictionaryError,
-            )
-        }
-
-        return try {
-            val translation = withContext(Dispatchers.IO) {
-                translator.translate(word, isolated)
-            }?.takeIf { it.isNotBlank() }
-            FloatingWordLookupOutcome(
-                word = word,
-                translation = translation,
-                wordResult = wordResult,
-                error = if (translation == null) dictionaryError else null,
-            )
-        } catch (cancellation: CancellationException) {
-            throw cancellation
-        } catch (error: Throwable) {
-            FloatingWordLookupOutcome(
-                word = word,
                 translation = null,
-                wordResult = wordResult,
+                wordResult = null,
                 error = error,
             )
         }
+        return FloatingWordLookupOutcome(
+            word = word,
+            translation = wordResult.compactTranslation(),
+            wordResult = wordResult,
+            error = null,
+        )
     }
 
-    private fun lookupKey(word: String, settings: Settings): String = listOf(
+    private fun lookupKey(word: String, settings: Settings, compact: Boolean): String = listOf(
         CACHE_PROMPT_VERSION,
+        if (compact) "compact" else "full",
         word.trim().lowercase(),
+        settings.dictionaryLookupMode.name,
         settings.translatorEngine.name,
         settings.targetLang,
         settings.baseUrl.trimEnd('/'),
@@ -146,6 +176,18 @@ internal class FloatingWordLookupCoordinator(
         const val CACHE_PROMPT_VERSION = "compact-dictionary-v2"
     }
 }
+
+internal class OnlineDictionaryUnavailableException(engine: String) :
+    IllegalStateException("Online dictionary lookup is unavailable for $engine")
+
+private fun WordResult?.compactTranslation(): String? = this?.effectiveDefinitions()
+    ?.asSequence()
+    ?.map(String::trim)
+    ?.filter(String::isNotEmpty)
+    ?.distinct()
+    ?.joinToString("、")
+    ?.takeIf(String::isNotBlank)
+    ?: this?.fallbackTranslation?.takeIf(String::isNotBlank)
 
 private fun WordResult.hasFloatingWordDetails(): Boolean =
     !isEmpty() || !fallbackTranslation.isNullOrBlank()

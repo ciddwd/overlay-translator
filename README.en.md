@@ -41,14 +41,16 @@ Game / manga / visual novel on screen → tap the floating ball → the translat
 ### 🖱️ How to trigger
 
 - **Tap the floating ball**: defaults to translating the whole screen; in **Word-pick mode**, draw around a word or phrase, then fine-tune the selection and tap **Translate** by default. Disable **Precise adjustment** in Settings to recognize and translate immediately on release
-- **Long-press the floating ball**: opens an arc menu with common actions one finger can reach: loop / re-pick region / switch between **"Translate full screen"** and **"Translate a word"** / quick source-target language switch / preset switch / settings / back to main. **Order and page size are configurable** in settings; extra buttons paginate with a "Next page" button automatically
-- **Loop mode**: choose a fixed interval or wait until dialogue text stabilizes; exact duplicate frames / translations are skipped, and detection can prioritize lower-screen dialogue regions for hands-free story reading
+- **Long-press the floating ball**: opens an arc menu with common actions one finger can reach: loop / re-pick region / input translation / switch between **"Translate full screen"** and **"Translate a word"** / quick source-target language switch / preset switch / settings / back to main. **Order and page size are configurable** in settings; extra buttons paginate with a "Next page" button automatically
+- **Input translation**: single-tap the floating ball to translate input-field text into the preset's source language; double-tap for your choice of full-screen or word-pick translation
+- **Quick toggle**: start or stop the capture service directly from your phone's Quick Settings panel
+- **Loop mode**: **Translate when settled** is the default, translating automatically when the screen stops changing. You can also translate at fixed intervals or wait until all the text has appeared.
 - **Volume two-key**: hold **Vol+ and Vol−** together for 0.3 s to trigger; your hands stay on the game (requires enabling the bundled accessibility service)
 - **From any other app**: long-press to select some text in any app → tap "Screen Translator" in the system menu → translation card pops up immediately, no need to switch back to this app first
 
 ### 🔍 OCR (read the text on screen)
 
-- **On-device**: ML Kit (CJK + Latin) / PaddleOCR / manga OCR — your screenshots never leave the phone; works offline; PaddleOCR supports multiple v5/v6 tiers
+- **On-device**: ML Kit (CJK + Latin) / PaddleOCR / manga OCR — your screenshots never leave the phone; works offline; PaddleOCR supports multiple v5/v6 tiers, with PP-OCRv5 Korean available as a separate choice
 - **Local HTTP OCR**: connect to Umi-OCR / LunaTranslator services on your LAN or PC
 - **Cloud**: PP-OCRv6 Online (PaddleOCR AI Studio) / Baidu / Tencent / Youdao — fall back to these when on-device OCR misreads; PP-OCRv6 Online requires an AI Studio Access Token
 - When you switch source language, the app checks whether the current OCR engine can read it; if not, it suggests a better one
@@ -59,11 +61,13 @@ Game / manga / visual novel on screen → tap the floating ball → the translat
 ### 🌐 Translation engines
 
 - **LLMs**: DeepSeek / ChatGPT / Claude / Zhipu / self-hosted services using OpenAI- or Anthropic-compatible connections, with results shown as they arrive
+- **Provider quick setup**: choose ModelScope, OpenRouter, AIHubMix, 302.AI, SCNet, or another listed provider; some services offer mainland China and international addresses
 - **On-device translation**: Google ML Kit works offline after downloading its language packs; Sakura is tuned for Japanese manga and visual novels translated into Simplified Chinese, while Hy-MT2 supports more languages
 - **Language-direction guard**: source and target cannot be set to the same language; conflicting choices are disabled with an explanation in Settings and the floating quick-switch menu
-- **Consistent terminology**: save names, places, organizations, and domain terms globally or per app. Long-press an existing translation to correct the source or translation and keep the correction
+- **Consistent terminology**: save names, places, organizations, and domain terms globally or per app, either individually or through JSON batch import. Long-press an existing translation to correct the source or translation and keep the correction
 - **More consistent over time**: when the same or a similar sentence appears later, the app can reuse a saved translation. Review, search, and manage these entries in the **Translation library**
 - **DeepL**: free / Pro plan auto-detected, **supports self-hosted [deeplx](https://github.com/OwO-Network/DeepLX)** (open-source proxy, run on your own server, no key needed); pick between Official / deeplx / Auto-fallback
+- **NiuTrans**: choose Flash or Pro; Pro can display translations as they arrive
 - **Youdao Pic-Trans**: skips the OCR step entirely — send the screenshot, get back boxes with translations. Great for comics.
 - **Google**: no key, free (proxy required inside mainland China)
 - Online engines have a **Test connection** action; DeepL can also show the current quota
@@ -87,6 +91,8 @@ Not just full-screen translation. Draw a rectangle around a single word or phras
 - In landscape, the close bar stays pinned at the top and both copy actions stay pinned at the bottom; only the content scrolls, clear of system bars and display cutouts
 - Great for game / manga / VN vocabulary you don't recognize — one second per word, faster than switching to a dictionary app
 
+**Text extraction**: enable **Extract text only**, then select an area to extract its text without translating it. You can copy the text or have it read aloud.
+
 ### 🎨 How the overlay looks
 
 - **Two render modes**: glued to each source box (BLOCKS), or packed into a **draggable / resizable floating window** — perfect for games with on-screen joysticks and buttons; you can lock the window to prevent accidental touches
@@ -98,6 +104,7 @@ Not just full-screen translation. Draw a rectangle around a single word or phras
 - **Comic / subtitle optimizations**: sentences split across multiple OCR boxes get merged before translating; vertical Japanese is read right-to-left; tiny ruby-text columns (furigana) next to kanji are filtered out so you don't get duplicate translations; vertical scenes can use vertical translation layout
 - **Marquee for long lines**: in single-line mode, long translations scroll horizontally instead of being truncated with "…"
 - **Custom translation font**: import `.ttf` files for translated text only; the app UI keeps using the system font, and imported fonts stay available as selectable chips
+- **Screen orientation correction**: for situations where the picture's orientation differs from the device's orientation
 
 ### 🛠️ Small conveniences
 
@@ -108,6 +115,8 @@ Not just full-screen translation. Draw a rectangle around a single word or phras
 - **Compact setting choices**: detection profile, merge strength, display mode, and translation-block copy behavior switch directly through button groups
 - **In-settings search**: search in either language; new color, font, backup, import, and export settings are indexed too
 - **System presets**: built-in bundles such as "offline Japanese manga OCR → Simplified Chinese" set up recognition, translation, and display in one step; the manga preset uses Adapt to screen by default, and lists any models you still need to download
+- **API keys per preset**: each preset can store its own keys on this device and switch them along with its settings; keys are never exported
+- **English offline dictionary**: import an English (ECDICT) dictionary pack and choose on-device word lookup
 - **Background model downloads**: continue after leaving Settings; Android 13 and later requests notification permission before a download starts, and both the app and system notification show the current model and progress, with cancel, retry, and resume support
 - **Per-app translation context**: detect the foreground app and apply its terminology; package names always stay on-device, and only the display name is sent when you explicitly enable that option for a context-aware translator
 - **Portable settings bundle**: export / import non-sensitive settings, custom presets, and font files in one step; API keys and tokens remain on the current device
@@ -128,6 +137,7 @@ Screen Translator treats **capture, text recognition, translation, display, and 
 | **Mix and match recognition and translation** | Read text on the phone or through your own computer or a cloud service, then choose translation separately. One unavailable provider does not disable the whole workflow |
 | **Speech is independent from translation** | Any translation method can be paired with a phone voice, your own voice service, or an online voice without reconfiguring recognition and translation |
 | **Live screens and saved images** | Use the floating ball to translate what is on screen immediately, or send a group of saved images to the background; both workflows can use your saved presets |
+| **Input translation** | Single-tap the floating ball to translate input-field text into the preset's source language; double-tap for your choice of full-screen or word-pick translation |
 | **Fully offline or fully self-hosted** | On-device recognition and translation plus an installed offline phone voice can keep screenshots and text on the phone; recognition, translation, and speech services can also run on your own computer or server |
 | **Built for games, manga, and visual novels** | Wait for dialogue to finish typing, skip unchanged scenes, prioritize dialogue regions, handle vertical manga, preserve source position and reading direction, and keep per-game names and terms consistent |
 | **Open source without configuration lock-in** | Apache-2.0 source; settings, presets, terminology, and fonts can be exported for migration, while API keys stay out of the export |
@@ -200,12 +210,12 @@ It is intended for users who want to choose their own recognition, translation, 
 | <img src="docs/screenshots/settings-display.png" width="280" alt="Overlay display and font settings" /> | <img src="docs/screenshots/settings-display-adaptive.png" width="280" alt="Adapt to screen settings" /> |
 | **Arc-menu buttons** | **Floating-window mode options** |
 | <img src="docs/screenshots/settings-arc-menu.png" width="280" alt="Arc-menu button settings" /> | <img src="docs/screenshots/settings-display-floating.png" width="280" alt="Floating-window mode settings" /> |
-| **Box merge / floating ball** | **Smart loop translation** |
-| <img src="docs/screenshots/settings-floating.png" width="280" alt="Box merge & floating ball settings" /> | <img src="docs/screenshots/settings-loop-translation.png" width="280" alt="Smart loop translation settings" /> |
+| **Floating ball** | **Smart loop translation** |
+| <img src="docs/screenshots/settings-floating.png" width="280" alt="Floating ball settings" /> | <img src="docs/screenshots/settings-loop-translation.png" width="280" alt="Smart loop translation settings" /> |
 
-| **Word-select translation** | **TTS speech settings** |
+| **Word-select translation / Capture region / Input translation** | **TTS speech settings** |
 |---|---|
-| <img src="docs/screenshots/settings-word-select.png" width="280" alt="Word-select precise adjustment, translation card, and remember-selection settings" /> | <img src="docs/screenshots/settings-tts.png" width="280" alt="TTS engine, system voice, speed, pitch, and test-text settings" /> |
+| <img src="docs/screenshots/settings-word-select.png" width="280" alt="Word-select translation / Capture region / Input translation" /> | <img src="docs/screenshots/settings-tts.png" width="280" alt="TTS engine, system voice, speed, pitch, and test-text settings" /> |
 
 ## 📦 Install
 
@@ -226,11 +236,22 @@ Each APK ships with a `.sha256` so you can verify integrity against `Get-FileHas
 5. By default, tap a translation block to hide it or long-press to select and copy; Settings can instead make taps open the source / translation copy panel
 
 Optional:
-- Enable the accessibility service so **holding Vol+ and Vol- together for 300 ms** acts as a global trigger. The service does not inspect accessibility text or view trees from other apps; Screen Translator's own primary overlays expose TalkBack labels, state, and action hints.
+
+- Enable the accessibility service so **holding Vol+ and Vol- together for 300 ms** acts as a global trigger. Screen Translator's own primary overlays expose TalkBack labels, state, and action hints.
 - Install [Shizuku](https://github.com/RikkaApps/Shizuku) and grant permission; in settings, switch the capture path to Shizuku to skip the per-session system dialog. Capture prefers the raw-pixel path and falls back to PNG for compatibility.
 - Pick a system preset at the top of settings, such as "Offline Japanese manga OCR → Simplified Chinese". If a required model is missing, the preset card lists it and offers a download action.
 - For single-word lookup, switch the floating-ball action to **Word-pick mode** from the arc menu, then draw around the word / phrase. You can also select text in another app and invoke Screen Translator from the system selection menu.
 - To hear source text or translations, enable TTS in Settings and choose a voice, then tap the speaker button beside the text.
+- Add the Screen Translator tile to your phone's Quick Settings panel to start or stop the capture service directly.
+
+### Input translation
+
+Switch to **Input translation** in the arc menu, then tap the input field you want to translate and enter your text:
+
+- **Single-tap the floating ball**: translate the input text into the preset's source language and replace the original content
+- **Double-tap the floating ball**: run full-screen or word-pick translation, as selected in the **Input translation** card in Settings
+
+Accessibility permission is required. Input text is read and replaced only when you tap the floating ball. Password-type fields are not read.
 
 ## ⚙️ Configuration
 
@@ -242,6 +263,7 @@ Open the app and tap **Settings**. The top of the settings page lets you switch 
 |---|---|---|
 | **On-device** ML Kit (auto / latin / ja / zh / ko) | Default; Japanese / Chinese / Korean / Latin | Offline, on-device |
 | **On-device** PaddleOCR PP-OCRv5 / v6 | Multilingual dense text, UI buttons, horizontal Chinese / English | Supports v5 mobile and v6 tiny / small / medium; models must be ready — see below |
+| **On-device** PP-OCRv5 Korean | Korean text | A separate Korean recognition model selectable in Settings; download the model before first use |
 | **On-device** manga OCR | Japanese manga, vertical bubbles, hand-drawn fonts | Uses manga-ocr ONNX and reuses DBNet detection; ~140 MB, downloadable or importable |
 | **Local HTTP** Umi-OCR | You already run [Umi-OCR](https://github.com/hiroi-sora/Umi-OCR) on a PC / LAN server | Point the app at `http://<host>:<port>/api/ocr`; screenshots stay on your LAN |
 | **Local HTTP** LunaTranslator | You already run [LunaTranslator](https://github.com/HIllya51/LunaTranslator) OCR on a PC / LAN server | Fill in the LunaTranslator OCR HTTP endpoint |
@@ -357,6 +379,7 @@ Choose by use case first; you do not need to read every setting before getting s
 | **OpenAI-compatible** | Existing DeepSeek, OpenAI, Zhipu, SiliconFlow, Ollama, or compatible services | Base URL, API key, and model name | Supports streaming and custom prompts; pricing and rate limits depend on the provider |
 | **Anthropic-compatible** | Existing Claude or another service with Anthropic support | Service URL, API key, and model name | Supports streaming and custom prompts; pricing and rate limits depend on the provider |
 | **DeepL / DeepLX** | Conventional machine translation or an existing self-hosted DeepLX service | DeepL Auth Key or a DeepLX service URL | Official DeepL selects free / pro automatically; Test connection can show quota |
+| **NiuTrans** | General text translation | API key; Flash also requires an App ID | Choose Flash or Pro; Pro can display translations as they arrive |
 | **Youdao PicTrans** | Comics, full images, and screens with many text boxes | Youdao App ID + App Secret | Translates the screenshot directly and does not use the OCR engine selected above |
 | **Google** | A quick trial without entering a key | Nothing | Uses an unofficial endpoint; usually needs a proxy in mainland China and may be rate-limited or stop working |
 | **Volcengine** | Long loop-translation sessions | AK / SK with Machine Translation enabled | Keep the default region; this is an online service |
@@ -368,6 +391,7 @@ Every online engine has a **Test connection** action. Use it before switching to
 <details>
 <summary><strong>How do I fill in an OpenAI-compatible service?</strong></summary>
 
+- **Quick setup**: choose ModelScope, OpenRouter, AIHubMix, 302.AI, SCNet, or another listed provider; some services offer mainland China and international addresses
 - **Base URL**: use the provider's OpenAI-compatible endpoint, usually ending in `/v1/`
 - **API key**: use the key issued by the provider; it may be left blank for a self-hosted service without authentication
 - **Model name**: copy the exact name from the provider console or your self-hosted service instead of guessing from an example
@@ -411,9 +435,41 @@ To hear translations aloud, enable TTS in Settings and choose a voice option:
 - **Foreground app detection**: choose Auto, Accessibility, Usage access, or Global only. Package names are used only for on-device terminology matching and are never sent to translation services; "Send app name to the model" is a separate opt-in
 - **Supported engines**: app names and terminology context currently apply only to OpenAI-compatible, Anthropic-compatible, and on-device LLM translation; plain machine-translation engines keep their existing request format
 
+#### Import terms in bulk
+
+Tap **＋** in the terminology list, choose **Batch import**, and select a JSON file. Each entry only needs a source term and its preferred translation:
+
+```json
+[
+  {"source": "梓ちゃん", "target": "梓酱"},
+  {"source": "先輩", "target": "前辈"}
+]
+```
+
+Chinese field names are also supported:
+
+```json
+[
+  {"原文": "梓ちゃん", "译文": "梓酱"}
+]
+```
+
+- Preview, filter, and deselect entries before importing; choose whether to skip or overwrite matching existing terms
+- Different source terms may share the same translation. If one source term has different translations in the file, select which one to keep first
+- Each file may contain up to 5,000 entries and must not exceed 2 MB
+
+### Dictionary library
+
+Manage lookup options in **Translation library → Dictionary library**:
+
+- **Online lookup**: use the currently configured cloud LLM; an OpenAI-compatible or Anthropic-compatible translation engine is required
+- **Offline lookup**: import an English (ECDICT) `.bin` dictionary pack made for Screen Translator to look up words on your phone
+- **Show definitions when tapping source text**: turn this feature on or off here
+
 ### Loop translation
 
-- **Trigger mode**: Fixed interval runs at the configured millisecond interval; "Wait for text completion" resets its timer while dialogue is still typing and translates as soon as text stabilizes
+- **Trigger mode**: **Translate when settled** is the default; **Fixed interval** and **Wait for text completion** are also available
+- **Translate when settled**: automatically translate each new page as you turn it, without repeatedly tapping the floating ball.
 - **Animated backgrounds**: on-device OCR can verify that text remains unchanged even while the frame animates; cloud OCR uses frame stability only, avoiding extra paid verification requests
 - **Dialogue region**: choose Auto, Lower screen first, or Anywhere, then decide whether to translate only that region or use it for stability while translating all text recognized in the first frame
 - **Duplicate skipping**: exact frame matches skip both OCR and translation; similar frames still verify whether OCR text changed, with an adjustable sensitivity threshold
@@ -425,6 +481,8 @@ To hear translations aloud, enable TTS in Settings and choose a voice option:
 - **Translation layout**: "Follow recognized text layout" is enabled by default, so horizontal / vertical layout and reading order jointly drive OCR-block sorting and translated-text rendering; turn it off to explicitly choose horizontal / vertical and LTR / RTL, including vertical manga and horizontal RTL
 - **Block interaction**: the default is tap-to-close plus long-press range selection; an alternate mode makes taps open a panel where you can select or copy the full source / translation
 - **Floating window**: switch between "source + translation" and "translation only" content modes; **lock** the window to disable dragging and resizing during gameplay; a "Reset position / size" button restores defaults in one tap
+- **Screen orientation correction**: for situations where the picture's orientation differs from the device's orientation
+- **Floating-ball opacity**: adjust it in the **Floating button** card in Settings
 - **Theme**: 5 presets + a visual custom color picker for independent background / text / border color and opacity; borders support solid / dashed / dotted / double / groove styles
 - **Text style**: bold / italic / underline, letter spacing, line spacing, left / center / right alignment, outline width and color, plus shadow radius / offset / color
 - **Font**: import `.ttf` files for the translation layer and preview only; imported fonts are kept as horizontally selectable chips, and reselecting an existing font does not reorder them
@@ -433,8 +491,8 @@ To hear translations aloud, enable TTS in Settings and choose a voice option:
 ### Presets and Arc Menu
 
 - **System presets**: built-in bundles such as "offline Japanese manga OCR → Simplified Chinese" set up recognition, translation, language, and display in one step. The manga preset uses Adapt to screen by default, and lists missing models for download.
-- **Custom presets**: save the current settings as a preset. A preset only shows as applied when all key settings still match; changing any key field returns the card to the unsaved state.
-- **Arc-menu buttons**: drag to reorder and choose 2-6 visible buttons per page. If there are more actions, the last slot becomes "Next page". Actions can include loop, capture region, word/full-screen mode switch, language quick switch, preset quick switch, settings, and back to main app.
+- **Custom presets**: save the current settings as a preset. A preset only shows as applied when all key settings still match; changing any key field returns the card to the unsaved state. Each preset can store its own API keys on this device and switch them along with its settings; keys are never exported.
+- **Arc-menu buttons**: drag to reorder and choose 2-6 visible buttons per page. If there are more actions, the last slot becomes "Next page". Actions can include loop, capture region, input translation, word/full-screen mode switch, language quick switch, preset quick switch, settings, and back to main app.
 
 ### Backup and migration
 
@@ -469,19 +527,24 @@ To hear translations aloud, enable TTS in Settings and choose a voice option:
 | Feature | What users can do |
 |---|---|
 | **Floating translation** | Tap the floating ball over a game, manga, or visual novel and show translations beside the source or in a separate floating window |
+| **Input translation** | Single-tap the floating ball to translate input-field text into the preset's source language; double-tap for your choice of full-screen or word-pick translation |
+| **Quick toggle** | Start or stop the capture service directly from your phone's Quick Settings panel |
 | **Batch image translation** | Select multiple saved images and let the task continue after leaving the page; review progress, source text, and translations, then save translated images with the task's text style |
 | **Adapt to screen** | Choose colors, background, and text size automatically; comic scenes use bundled bubble detection, source-text erasure, local repair, and shape-aware layout with a safe fallback |
 | **Automatic loop** | Translate at a fixed interval or wait for dialogue to finish typing; skip unchanged screens and optionally prioritize lower-screen dialogue boxes |
-| **Multiple OCR choices** | Use on-device ML Kit / PaddleOCR / manga OCR, connect to OCR on your LAN, or use Baidu, Tencent, Youdao, and PP-OCRv6 Online |
+| **Multiple OCR choices** | Use on-device ML Kit / PaddleOCR / manga OCR, including a separate PP-OCRv5 Korean option; connect to OCR on your LAN, or use Baidu, Tencent, Youdao, and PP-OCRv6 Online |
 | **Horizontal and vertical text** | Detect rotated, horizontal, and vertical manga text; follow the recognized layout or manually choose layout and reading direction |
-| **Multiple translators** | Use Google ML Kit on-device translation, OpenAI-compatible services, DeepL, Google, Volcengine, Baidu, Tencent, Youdao PicTrans, or offline Sakura / Hy-MT2 models |
+| **Screen orientation correction** | For situations where the picture's orientation differs from the device's orientation |
+| **Multiple translators** | Use Google ML Kit on-device translation, OpenAI-compatible services, DeepL, NiuTrans, Google, Volcengine, Baidu, Tencent, Youdao PicTrans, or offline Sakura / Hy-MT2 models |
+| **Provider quick setup** | Choose ModelScope, OpenRouter, AIHubMix, 302.AI, SCNet, or another listed provider; some services offer mainland China and international addresses |
 | **Copy translations** | Long-press to select a range, or tap a block to open a panel and copy part of the text, the full source, or the full translation |
 | **Translation speech (TTS)** | Read source text, translations, and word-card content with phone system voices, a self-hosted service, Volcengine, MiniMax, or MiMo; pause / resume, speak selected text, and manage voices |
 | **Word lookup** | Select a word or phrase for a translation; LLM engines can also return pronunciation, part of speech, inflections, synonyms, definitions, examples, and usage notes |
-| **Consistent names and terms** | Save global or per-game names, places, and terminology so wording stays consistent across scenes |
+| **English offline dictionary** | Import an English (ECDICT) dictionary pack and choose on-device word lookup |
+| **Consistent names and terms** | Save global or per-game names, places, and terminology so wording stays consistent across scenes; import JSON files with preview, filtering, and entry selection |
 | **Model downloads** | Download on-device models in the background, view progress in the app and notification, cancel, retry, or resume interrupted files |
 | **Faster local translation** | Prepare offline models after capture starts and handle several text blocks together when possible to reduce waiting |
-| **Customization and migration** | Adjust colors, fonts, size, outline, and shadow; export settings, presets, terminology, and fonts for another device |
+| **Customization and migration** | Adjust floating-ball opacity and translation colors, fonts, size, outline, and shadow; export settings, presets, terminology, and fonts for another device |
 | **Assistive features** | Trigger with both volume keys, use TalkBack action hints, export crash logs, and open background-running guides for aggressive Android ROMs |
 | **Broader Shizuku compatibility** | Use Sui, official Shizuku, Nightzuku, thedjchi/Shizuku, or Shizuku+ for authorization and screen capture |
 
@@ -492,7 +555,6 @@ These are user-facing improvements we want to continue working on, not a fixed r
 | Direction | Intended experience |
 |---|---|
 | **Floating translation history** | Revisit screens and dialogue translated with the floating ball instead of losing the last line after switching scenes |
-| **Offline dictionary** | Show basic definitions and examples without a network connection or an LLM translator |
 | **Character and speaker recognition** | Better identify who is speaking, reduce mistakes in names, relationships, and pronouns, and make ongoing dialogue sound more natural |
 | **Long-term on-device model improvements** | Keep improving downloads, startup time, memory use, heat, battery life, and device compatibility across all on-device models, while exploring speech and more features that can run locally on phones |
 | **System assistant and agent integration** | Track [Android AppFunctions](https://developer.android.com/ai/appfunctions) and [A2A](https://a2a-protocol.org/latest/), then explore starting translation, speech, and common actions through system assistants or other agents as platform support matures |
@@ -503,6 +565,8 @@ On-device model improvements are an ongoing plan that will progress over time as
 ## 🤝 Contributing
 
 Contributions of any kind — bug fixes, features, UI polish, translations, doc tweaks — are welcome.
+
+If you plan to work on an issue yourself, please leave a comment on it beforehand to let others know, so we can avoid duplicating effort. If no one has said they will take it on, I will generally work on it as my schedule allows.
 
 ### Branch & PR rules
 

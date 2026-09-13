@@ -780,7 +780,7 @@ private fun MiniMaxManagedVoiceRow(
                         } else {
                             R.string.settings_tts_minimax_voice_type_designed
                         }
-                    ) + voice.createdTime.takeIf(String::isNotBlank)?.let { " · $it" }.orEmpty()
+                    ) + voice.createdTime.takeIf(String::isNotBlank)?.let { " $it" }.orEmpty()
                 )
                 voice.description.firstOrNull()?.let { description ->
                     Text(

@@ -2,10 +2,15 @@
 // Sequence 0 retains the reusable system prompt. Sequences 1..8 are independent requests.
 
 #include <cctype>
+#include <array>
 
 namespace {
 
 constexpr int GAMEOCR_MAX_PARALLEL_SEQUENCES = 8;
+constexpr int GAMEOCR_MULTI_METRICS_FIELD_COUNT = 6;
+
+static std::array<jdouble, GAMEOCR_MULTI_METRICS_FIELD_COUNT> gameocr_last_multi_metrics{};
+static bool gameocr_last_multi_metrics_valid = false;
 
 struct gameocr_multi_sequence_state {
     llama_seq_id seq_id = -1;
@@ -81,6 +86,7 @@ static std::string gameocr_format_independent_user_prompt(const std::string & pr
 }
 
 static jobjectArray gameocr_multi_fail(const char * reason, const int sequence_count) {
+    gameocr_last_multi_metrics_valid = false;
     LOGe(
             "MULTI failed reason=%s sequences=%d",
             reason,
@@ -478,6 +484,16 @@ Java_com_gameocr_app_llm_LlamaMultiSequence_generateNative(
             generation_decode_calls,
             (finished_us - total_started_us) / 1000.0);
 
+    gameocr_last_multi_metrics = {
+            (prefill_started_us - total_started_us) / 1000.0,
+            (prefill_finished_us - prefill_started_us) / 1000.0,
+            generation_decode_us / 1000.0,
+            (finished_us - total_started_us) / 1000.0,
+            static_cast<jdouble>(decoded_prompt_tokens),
+            static_cast<jdouble>(total_generated_tokens),
+    };
+    gameocr_last_multi_metrics_valid = true;
+
     auto * string_class = env->FindClass("java/lang/String");
     if (string_class == nullptr) {
         return gameocr_multi_fail("string_class", sequence_count);
@@ -497,4 +513,24 @@ Java_com_gameocr_app_llm_LlamaMultiSequence_generateNative(
         env->DeleteLocalRef(output);
     }
     return outputs;
+}
+
+extern "C"
+JNIEXPORT jdoubleArray JNICALL
+Java_com_gameocr_app_llm_LlamaMultiSequence_lastMetricsNative(
+        JNIEnv * env,
+        jobject /*unused*/) {
+    if (!gameocr_last_multi_metrics_valid) {
+        return nullptr;
+    }
+    auto * result = env->NewDoubleArray(GAMEOCR_MULTI_METRICS_FIELD_COUNT);
+    if (result == nullptr) {
+        return nullptr;
+    }
+    env->SetDoubleArrayRegion(
+            result,
+            0,
+            GAMEOCR_MULTI_METRICS_FIELD_COUNT,
+            gameocr_last_multi_metrics.data());
+    return env->ExceptionCheck() ? nullptr : result;
 }

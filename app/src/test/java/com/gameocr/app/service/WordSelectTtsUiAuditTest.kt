@@ -22,7 +22,7 @@ class WordSelectTtsUiAuditTest {
             "playbackId = \"word-select:${'$'}diagId:source\"",
             "playbackId = \"word-select:${'$'}diagId:translation\"",
             "playbackId = \"word-select:${'$'}diagId:dictionary\"",
-            "settings.copy(targetLang = settings.sourceLang)",
+            "sourceEvidence = { sourceLanguageEvidence }",
         )
         requiredFragments.forEach { fragment ->
             assertTrue("Missing manual word-select TTS wiring: $fragment", pipeline.contains(fragment))
@@ -38,6 +38,8 @@ class WordSelectTtsUiAuditTest {
         )
         assertTrue("Persistent buttons toggle playback", speaker.contains("ttsEngine.toggle("))
         assertTrue("Selection toolbar starts new playback", speaker.contains("ttsEngine.speak("))
+        assertTrue("Original text toggles with its actual language", speaker.contains("ttsEngine.toggleSource("))
+        assertTrue("Original text selection detects its own language", speaker.contains("ttsEngine.speakSource("))
         assertFalse("Toggle must not discard resumable progress", speaker.contains("ttsEngine.stop()"))
         assertTrue(
             "TTS failures must be visible instead of log-only",

@@ -5,6 +5,7 @@ import com.gameocr.app.R
 import com.gameocr.app.data.Languages
 import com.gameocr.app.data.Settings
 import com.gameocr.app.data.withApiTimeout
+import com.gameocr.app.util.RuntimePerformanceDiagnostics
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -26,6 +27,7 @@ class AnthropicTranslator @Inject constructor(
     private val client: OkHttpClient,
     private val json: Json,
     private val cache: TranslationCache,
+    private val performanceDiagnostics: RuntimePerformanceDiagnostics,
 ) : Translator {
 
     override val supportsStructuredContextBatch: Boolean = true
@@ -221,8 +223,10 @@ class AnthropicTranslator @Inject constructor(
                         readStructuredAnthropicStream(response, requestId, startedAt)
                     } else {
                         val raw = response.body?.string().orEmpty()
-                        parseAnthropicResponseText(raw, json)
+                        val parsed = parseAnthropicResponse(raw, json)
                             ?: throw TranslationException(appContext.getString(R.string.err_anthropic_no_text))
+                        recordInferenceMetrics(parsed.usage, startedAt)
+                        parsed.text
                     }
                 }
             }.also { translated ->
@@ -327,6 +331,8 @@ class AnthropicTranslator @Inject constructor(
         var dataEventCount = 0
         var contentEventCount = 0
         var malformedEventCount = 0
+        var usage: AnthropicUsage? = null
+        var firstTokenMs: Long? = null
         var endReason = "eof"
         try {
             body.source().use { source ->
@@ -345,6 +351,7 @@ class AnthropicTranslator @Inject constructor(
                             contentEventCount += 1
                             if (!firstTokenLogged) {
                                 firstTokenLogged = true
+                                firstTokenMs = (System.currentTimeMillis() - startedAt).coerceAtLeast(0L)
                                 Timber.i(
                                     "Anthropic request=%s firstTokenMs=%d kind=translation_batch",
                                     requestId,
@@ -353,6 +360,7 @@ class AnthropicTranslator @Inject constructor(
                             }
                             accumulated.append(event.value)
                         }
+                        is AnthropicStreamEvent.Metrics -> usage = mergeAnthropicUsage(usage, event.usage)
                         is AnthropicStreamEvent.Error -> {
                             endReason = "server_error"
                             throw TranslationException("Anthropic stream error: ${event.detail}")
@@ -396,6 +404,9 @@ class AnthropicTranslator @Inject constructor(
                 accumulated.length,
             )
         }
+        if (accumulated.isNotEmpty()) {
+            recordInferenceMetrics(usage, startedAt, firstTokenMs)
+        }
         return accumulated.toString().trim()
             .takeIf(String::isNotEmpty)
             ?: throw TranslationException(appContext.getString(R.string.err_anthropic_no_text))
@@ -427,6 +438,7 @@ class AnthropicTranslator @Inject constructor(
             conversationMessages = resolvedRequest.conversationMessages,
         )
         val requestId = UUID.randomUUID().toString().take(8)
+        val startedAt = System.currentTimeMillis()
         TranslationRequestAudit.log(
             requestId, "ANTHROPIC", "translation", false, request,
         )
@@ -436,8 +448,10 @@ class AnthropicTranslator @Inject constructor(
                 if (!response.isSuccessful) {
                     throw TranslationException("HTTP ${response.code}: ${anthropicErrorDetail(raw, json)}")
                 }
-                parseAnthropicResponseText(raw, json)
+                val parsed = parseAnthropicResponse(raw, json)
                     ?: throw TranslationException(appContext.getString(R.string.err_anthropic_no_text))
+                recordInferenceMetrics(parsed.usage, startedAt)
+                parsed.text
             }
         }
         cache.put(cacheKey, translated, settings)
@@ -473,6 +487,7 @@ class AnthropicTranslator @Inject constructor(
             conversationMessages = resolvedRequest.conversationMessages,
         )
         val requestId = UUID.randomUUID().toString().take(8)
+        val startedAt = System.currentTimeMillis()
         TranslationRequestAudit.log(
             requestId, "ANTHROPIC", "translation", true, request,
         )
@@ -491,6 +506,8 @@ class AnthropicTranslator @Inject constructor(
 
         val accumulated = StringBuilder()
         var malformedEventCount = 0
+        var usage: AnthropicUsage? = null
+        var firstTokenMs: Long? = null
         try {
             body.source().use { sourceBuffer ->
                 while (!sourceBuffer.exhausted()) {
@@ -499,9 +516,13 @@ class AnthropicTranslator @Inject constructor(
                     val payload = line.substring(5).trim()
                     when (val event = parseAnthropicStreamEvent(payload, json)) {
                         is AnthropicStreamEvent.Text -> {
+                            if (firstTokenMs == null) {
+                                firstTokenMs = (System.currentTimeMillis() - startedAt).coerceAtLeast(0L)
+                            }
                             accumulated.append(event.value)
                             emit(accumulated.toString())
                         }
+                        is AnthropicStreamEvent.Metrics -> usage = mergeAnthropicUsage(usage, event.usage)
                         is AnthropicStreamEvent.Error ->
                             throw TranslationException("Anthropic stream error: ${event.detail}")
                         is AnthropicStreamEvent.Malformed -> {
@@ -524,9 +545,23 @@ class AnthropicTranslator @Inject constructor(
             response.close()
         }
         if (accumulated.isNotEmpty()) {
+            recordInferenceMetrics(usage, startedAt, firstTokenMs)
             cache.put(cacheKey, accumulated.toString(), settings)
         }
     }.flowOn(Dispatchers.IO)
+
+    private fun recordInferenceMetrics(
+        usage: AnthropicUsage?,
+        startedAtMs: Long,
+        firstTokenMs: Long? = null,
+    ) {
+        performanceDiagnostics.recordLlmInference(
+            firstTokenMs = firstTokenMs,
+            totalMs = (System.currentTimeMillis() - startedAtMs).coerceAtLeast(0L),
+            inputTokens = usage?.inputTokens,
+            outputTokens = usage?.outputTokens,
+        )
+    }
 
     override suspend fun testConnection(settings: Settings): TestResult {
         connectionValidationMessage(settings)?.let { return TestResult(false, it) }
@@ -611,14 +646,7 @@ class AnthropicTranslator @Inject constructor(
         val systemPrompt = if (compact) {
             compactDictionaryPrompt(sourceDisplay, targetDisplay)
         } else {
-            settings.dictionaryPrompt
-                .replace("{source}", sourceDisplay)
-                .replace("{source_lang}", sourceDisplay)
-                .replace("{target}", targetDisplay)
-                .replace("{target_lang}", targetDisplay)
-                .withDifficultyNotesContract(targetDisplay)
-                .withLexicalDetailsContract(sourceDisplay)
-                .withGroupedSensesContract(sourceDisplay, targetDisplay) + settings.runtimeTranslationContext
+            fullDictionaryPrompt(sourceDisplay, targetDisplay) + settings.runtimeTranslationContext
         }
         val request = buildAnthropicMessageRequest(
             settings = settings,

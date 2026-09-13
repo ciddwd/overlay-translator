@@ -119,7 +119,12 @@ import androidx.compose.ui.window.DialogProperties
 import com.gameocr.app.BuildConfig
 import com.gameocr.app.R
 import com.gameocr.app.capture.CaptureRegion
-import com.gameocr.app.capture.MediaProjectionRequestActivity
+import com.gameocr.app.capture.CaptureStartRequestActivity
+import com.gameocr.app.capture.CaptureStartPreference
+import com.gameocr.app.capture.resolveCaptureStartMode
+import com.gameocr.app.capture.showCaptureStartControls
+import com.gameocr.app.capture.CaptureStartMode as StartMode
+import com.gameocr.app.shizuku.AppPermissionCoordinator
 import com.gameocr.app.capture.RegionPickerActivity
 import com.gameocr.app.data.Settings as AppSettings
 import com.gameocr.app.data.SettingsRepository
@@ -140,6 +145,9 @@ import com.gameocr.app.service.CaptureService
 import com.gameocr.app.service.CaptureServiceState
 import com.gameocr.app.shizuku.ShizukuCapabilities
 import com.gameocr.app.shizuku.ShizukuManager
+import com.gameocr.app.shizuku.OverlayPermissionEntryAction
+import com.gameocr.app.shizuku.resolveOverlayPermissionEntryAction
+import com.gameocr.app.trigger.AccessibilityServiceStatus
 import com.gameocr.app.update.UpdateChecker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -176,7 +184,11 @@ fun MainScreen(
     var batteryOk by remember {
         mutableStateOf(RomHelper.isIgnoringBatteryOptimizations(context))
     }
+    var accessibilityServiceEnabled by remember {
+        mutableStateOf(AccessibilityServiceStatus.isEnabled(context))
+    }
     val serviceRunning by CaptureServiceState.running.collectAsState()
+    val showCaptureControls = showCaptureStartControls(canDrawOverlay, serviceRunning, shizukuAvail)
     val appSettings by viewModel.settings.collectAsState(initial = null)
     val featuredGalleryTaskState by produceState<MainGalleryTaskLoadState>(
         initialValue = MainGalleryTaskLoadState.Loading,
@@ -196,15 +208,30 @@ fun MainScreen(
         if (uris.isNotEmpty()) onGalleryImagesSelected(uris.map { it.toString() })
     }
     val unsavedPresetName = stringResource(R.string.settings_translation_preset_unsaved_name)
-    val presetPlans = remember(appSettings, unsavedPresetName) {
-        appSettings?.let { presetCarouselPlans(it, unsavedPresetName) }
+    val credentialRequest = appSettings?.let { com.gameocr.app.data.PresetCredentialPolicy.capture("", it) }
+    var credentialMatchSnapshot by remember { mutableStateOf<com.gameocr.app.data.PresetCredentialRecord?>(null) }
+    var credentialMatchedPresetIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    LaunchedEffect(appSettings?.translationPresets, credentialRequest) {
+        val source = appSettings ?: return@LaunchedEffect
+        credentialMatchedPresetIds = viewModel.matchingCredentialPresetIds(source)
+        credentialMatchSnapshot = credentialRequest
+    }
+    val presetPlans = remember(appSettings, unsavedPresetName, credentialMatchSnapshot, credentialMatchedPresetIds) {
+        appSettings?.takeIf { credentialMatchSnapshot == credentialRequest }?.let {
+            presetCarouselPlans(it, unsavedPresetName, credentialMatchedPresetIds)
+        }
     }
     val presets = presetPlans?.presets.orEmpty()
     var presetModelIssues by remember {
         mutableStateOf<Map<String, List<TranslationPresetModelIssue>>?>(null)
     }
-    var startMode by remember { mutableStateOf(StartMode.MEDIA_PROJECTION) }
-    var userOverrodeMode by remember { mutableStateOf(false) }
+    var startMode by remember { mutableStateOf(StartMode.SYSTEM) }
+    val preferredStartMode by CaptureStartPreference.mode.collectAsState()
+    val accessibilityConnected by com.gameocr.app.trigger.GameOcrAccessibilityService.connected.collectAsState()
+    LaunchedEffect(accessibilityConnected) {
+        accessibilityServiceEnabled = AccessibilityServiceStatus.isEnabled(context)
+    }
+    var overlayPermissionRequestRunning by remember { mutableStateOf(false) }
     var showClearRegionDialog by remember { mutableStateOf(false) }
     var showSharePrompt by rememberSaveable { mutableStateOf(false) }
     var presetPageSeen by rememberSaveable { mutableStateOf<Boolean?>(null) }
@@ -303,12 +330,8 @@ fun MainScreen(
     // Shizuku 就绪时默认选 Shizuku（用户未手动切换过的前提下）。
     // 进入页面时 shizukuAvail 还在初始 NOT_INSTALLED，等 ON_RESUME 探测完才真实；
     // 这里跟着变化走，确保用户进来直接看到最优选项。
-    LaunchedEffect(shizukuAvail) {
-        if (!userOverrodeMode) {
-            startMode = if (shizukuAvail == ShizukuCapabilities.Availability.READY ||
-                shizukuAvail == ShizukuCapabilities.Availability.INSTALLED_NOT_GRANTED
-            ) StartMode.SHIZUKU else StartMode.MEDIA_PROJECTION
-        }
+    LaunchedEffect(shizukuAvail, preferredStartMode) {
+        startMode = resolveCaptureStartMode(preferredStartMode, shizukuAvail)
     }
 
     // binder 死亡 / 重启 / shell 特权变化都会触发重算 Availability，避免「Shizuku 被外部
@@ -328,6 +351,7 @@ fun MainScreen(
                     region = viewModel.currentRegion()
                     shizukuAvail = viewModel.shizukuAvailability(context)
                     batteryOk = RomHelper.isIgnoringBatteryOptimizations(context)
+                    accessibilityServiceEnabled = AccessibilityServiceStatus.isEnabled(context)
                     if (!batteryOk) {
                         repeat(5) {
                             if (!batteryOk) {
@@ -625,15 +649,35 @@ fun MainScreen(
                         title = stringResource(R.string.main_section_capture),
                         modifier = pageModifier,
                     ) {
-                if (!canDrawOverlay) {
+                if (!showCaptureControls) {
                     Button(
+                        enabled = !overlayPermissionRequestRunning,
                         modifier = Modifier.fillMaxWidth().height(56.dp),
                         onClick = {
-                            val intent = Intent(
-                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                Uri.parse("package:" + context.packageName)
-                            )
-                            context.startActivity(intent)
+                            if (overlayPermissionRequestRunning) return@Button
+                            overlayPermissionRequestRunning = true
+                            scope.launch {
+                                try {
+                                    shizukuAvail = viewModel.shizukuAvailability(context)
+                                    val action = resolveOverlayPermissionEntryAction(
+                                        overlayPermissionGranted = Settings.canDrawOverlays(context),
+                                        shizukuAvailability = shizukuAvail,
+                                    )
+                                    val granted = when (action) {
+                                        OverlayPermissionEntryAction.ALREADY_GRANTED -> true
+                                        OverlayPermissionEntryAction.TRY_SHIZUKU ->
+                                            viewModel.grantOverlayPermissionViaShizuku()
+                                        OverlayPermissionEntryAction.OPEN_SYSTEM_SETTINGS -> false
+                                    }
+                                    canDrawOverlay = Settings.canDrawOverlays(context)
+                                    shizukuAvail = viewModel.shizukuAvailability(context)
+                                    if (!granted || !canDrawOverlay) {
+                                        openOverlayPermissionSettings(context)
+                                    }
+                                } finally {
+                                    overlayPermissionRequestRunning = false
+                                }
+                            }
                         }
                     ) { Text(stringResource(R.string.main_action_grant_overlay_first)) }
                 } else {
@@ -654,35 +698,11 @@ fun MainScreen(
                             Text("  ${stringResource(R.string.main_action_stop)}", modifier = Modifier.padding(start = 4.dp))
                         }
                     } else {
-                        val modeLabel = if (startMode == StartMode.SHIZUKU) "Shizuku" else "MediaProjection"
+                        val modeLabel = if (startMode == StartMode.SHIZUKU) "Shizuku" else stringResource(R.string.main_capture_system)
                         Button(
                             modifier = Modifier.fillMaxWidth().height(56.dp),
                             onClick = {
-                                when (startMode) {
-                                    StartMode.MEDIA_PROJECTION ->
-                                        context.startActivity(
-                                            MediaProjectionRequestActivity.newIntent(context)
-                                        )
-                                    StartMode.SHIZUKU -> scope.launch {
-                                        val ok = viewModel.ensureShizukuReady()
-                                        shizukuAvail = viewModel.shizukuAvailability(context)
-                                        if (ok) {
-                                            val svc = Intent(context, CaptureService::class.java).apply {
-                                                action = CaptureService.ACTION_START
-                                                putExtra(CaptureService.EXTRA_USE_SHIZUKU, true)
-                                            }
-                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                                ContextCompat.startForegroundService(context, svc)
-                                            } else {
-                                                context.startService(svc)
-                                            }
-                                        } else {
-                                            snackbarHostState.showSnackbar(
-                                                context.getString(R.string.main_snack_shizuku_unavailable)
-                                            )
-                                        }
-                                    }
-                                }
+                                context.startActivity(CaptureStartRequestActivity.newIntent(context))
                             }
                         ) {
                             Icon(Icons.Default.PlayArrow, contentDescription = null)
@@ -701,20 +721,18 @@ fun MainScreen(
                     )
                     SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                         SegmentedButton(
-                            selected = startMode == StartMode.MEDIA_PROJECTION,
+                            selected = startMode == StartMode.SYSTEM,
                             onClick = {
-                                startMode = StartMode.MEDIA_PROJECTION
-                                userOverrodeMode = true
+                                CaptureStartPreference.select(StartMode.SYSTEM)
                             },
                             enabled = !serviceRunning,
                             shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-                            label = { Text("MediaProjection") }
+                            label = { Text(stringResource(R.string.main_capture_system)) }
                         )
                         SegmentedButton(
                             selected = startMode == StartMode.SHIZUKU,
                             onClick = {
-                                startMode = StartMode.SHIZUKU
-                                userOverrodeMode = true
+                                CaptureStartPreference.select(StartMode.SHIZUKU)
                             },
                             enabled = !serviceRunning && shizukuUsable,
                             shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
@@ -722,7 +740,7 @@ fun MainScreen(
                         )
                     }
                     val hintRes = when {
-                        startMode == StartMode.MEDIA_PROJECTION -> R.string.main_hint_media_projection
+                        startMode == StartMode.SYSTEM -> R.string.main_hint_media_projection
                         shizukuAvail == ShizukuCapabilities.Availability.READY -> R.string.main_hint_shizuku_ready
                         shizukuAvail == ShizukuCapabilities.Availability.INSTALLED_NOT_GRANTED -> R.string.main_hint_shizuku_not_granted
                         shizukuAvail == ShizukuCapabilities.Availability.INSTALLED_NOT_PAIRED -> R.string.main_hint_shizuku_not_paired
@@ -737,7 +755,7 @@ fun MainScreen(
                     )
                 }
 
-                // 已授权时恢复原使用说明布局；未授权时紧凑显示授权提示。
+                // 可启动时使用完整说明布局；需要单独授权时紧凑显示授权提示。
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -745,7 +763,7 @@ fun MainScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    if (canDrawOverlay) {
+                    if (showCaptureControls) {
                         Text(
                             stringResource(R.string.main_label_usage),
                             style = MaterialTheme.typography.labelLarge,
@@ -762,7 +780,7 @@ fun MainScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                             Text(
-                                stringResource(mainUsageTextRes(canDrawOverlay)),
+                                stringResource(mainUsageTextRes(showCaptureControls)),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -780,9 +798,9 @@ fun MainScreen(
                         )
                     }
                 }
-                if (canDrawOverlay) {
+                if (showCaptureControls) {
                     Text(
-                        stringResource(mainUsageTextRes(canDrawOverlay)),
+                        stringResource(mainUsageTextRes(showCaptureControls)),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -906,6 +924,28 @@ fun MainScreen(
                         stringResource(
                             if (batteryOk) R.string.main_btn_battery_already_ok
                             else R.string.main_btn_open_battery_whitelist
+                        )
+                    )
+                }
+                OutlinedButton(
+                    enabled = !accessibilityServiceEnabled,
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = {
+                        scope.launch {
+                            if (!viewModel.enableAccessibilityViaShizuku()) {
+                                context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                            }
+                            accessibilityServiceEnabled = AccessibilityServiceStatus.isEnabled(context)
+                        }
+                    },
+                ) {
+                    Text(
+                        stringResource(
+                            if (accessibilityServiceEnabled) {
+                                R.string.settings_btn_a11y_enabled
+                            } else {
+                                R.string.settings_btn_open_a11y
+                            }
                         )
                     )
                 }
@@ -1691,8 +1731,8 @@ internal fun isMainGalleryTaskActive(status: GalleryTaskStatus): Boolean =
         status == GalleryTaskStatus.RUNNING ||
         status == GalleryTaskStatus.WAITING_RETRY
 
-internal fun mainUsageTextRes(canDrawOverlay: Boolean): Int =
-    if (canDrawOverlay) {
+internal fun mainUsageTextRes(showCaptureControls: Boolean): Int =
+    if (showCaptureControls) {
         R.string.main_usage_text
     } else {
         R.string.main_usage_overlay_permission_required
@@ -2250,14 +2290,17 @@ internal fun mainTranslationPresetNameMaxLines(presetId: String): Int =
 internal fun presetCarouselPlans(
     settings: AppSettings,
     unsavedPresetName: String,
+    credentialMatchedPresetIds: Set<String>? = null,
 ): PresetCarouselPlans {
     val savedPresets = TranslationPresetCatalog.all(settings.translationPresets)
         .filterNot { it.id == TranslationPresetCatalog.UNSAVED_DRAFT_ID }
     val settingsHash = TranslationPresetCatalog.hashForSettings(settings)
     val matchingPreset = savedPresets.firstOrNull {
         it.id == settings.activeTranslationPresetId &&
+            (credentialMatchedPresetIds == null || it.id in credentialMatchedPresetIds) &&
             TranslationPresetCatalog.matchesHash(it, settingsHash)
     } ?: savedPresets.firstOrNull {
+        (credentialMatchedPresetIds == null || it.id in credentialMatchedPresetIds) &&
         TranslationPresetCatalog.matchesHash(it, settingsHash)
     }
     if (matchingPreset != null) {
@@ -2460,7 +2503,6 @@ private fun ActionCard(
     }
 }
 
-/** 用户在主屏选择的截屏服务启动方式。仅 App 进程内记忆，不持久化（用户每次启动后默认 MediaProjection）。 */
 /**
  * 自动检查更新时的全屏 Loading 遮罩：半透明 scrim + 中央 spinner + 「检查更新…」文案。
  * - `clickable` 但 indication=null + 空 onClick 用来吞掉点击事件，防止用户在遮罩期间瞎点底下控件。
@@ -2491,13 +2533,25 @@ private fun AutoUpdateCheckOverlay() {
 
 private val MainScreenHorizontalPadding = 16.dp
 
-private enum class StartMode { MEDIA_PROJECTION, SHIZUKU }
+internal fun openOverlayPermissionSettings(context: Context) {
+    val appSpecificIntent = Intent(
+        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+        Uri.parse("package:${context.packageName}"),
+    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    if (runCatching { context.startActivity(appSpecificIntent) }.isFailure) {
+        context.startActivity(
+            Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    }
+}
 
 @HiltViewModel
 class MainViewModel @Inject constructor(
     private val repo: SettingsRepository,
     galleryTranslationRepository: GalleryTranslationRepository,
     private val shizukuManager: ShizukuManager,
+    private val appPermissions: AppPermissionCoordinator,
     private val shizukuCapabilities: ShizukuCapabilities,
     private val llamaEngineHolder: LlamaEngineHolder,
     private val paddleModelInstaller: PaddleModelInstaller,
@@ -2534,7 +2588,8 @@ class MainViewModel @Inject constructor(
     }
     fun shizukuAvailability(context: android.content.Context): ShizukuCapabilities.Availability =
         shizukuCapabilities.availability(context)
-    suspend fun ensureShizukuReady(): Boolean = shizukuManager.ensureReady()
+    suspend fun enableAccessibilityViaShizuku(): Boolean = appPermissions.configureIfReady().accessibilityConnected
+    suspend fun grantOverlayPermissionViaShizuku(): Boolean = appPermissions.configure().overlayGranted
     internal suspend fun presetModelIssues(
         presets: List<TranslationPreset>,
     ): Map<String, List<TranslationPresetModelIssue>> = withContext(Dispatchers.IO) {
@@ -2548,15 +2603,9 @@ class MainViewModel @Inject constructor(
         }
         if (!canApply) return false
 
-        var applied = false
-        repo.update { current ->
-            val latestPreset = TranslationPresetCatalog.find(current.translationPresets, id)
-                ?: return@update current
-            applied = true
-            latestPreset.applyTo(current).copy(activeTranslationPresetId = latestPreset.id)
-        }
-        return applied
+        return repo.applyTranslationPreset(id) != null
     }
+    suspend fun matchingCredentialPresetIds(source: AppSettings): Set<String> = repo.matchingCredentialPresetIds(source)
     suspend fun saveTranslationPresetAndApply(
         presetToSave: TranslationPreset,
         targetId: String,
@@ -2568,24 +2617,7 @@ class MainViewModel @Inject constructor(
         }
         if (!canApply) return false
 
-        var applied = false
-        repo.update { current ->
-            val latestTarget = TranslationPresetCatalog.find(
-                current.translationPresets,
-                targetId,
-            ) ?: return@update current
-            val withSavedPreset = current.copy(
-                translationPresets = TranslationPresetCatalog.upsertCustom(
-                    current.translationPresets,
-                    presetToSave,
-                ),
-            )
-            applied = true
-            latestTarget.applyTo(withSavedPreset).copy(
-                activeTranslationPresetId = latestTarget.id,
-            )
-        }
-        return applied
+        return repo.applyTranslationPreset(targetId, presetToSave) != null
     }
     private fun modelIssuesFor(preset: TranslationPreset): List<TranslationPresetModelIssue> =
         translationPresetModelIssues(

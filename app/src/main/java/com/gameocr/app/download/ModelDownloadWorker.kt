@@ -34,6 +34,7 @@ class ModelDownloadWorker @AssistedInject constructor(
     private val mangaOcrInstaller: MangaOcrModelInstaller,
     private val orientationModelInstaller: OrientationModelInstaller,
     private val modelReadinessChecker: ModelReadinessChecker,
+    private val networkTester: ModelDownloadNetworkTester,
 ) : CoroutineWorker(appContext, workerParams) {
 
     private var lastProgressUpdateAt = 0L
@@ -43,9 +44,11 @@ class ModelDownloadWorker @AssistedInject constructor(
     private var lastTotal = -1L
     private var lastBatchIndex = 0
     private var lastBatchCount = 0
+    private var requiredSpecs: List<ModelDownloadSpec> = emptyList()
 
     override suspend fun doWork(): Result {
         val specs = ModelDownloadSpec.decodeAll(inputData.getStringArray(KEY_SPECS).orEmpty())
+            ?.let(ModelDownloadDependencies::expand)
             ?: return Result.failure(
                 terminalData(
                     specs = emptyList(),
@@ -53,6 +56,7 @@ class ModelDownloadWorker @AssistedInject constructor(
                     error = "Invalid model download request",
                 )
             )
+        requiredSpecs = specs
         val ownerPresetId = inputData.getString(KEY_OWNER_PRESET_ID).orEmpty()
         Timber.i(
             "Background model download started id=%s ownerPresetId=%s attempt=%d specs=%s",
@@ -66,8 +70,11 @@ class ModelDownloadWorker @AssistedInject constructor(
             specs.forEachIndexed { index, spec ->
                 download(spec, index, specs.size)
             }
+            check(specs.all { modelReadinessChecker.check(it).ready }) {
+                "Required model components did not pass the shared installation check"
+            }
             val status = applicationContext.getString(R.string.model_download_complete)
-            publish(status, "", 1, 1, force = true, batchIndex = specs.size, batchCount = specs.size)
+            publish(status, "", 1, 1, force = true, batchIndex = specs.size, batchCount = specs.size, active = false)
             Timber.i("Background model download completed id=%s specs=%d", id, specs.size)
             Result.success(terminalData(specs, status))
         } catch (t: CancellationException) {
@@ -75,8 +82,8 @@ class ModelDownloadWorker @AssistedInject constructor(
             throw t
         } catch (t: Throwable) {
             Timber.w(t, "Background model download failed attempt=$runAttemptCount")
-            val detail = t.message ?: t.javaClass.simpleName
-            val retry = ModelDownloadWorkPolicy.shouldRetry(runAttemptCount)
+            val detail = (t.message ?: t.javaClass.simpleName).take(2_000)
+            val retry = ModelDownloadWorkPolicy.shouldRetry(runAttemptCount, t)
             val status = applicationContext.getString(
                 if (retry) R.string.model_download_retrying_format else R.string.model_download_failed_format,
                 detail,
@@ -90,6 +97,7 @@ class ModelDownloadWorker @AssistedInject constructor(
                 spec = lastSpec,
                 batchIndex = lastBatchIndex,
                 batchCount = lastBatchCount.takeIf { it > 0 } ?: specs.size,
+                active = false,
             )
             if (retry) {
                 Result.retry()
@@ -102,6 +110,25 @@ class ModelDownloadWorker @AssistedInject constructor(
     private suspend fun download(spec: ModelDownloadSpec, index: Int, count: Int) {
         val label = displayName(spec)
         publish(
+            applicationContext.getString(R.string.model_download_preparing_format, label, index + 1, count),
+            label,
+            0,
+            -1,
+            force = true,
+            spec = spec,
+            batchIndex = index + 1,
+            batchCount = count,
+        )
+        val initialReadiness = modelReadinessChecker.checkArtifact(spec)
+        check(initialReadiness.supported) {
+            applicationContext.getString(R.string.err_llm_device_unsupported)
+        }
+        if (initialReadiness.installed) {
+            Timber.i("Model download skipped because shared check is ready spec=%s", spec.encode())
+            return
+        }
+
+        publish(
             applicationContext.getString(R.string.model_download_starting_format, label, index + 1, count),
             label,
             0,
@@ -111,14 +138,7 @@ class ModelDownloadWorker @AssistedInject constructor(
             batchIndex = index + 1,
             batchCount = count,
         )
-        val initialReadiness = modelReadinessChecker.check(spec)
-        check(initialReadiness.supported) {
-            applicationContext.getString(R.string.err_llm_device_unsupported)
-        }
-        if (initialReadiness.installed) {
-            Timber.i("Model download skipped because shared check is ready spec=%s", spec.encode())
-            return
-        }
+        networkTester.requireReachable(spec)
 
         when (spec.type) {
             ModelDownloadType.LLM -> {
@@ -144,7 +164,7 @@ class ModelDownloadWorker @AssistedInject constructor(
                 }
             }
         }
-        check(modelReadinessChecker.check(spec).installed) {
+        check(modelReadinessChecker.checkArtifact(spec).installed) {
             "Downloaded model did not pass the shared installation check: ${spec.encode()}"
         }
     }
@@ -202,6 +222,7 @@ class ModelDownloadWorker @AssistedInject constructor(
         spec: ModelDownloadSpec? = null,
         batchIndex: Int,
         batchCount: Int,
+        active: Boolean = true,
     ) {
         if (spec != null) lastSpec = spec
         if (file.isNotBlank()) lastFile = file
@@ -217,6 +238,8 @@ class ModelDownloadWorker @AssistedInject constructor(
         setProgress(
             workDataOf(
                 KEY_STATUS to status,
+                KEY_SPECS to requiredSpecs.map { it.encode() }.toTypedArray(),
+                KEY_ACTIVE to active,
                 KEY_FILE to file,
                 KEY_DOWNLOADED to downloaded,
                 KEY_TOTAL to total,
@@ -225,13 +248,12 @@ class ModelDownloadWorker @AssistedInject constructor(
                 KEY_BATCH_COUNT to batchCount,
             )
         )
-        setForeground(createForegroundInfo(status, downloaded, total))
+        setForeground(createForegroundInfo(status, downloaded, total, active))
     }
 
-    private fun createForegroundInfo(status: String, downloaded: Long, total: Long): ForegroundInfo {
+    private fun createForegroundInfo(status: String, downloaded: Long, total: Long, active: Boolean): ForegroundInfo {
         createNotificationChannel()
-        val cancelIntent = androidx.work.WorkManager.getInstance(applicationContext)
-            .createCancelPendingIntent(id)
+        val cancelIntent = ModelDownloadCancelActivity.pendingIntent(applicationContext, id)
         val notification = NotificationCompat.Builder(applicationContext, NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setContentTitle(applicationContext.getString(R.string.model_download_notification_title))
@@ -243,7 +265,7 @@ class ModelDownloadWorker @AssistedInject constructor(
             .setProgress(
                 if (total > 0) 100 else 0,
                 if (total > 0) (downloaded * 100 / total).toInt().coerceIn(0, 100) else 0,
-                total <= 0,
+                active && total <= 0,
             )
             .addAction(
                 android.R.drawable.ic_menu_close_clear_cancel,
@@ -301,6 +323,7 @@ class ModelDownloadWorker @AssistedInject constructor(
     companion object {
         const val KEY_SPECS = "model_download_specs"
         const val KEY_STATUS = "model_download_status"
+        const val KEY_ACTIVE = "model_download_active"
         const val KEY_ERROR = "model_download_error"
         const val KEY_FILE = "model_download_file"
         const val KEY_DOWNLOADED = "model_download_downloaded"

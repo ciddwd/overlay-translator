@@ -24,6 +24,10 @@ const val DEFAULT_ANTHROPIC_MODEL = "deepseek-v4-flash"
 const val MIN_TTS_PLAYBACK_GAIN_DB = 0
 const val MAX_TTS_PLAYBACK_GAIN_DB = 24
 
+/** Keep the operation button visible even with malformed imported settings. */
+internal fun normalizedFloatingButtonAlpha(value: Float): Float =
+    if (value.isFinite()) value.coerceIn(0.1f, 1f) else 1f
+
 /** 用户配置：OCR / 翻译后端相关。 */
 @Serializable
 data class Settings(
@@ -39,14 +43,16 @@ data class Settings(
     val promptTemplate: String = DEFAULT_PROMPT,
     val openAiRequestOptions: OpenAiRequestOptions = OpenAiRequestOptions(),
     val ocrEngine: OcrEngineKind = OcrEngineKind.ML_KIT_AUTO,
+    val autoOcr: AutoOcrSettings = AutoOcrSettings(),
     val captureLoopIntervalMs: Long = 2000L,
-    val loopTriggerMode: LoopTriggerMode = LoopTriggerMode.FIXED_INTERVAL,
+    val loopTriggerMode: LoopTriggerMode = LoopTriggerMode.SETTLED_PAGE,
     val loopTextStableDurationMs: Long = DEFAULT_LOOP_TEXT_STABLE_DURATION_MS,
     val loopSkipSimilarFrames: Boolean = true,
     val loopFrameSimilarityThreshold: Float = 0.95f,
     val loopTextRegionMode: LoopTextRegionMode = LoopTextRegionMode.AUTO,
     val loopTranslateRegionOnly: Boolean = true,
     val developerOptionsEnabled: Boolean = false,
+    val performanceOverlayEnabled: Boolean = false,
     val ocrScreenshotSavingEnabled: Boolean = false,
     val disableTranslationCache: Boolean = false,
     val batchCumulativeCompletionTimeEnabled: Boolean = false,
@@ -62,9 +68,11 @@ data class Settings(
     val captureRegionSavedScreenW: Int = 0,
     val captureRegionSavedScreenH: Int = 0,
     val captureRegionBorderEnabled: Boolean = true,
+    val captureRegionHideOnCapture: Boolean = true,
     val captureRegionBorderColor: Int = DEFAULT_CAPTURE_REGION_BORDER_COLOR,
     val captureRegionBorderWidthDp: Int = DEFAULT_CAPTURE_REGION_BORDER_WIDTH_DP,
     val captureRegionBorderStyle: CaptureRegionBorderStyle = CaptureRegionBorderStyle.SOLID,
+    val captureRegionAdjustmentEnabled: Boolean = false,
     val overlayStyleMode: OverlayStyleMode = OverlayStyleMode.FIXED,
     val overlayTextSizeSp: Int = 14,
     val overlayTextStyle: OverlayTextStyle = OverlayTextStyle(),
@@ -134,6 +142,11 @@ data class Settings(
      */
     val textOrientationAutoDetect: Boolean = true,
     /**
+     * 截图中实际内容的方向。AUTO 保持截图原样；横屏/竖屏仅在截图宽高与指定方向不一致时，
+     * 使用整图方向模型决定顺/逆时针并校正 OCR 输入。它与日文横排/竖排等文字排版相互独立。
+     */
+    val captureContentOrientation: CaptureContentOrientation = CaptureContentOrientation.AUTO,
+    /**
      * 用户手动锁定文本方向，覆盖自动判别。null = 走自动 / 关闭时无意义。
      * 通常仅在自动判别频繁误判某帧时由用户临时锁定。
      */
@@ -180,12 +193,12 @@ data class Settings(
      */
     /** PaddleOCR doc-orientation ONNX model mirror. Empty = official HuggingFace source. */
     val orientationModelMirrorUrl: String = "",
-    val preferShizukuCapture: Boolean = false,
     val a11yVolumeTrigger: Boolean = false,
     val translatorEngine: TranslatorEngine = TranslatorEngine.OPENAI,
     val translationGlossaryEnabled: Boolean = true,
     /** Master gate for source-preservation matching; individual entry states remain untouched. */
     val sourcePreservationEnabled: Boolean = true,
+    val translationMemoryEnabled: Boolean = true,
     val foregroundAppDetectionMode: ForegroundAppDetectionMode = ForegroundAppDetectionMode.AUTO,
     val sendAppNameToTranslator: Boolean = false,
     val deeplApiKey: String = "",
@@ -211,6 +224,13 @@ data class Settings(
      * 防止用户切换 URL 时把官方 key 泄漏给第三方。留空 = 不发 Authorization（裸 deeplx 无鉴权场景）。
      */
     val deeplCustomToken: String = "",
+    /** 小牛翻译接口版本。Flash 支持原生批量；Pro 支持官方 SSE 流式返回。 */
+    val niuTransMode: NiuTransMode = NiuTransMode.FLASH,
+    val niuTransApiKey: String = "",
+    /** Flash 接口鉴权所需；Pro 只发送 API Key，不读取 App ID。 */
+    val niuTransAppId: String = "",
+    val niuTransTermLibraryId: String = "",
+    val niuTransMemoryLibraryId: String = "",
     /** 有道智云一套 AppKey/Secret，OCR (ocrapi) 与图片翻译 (ocrtransapi) 共用。 */
     val youdaoAppKey: String = "",
     val youdaoAppSecret: String = "",
@@ -225,6 +245,8 @@ data class Settings(
     val baiduFanyiSecretKey: String = "",
     /** 悬浮按钮直径（dp）。 */
     val floatingButtonSizeDp: Int = 40,
+    /** Operation button opacity; independent of translation windows and arc-menu buttons. */
+    val floatingButtonAlpha: Float = 1f,
     /**
      * 悬浮按钮 X 坐标（px，gravity=TOP|START 参考左上角）。-1 表示未保存过，按代码默认值
      * `(16dp, screenH/4)` 初始化。松手吸边后由 [FloatingButtonManager] 写回。
@@ -303,30 +325,39 @@ data class Settings(
      * 自动在每页末位插入「下一组」翻页项，最后一页循环回第一页。新装用户 / 未自定义的旧默认顺序迁移到
      * [FloatingMenu.DEFAULT_ORDER]。
      *
-     * `LOOP` 与 `FULL_SCREEN_SKILL` 共同构成两个稳定的模式切换槽；展开菜单时分别显示
-     * 另外两种主球模式。order 无需迁移到三个新 ID，旧配置仍可直接读取。
+     * `LOOP`、`FULL_SCREEN_SKILL` 与 `INPUT_TRANSLATE_SKILL` 构成三个稳定的模式切换槽；
+     * 展开菜单时分别显示当前模式之外的三个模式。旧配置读取时会自动补齐新增槽位。
      */
     val floatingMenuItemOrder: List<MenuItemId> = FloatingMenu.DEFAULT_ORDER,
     val arcMenuPageSize: Int = FloatingMenu.DEFAULT_PAGE_SIZE,
     /**
      * 主球单击触发的「技能」。FULL_SCREEN 走全屏 OCR+翻译；WORD_SELECT 进入划词框选；
-     * LOOP 切换循环任务的启动/停止。模式会持久化，循环运行状态不会跨 Service 重启恢复。
+     * LOOP 切换循环任务的启动/停止；INPUT_TRANSLATE 翻译当前获得焦点的输入框。
+     * 模式会持久化，循环运行状态不会跨 Service 重启恢复。
      */
     val floatingButtonSkill: FloatingSkill = FloatingSkill.FULL_SCREEN,
+    /** 输入翻译模式下，双击操作球执行的屏幕翻译动作。 */
+    val inputTranslationDoubleAction: InputTranslationDoubleAction =
+        InputTranslationDoubleAction.FULL_SCREEN,
     /** 划词翻译：选框后进入精确调整阶段（显示 8 个 handle）再点翻译；关闭则松手即翻译。 */
     val wordSelectPreciseAdjust: Boolean = true,
     /** 划词翻译：开启 = 弹翻译卡片；关闭 = 走全屏叠加显示管线（译文覆盖在原文位置）。 */
     val wordSelectCardMode: Boolean = true,
+    /** Only extract selected text into the shared card; never invoke a translator. */
+    val wordSelectExtractOnly: Boolean = false,
     /** 划词翻译：记住上次的选框位置，下次打开时自动预填。 */
     val wordSelectRememberRegion: Boolean = false,
     /** 划词翻译上次选框（物理像素）。仅 [wordSelectRememberRegion] 开启时读取。 */
     val wordSelectLastRegion: CaptureRegion? = null,
     val wordSelectLastRegionSavedScreenW: Int = 0,
     val wordSelectLastRegionSavedScreenH: Int = 0,
+    /** 点击单词后的释义来源。离线与云端严格互斥，运行时不会自动回退。 */
+    val dictionaryLookupMode: DictionaryLookupMode = DictionaryLookupMode.ONLINE,
+    /** 是否允许点击悬浮窗或翻译卡片中的原文单词查看释义。 */
+    val dictionaryTapLookupEnabled: Boolean = true,
     /**
-     * 划词翻译：单词模式专用的 LLM 词典 prompt 模板（仅 OpenAI 兼容引擎生效）。
-     * 用占位符 `{source}` / `{target}` 同 [promptTemplate]。返回 JSON 让卡片显示音标 / 词性 /
-     * 释义 / 难点解释 / 例句；解析失败回退到 [promptTemplate]。读取时若 key 缺省，按 UI locale 给出本地化默认。
+     * 旧版自定义词典 Prompt。仅为设置、预设和导入文件向后兼容而保留；运行时使用应用内置的
+     * 版本化词典协议，不再读取此字段。
      */
     val dictionaryPrompt: String = DEFAULT_DICTIONARY_PROMPT,
     /** 端侧 LLM 上下文窗口大小（token）。屏译 OCR 段落短，2048 足够；越大越占内存。 */
@@ -596,6 +627,9 @@ data class TranslationPreset(
     val deeplProtocol: DeeplProtocol = DeeplProtocol.OFFICIAL,
     val deeplBaseUrl: String = "",
     val deeplBearerAuth: Boolean = false,
+    val niuTransMode: NiuTransMode = NiuTransMode.FLASH,
+    val niuTransTermLibraryId: String = "",
+    val niuTransMemoryLibraryId: String = "",
     val baiduOcrEndpoint: BaiduOcrEndpoint = BaiduOcrEndpoint.GENERAL,
     val baiduOcrLanguage: BaiduOcrLanguage = BaiduOcrLanguage.CHN_ENG,
     val umiOcrBaseUrl: String = "",
@@ -609,6 +643,7 @@ data class TranslationPreset(
     val mergeAdjacentBlocks: Boolean = false,
     val mergeStrength: MergeStrength = MergeStrength.STANDARD,
     val textOrientationAutoDetect: Boolean = true,
+    val captureContentOrientation: CaptureContentOrientation = CaptureContentOrientation.AUTO,
     val manualTextOrientation: com.gameocr.app.ocr.TextOrientation? = null,
     val translationOutputFollowRecognition: Boolean = true,
     val translationOutputLayout: TranslationOutputLayout = TranslationOutputLayout.FOLLOW_RECOGNITION,
@@ -672,6 +707,9 @@ data class TranslationPreset(
         deeplProtocol = deeplProtocol,
         deeplBaseUrl = deeplBaseUrl,
         deeplBearerAuth = deeplBearerAuth,
+        niuTransMode = niuTransMode,
+        niuTransTermLibraryId = niuTransTermLibraryId,
+        niuTransMemoryLibraryId = niuTransMemoryLibraryId,
         baiduOcrEndpoint = baiduOcrEndpoint,
         baiduOcrLanguage = baiduOcrLanguage,
         umiOcrBaseUrl = umiOcrBaseUrl,
@@ -685,6 +723,7 @@ data class TranslationPreset(
         mergeAdjacentBlocks = mergeAdjacentBlocks,
         mergeStrength = mergeStrength,
         textOrientationAutoDetect = textOrientationAutoDetect,
+        captureContentOrientation = captureContentOrientation,
         manualTextOrientation = manualTextOrientation,
         translationOutputFollowRecognition = output.followRecognition,
         translationOutputLayout = output.layout,
@@ -788,6 +827,9 @@ object TranslationPresetCatalog {
             deeplProtocol = settings.deeplProtocol,
             deeplBaseUrl = settings.deeplBaseUrl,
             deeplBearerAuth = settings.deeplBearerAuth,
+            niuTransMode = settings.niuTransMode,
+            niuTransTermLibraryId = settings.niuTransTermLibraryId,
+            niuTransMemoryLibraryId = settings.niuTransMemoryLibraryId,
             baiduOcrEndpoint = settings.baiduOcrEndpoint,
             baiduOcrLanguage = settings.baiduOcrLanguage,
             umiOcrBaseUrl = settings.umiOcrBaseUrl,
@@ -801,6 +843,7 @@ object TranslationPresetCatalog {
             mergeAdjacentBlocks = settings.mergeAdjacentBlocks,
             mergeStrength = settings.mergeStrength,
             textOrientationAutoDetect = settings.textOrientationAutoDetect,
+            captureContentOrientation = settings.captureContentOrientation,
             manualTextOrientation = settings.manualTextOrientation,
             translationOutputFollowRecognition = output.followRecognition,
             translationOutputLayout = output.layout,
@@ -902,6 +945,9 @@ object TranslationPresetCatalog {
             preset.deeplProtocol.name,
             preset.deeplBaseUrl,
             preset.deeplBearerAuth,
+            preset.niuTransMode.name,
+            preset.niuTransTermLibraryId,
+            preset.niuTransMemoryLibraryId,
             preset.baiduOcrEndpoint.name,
             preset.baiduOcrLanguage.name,
             preset.umiOcrBaseUrl,
@@ -915,6 +961,7 @@ object TranslationPresetCatalog {
             preset.mergeAdjacentBlocks,
             preset.mergeStrength.name,
             preset.textOrientationAutoDetect,
+            preset.captureContentOrientation.name,
             preset.manualTextOrientation?.name.orEmpty(),
             output.followRecognition,
             output.layout.name,
@@ -968,20 +1015,28 @@ object TranslationPresetCatalog {
 
 /**
  * 主球单击技能。FULL_SCREEN 走 CaptureService.triggerOnce()（全屏 OCR+翻译）；
- * WORD_SELECT 走 CaptureService.triggerWordSelect()（拖矩形 → 单段翻译卡片）。
+ * WORD_SELECT 走 CaptureService.triggerWordSelect()（拖矩形 → 单段翻译卡片）；
+ * INPUT_TRANSLATE 读取并翻译当前获得焦点的输入框。
  */
 @Serializable
 enum class FloatingSkill {
     FULL_SCREEN,
     WORD_SELECT,
     LOOP,
+    INPUT_TRANSLATE,
+}
+
+@Serializable
+enum class InputTranslationDoubleAction {
+    FULL_SCREEN,
+    WORD_SELECT,
 }
 
 /**
  * 悬浮球弧菜单按钮 ID。在 `overlay/MenuItemRegistry.kt` 集中绑定到图标 / 文案 / 回调。
  *
- * `LOOP` 与 `FULL_SCREEN_SKILL` 是两个稳定的模式槽位。registry 根据当前 [FloatingSkill]
- * 将它们映射为另外两种模式；这样旧版菜单顺序无需迁移到三个新 ID。
+ * `LOOP`、`FULL_SCREEN_SKILL` 与 `INPUT_TRANSLATE_SKILL` 是三个稳定的模式槽位。
+ * registry 根据当前 [FloatingSkill] 将它们映射为另外三种模式；旧配置读取时会自动补齐新槽位。
  */
 @Serializable
 enum class MenuItemId {
@@ -991,7 +1046,8 @@ enum class MenuItemId {
     PRESET_SWITCH,
     SETTINGS,
     HOME,
-    FULL_SCREEN_SKILL
+    FULL_SCREEN_SKILL,
+    INPUT_TRANSLATE_SKILL,
 }
 
 /** 弧菜单分页 / 默认顺序常量。 */
@@ -1016,11 +1072,12 @@ object FloatingMenu {
         MenuItemId.PRESET_SWITCH,
         MenuItemId.SETTINGS,
         MenuItemId.HOME,
-        MenuItemId.FULL_SCREEN_SKILL
+        MenuItemId.FULL_SCREEN_SKILL,
+        MenuItemId.INPUT_TRANSLATE_SKILL,
     )
 
     /**
-     * 首次安装默认顺序：循环、选区、划词技能槽、返回主应用。
+     * 首次安装默认顺序：循环、选区、两个技能槽、语言、预设、设置、返回主应用。
      * 把「技能槽」放在「返回主应用」之前——拖球到菜单时手指先经过的位置留给「常用动作」，
      * HOME 作为"离场"动作放最后符合直觉。
      */
@@ -1028,11 +1085,46 @@ object FloatingMenu {
         MenuItemId.LOOP,
         MenuItemId.REGION,
         MenuItemId.FULL_SCREEN_SKILL,
+        MenuItemId.INPUT_TRANSLATE_SKILL,
         MenuItemId.LANGUAGE_PAIR,
         MenuItemId.PRESET_SWITCH,
         MenuItemId.SETTINGS,
         MenuItemId.HOME
     )
+
+    /**
+     * Keeps a user's custom order, removes unknown/duplicate entries, and inserts newly added
+     * actions beside the existing mode slots instead of hiding them on the last page.
+     */
+    fun normalizeOrder(order: List<MenuItemId>): List<MenuItemId> {
+        val known = order.filter { it in ALL_ORDER }.distinct()
+        if (known.isEmpty()) return DEFAULT_ORDER
+
+        val normalized = known.toMutableList()
+        ALL_ORDER.filterNot(normalized::contains).forEach { missing ->
+            if (missing == MenuItemId.INPUT_TRANSLATE_SKILL) {
+                val skillIndex = normalized.indexOf(MenuItemId.FULL_SCREEN_SKILL)
+                normalized.add(
+                    index = if (skillIndex >= 0) skillIndex + 1 else normalized.size,
+                    element = missing,
+                )
+            } else {
+                normalized.add(missing)
+            }
+        }
+        val beforeInputTranslation = normalized.filterNot {
+            it == MenuItemId.INPUT_TRANSLATE_SKILL
+        }
+        return if (
+            beforeInputTranslation == LEGACY_DEFAULT_ORDER_BEFORE_SKILL_SWAP ||
+            beforeInputTranslation == LEGACY_DEFAULT_ORDER_BEFORE_PRESET_SKILL_SWAP ||
+            beforeInputTranslation == LEGACY_DEFAULT_ORDER_BEFORE_PRESET_LANGUAGE_SWAP
+        ) {
+            DEFAULT_ORDER
+        } else {
+            normalized
+        }
+    }
 
     val LEGACY_DEFAULT_ORDER_BEFORE_PRESET_LANGUAGE_SWAP: List<MenuItemId> = listOf(
         MenuItemId.LOOP,
@@ -1151,6 +1243,15 @@ enum class PaddleModelVersion(
         true,
         "v5"
     ),
+    /** Official Korean PP-OCRv5 mobile recognizer paired with the v5 mobile detector. */
+    V5_KOREAN(
+        R.string.paddle_version_v5_korean,
+        R.string.paddle_version_v5_korean_desc,
+        2,
+        R.string.paddle_version_v5_korean_languages,
+        false,
+        "v5ko"
+    ),
     /** PP-OCRv6 tiny（det ~1.5M params + rec ~1.5M params，极轻量极快） */
     V6_TINY(
         R.string.paddle_version_v6_tiny,
@@ -1242,6 +1343,21 @@ enum class TranslationContextMode {
 }
 
 @Serializable
+enum class NiuTransMode {
+    FLASH,
+    PRO,
+}
+
+@Serializable
+enum class DictionaryLookupMode {
+    /** 只查询用户已安装的离线词典包。 */
+    OFFLINE,
+
+    /** 只使用当前 OpenAI / Anthropic 兼容云端 LLM 查询。 */
+    ONLINE,
+}
+
+@Serializable
 enum class TranslatorEngine {
     /** OpenAI 兼容 LLM（DeepSeek / SiliconFlow / GPT / 自架 Ollama 等）。 */
     OPENAI,
@@ -1249,6 +1365,8 @@ enum class TranslatorEngine {
     ANTHROPIC,
     /** DeepL 翻译 API（专业翻译质量，对日/英/中等 30+ 语言对）。 */
     DEEPL,
+    /** 小牛翻译官方文本 API。Flash 支持批量，Pro 支持 SSE 流式。 */
+    NIUTRANS,
     /**
      * 有道智云图片翻译（ocrtransapi）。**端到端引擎**：传整张截图，直接拿回带 box 的译文，
      * 无需先调 OCR 引擎。选中后 CaptureService 会跳过 [Settings.ocrEngine]。
@@ -1560,6 +1678,7 @@ enum class OcrEngineKind {
 enum class LoopTriggerMode {
     FIXED_INTERVAL,
     WAIT_FOR_TEXT_COMPLETE,
+    SETTLED_PAGE,
 }
 
 @Serializable
@@ -1578,7 +1697,8 @@ enum class LoopTextRegionMode {
  * squash resize 后无副作用。
  */
 val OcrEngineKind.needsRawBitmap: Boolean
-    get() = this == OcrEngineKind.MANGA_OCR_JA || this == OcrEngineKind.ML_KIT_JAPANESE
+    get() = this == OcrEngineKind.MANGA_OCR_JA || this == OcrEngineKind.ML_KIT_JAPANESE ||
+        this == OcrEngineKind.ML_KIT_AUTO
 
 fun Settings.dbnetUnclipRatioFor(engine: OcrEngineKind): Float =
     if (engine == OcrEngineKind.MANGA_OCR_JA) mangaOcrDbnetUnclipRatio else dbnetUnclipRatio

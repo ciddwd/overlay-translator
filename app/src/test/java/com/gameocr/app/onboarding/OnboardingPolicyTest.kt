@@ -86,6 +86,7 @@ class OnboardingPolicyTest {
             Case(
                 "ko", "zh-CN", OnboardingUsage.MANGA, OnboardingTranslationMethod.OFFLINE, false,
                 mangaStart + OnboardingStep.TRANSLATION_METHOD +
+                    OnboardingStep.RECOMMENDED_MODELS_DOWNLOAD +
                     OnboardingStep.OFFLINE_LANGUAGE_DOWNLOAD +
                     OnboardingStep.TTS + OnboardingStep.SUMMARY,
             ),
@@ -142,7 +143,7 @@ class OnboardingPolicyTest {
             Case("zh-TW", OnboardingUsage.MANGA, OnboardingTranslationMethod.CLOUD_LLM, true, false, true),
             Case("en-US", OnboardingUsage.MANGA, OnboardingTranslationMethod.CLOUD_LLM, true, false, true),
             Case("fr", OnboardingUsage.MANGA, OnboardingTranslationMethod.OFFLINE, true, true, true),
-            Case("ko-KR", OnboardingUsage.MANGA, OnboardingTranslationMethod.OFFLINE, false, true, true),
+            Case("ko-KR", OnboardingUsage.MANGA, OnboardingTranslationMethod.OFFLINE, true, true, true),
         )
 
         cases.forEach { case ->
@@ -202,7 +203,7 @@ class OnboardingPolicyTest {
     }
 
     @Test
-    fun mangaOcrUsesMangaRecognizerWithV6SmallDetectorForJapaneseChinese() {
+    fun mangaOcrUsesLanguageSpecificPaddleModelForEachMangaSourceLanguage() {
         data class Case(
             val sourceLang: String,
             val expectedEngine: OcrEngineKind,
@@ -213,8 +214,7 @@ class OnboardingPolicyTest {
             Case("zh-TW", OcrEngineKind.PADDLE_ONNX, PaddleModelVersion.V6_SMALL),
             Case("en-US", OcrEngineKind.PADDLE_ONNX, PaddleModelVersion.V6_SMALL),
             Case("fr", OcrEngineKind.PADDLE_ONNX, PaddleModelVersion.V6_SMALL),
-            // PP-OCRv6 Small has no Korean recognizer; ML Kit Korean is the safe fallback.
-            Case("ko-KR", OcrEngineKind.ML_KIT_KOREAN, null),
+            Case("ko-KR", OcrEngineKind.PADDLE_ONNX, PaddleModelVersion.V5_KOREAN),
         )
 
         cases.forEach { case ->
@@ -280,8 +280,8 @@ class OnboardingPolicyTest {
                 "ko-KR",
                 OnboardingUsage.MANGA,
                 OnboardingTranslationMethod.OFFLINE,
-                OcrEngineKind.ML_KIT_KOREAN,
-                PaddleModelVersion.V6_TINY,
+                OcrEngineKind.PADDLE_ONNX,
+                PaddleModelVersion.V5_KOREAN,
             ),
         )
 
@@ -411,65 +411,112 @@ class OnboardingPolicyTest {
     }
 
     @Test
-    fun cloudProviderPresets_haveVerifiedNonBlankConfiguration() {
+    fun mangaMergePolicy_enablesStandardMergeOnlyForNonJapaneseSources() {
+        data class Case(
+            val sourceLang: String,
+            val expectedEnabled: Boolean,
+            val expectedStrength: MergeStrength,
+        )
+        val cases = listOf(
+            Case("ja", false, MergeStrength.AGGRESSIVE),
+            Case("ja-JP", false, MergeStrength.AGGRESSIVE),
+            Case("ko", true, MergeStrength.STANDARD),
+            Case("ko_KR", true, MergeStrength.STANDARD),
+            Case("zh-TW", true, MergeStrength.STANDARD),
+            Case("en-US", true, MergeStrength.STANDARD),
+        )
+
+        cases.forEach { case ->
+            val actual = OnboardingPolicy.apply(
+                settings = Settings(
+                    mergeAdjacentBlocks = false,
+                    mergeStrength = MergeStrength.AGGRESSIVE,
+                ),
+                draft = OnboardingDraft(
+                    sourceLang = case.sourceLang,
+                    usage = OnboardingUsage.MANGA,
+                ),
+            )
+            assertEquals(case.sourceLang, case.expectedEnabled, actual.mergeAdjacentBlocks)
+            assertEquals(case.sourceLang, case.expectedStrength, actual.mergeStrength)
+        }
+    }
+
+    @Test
+    fun cloudProviders_haveVerifiedAddressesAndNoModelDefaults() {
         data class Case(
             val provider: CloudProvider,
             val url: String,
-            val model: String,
             val protocol: CloudApiProtocol,
         )
         val cases = listOf(
             Case(
                 CloudProvider.DEEPSEEK,
                 "https://api.deepseek.com/v1/",
-                "deepseek-v4-flash",
                 CloudApiProtocol.OPENAI,
             ),
             Case(
                 CloudProvider.KIMI,
                 "https://api.moonshot.cn/v1/",
-                "kimi-k3",
                 CloudApiProtocol.OPENAI,
             ),
             Case(
                 CloudProvider.MINIMAX,
                 "https://api.minimaxi.com/v1/",
-                "MiniMax-M3",
                 CloudApiProtocol.OPENAI,
             ),
             Case(
                 CloudProvider.GLM,
                 "https://open.bigmodel.cn/api/paas/v4/",
-                "glm-5.2",
                 CloudApiProtocol.OPENAI,
             ),
             Case(
                 CloudProvider.MIMO,
                 "https://api.xiaomimimo.com/v1/",
-                "mimo-v2.5-pro",
                 CloudApiProtocol.OPENAI,
             ),
             Case(
                 CloudProvider.OPENAI,
                 "https://api.openai.com/v1/",
-                "gpt-4.1-mini",
                 CloudApiProtocol.OPENAI,
             ),
             Case(
                 CloudProvider.CLAUDE,
                 "https://api.anthropic.com",
-                "claude-sonnet-4-5",
                 CloudApiProtocol.ANTHROPIC,
             ),
             Case(
                 CloudProvider.GEMINI,
                 "https://generativelanguage.googleapis.com/v1beta/openai/",
-                "gemini-3.6-flash",
+                CloudApiProtocol.OPENAI,
+            ),
+            Case(
+                CloudProvider.MODELSCOPE,
+                "https://api-inference.modelscope.cn/v1/",
+                CloudApiProtocol.OPENAI,
+            ),
+            Case(
+                CloudProvider.OPENROUTER,
+                "https://openrouter.ai/api/v1/",
+                CloudApiProtocol.OPENAI,
+            ),
+            Case(
+                CloudProvider.AIHUBMIX,
+                "https://aihubmix.com/v1/",
+                CloudApiProtocol.OPENAI,
+            ),
+            Case(
+                CloudProvider.AI_302,
+                "https://api.302ai.cn/v1/",
+                CloudApiProtocol.OPENAI,
+            ),
+            Case(
+                CloudProvider.SCNET,
+                "https://api.scnet.cn/api/llm/v1/",
                 CloudApiProtocol.OPENAI,
             ),
             Case(
                 CloudProvider.CUSTOM,
-                "",
                 "",
                 CloudApiProtocol.OPENAI,
             ),
@@ -478,7 +525,7 @@ class OnboardingPolicyTest {
         assertEquals(CloudProvider.entries.size, cases.size)
         cases.forEach { case ->
             assertEquals(case.provider.name, case.url, case.provider.baseUrl)
-            assertEquals(case.provider.name, case.model, case.provider.model)
+            assertEquals(case.provider.name, "", OnboardingDraft(cloudProvider = case.provider).cloudModel)
             assertEquals(case.provider.name, case.protocol, case.provider.protocol)
         }
     }
@@ -604,7 +651,7 @@ class OnboardingPolicyTest {
                     cloudProvider = case.provider,
                     cloudBaseUrl = case.provider.baseUrl,
                     cloudApiKey = "key",
-                    cloudModel = case.provider.model,
+                    cloudModel = "chosen-model",
                 ),
             )
             assertEquals(case.name, case.expected, actual.translationContextMode)
@@ -718,7 +765,7 @@ class OnboardingPolicyTest {
             ),
             Case(
                 "ko", "zh-CN", OnboardingUsage.MANGA, true,
-                TranslatorEngine.LOCAL_HY_MT2, OcrEngineKind.ML_KIT_KOREAN,
+                TranslatorEngine.LOCAL_HY_MT2, OcrEngineKind.PADDLE_ONNX,
             ),
             Case(
                 "fr", "zh-CN", OnboardingUsage.MANGA, true,
@@ -730,7 +777,7 @@ class OnboardingPolicyTest {
             ),
             Case(
                 "ko", "zh-CN", OnboardingUsage.MANGA, false,
-                TranslatorEngine.GOOGLE_ML_KIT, OcrEngineKind.ML_KIT_KOREAN,
+                TranslatorEngine.GOOGLE_ML_KIT, OcrEngineKind.PADDLE_ONNX,
             ),
             Case(
                 "fr", "zh-CN", OnboardingUsage.MANGA, false,
@@ -891,7 +938,7 @@ class OnboardingPolicyTest {
                 OnboardingDraft(
                     cloudBaseUrl = CloudProvider.DEEPSEEK.baseUrl,
                     cloudApiKey = "secret",
-                    cloudModel = CloudProvider.DEEPSEEK.model,
+                    cloudModel = "chosen-model",
                 )
             )
         )

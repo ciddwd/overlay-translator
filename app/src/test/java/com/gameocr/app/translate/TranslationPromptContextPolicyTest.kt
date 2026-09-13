@@ -13,6 +13,7 @@ class TranslationPromptContextPolicyTest {
             TranslatorEngine.LOCAL_HY_MT2 to TranslationPromptContextStrategy.HY_MT2_OFFICIAL,
             TranslatorEngine.LOCAL_SAKURA to TranslationPromptContextStrategy.SAKURA_OFFICIAL,
             TranslatorEngine.DEEPL to TranslationPromptContextStrategy.NONE,
+            TranslatorEngine.NIUTRANS to TranslationPromptContextStrategy.NONE,
             TranslatorEngine.YOUDAO_PICTRANS to TranslationPromptContextStrategy.NONE,
             TranslatorEngine.GOOGLE to TranslationPromptContextStrategy.NONE,
             TranslatorEngine.GOOGLE_ML_KIT to TranslationPromptContextStrategy.NONE,

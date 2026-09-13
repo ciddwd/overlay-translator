@@ -32,7 +32,8 @@ internal enum class SystemTtsTerminalAction {
 
 internal class SystemTtsLanguageUnavailableException(
     val languageTag: String,
-) : IllegalStateException("System TTS language is not supported: $languageTag")
+    languageName: String = com.gameocr.app.data.languageDisplayName(languageTag),
+) : IllegalStateException("System TTS language is not supported: $languageName")
 
 internal fun systemTtsTerminalAction(
     utteranceStarted: Boolean,
@@ -206,7 +207,7 @@ class SystemTtsEngine @Inject constructor(
             languageResult == TextToSpeech.LANG_MISSING_DATA ||
             languageResult == TextToSpeech.LANG_NOT_SUPPORTED
         ) {
-            throw SystemTtsLanguageUnavailableException(languageTag)
+            throw SystemTtsLanguageUnavailableException(languageTag, Languages.nameOf(appContext, languageTag))
         }
         val requestedVoiceName = selectSystemTtsVoiceForLanguage(
             voices = engine.voices.orEmpty().map { voice ->

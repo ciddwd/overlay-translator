@@ -1,9 +1,34 @@
 package com.gameocr.app.ui
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
+import java.io.File
 import org.junit.Test
 
 class MlKitRecentSourceLanguageTest {
+    @Test
+    fun recentHistoryIsRecordedOnSelectionWithoutTheSaveButton() {
+        val screen = File("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
+        val viewModel = File("src/main/java/com/gameocr/app/ui/SettingsViewModel.kt").readText()
+        for ((start, end, argument) in listOf(
+            Triple("fun selectMlKitSourceLanguage(", "fun swapSelectedLanguages(", "languageTag"),
+            Triple("fun swapSelectedLanguages(", "fun buildSnapshot(", "swapped.first"),
+        )) {
+            assertTrue(screen.substringAfter(start).substringBefore(end)
+                .contains("viewModel.rememberMlKitSourceLanguage($argument)"))
+        }
+        assertFalse(screen.contains("mlKitRecentSourceLanguages = mlKitRecentSources"))
+        val save = viewModel.substringAfter("suspend fun save(")
+        assertFalse(save.contains("mlKitRecentSourceLanguages"))
+        val remember = viewModel.substringAfter("internal fun rememberMlKitSourceLanguage(")
+            .substringBefore("private val autoOcrSettingsSaver")
+        assertTrue(remember.contains("viewModelScope.launch"))
+        assertTrue(remember.contains("recentLanguageMutex.withLock"))
+        assertTrue(remember.contains("repo.update { current ->"))
+        assertTrue(remember.contains("current.mlKitRecentSourceLanguages, languageTag"))
+    }
+
     @Test
     fun recentSources_tableDriven_keepFourMostRecentlyUsedSupportedLanguages() {
         data class Case(

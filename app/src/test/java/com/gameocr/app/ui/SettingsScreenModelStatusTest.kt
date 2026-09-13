@@ -97,7 +97,7 @@ class SettingsScreenModelStatusTest {
         listOf(
             Case("engine choices before source language", "R.string.settings_translator_group_local_llm", "R.string.settings_source_lang"),
             Case("model before source language", "R.string.settings_model)", "R.string.settings_source_lang"),
-            Case("connection test before source language", "R.string.settings_test_connection", "R.string.settings_source_lang"),
+            Case("connection test before source language", "TranslatorConnectionTestPanel(", "R.string.settings_source_lang"),
             Case("source language before target language", "R.string.settings_source_lang", "R.string.settings_target_lang"),
             Case("target language before translation assistance", "R.string.settings_target_lang", "TranslationAssistanceSettings("),
             Case("translation assistance before prompt", "TranslationAssistanceSettings(", "OpenAiPromptSettings("),
@@ -240,6 +240,7 @@ class SettingsScreenModelStatusTest {
     @Test
     fun translationDisplayPreview_isSecondaryWhileDisplayModeStaysPrimary() {
         val source = File("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
+            .replace("\r\n", "\n")
         data class Case(val name: String, val expected: Boolean)
 
         val pageStart = source.indexOf("val overlayRenderingContent: @Composable () -> Unit = {")
