@@ -14,6 +14,18 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class SettingsRepositoryBehaviorTest {
+    @Test fun shareEntireScreen_defaultsOffAndPersists_tableDriven() = runBlocking {
+        for (saved in listOf(null, false, true)) {
+            val root = Files.createTempDirectory("projection-scope-test").toFile()
+            val repository = fileBackedRepository(root)
+            saved?.let { value -> repository.update { it.copy(shareEntireScreen = value) } }
+            assertEquals(saved ?: false, repository.get().shareEntireScreen)
+            assertEquals(saved ?: false, fileBackedRepository(root).get().shareEntireScreen)
+            repository.update { it.copy(apiTimeoutSeconds = 43) }
+            assertEquals(saved ?: false, repository.get().shareEntireScreen)
+        }
+    }
+
 
     @Test fun autoOcrAutoSavePersistsOnlyMappingAndReopens_tableDriven() = runBlocking {
         val root = Files.createTempDirectory("auto-ocr-auto-save-test").toFile()

@@ -119,6 +119,7 @@ object SettingsFieldPolicy {
         portable("ocrScreenshotSavingEnabled", R.string.settings_search_item_developer_ocr),
         portable("disableTranslationCache", R.string.settings_search_item_developer_ocr),
         portable("batchCumulativeCompletionTimeEnabled", R.string.settings_search_item_developer_ocr),
+        portable("shareEntireScreen", R.string.settings_search_item_developer_ocr),
         portable("translationContextMode", R.string.settings_translation_mode),
         portable("ocrRedBoxModeEnabled", R.string.settings_search_item_developer_ocr),
         portable("ocrRedBoxShowSourceText", R.string.settings_search_item_developer_ocr),

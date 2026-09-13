@@ -4,6 +4,8 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.media.projection.MediaProjectionManager
+import android.media.projection.MediaProjectionConfig
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
@@ -13,6 +15,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewModelScope
 import com.gameocr.app.ui.MainActivity
+import com.gameocr.app.data.SettingsRepository
 import com.gameocr.app.ui.openOverlayPermissionSettings
 import dagger.hilt.android.AndroidEntryPoint
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -51,7 +54,13 @@ class CaptureStartRequestActivity : ComponentActivity() {
                 when (stage) {
                     CaptureStartStage.WAITING -> Unit
                     CaptureStartStage.PROJECTION -> if (viewModel.consumeProjectionRequest()) {
-                        launcher.launch(mpm.createScreenCaptureIntent())
+                        val fullScreen = viewModel.shouldShareEntireScreen()
+                        val intent = if (Build.VERSION.SDK_INT >= 34 && fullScreen) {
+                            mpm.createScreenCaptureIntent(MediaProjectionConfig.createConfigForDefaultDisplay())
+                        } else {
+                            mpm.createScreenCaptureIntent()
+                        }
+                        launcher.launch(intent)
                     }
                     CaptureStartStage.OVERLAY_PERMISSION -> {
                         openOverlayPermissionSettings(this@CaptureStartRequestActivity)
@@ -88,6 +97,7 @@ enum class CaptureStartStage { WAITING, PROJECTION, OVERLAY_PERMISSION, SETUP, F
 class CaptureStartViewModel @Inject constructor(
     private val coordinator: CaptureStartCoordinator,
     private val savedState: SavedStateHandle,
+    private val settingsRepository: SettingsRepository,
 ) : ViewModel() {
     private val ownsGate = coordinator.gate.acquire()
     private val currentStage = MutableStateFlow(CaptureStartStage.WAITING)
@@ -129,6 +139,13 @@ class CaptureStartViewModel @Inject constructor(
         projectionRequested = true
         savedState["projectionRequested"] = true
         return true
+    }
+
+    suspend fun shouldShareEntireScreen(): Boolean {
+        val settings = settingsRepository.get()
+        return shouldRequestEntireScreen(
+            Build.VERSION.SDK_INT, settings.developerOptionsEnabled, settings.shareEntireScreen,
+        )
     }
 
     fun projectionGranted(code: Int, data: Intent) {
