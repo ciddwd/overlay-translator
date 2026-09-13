@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="settings_about_user_guide">User Guide</string>
     <string name="settings_share_entire_screen">Share entire screen</string>
     <string name="translation_library_disable_all">Disable all</string>
     <string name="settings_auto_ocr_title">Automatic recognition settings</string>

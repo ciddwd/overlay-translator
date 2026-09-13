@@ -99,7 +99,8 @@ internal object LanguageQuickSwitchOptions {
     }
 }
 
-class LanguageQuickSwitchOverlay(private val context: Context) {
+class LanguageQuickSwitchOverlay(context: Context) {
+    private val context = com.gameocr.app.data.AppLocalePrefs.live(context)
 
     private val overlayType: Int = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
         WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -413,6 +414,13 @@ class LanguageQuickSwitchOverlay(private val context: Context) {
         }
         runCatching { wm.addView(backdrop, params) }
         rootView = backdrop
+        com.gameocr.app.data.AppLocalePrefs.observe(backdrop) {
+            title.text = context.getString(R.string.language_quick_title)
+            closeBtn.contentDescription = context.getString(R.string.word_card_dismiss)
+            searchBox.hint = context.getString(R.string.lang_picker_search_placeholder)
+            refreshHeader()
+            refreshList()
+        }
         backdrop.requestFocus()
     }
 

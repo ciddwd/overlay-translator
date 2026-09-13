@@ -26,7 +26,8 @@ import com.gameocr.app.capture.RegionPickerView
  * 与 RegionPickerOverlay 共享：display-bound WindowManager、cutout layout 一致性，确保
  * 选区坐标对齐物理屏幕原点。
  */
-class WordSelectOverlay(private val context: Context) {
+class WordSelectOverlay(context: Context) {
+    private val context = com.gameocr.app.data.AppLocalePrefs.live(context)
 
     private val overlayType: Int = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
         WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -197,6 +198,10 @@ class WordSelectOverlay(private val context: Context) {
             addView(buildButton(context.getString(R.string.word_select_btn_cancel), onCancel))
             val actionLabel = if (extractTextOnly) R.string.word_select_btn_extract else R.string.word_select_btn_translate
             addView(buildButton(context.getString(actionLabel), onTranslate, primary = true))
+            com.gameocr.app.data.AppLocalePrefs.observe(this) {
+                listOf(R.string.word_select_btn_redraw, R.string.word_select_btn_cancel, actionLabel)
+                    .forEachIndexed { index, label -> (getChildAt(index) as Button).text = context.getString(label) }
+            }
         }
     }
 

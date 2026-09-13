@@ -20,6 +20,8 @@ class AutoOcrLanguageIntegrationTest {
             "no first-language early exit" to !auto.substringAfter("val passes =")
                 .substringBefore("if (best.isEmpty())").contains("break"),
             "refinement quality checked" to auto.contains("AutoOcrLanguagePolicy.canRefine("),
+            "regions from every pass compete" to auto.contains("selectAutoOcrRegions(passes.values.flatten()"),
+            "no whole-page winner" to !auto.contains("bestKind"),
         ).forEach { (name, passed) -> assertTrue(name, passed) }
     }
 

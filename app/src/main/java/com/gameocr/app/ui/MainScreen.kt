@@ -966,6 +966,7 @@ fun MainScreen(
 }
 
 internal const val GITHUB_URL = "https://github.com/ciddwd/overlay-translator"
+internal const val USER_GUIDE_URL = "https://github.com/ciddwd/overlay-translator/wiki"
 internal const val QQ_GROUP_NUMBER = "1059655926"
 internal const val QQ_GROUP_URL = "https://qun.qq.com/universal-share/share?ac=1&authKey=%2Fs0%2FaO4mEHsgutzjUnhGIQEWLcAcGPXTefUY2YwdMkPdnHHuB%2FpLZm9hPjcrw6n5&busi_data=eyJncm91cENvZGUiOiIxMDU5NjU1OTI2IiwidG9rZW4iOiJ4b25nS0FvSFQyMko4WjJTMHhGRlIwSnppeVB2eGJCNjFua0FDTGZzNUhEWlY3VkdPcFVaOEdMams0aEY3aFBTIiwidWluIjoiNTcyMjQyOTk4In0%3D&data=j7H7DHUunIEqMXYLZxhTkx-K_LZTTs5aBJS95LT_Y50uQy37d5IiUU2y3gAPcy9CYRzRufvHuTCaSHOQsLTkTw&svctype=4&tempid=h5_group_info"
 private const val SHARE_PROMPT_DELAY_MS = 1_200L
@@ -1023,6 +1024,18 @@ private fun AboutContent(
         },
         modifier = Modifier.fillMaxWidth()
     ) { Text(stringResource(R.string.settings_about_open_github)) }
+
+    OutlinedButton(
+        onClick = {
+            runCatching {
+                context.startActivity(
+                    Intent(Intent.ACTION_VIEW, Uri.parse(USER_GUIDE_URL))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }
+        },
+        modifier = Modifier.fillMaxWidth()
+    ) { Text(stringResource(R.string.settings_about_user_guide)) }
 
     Text(
         text = stringResource(R.string.settings_about_open_source_licenses),

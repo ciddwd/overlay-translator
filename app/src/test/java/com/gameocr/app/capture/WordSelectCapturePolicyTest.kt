@@ -5,6 +5,38 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class WordSelectCapturePolicyTest {
+    @Test fun extractedTextUsesSharedGrouping_tableDriven() {
+        fun block(text: String, top: Int) = com.gameocr.app.ocr.TextBlock(
+            text, android.graphics.Rect().apply { left = 0; this.top = top; right = 200; bottom = top + 20 },
+            layoutOrientation = com.gameocr.app.ocr.TextOrientation.HORIZONTAL_LTR)
+        for (strength in com.gameocr.app.data.MergeStrength.entries) {
+            for (enabled in listOf(false, true)) {
+                val settings = com.gameocr.app.data.Settings(mergeStrength = strength, mergeAdjacentBlocks = enabled)
+                val separator = if (enabled && strength == com.gameocr.app.data.MergeStrength.ALL) " " else "\n"
+                assertEquals("first${separator}second", extractedCardText(
+                    listOf(block("second", 100), block("first", 0)), settings))
+                assertEquals("", extractedCardText(emptyList(), settings))
+                assertEquals("", extractedCardText(listOf(block("  ", 0)), settings))
+                assertEquals("hello world", extractedCardText(listOf(block("hello\nworld", 0)), settings))
+            }
+        }
+    }
+
+    @Test fun extractionUsesFloatingMergeSettingsWithoutChangingSavedSettings_tableDriven() {
+        for (mode in com.gameocr.app.data.RenderMode.entries) {
+            for (strength in com.gameocr.app.data.MergeStrength.entries) {
+                for (enabled in listOf(false, true)) {
+                    val settings = com.gameocr.app.data.Settings(renderMode = mode,
+                        mergeStrength = strength, mergeAdjacentBlocks = enabled)
+                    assertEquals(settings, wordSelectOcrSettings(settings, false))
+                    assertEquals(settings.copy(renderMode = com.gameocr.app.data.RenderMode.FLOATING_WINDOW),
+                        wordSelectOcrSettings(settings, true))
+                    assertEquals(mode, settings.renderMode)
+                }
+            }
+        }
+    }
+
     @Test
     fun extraction_tableDriven_forcesCardWithoutChangingSelectionMemoryOrSavedCardChoice() {
         val region = CaptureRegion(10, 20, 300, 400)

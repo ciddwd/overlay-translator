@@ -37,6 +37,9 @@ import timber.log.Timber
  */
 @AndroidEntryPoint
 class ProcessTextTranslateActivity : ComponentActivity() {
+    override fun attachBaseContext(newBase: android.content.Context) {
+        super.attachBaseContext(com.gameocr.app.data.AppLocalePrefs.wrap(newBase))
+    }
 
     @Inject lateinit var translator: Translator
     @Inject lateinit var settingsRepository: SettingsRepository
@@ -66,7 +69,7 @@ class ProcessTextTranslateActivity : ComponentActivity() {
         }
 
         // 翻译跑在 application scope；finish() 后 Activity 不在了也不影响协程。
-        val app = applicationContext
+        val app = com.gameocr.app.data.AppLocalePrefs.live(applicationContext)
         val appScope = (application as GameOcrApp).appScope
         val translatingLabel = getString(R.string.process_text_translating)
         val failedLabel = getString(R.string.process_text_translate_failed)

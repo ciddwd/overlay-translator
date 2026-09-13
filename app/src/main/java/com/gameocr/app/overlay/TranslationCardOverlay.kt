@@ -84,9 +84,11 @@ internal fun translationCardSectionDividerCount(
  * 未来改主题色需要两边一起改。
  */
 class TranslationCardOverlay(
-    private val context: Context,
+    context: Context,
     private val onDismissed: () -> Unit = {},
 ) {
+    private val context = com.gameocr.app.data.AppLocalePrefs.live(context)
+    private var refreshingLocale = false
 
     private val overlayType: Int = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
         WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -130,7 +132,7 @@ class TranslationCardOverlay(
         dialog = null
         if (currentDialog != null) {
             performPlaybackOverlayDismiss(
-                stopPlayback = onDismissed,
+                stopPlayback = { if (!refreshingLocale) onDismissed() },
                 clearOverlay = { runCatching { currentDialog.dismiss() } },
             ).onFailure { error ->
                 VerticalDiagnosticLog.w(error, "Failed to stop TTS when translation card was dismissed")
@@ -962,6 +964,22 @@ class TranslationCardOverlay(
             )
             dialog = cardDialog
             rootView = backdrop
+            com.gameocr.app.data.AppLocalePrefs.observe(backdrop) {
+                val source = currentSource
+                val translated = currentTranslation
+                val word = currentWordResult
+                val isLoading = translationLoading
+                val wasFinal = translationFinal
+                refreshingLocale = true
+                try {
+                    show(source, translated.takeUnless { isLoading && it.isBlank() }, word, settings, isLoading,
+                        onSpeakSource, onSpeakTranslation, onSpeakDictionary,
+                        onCorrectTranslation, onEnglishWordTapped, textOnly)
+                    translationFinal = wasFinal
+                } finally {
+                    refreshingLocale = false
+                }
+            }
             ViewCompat.requestApplyInsets(backdrop)
         }.onFailure {
             runCatching { pendingDialog?.dismiss() }

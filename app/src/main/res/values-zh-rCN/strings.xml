@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="settings_about_user_guide">使用手册</string>
     <string name="settings_share_entire_screen">共享整个屏幕</string>
     <string name="translation_library_disable_all">全部停用</string>
     <string name="settings_auto_ocr_title">自动识别设置</string>

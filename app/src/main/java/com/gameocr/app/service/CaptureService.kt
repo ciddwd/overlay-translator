@@ -234,6 +234,9 @@ internal fun supportsShapeAwareBubblePatches(engine: OcrEngineKind): Boolean =
  */
 @AndroidEntryPoint
 class CaptureService : Service() {
+    override fun attachBaseContext(newBase: android.content.Context) {
+        super.attachBaseContext(com.gameocr.app.data.AppLocalePrefs.live(newBase))
+    }
 
     private data class DelayedMaskRenderSession(
         val batch: MangaDelayedMaskDebugSessionManager.Batch,
@@ -1228,7 +1231,8 @@ class CaptureService : Service() {
             val ocrStartedAt = System.currentTimeMillis()
             logWordSelectPerf("ocr_started", "engine=${settings.ocrEngine.name}")
             val ocrBlocks = try {
-                ocrEngine.recognize(cropped, settings.ocrEngine, settings)
+                ocrEngine.recognize(cropped, settings.ocrEngine,
+                    com.gameocr.app.capture.wordSelectOcrSettings(settings, extractTextOnly))
             } catch (ce: kotlinx.coroutines.CancellationException) {
                 cropped.recycle()
                 throw ce
@@ -1271,8 +1275,10 @@ class CaptureService : Service() {
             } finally {
                 cropped.recycle()
             }
-            val text = com.gameocr.app.capture.wordSelectRecognizedText(
-                orderedOcrBlocks.map { it.text }, extractTextOnly,
+            val text = if (extractTextOnly) {
+                com.gameocr.app.capture.extractedCardText(ocrBlocks, settings)
+            } else com.gameocr.app.capture.wordSelectRecognizedText(
+                orderedOcrBlocks.map { it.text }, false,
             )
             logVerticalDiag(diagId, "wordSelect joined ${text.toDiagText()}")
             if (text.isEmpty()) {
