@@ -406,6 +406,7 @@ class DeepLTranslator @Inject constructor(
     private fun formatNumber(n: Long): String = "%,d".format(n)
 
     private fun mapTargetLang(code: String): String = when (code.trim().lowercase()) {
+        "vi", "vietnamese" -> throw TranslationException("DeepL API does not support Vietnamese (vi)")
         "zh-cn", "zh", "chinese" -> "ZH"
         "zh-tw", "zh-hant" -> "ZH-HANT"
         "en", "en-us" -> "EN-US"

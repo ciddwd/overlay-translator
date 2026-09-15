@@ -141,6 +141,7 @@ object Languages {
         Language("id", R.string.lang_id),
         Language("en", R.string.lang_en),
         Language("yue", R.string.lang_yue),
+        Language("vi", R.string.lang_vi),
         ZH_CN,
         ZH_TW,
         Language("zu", R.string.lang_zu)

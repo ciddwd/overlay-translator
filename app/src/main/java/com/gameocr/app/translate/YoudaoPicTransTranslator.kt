@@ -197,6 +197,7 @@ class YoudaoPicTransTranslator @Inject constructor(
     private fun mapLang(s: String): String {
         val l = s.lowercase()
         if (l == "auto") return "auto"
+        if (l == "vi" || l == "vietnamese") throw TranslationException("Youdao API does not support Vietnamese (vi)")
         if (l == "zh-cn" || l == "zh") return "zh-CHS"
         if (l == "zh-tw" || l == "zh-hant") return "zh-CHT"
         val core = l.substringBefore('-')
