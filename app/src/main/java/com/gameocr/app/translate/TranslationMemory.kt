@@ -374,9 +374,6 @@ class TranslationMemoryRepository @Inject constructor(
 
     suspend fun delete(id: Long) = dao.delete(id)
 
-    suspend fun importBulk(
-        document: TranslationMemoryImportDocument
-    ): com.gameocr.app.glossary.GlossaryImportCommitResult = dao.importBulk(document)
 
 
     private fun TranslationMemoryEntity.toMatch(
