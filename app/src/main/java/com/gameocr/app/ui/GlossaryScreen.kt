@@ -110,6 +110,7 @@ private enum class TranslationLibraryTab {
 private enum class GlossaryAddRoute {
     SINGLE,
     BATCH,
+    MEMORY_BATCH,
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -201,6 +202,13 @@ fun GlossaryScreen(
             onBack = { addRoute = null },
         )
         return
+    }
+
+    if (addRoute == GlossaryAddRoute.MEMORY_BATCH) {
+        com.gameocr.app.ui.TranslationMemoryImportScreen(
+            viewModel = viewModel,
+            onBack = { addRoute = null }
+        )
     }
     if (addRoute == GlossaryAddRoute.BATCH) {
         GlossaryImportScreen(
@@ -302,7 +310,14 @@ fun GlossaryScreen(
                         Icon(Icons.Default.Add, stringResource(R.string.glossary_add))
                     }
                 }
-                TranslationLibraryTab.MEMORY -> Unit
+                TranslationLibraryTab.MEMORY -> {
+                    androidx.compose.material3.FloatingActionButton(onClick = {
+                        // Reuse the batch document picker launcher
+                        addRoute = GlossaryAddRoute.MEMORY_BATCH
+                    }) {
+                        androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Default.Description, "Import Translation Memory")
+                    }
+                }
             }
         },
     ) { padding ->

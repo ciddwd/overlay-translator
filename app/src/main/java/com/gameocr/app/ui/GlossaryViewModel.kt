@@ -122,4 +122,11 @@ class GlossaryViewModel @Inject constructor(
     )
 
     suspend fun deleteMemory(id: Long) = translationMemoryRepository.delete(id)
+
+    suspend fun importTranslationMemory(
+        document: com.gameocr.app.translate.TranslationMemoryImportDocument
+    ): com.gameocr.app.glossary.GlossaryImportCommitResult {
+        return translationMemoryRepository.importBulk(document)
+    }
+
 }

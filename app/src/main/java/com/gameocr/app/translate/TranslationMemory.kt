@@ -120,6 +120,10 @@ interface TranslationMemoryDao {
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(entry: TranslationMemoryEntity): Long
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(entries: List<TranslationMemoryEntity>)
+
+
     @Update
     suspend fun update(entry: TranslationMemoryEntity)
 
@@ -313,7 +317,67 @@ class TranslationMemoryRepository @Inject constructor(
         return true
     }
 
+
+    suspend fun importBulk(
+        document: TranslationMemoryImportDocument
+    ): com.gameocr.app.glossary.GlossaryImportCommitResult {
+        var inserted = 0
+        var overwritten = 0
+        var skipped = 0
+
+        val chunkSize = 1000
+        document.entries.chunked(chunkSize).forEach { chunk ->
+            val entitiesToInsert = mutableListOf<TranslationMemoryEntity>()
+            val now = System.currentTimeMillis()
+
+            for (entry in chunk) {
+                val normalizedSource = normalizeTranslationMemorySource(entry.source)
+                if (normalizedSource.isEmpty()) {
+                    skipped++
+                    continue
+                }
+
+                val existing = dao.findObserved(
+                    scopePackage = document.packageName,
+                    sourceLang = document.sourceLang,
+                    targetLang = document.targetLang,
+                    normalizedSource = normalizedSource
+                )
+                if (existing != null) overwritten++ else inserted++
+
+                entitiesToInsert.add(TranslationMemoryEntity(
+                    id = existing?.id ?: 0,
+                    scopePackage = document.packageName,
+                    appLabel = "",
+                    sourceLang = document.sourceLang,
+                    targetLang = document.targetLang,
+                    observedSource = entry.source,
+                    normalizedObservedSource = normalizedSource,
+                    normalizedObservedLength = normalizedSource.codePointCount(0, normalizedSource.length),
+                    correctedSource = entry.source,
+                    normalizedCorrectedSource = normalizedSource,
+                    normalizedCorrectedLength = normalizedSource.codePointCount(0, normalizedSource.length),
+                    correctedTranslation = entry.target,
+                    createdAtMs = existing?.createdAtMs ?: now,
+                    updatedAtMs = now,
+                    lastUsedAtMs = existing?.lastUsedAtMs ?: 0L,
+                    hitCount = existing?.hitCount ?: 0L
+                ))
+            }
+
+            if (entitiesToInsert.isNotEmpty()) {
+                dao.insertAll(entitiesToInsert)
+            }
+        }
+        return com.gameocr.app.glossary.GlossaryImportCommitResult(inserted, overwritten, skipped)
+    }
+
     suspend fun delete(id: Long) = dao.delete(id)
+
+    suspend fun importBulk(
+        document: TranslationMemoryImportDocument
+    ): com.gameocr.app.glossary.GlossaryImportCommitResult = dao.importBulk(document)
+
 
     private fun TranslationMemoryEntity.toMatch(
         kind: TranslationMemoryMatchKind,
