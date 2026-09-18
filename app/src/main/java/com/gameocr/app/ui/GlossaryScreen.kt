@@ -209,6 +209,7 @@ fun GlossaryScreen(
             viewModel = viewModel,
             onBack = { addRoute = null }
         )
+        return
     }
     if (addRoute == GlossaryAddRoute.BATCH) {
         GlossaryImportScreen(

@@ -3,10 +3,9 @@ name: CI
 # PR 进 dev / main，以及向 main 直接 push（被 branch protection 限制后实际仅维护者）
 # 都跑一遍 debug 构建做 smoke test。release 走单独的 release.yml。
 on:
-  pull_request:
-    branches: [dev, main]
   push:
     branches: [main, dev]
+  workflow_dispatch:
 
 permissions:
   contents: read
