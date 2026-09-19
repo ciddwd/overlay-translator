@@ -23,7 +23,8 @@ data class Language(val code: String, @StringRes val nameRes: Int)
  * - 第一项是 [Languages.AUTO]（"auto"），仅源语言侧有意义；目标语言侧选 auto 会被
  *   DeepLTranslator/OpenAiTranslator 视作回退到默认 "zh-CN"。
  *
- * 添加新语言时直接 append；在 values/strings.xml + values-en/strings.xml 同步加 lang_xx 资源。
+ * 添加新语言时按中文名称的拼音位置插入；在 values/strings.xml（英文）和
+ * values-zh-rCN/strings.xml（中文）同步加 lang_xx 资源。
  */
 object Languages {
     val AUTO = Language("auto", R.string.lang_auto)
@@ -77,6 +78,7 @@ object Languages {
         Language("gl", R.string.lang_gl),
         Language("ca", R.string.lang_ca),
         Language("cs", R.string.lang_cs),
+        Language("kn", R.string.lang_kn),
         Language("xh", R.string.lang_xh),
         Language("hr", R.string.lang_hr),
         Language("gom", R.string.lang_gom),
@@ -119,6 +121,7 @@ object Languages {
         Language("tt", R.string.lang_tt),
         Language("te", R.string.lang_te),
         Language("ta", R.string.lang_ta),
+        Language("th", R.string.lang_th),
         Language("tr", R.string.lang_tr),
         Language("tk", R.string.lang_tk),
         Language("cy", R.string.lang_cy),
@@ -140,6 +143,7 @@ object Languages {
         Language("hi", R.string.lang_hi),
         Language("id", R.string.lang_id),
         Language("en", R.string.lang_en),
+        Language("vi", R.string.lang_vi),
         Language("yue", R.string.lang_yue),
         ZH_CN,
         ZH_TW,

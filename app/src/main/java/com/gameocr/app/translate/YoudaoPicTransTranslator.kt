@@ -193,24 +193,28 @@ class YoudaoPicTransTranslator @Inject constructor(
         }
     }
 
-    /** sourceLang/targetLang BCP-47 → 有道图片翻译 from/to。 */
-    private fun mapLang(s: String): String {
-        val l = s.lowercase()
-        if (l == "auto") return "auto"
-        if (l == "zh-cn" || l == "zh") return "zh-CHS"
-        if (l == "zh-tw" || l == "zh-hant") return "zh-CHT"
-        val core = l.substringBefore('-')
-        return when (core) {
-            "en" -> "en"
-            "ja" -> "ja"
-            "ko" -> "ko"
-            "fr" -> "fr"
-            "de" -> "de"
-            "es" -> "es"
-            "ru" -> "ru"
-            "pt" -> "pt"
-            "it" -> "it"
-            else -> "auto"
+    companion object {
+        /** sourceLang/targetLang BCP-47 → 有道图片翻译 from/to。 */
+        internal fun mapLang(s: String): String {
+            val l = s.lowercase()
+            if (l == "auto") return "auto"
+            if (l == "zh-cn" || l == "zh") return "zh-CHS"
+            if (l == "zh-tw" || l == "zh-hant") return "zh-CHT"
+            val core = l.substringBefore('-')
+            return when (core) {
+                "en" -> "en"
+                "ja" -> "ja"
+                "ko" -> "ko"
+                "fr" -> "fr"
+                "de" -> "de"
+                "es" -> "es"
+                "ru" -> "ru"
+                "pt" -> "pt"
+                "it" -> "it"
+                "vi" -> "vi"
+                "th" -> "th"
+                else -> "auto"
+            }
         }
     }
 
