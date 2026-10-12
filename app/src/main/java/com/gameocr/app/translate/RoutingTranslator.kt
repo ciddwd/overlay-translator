@@ -27,6 +27,7 @@ class RoutingTranslator @Inject constructor(
     private val niuTrans: NiuTransTranslator,
     private val youdaoPicTrans: YoudaoPicTransTranslator,
     private val google: GoogleTranslator,
+    private val bilibiliIndex: BilibiliIndexTranslator,
     private val googleMlKit: MlKitOnDeviceTranslator,
     private val volc: VolcTranslator,
     private val baiduFanyi: BaiduFanyiTranslator,
@@ -474,6 +475,7 @@ class RoutingTranslator @Inject constructor(
         TranslatorEngine.NIUTRANS -> niuTrans
         TranslatorEngine.YOUDAO_PICTRANS -> youdaoPicTrans
         TranslatorEngine.GOOGLE -> google
+        TranslatorEngine.BILIBILI_INDEX -> bilibiliIndex
         TranslatorEngine.GOOGLE_ML_KIT -> googleMlKit
         TranslatorEngine.VOLC -> volc
         TranslatorEngine.BAIDU_FANYI -> baiduFanyi

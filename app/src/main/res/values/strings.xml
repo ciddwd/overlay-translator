@@ -348,6 +348,7 @@
     <string name="settings_engine_niutrans">NiuTrans</string>
     <string name="settings_engine_youdao_pictrans">Youdao PicTrans</string>
     <string name="settings_engine_google">Google</string>
+    <string name="settings_engine_bilibili_index">Bilibili Translate (Free)</string>
     <string name="settings_on_device_translation_english">English</string>
     <string name="settings_on_device_translation_more">More</string>
     <string name="settings_mlkit_model_downloaded_short">Downloaded</string>
@@ -369,6 +370,7 @@
     <string name="settings_tencent_region">Tencent Cloud Region</string>
     <string name="settings_tencent_trans_tip">Shares SecretId / SecretKey / Region with Tencent Cloud OCR — edits here sync to the OCR section. Default ap-guangzhou. Native batch via TextTranslateBatch (≤ 2000 chars / call). First-time setup requires opening Machine Translation at console.cloud.tencent.com/tmt.</string>
     <string name="settings_google_tip">No config needed. Google may rate-limit or change the endpoint any time — for learning only. Proxy required inside mainland China.</string>
+    <string name="settings_bilibili_index_hint">Ready to use — base URL, API key and model are built in. No configuration required.</string>
     <string name="settings_google_mlkit_tip">Translation content is processed entirely on the device after the language model is downloaded. A 30 MB language model is required. No API key is needed.</string>
     <string name="settings_mlkit_data_disclosure">ML Kit may contact Google to download or update models and compatibility data, and may send performance and usage metrics. Captured images, source text, and translations are not sent to Google.</string>
     <string name="settings_mlkit_download_pair">Download %1$s → %2$s models</string>

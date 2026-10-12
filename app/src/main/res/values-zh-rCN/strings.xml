@@ -348,6 +348,7 @@
     <string name="settings_engine_niutrans">小牛翻译</string>
     <string name="settings_engine_youdao_pictrans">有道图翻</string>
     <string name="settings_engine_google">Google</string>
+    <string name="settings_engine_bilibili_index">B站翻译(免费)</string>
     <string name="settings_on_device_translation_english">英语</string>
     <string name="settings_on_device_translation_more">更多</string>
     <string name="settings_mlkit_model_downloaded_short">已下载</string>
@@ -369,6 +370,7 @@
     <string name="settings_tencent_region">腾讯云 Region</string>
     <string name="settings_tencent_trans_tip">与腾讯云 OCR 共用 SecretId / SecretKey / Region —— 此处修改会同步到 OCR 配置。默认 ap-guangzhou。一次调用走 TextTranslateBatch 批量翻译（≤ 2000 字符/次）。首次使用须先到 console.cloud.tencent.com/tmt 开通「机器翻译」。</string>
     <string name="settings_google_tip">无需配置，谷歌可能随时限流 / 改端点，仅供学习。国内必须代理。</string>
+    <string name="settings_bilibili_index_hint">开箱即用：接口地址、API Key、模型均已内置，无需任何配置。</string>
     <string name="settings_google_mlkit_tip">语言模型下载后，翻译内容完全在设备端处理。需要下载 30 MB 的语言模型。无需 API Key。</string>
     <string name="settings_mlkit_data_disclosure">ML Kit 可能连接 Google 下载或更新模型及兼容性信息，并发送性能与使用指标；截屏、原文和译文不会发送给 Google。</string>
     <string name="settings_mlkit_download_pair">下载 %1$s → %2$s 模型</string>

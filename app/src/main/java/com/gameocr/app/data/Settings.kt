@@ -1378,6 +1378,12 @@ enum class TranslatorEngine {
      */
     GOOGLE,
     /**
+     * B站 Index-Translate 免费公网 API（OpenAI 兼容 Chat Completions）。
+     * baseUrl / apiKey / model 全部内置写死（见 [com.gameocr.app.translate.BilibiliIndexTranslator]），
+     * 用户无需任何配置，开箱即用；与 [OPENAI] 共用同一套 OpenAI 兼容管线。
+     */
+    BILIBILI_INDEX,
+    /**
      * 端侧翻译的内部路由值，UI 仅显示拉丁 / 中文 / 日文 / 韩文四个源语言入口。
      * 底层使用 Google ML Kit，要求明确的 sourceLang；首次实际翻译时按需下载模型。
      */

@@ -3690,6 +3690,7 @@ fun SettingsScreen(
                     EngineChip(translatorEngine, TranslatorEngine.DEEPL, stringResource(R.string.settings_engine_deepl)) { translatorEngine = it }
                     EngineChip(translatorEngine, TranslatorEngine.NIUTRANS, stringResource(R.string.settings_engine_niutrans)) { translatorEngine = it }
                     EngineChip(translatorEngine, TranslatorEngine.GOOGLE, stringResource(R.string.settings_engine_google)) { translatorEngine = it }
+                    EngineChip(translatorEngine, TranslatorEngine.BILIBILI_INDEX, stringResource(R.string.settings_engine_bilibili_index)) { translatorEngine = it }
                     EngineChip(translatorEngine, TranslatorEngine.VOLC, stringResource(R.string.settings_engine_volc)) { translatorEngine = it }
                     EngineChip(translatorEngine, TranslatorEngine.BAIDU_FANYI, stringResource(R.string.settings_engine_baidu_fanyi)) { translatorEngine = it }
                     EngineChip(translatorEngine, TranslatorEngine.TENCENT, stringResource(R.string.settings_engine_tencent)) { translatorEngine = it }
@@ -4189,12 +4190,23 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.error
                     )
                     }
+                } else if (translatorEngine == TranslatorEngine.BILIBILI_INDEX) {
+                    SettingsSearchTarget(searchTargetRegistry, R.string.settings_engine_bilibili_index) {
+                    // B站 Index-Translate：baseUrl/apiKey/model 全部内置写死，开箱即用，无需任何配置。
+                    Text(
+                        stringResource(R.string.settings_bilibili_index_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    }
                 }
 
                 // —— 测试连接 ——
                 // 验证 baseUrl/key/model（或 DeepL key/endpoint）能不能用；DeepL 顺便返回剩余额度，
                 // OpenAI 顺便拉 model 列表回填到上方下拉。状态文字按成功/失败着色，下次点击覆盖。
-                if (translatorEngine != TranslatorEngine.GOOGLE_ML_KIT) {
+                if (translatorEngine != TranslatorEngine.GOOGLE_ML_KIT &&
+                    translatorEngine != TranslatorEngine.BILIBILI_INDEX
+                ) {
                 TranslatorConnectionTestPanel(
                     inputKey = buildSnapshot(),
                     onTest = {
@@ -10383,6 +10395,7 @@ private fun translatorEngineLabel(engine: TranslatorEngine): String = stringReso
         TranslatorEngine.NIUTRANS -> R.string.settings_engine_niutrans
         TranslatorEngine.YOUDAO_PICTRANS -> R.string.settings_engine_youdao_pictrans
         TranslatorEngine.GOOGLE -> R.string.settings_engine_google
+        TranslatorEngine.BILIBILI_INDEX -> R.string.settings_engine_bilibili_index
         TranslatorEngine.GOOGLE_ML_KIT -> R.string.settings_translator_group_on_device
         TranslatorEngine.VOLC -> R.string.settings_engine_volc
         TranslatorEngine.BAIDU_FANYI -> R.string.settings_engine_baidu_fanyi
@@ -10924,6 +10937,7 @@ internal fun translatorEngineLabelRes(engine: TranslatorEngine): Int = when (eng
     TranslatorEngine.NIUTRANS -> R.string.settings_engine_niutrans
     TranslatorEngine.YOUDAO_PICTRANS -> R.string.settings_engine_youdao_pictrans
     TranslatorEngine.GOOGLE -> R.string.settings_engine_google
+    TranslatorEngine.BILIBILI_INDEX -> R.string.settings_engine_bilibili_index
     TranslatorEngine.GOOGLE_ML_KIT -> R.string.settings_translator_group_on_device
     TranslatorEngine.VOLC -> R.string.settings_engine_volc
     TranslatorEngine.BAIDU_FANYI -> R.string.settings_engine_baidu_fanyi
