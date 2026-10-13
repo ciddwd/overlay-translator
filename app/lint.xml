@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<lint>
+    <!-- Arabic uses the contributed translations; missing entries fall back to English. -->
+    <issue id="MissingTranslation">
+        <ignore regexp="is not translated in &quot;ar&quot; \(Arabic\)" />
+    </issue>
+</lint>

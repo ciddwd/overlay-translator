@@ -15,6 +15,7 @@ class TranslationPromptContextCapabilityTest {
             Case(TranslatorEngine.LOCAL_SAKURA, true),
             Case(TranslatorEngine.LOCAL_HY_MT2, true),
             Case(TranslatorEngine.DEEPL, false),
+            Case(TranslatorEngine.NIUTRANS, false),
             Case(TranslatorEngine.YOUDAO_PICTRANS, false),
             Case(TranslatorEngine.GOOGLE, false),
             Case(TranslatorEngine.GOOGLE_ML_KIT, false),

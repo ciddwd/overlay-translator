@@ -283,7 +283,11 @@ class PresetQuickSwitchOverlay(private val context: Context) {
     }
 
     private fun presetLlmName(preset: TranslationPreset): String = when (preset.translatorEngine) {
-        TranslatorEngine.OPENAI -> preset.model.ifBlank { translatorName(TranslatorEngine.OPENAI) }
+        TranslatorEngine.OPENAI -> if (preset.openAiProvider == com.gameocr.app.data.OpenAiProvider.BILIBILI) {
+            context.getString(R.string.settings_engine_bilibili_index)
+        } else {
+            preset.model.ifBlank { translatorName(TranslatorEngine.OPENAI) }
+        }
         TranslatorEngine.ANTHROPIC -> preset.anthropicModel.ifBlank {
             translatorName(TranslatorEngine.ANTHROPIC)
         }

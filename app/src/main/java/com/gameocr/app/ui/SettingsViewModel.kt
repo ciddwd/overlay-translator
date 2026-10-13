@@ -13,6 +13,7 @@ import com.gameocr.app.data.InputTranslationDoubleAction
 import com.gameocr.app.data.MangaOcrAdvancedSettingsPolicy
 import com.gameocr.app.data.OcrEngineKind
 import com.gameocr.app.data.OpenAiRequestOptions
+import com.gameocr.app.data.OpenAiProvider
 import com.gameocr.app.data.OverlayFontEntry
 import com.gameocr.app.data.OverlayFontCommit
 import com.gameocr.app.data.OverlayTextStyle
@@ -487,6 +488,7 @@ class SettingsViewModel @Inject constructor(
         translationContextMode: TranslationContextMode,
         cleartextAllowedHosts: List<String>,
         translatorEngine: TranslatorEngine,
+        openAiProvider: OpenAiProvider,
         deeplKey: String,
         deeplPro: Boolean,
         deeplProtocol: com.gameocr.app.data.DeeplProtocol,
@@ -627,6 +629,7 @@ class SettingsViewModel @Inject constructor(
                     ttsVolcengineBaseUrl,
                 ),
                 translatorEngine = translatorEngine,
+                openAiProvider = openAiProvider,
                 deeplApiKey = deeplKey.trim(),
                 deeplPro = deeplPro,
                 deeplProtocol = deeplProtocol,
@@ -1134,6 +1137,7 @@ class SettingsViewModel @Inject constructor(
         val base = repo.get()
         val temp = base.copy(
             translatorEngine = translatorEngine,
+            openAiProvider = OpenAiProvider.CUSTOM,
             baseUrl = baseUrl.trim(),
             apiKey = apiKey.trim(),
             model = model.trim(),
