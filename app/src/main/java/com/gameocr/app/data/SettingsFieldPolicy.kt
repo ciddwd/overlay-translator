@@ -233,6 +233,7 @@ object SettingsFieldPolicy {
         privateConnection("orientationModelMirrorUrl"),
         portable("a11yVolumeTrigger", R.string.settings_search_item_a11y_volume),
         portable("translatorEngine", R.string.settings_search_item_translator_engine),
+        portable("openAiProvider", R.string.settings_search_item_translator_engine),
         portable("translationGlossaryEnabled", R.string.settings_glossary_enabled),
         portable("sourcePreservationEnabled"),
         portable("translationMemoryEnabled"),

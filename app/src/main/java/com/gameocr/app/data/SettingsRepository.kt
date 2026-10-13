@@ -155,6 +155,7 @@ class SettingsRepository internal constructor(
         val CustomBorder = intPreferencesKey("overlay_custom_border")
         val CustomBorderW = intPreferencesKey("overlay_custom_border_w")
         val TranslatorEng = stringPreferencesKey("translator_engine")
+        val OpenAiProvider = stringPreferencesKey("openai_provider")
         val DeeplKey = stringPreferencesKey("deepl_key")
         val DeeplPro = booleanPreferencesKey("deepl_pro")
         val DeeplProtocol = stringPreferencesKey("deepl_protocol")
@@ -810,6 +811,7 @@ class SettingsRepository internal constructor(
             prefs[Keys.CustomBorder] = next.customBorderColor
             prefs[Keys.CustomBorderW] = next.customBorderWidth
             prefs[Keys.TranslatorEng] = next.translatorEngine.name
+            prefs[Keys.OpenAiProvider] = next.openAiProvider.name
             prefs[Keys.TranslationGlossaryEnabled] = next.translationGlossaryEnabled
             prefs[Keys.SourcePreservationEnabled] = next.sourcePreservationEnabled
             prefs[Keys.TranslationMemoryEnabled] = next.translationMemoryEnabled
@@ -1158,6 +1160,8 @@ class SettingsRepository internal constructor(
             customBorderWidth = this[Keys.CustomBorderW] ?: default.customBorderWidth,
             translatorEngine = runCatching { TranslatorEngine.valueOf(this[Keys.TranslatorEng] ?: "") }
                 .getOrDefault(default.translatorEngine),
+            openAiProvider = runCatching { OpenAiProvider.valueOf(this[Keys.OpenAiProvider] ?: "") }
+                .getOrDefault(default.openAiProvider),
             translationGlossaryEnabled = this[Keys.TranslationGlossaryEnabled]
                 ?: default.translationGlossaryEnabled,
             sourcePreservationEnabled = this[Keys.SourcePreservationEnabled]

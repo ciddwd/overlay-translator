@@ -126,6 +126,9 @@ import com.gameocr.app.R
 import com.gameocr.app.data.Languages
 import com.gameocr.app.data.OcrEngineKind
 import com.gameocr.app.data.Settings
+import com.gameocr.app.data.OpenAiProvider
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
 import com.gameocr.app.data.SettingsRepository
 import com.gameocr.app.data.TranslationPreset
 import com.gameocr.app.data.TranslationPresetCatalog
@@ -310,7 +313,7 @@ fun GalleryTranslationConfirmScreen(
                                     stringResource(
                                         R.string.gallery_confirm_translator,
                                         stringResource(
-                                            translatorEngineLabelRes(current.translatorEngine)
+                                            translatorEngineLabelRes(current.translatorEngine, current.openAiProvider)
                                         ),
                                     )
                                 )
@@ -1226,10 +1229,16 @@ private fun GalleryTaskSettingsSummary(
     val translatorEngine = remember(task.translatorEngine) {
         runCatching { TranslatorEngine.valueOf(task.translatorEngine) }.getOrNull()
     }
+    val openAiProvider = remember(task.settingsSnapshotJson) {
+        runCatching {
+            Json { ignoreUnknownKeys = true }
+                .decodeFromString<TranslationPreset>(task.settingsSnapshotJson).openAiProvider
+        }.getOrDefault(OpenAiProvider.CUSTOM)
+    }
     val ocrLabel = ocrEngine?.let { stringResource(ocrEngineLabelRes(it)) }
         ?: task.ocrEngine
     val translatorLabel = translatorEngine?.let {
-        stringResource(translatorEngineLabelRes(it))
+        stringResource(translatorEngineLabelRes(it, openAiProvider))
     } ?: task.translatorEngine
     Text(
         stringResource(

@@ -196,6 +196,7 @@ data class Settings(
     val orientationModelMirrorUrl: String = "",
     val a11yVolumeTrigger: Boolean = false,
     val translatorEngine: TranslatorEngine = TranslatorEngine.OPENAI,
+    val openAiProvider: OpenAiProvider = OpenAiProvider.CUSTOM,
     val translationGlossaryEnabled: Boolean = true,
     /** Master gate for source-preservation matching; individual entry states remain untouched. */
     val sourcePreservationEnabled: Boolean = true,
@@ -624,6 +625,7 @@ data class TranslationPreset(
     val ttsEnabled: Boolean = false,
     val ttsProvider: TtsProvider = TtsProvider.SYSTEM,
     val translatorEngine: TranslatorEngine = TranslatorEngine.OPENAI,
+    val openAiProvider: OpenAiProvider = OpenAiProvider.CUSTOM,
     val deeplPro: Boolean = false,
     val deeplProtocol: DeeplProtocol = DeeplProtocol.OFFICIAL,
     val deeplBaseUrl: String = "",
@@ -704,6 +706,7 @@ data class TranslationPreset(
         ttsEnabled = ttsEnabled,
         ttsProvider = ttsProvider,
         translatorEngine = translatorEngine,
+        openAiProvider = openAiProvider,
         deeplPro = deeplPro,
         deeplProtocol = deeplProtocol,
         deeplBaseUrl = deeplBaseUrl,
@@ -824,6 +827,7 @@ object TranslationPresetCatalog {
             ttsEnabled = settings.ttsEnabled,
             ttsProvider = settings.ttsProvider,
             translatorEngine = settings.translatorEngine,
+            openAiProvider = settings.openAiProvider,
             deeplPro = settings.deeplPro,
             deeplProtocol = settings.deeplProtocol,
             deeplBaseUrl = settings.deeplBaseUrl,
@@ -942,6 +946,7 @@ object TranslationPresetCatalog {
             preset.ttsEnabled,
             preset.ttsProvider.name,
             preset.translatorEngine.name,
+            preset.openAiProvider.name,
             preset.deeplPro,
             preset.deeplProtocol.name,
             preset.deeplBaseUrl,
@@ -1377,12 +1382,6 @@ enum class TranslatorEngine {
      * Google 翻译（非官方端点，无需 key）。谷歌可能随时限流 / 改端点 / 拒绝。国内需代理。
      */
     GOOGLE,
-    /**
-     * B站 Index-Translate 免费公网 API（OpenAI 兼容 Chat Completions）。
-     * baseUrl / apiKey / model 全部内置写死（见 [com.gameocr.app.translate.BilibiliIndexTranslator]），
-     * 用户无需任何配置，开箱即用；与 [OPENAI] 共用同一套 OpenAI 兼容管线。
-     */
-    BILIBILI_INDEX,
     /**
      * 端侧翻译的内部路由值，UI 仅显示拉丁 / 中文 / 日文 / 韩文四个源语言入口。
      * 底层使用 Google ML Kit，要求明确的 sourceLang；首次实际翻译时按需下载模型。

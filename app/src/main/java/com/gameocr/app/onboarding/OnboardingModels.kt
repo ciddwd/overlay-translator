@@ -507,6 +507,7 @@ object OnboardingPolicy {
             )
         }
         var next = settings.copy(
+            openAiProvider = com.gameocr.app.data.OpenAiProvider.CUSTOM,
             sourceLang = draft.sourceLang,
             targetLang = draft.targetLang,
             renderMode = displaySettings.first,

@@ -3,6 +3,7 @@ package com.gameocr.app.translate
 import com.gameocr.app.data.Settings
 import com.gameocr.app.data.TranslatorEngine
 import com.gameocr.app.data.withApiTimeout
+import com.gameocr.app.data.usesBilibiliTranslation
 import java.io.IOException
 import java.math.BigDecimal
 import java.net.URI
@@ -37,7 +38,7 @@ sealed interface ConnectionBalance {
 }
 
 internal fun deepSeekBalanceUrl(settings: Settings): String? {
-    if (settings.translatorEngine != TranslatorEngine.OPENAI || settings.apiKey.isBlank()) return null
+    if (settings.translatorEngine != TranslatorEngine.OPENAI || settings.usesBilibiliTranslation() || settings.apiKey.isBlank()) return null
     val url = runCatching { URI(settings.baseUrl.trim()) }.getOrNull() ?: return null
     return "https://api.deepseek.com/user/balance".takeIf {
         url.scheme.equals("https", true) && url.host.equals("api.deepseek.com", true) &&

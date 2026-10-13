@@ -4,6 +4,7 @@ import android.content.Context
 import com.gameocr.app.R
 import com.gameocr.app.data.Languages
 import com.gameocr.app.data.Settings
+import com.gameocr.app.data.openAiCacheModelKey
 import com.gameocr.app.data.withApiTimeout
 import com.gameocr.app.util.RuntimePerformanceDiagnostics
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -472,7 +473,7 @@ class OpenAiTranslator @Inject constructor(
 
         val cacheKey = cache.key(
             trimmed,
-            settings.model,
+            settings.openAiCacheModelKey(),
             settings.targetLang,
             resolvedRequest.cacheFingerprint,
         )
@@ -541,7 +542,7 @@ class OpenAiTranslator @Inject constructor(
 
         val cacheKey = cache.key(
             trimmed,
-            settings.model,
+            settings.openAiCacheModelKey(),
             settings.targetLang,
             resolvedRequest.cacheFingerprint,
         )

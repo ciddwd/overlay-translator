@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.os.SystemClock
 import com.gameocr.app.data.Settings
 import com.gameocr.app.data.TranslatorEngine
+import com.gameocr.app.data.resolveOpenAiProvider
 import com.gameocr.app.glossary.TranslationContextResolver
 import com.gameocr.app.llm.LlamaEngineHolder
 import com.gameocr.app.ocr.TextBlock
@@ -27,7 +28,6 @@ class RoutingTranslator @Inject constructor(
     private val niuTrans: NiuTransTranslator,
     private val youdaoPicTrans: YoudaoPicTransTranslator,
     private val google: GoogleTranslator,
-    private val bilibiliIndex: BilibiliIndexTranslator,
     private val googleMlKit: MlKitOnDeviceTranslator,
     private val volc: VolcTranslator,
     private val baiduFanyi: BaiduFanyiTranslator,
@@ -48,7 +48,7 @@ class RoutingTranslator @Inject constructor(
             logNumericPassthrough(stage = "translate", count = 1, total = 1)
             return source
         }
-        val enriched = translationContextResolver.enrich(source, settings)
+        val enriched = translationContextResolver.enrich(source, settings.resolveOpenAiProvider())
         val startedAt = SystemClock.elapsedRealtime()
         val translated = engineFor(enriched).translate(source, enriched)
         performanceDiagnostics.observe(
@@ -79,7 +79,7 @@ class RoutingTranslator @Inject constructor(
                 emit(source)
                 return@flow
             }
-            val enriched = translationContextResolver.enrich(source, settings)
+            val enriched = translationContextResolver.enrich(source, settings.resolveOpenAiProvider())
             val startedAt = SystemClock.elapsedRealtime()
             var completed = false
             try {
@@ -212,7 +212,7 @@ class RoutingTranslator @Inject constructor(
 
         val enriched = translationContextResolver.enrich(
             passthroughPlan.translatableSources.joinToString("\n"),
-            settings,
+            settings.resolveOpenAiProvider(),
         )
         val rawResults = engineFor(enriched).translateBatchIncremental(
             passthroughPlan.translatableSources,
@@ -280,7 +280,7 @@ class RoutingTranslator @Inject constructor(
         }
         if (overrides.all { it != null }) return results
 
-        val enriched = translationContextResolver.enrich(sources.joinToString("\n"), settings)
+        val enriched = translationContextResolver.enrich(sources.joinToString("\n"), settings.resolveOpenAiProvider())
         val rawResults = engineFor(enriched).translateBatchIncremental(
             sources = sources,
             settings = enriched,
@@ -307,7 +307,7 @@ class RoutingTranslator @Inject constructor(
     }
 
     override suspend fun testConnection(settings: Settings): TestResult =
-        engineFor(settings).testConnection(settings)
+        engineFor(settings).testConnection(settings.resolveOpenAiProvider())
 
     override val isEndToEnd: Boolean get() = false
     /** RoutingTranslator 的 isEndToEnd 不能静态判，调用方应用 [isEndToEndFor]。 */
@@ -335,14 +335,14 @@ class RoutingTranslator @Inject constructor(
 
     override suspend fun translateWord(source: String, settings: Settings): WordResult? {
         performanceDiagnostics.beginTranslation()
-        val enriched = translationContextResolver.enrich(source, settings)
+        val enriched = translationContextResolver.enrich(source, settings.resolveOpenAiProvider())
         return engineFor(enriched).translateWord(source, enriched)
             ?.let { normalizeWordResult(it, enriched) }
     }
 
     override suspend fun translateWordCompact(source: String, settings: Settings): WordResult? {
         performanceDiagnostics.beginTranslation()
-        val enriched = translationContextResolver.enrich(source, settings)
+        val enriched = translationContextResolver.enrich(source, settings.resolveOpenAiProvider())
         return engineFor(enriched).translateWordCompact(source, enriched)
             ?.let { normalizeWordResult(it, enriched) }
     }
@@ -475,7 +475,6 @@ class RoutingTranslator @Inject constructor(
         TranslatorEngine.NIUTRANS -> niuTrans
         TranslatorEngine.YOUDAO_PICTRANS -> youdaoPicTrans
         TranslatorEngine.GOOGLE -> google
-        TranslatorEngine.BILIBILI_INDEX -> bilibiliIndex
         TranslatorEngine.GOOGLE_ML_KIT -> googleMlKit
         TranslatorEngine.VOLC -> volc
         TranslatorEngine.BAIDU_FANYI -> baiduFanyi

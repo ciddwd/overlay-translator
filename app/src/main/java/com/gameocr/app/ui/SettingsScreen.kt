@@ -182,6 +182,7 @@ import com.gameocr.app.data.CleartextHostIssueKind
 import com.gameocr.app.data.CleartextHostPolicy
 import com.gameocr.app.data.CaptureContentOrientation
 import com.gameocr.app.data.Languages
+import com.gameocr.app.data.OpenAiProvider
 import com.gameocr.app.translate.MlKitLanguagePolicy
 import com.gameocr.app.data.LoopTriggerMode
 import com.gameocr.app.data.LoopTextRegionMode
@@ -508,6 +509,9 @@ fun SettingsScreen(
     var targetLang by remember { mutableStateOf("zh-CN") }
     var sourceLang by remember { mutableStateOf("auto") }
     var translatorEngine by remember { mutableStateOf(TranslatorEngine.OPENAI) }
+    var openAiProvider by remember { mutableStateOf(OpenAiProvider.CUSTOM) }
+    val bilibiliSelected = translatorEngine == TranslatorEngine.OPENAI &&
+        openAiProvider == OpenAiProvider.BILIBILI
     // 端侧 LLM 翻译：状态文本（"已就绪 XX MB" / "未下载" / "下载中 …"）。仅在 LOCAL_* 引擎时显示。
     var llmModelStatus by remember { mutableStateOf("") }
     var llmDownloading by remember { mutableStateOf(false) }
@@ -933,6 +937,7 @@ fun SettingsScreen(
     }
     fun selectTranslatorEngine(engine: TranslatorEngine) {
         translatorEngine = engine
+        openAiProvider = OpenAiProvider.CUSTOM
         if (engine == TranslatorEngine.LOCAL_SAKURA && !supportsSakuraLanguagePair(sourceLang, targetLang)) {
             showSakuraFallbackDialog = true
         }
@@ -1063,6 +1068,7 @@ fun SettingsScreen(
         targetLang = s.targetLang
         dictionaryPrompt = s.dictionaryPrompt
         translatorEngine = s.translatorEngine
+        openAiProvider = s.openAiProvider
         translationGlossaryEnabled = s.translationGlossaryEnabled
         foregroundAppDetectionMode = s.foregroundAppDetectionMode
         sendAppNameToTranslator = s.sendAppNameToTranslator
@@ -1504,6 +1510,7 @@ fun SettingsScreen(
         tencentOcrLanguage = tencentLanguage,
         a11yVolumeTrigger = a11yVolume,
         translatorEngine = effectiveTranslatorEngine(),
+        openAiProvider = openAiProvider,
         deeplApiKey = deeplKey,
         deeplPro = deeplPro,
         deeplProtocol = deeplProtocol,
@@ -1765,6 +1772,7 @@ fun SettingsScreen(
             translationContextMode = translationContextMode,
             cleartextAllowedHosts = parseCleartextHosts(cleartextHostsText),
             translatorEngine = effectiveTranslatorEngine(),
+            openAiProvider = openAiProvider,
             deeplKey = deeplKey,
             deeplPro = deeplPro,
             deeplProtocol = deeplProtocol,
@@ -2388,7 +2396,7 @@ fun SettingsScreen(
                 TextButton(onClick = {
                     mlKitModelPromptDismissedPair = prompt.pair
                     mlKitMissingModelsPrompt = null
-                    translatorEngine = TranslatorEngine.OPENAI
+                    selectTranslatorEngine(TranslatorEngine.OPENAI)
                 }) {
                     Text(stringResource(R.string.mlkit_missing_models_dialog_switch_llm))
                 }
@@ -2464,7 +2472,7 @@ fun SettingsScreen(
                     if (missingFallbackFields.isEmpty()) {
                         translatorEngine = TranslatorEngine.LOCAL_SAKURA
                     } else {
-                        translatorEngine = TranslatorEngine.OPENAI
+                        selectTranslatorEngine(TranslatorEngine.OPENAI)
                     }
                 }) {
                     Text(
@@ -2801,6 +2809,7 @@ fun SettingsScreen(
             } else {
                 s.translatorEngine
             }
+            openAiProvider = s.openAiProvider
             deeplKey = s.deeplApiKey
             youdaoAppKey = s.youdaoAppKey
             volcAk = s.volcAccessKeyId
@@ -3674,8 +3683,13 @@ fun SettingsScreen(
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    EngineChip(translatorEngine, TranslatorEngine.OPENAI, stringResource(R.string.settings_engine_openai_llm)) { translatorEngine = it }
-                    EngineChip(translatorEngine, TranslatorEngine.ANTHROPIC, stringResource(R.string.settings_engine_anthropic_llm)) { translatorEngine = it }
+                    EngineChip(
+                        translatorEngine,
+                        TranslatorEngine.OPENAI,
+                        stringResource(R.string.settings_engine_openai_llm),
+                        selected = translatorEngine == TranslatorEngine.OPENAI && !bilibiliSelected,
+                    ) { selectTranslatorEngine(it) }
+                    EngineChip(translatorEngine, TranslatorEngine.ANTHROPIC, stringResource(R.string.settings_engine_anthropic_llm)) { selectTranslatorEngine(it) }
                 }
                 Text(
                     stringResource(R.string.settings_translator_group_cloud),
@@ -3687,14 +3701,22 @@ fun SettingsScreen(
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    EngineChip(translatorEngine, TranslatorEngine.DEEPL, stringResource(R.string.settings_engine_deepl)) { translatorEngine = it }
-                    EngineChip(translatorEngine, TranslatorEngine.NIUTRANS, stringResource(R.string.settings_engine_niutrans)) { translatorEngine = it }
-                    EngineChip(translatorEngine, TranslatorEngine.GOOGLE, stringResource(R.string.settings_engine_google)) { translatorEngine = it }
-                    EngineChip(translatorEngine, TranslatorEngine.BILIBILI_INDEX, stringResource(R.string.settings_engine_bilibili_index)) { translatorEngine = it }
-                    EngineChip(translatorEngine, TranslatorEngine.VOLC, stringResource(R.string.settings_engine_volc)) { translatorEngine = it }
-                    EngineChip(translatorEngine, TranslatorEngine.BAIDU_FANYI, stringResource(R.string.settings_engine_baidu_fanyi)) { translatorEngine = it }
-                    EngineChip(translatorEngine, TranslatorEngine.TENCENT, stringResource(R.string.settings_engine_tencent)) { translatorEngine = it }
-                    EngineChip(translatorEngine, TranslatorEngine.YOUDAO_PICTRANS, stringResource(R.string.settings_engine_youdao_pictrans)) { translatorEngine = it }
+                    EngineChip(translatorEngine, TranslatorEngine.DEEPL, stringResource(R.string.settings_engine_deepl)) { selectTranslatorEngine(it) }
+                    EngineChip(translatorEngine, TranslatorEngine.NIUTRANS, stringResource(R.string.settings_engine_niutrans)) { selectTranslatorEngine(it) }
+                    EngineChip(translatorEngine, TranslatorEngine.GOOGLE, stringResource(R.string.settings_engine_google)) { selectTranslatorEngine(it) }
+                    EngineChip(
+                        translatorEngine,
+                        TranslatorEngine.OPENAI,
+                        stringResource(R.string.settings_engine_bilibili_index),
+                        selected = bilibiliSelected,
+                    ) {
+                        translatorEngine = it
+                        openAiProvider = OpenAiProvider.BILIBILI
+                    }
+                    EngineChip(translatorEngine, TranslatorEngine.VOLC, stringResource(R.string.settings_engine_volc)) { selectTranslatorEngine(it) }
+                    EngineChip(translatorEngine, TranslatorEngine.BAIDU_FANYI, stringResource(R.string.settings_engine_baidu_fanyi)) { selectTranslatorEngine(it) }
+                    EngineChip(translatorEngine, TranslatorEngine.TENCENT, stringResource(R.string.settings_engine_tencent)) { selectTranslatorEngine(it) }
+                    EngineChip(translatorEngine, TranslatorEngine.YOUDAO_PICTRANS, stringResource(R.string.settings_engine_youdao_pictrans)) { selectTranslatorEngine(it) }
                 }
 
                 // 端侧 LLM 翻译区块。当前支持 Sakura（日译中）和 Hy-MT2（多语种）。
@@ -3749,7 +3771,7 @@ fun SettingsScreen(
                     )
                 }
 
-                if (translatorEngine == TranslatorEngine.OPENAI) {
+                if (translatorEngine == TranslatorEngine.OPENAI && !bilibiliSelected) {
                     SettingsSearchTarget(
                         searchTargetRegistry,
                         R.string.settings_search_item_base_url,
@@ -4190,14 +4212,13 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.error
                     )
                     }
-                } else if (translatorEngine == TranslatorEngine.BILIBILI_INDEX) {
+                } else if (bilibiliSelected) {
                     SettingsSearchTarget(searchTargetRegistry, R.string.settings_engine_bilibili_index) {
-                    // B站 Index-Translate：baseUrl/apiKey/model 全部内置写死，开箱即用，无需任何配置。
-                    Text(
-                        stringResource(R.string.settings_bilibili_index_hint),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                        Text(
+                            stringResource(R.string.settings_bilibili_index_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
 
@@ -4205,7 +4226,7 @@ fun SettingsScreen(
                 // 验证 baseUrl/key/model（或 DeepL key/endpoint）能不能用；DeepL 顺便返回剩余额度，
                 // OpenAI 顺便拉 model 列表回填到上方下拉。状态文字按成功/失败着色，下次点击覆盖。
                 if (translatorEngine != TranslatorEngine.GOOGLE_ML_KIT &&
-                    translatorEngine != TranslatorEngine.BILIBILI_INDEX
+                    !bilibiliSelected
                 ) {
                 TranslatorConnectionTestPanel(
                     inputKey = buildSnapshot(),
@@ -9542,6 +9563,7 @@ private val SETTING_ITEMS: List<SearchEntry> = listOfNotNull(
             R.string.settings_engine_niutrans,
             R.string.settings_engine_youdao_pictrans,
             R.string.settings_engine_google,
+            R.string.settings_engine_bilibili_index,
             R.string.settings_on_device_translation_english,
             R.string.settings_ocr_chip_chinese,
             R.string.settings_ocr_chip_japanese,
@@ -10354,7 +10376,11 @@ internal fun translationPresetSummary(preset: TranslationPreset): String {
 
 @Composable
 private fun presetLlmLabel(preset: TranslationPreset): String = when (preset.translatorEngine) {
-    TranslatorEngine.OPENAI -> preset.model.ifBlank { stringResource(R.string.settings_engine_openai_llm) }
+    TranslatorEngine.OPENAI -> if (preset.openAiProvider == OpenAiProvider.BILIBILI) {
+        stringResource(R.string.settings_engine_bilibili_index)
+    } else {
+        preset.model.ifBlank { stringResource(R.string.settings_engine_openai_llm) }
+    }
     TranslatorEngine.ANTHROPIC -> preset.anthropicModel.ifBlank {
         stringResource(R.string.settings_engine_anthropic_llm)
     }
@@ -10395,7 +10421,6 @@ private fun translatorEngineLabel(engine: TranslatorEngine): String = stringReso
         TranslatorEngine.NIUTRANS -> R.string.settings_engine_niutrans
         TranslatorEngine.YOUDAO_PICTRANS -> R.string.settings_engine_youdao_pictrans
         TranslatorEngine.GOOGLE -> R.string.settings_engine_google
-        TranslatorEngine.BILIBILI_INDEX -> R.string.settings_engine_bilibili_index
         TranslatorEngine.GOOGLE_ML_KIT -> R.string.settings_translator_group_on_device
         TranslatorEngine.VOLC -> R.string.settings_engine_volc
         TranslatorEngine.BAIDU_FANYI -> R.string.settings_engine_baidu_fanyi
@@ -10858,10 +10883,11 @@ internal fun <T> EngineChip(
     label: String,
     enabled: Boolean = true,
     onSettingsClick: (() -> Unit)? = null,
+    selected: Boolean = current == target,
     onSelect: (T) -> Unit
 ) {
     FilterChip(
-        selected = current == target,
+        selected = selected,
         onClick = { onSelect(target) },
         label = { Text(label) },
         trailingIcon = onSettingsClick?.let { open -> {
@@ -10930,14 +10956,20 @@ internal fun ocrEngineLabelRes(engine: com.gameocr.app.data.OcrEngineKind): Int 
     OcrEngineCatalog.option(engine).labelRes
 
 @androidx.annotation.StringRes
-internal fun translatorEngineLabelRes(engine: TranslatorEngine): Int = when (engine) {
-    TranslatorEngine.OPENAI -> R.string.settings_engine_openai_llm
+internal fun translatorEngineLabelRes(
+    engine: TranslatorEngine,
+    openAiProvider: OpenAiProvider = OpenAiProvider.CUSTOM,
+): Int = when (engine) {
+    TranslatorEngine.OPENAI -> if (openAiProvider == OpenAiProvider.BILIBILI) {
+        R.string.settings_engine_bilibili_index
+    } else {
+        R.string.settings_engine_openai_llm
+    }
     TranslatorEngine.ANTHROPIC -> R.string.settings_engine_anthropic_llm
     TranslatorEngine.DEEPL -> R.string.settings_engine_deepl
     TranslatorEngine.NIUTRANS -> R.string.settings_engine_niutrans
     TranslatorEngine.YOUDAO_PICTRANS -> R.string.settings_engine_youdao_pictrans
     TranslatorEngine.GOOGLE -> R.string.settings_engine_google
-    TranslatorEngine.BILIBILI_INDEX -> R.string.settings_engine_bilibili_index
     TranslatorEngine.GOOGLE_ML_KIT -> R.string.settings_translator_group_on_device
     TranslatorEngine.VOLC -> R.string.settings_engine_volc
     TranslatorEngine.BAIDU_FANYI -> R.string.settings_engine_baidu_fanyi

@@ -13,8 +13,7 @@ internal enum class TranslationPromptContextStrategy {
 internal object TranslationPromptContextPolicy {
     fun strategyFor(engine: TranslatorEngine): TranslationPromptContextStrategy = when (engine) {
         TranslatorEngine.OPENAI,
-        TranslatorEngine.ANTHROPIC,
-        TranslatorEngine.BILIBILI_INDEX -> TranslationPromptContextStrategy.GENERIC_STRUCTURED
+        TranslatorEngine.ANTHROPIC -> TranslationPromptContextStrategy.GENERIC_STRUCTURED
         TranslatorEngine.LOCAL_HY_MT2 -> TranslationPromptContextStrategy.HY_MT2_OFFICIAL
         TranslatorEngine.LOCAL_SAKURA -> TranslationPromptContextStrategy.SAKURA_OFFICIAL
         TranslatorEngine.DEEPL,
