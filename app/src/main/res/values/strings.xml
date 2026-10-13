@@ -305,6 +305,7 @@
     <string name="settings_app_lang_follow_system">Follow system</string>
     <string name="settings_app_lang_zh">简体中文</string>
     <string name="settings_app_lang_en">English</string>
+    <string name="settings_app_lang_ar" translatable="false">العربية</string>
     <string name="settings_app_lang_hint">Takes effect immediately. You can also change it in system Settings → Apps → Language.</string>
     <string name="settings_baidu_image_limit_hint">Image limits: longest side ≤ 4096px / shortest side ≥ 15px, aspect ratio 1:4–4:1, base64 &lt; 4MB. The 2× upscale preprocess doubles image size — narrow or huge capture regions easily hit error 216202.</string>
     <string name="settings_section_theme_mode">Theme</string>
@@ -1329,6 +1330,7 @@
     <string name="lang_gl">Galician</string>
     <string name="lang_ca">Catalan</string>
     <string name="lang_cs">Czech</string>
+    <string name="lang_kn">Kannada</string>
     <string name="lang_xh">Xhosa</string>
     <string name="lang_hr">Croatian</string>
     <string name="lang_gom">Konkani</string>

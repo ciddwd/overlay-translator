@@ -662,6 +662,10 @@ i18n: 翻译相关
 
 ### 贡献者
 
+| 语言 | 翻译率 | 贡献者 | 来源 |
+| --- | --- | --- | --- |
+| 阿拉伯语（العربية） | **98.6%（1,988 / 2,016）** | [Maxaseel](https://github.com/Maxaseel) | [Issue #31](https://github.com/ciddwd/overlay-translator/issues/31) |
+
 <a href="https://github.com/ciddwd/overlay-translator/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=ciddwd/overlay-translator" />
 </a>

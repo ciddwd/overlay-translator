@@ -652,6 +652,10 @@ Write the subject in either English or Chinese — **don't mix in one line**. Ke
 
 ### Contributors
 
+| Language | Translation coverage | Contributor | Source |
+| --- | --- | --- | --- |
+| Arabic (العربية) | **98.6% (1,988 / 2,016)** | [Maxaseel](https://github.com/Maxaseel) | [Issue #31](https://github.com/ciddwd/overlay-translator/issues/31) |
+
 <a href="https://github.com/ciddwd/overlay-translator/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=ciddwd/overlay-translator" />
 </a>
