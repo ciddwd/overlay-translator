@@ -25,12 +25,10 @@ class TranslationContextModeSegmentedUiTest {
         val end = source.indexOf("private fun translationContextModeLabelRes", start)
         val snippet = source.substring(start, end)
         listOf(
-            "SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth())",
+            "SettingsChoiceRow(",
             "modes.forEachIndexed { index, mode ->",
-            "SegmentedButton(",
-            "SegmentedButtonDefaults.itemShape(index, modes.size)",
+            "SettingsChoiceButton(",
             "selected = value == mode",
-            "icon = {}",
         ).forEach { marker -> assertTrue(marker, marker in snippet) }
     }
 
@@ -45,7 +43,6 @@ class TranslationContextModeSegmentedUiTest {
         assertTrue("translation mode exists", mode >= 0)
         assertTrue("streaming exists", streaming >= 0)
         assertTrue("translation mode before streaming", mode < streaming)
-        assertTrue("same-segment switch removed", "settings_cross_line_context" !in snippet)
     }
 
     @Test

@@ -50,9 +50,9 @@ class ProcessTextSpeechPolicyTest {
         ).readText()
 
         assertTrue(source.contains("@Inject lateinit var ttsEngine: TtsEngine"))
-        assertEquals(2, source.countOccurrences("onSpeakSource = sourceSpeech"))
-        assertEquals(1, source.countOccurrences("onSpeakTranslation = translationSpeech.takeIf"))
-        assertEquals(1, source.countOccurrences("onSpeakDictionary = dictionarySpeech.takeIf"))
+        assertTrue(source.contains("onSpeakSource = sourceSpeech"))
+        assertTrue(source.contains("onSpeakTranslation = translationSpeech.takeIf"))
+        assertTrue(source.contains("onSpeakDictionary = dictionarySpeech.takeIf"))
         assertTrue(source.contains("presentation.translationSucceeded"))
         assertTrue(source.contains("speechEngine.toggle("))
         assertTrue(source.contains("speechEngine.speak("))

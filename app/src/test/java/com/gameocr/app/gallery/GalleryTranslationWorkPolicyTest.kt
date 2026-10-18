@@ -2,11 +2,33 @@ package com.gameocr.app.gallery
 
 import com.gameocr.app.data.OcrEngineKind
 import com.gameocr.app.data.TranslatorEngine
+import com.gameocr.app.data.Settings
+import com.gameocr.app.R
 import java.io.IOException
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class GalleryTranslationWorkPolicyTest {
+
+    @Test
+    fun `creation checks keys only for the selected OpenAI translator`() {
+        data class Case(val engine: TranslatorEngine, val key: String, val expected: Int?)
+        listOf(
+            Case(TranslatorEngine.OPENAI, "", R.string.err_openai_no_api_key),
+            Case(TranslatorEngine.OPENAI, "  \n", R.string.err_openai_no_api_key),
+            Case(TranslatorEngine.OPENAI, "configured", null),
+            Case(TranslatorEngine.GOOGLE, "", null),
+            Case(TranslatorEngine.GOOGLE_ML_KIT, "", null),
+            Case(TranslatorEngine.LOCAL_SAKURA, "", null),
+        ).forEach { case ->
+            assertEquals(
+                case.toString(), case.expected,
+                GalleryTranslationWorkPolicy.creationErrorRes(
+                    Settings(translatorEngine = case.engine, apiKey = case.key),
+                ),
+            )
+        }
+    }
 
     @Test
     fun `selection normalization is table driven`() {

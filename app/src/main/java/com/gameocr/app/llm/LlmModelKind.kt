@@ -16,6 +16,7 @@ enum class LlmModelKind(
     val approxSizeMb: Int,
     val targetLangMode: TargetLangMode,
     val onlySourceLangBcp47: String? = null,
+    val quantization: String = "Q4_K_M",
 ) {
     /**
      * SakuraLLM 的 Qwen2.5-1.5B v1.0 微调版（Q5KS imatrix 量化），日译中 ACGN/VN/Galgame 专用。
@@ -34,6 +35,7 @@ enum class LlmModelKind(
         approxSizeMb = 1260,
         targetLangMode = TargetLangMode.FIXED_ZH_CN,
         onlySourceLangBcp47 = "ja",
+        quantization = "Q5_K_S",
     ),
 
     /**
@@ -48,7 +50,69 @@ enum class LlmModelKind(
         downloadUrl = "https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/main/Hy-MT2-1.8B-Q4_K_M.gguf",
         approxSizeMb = 1130,
         targetLangMode = TargetLangMode.FOLLOWS_SETTINGS,
+    ),
+
+    /** Official Qwen3.5-based multilingual translation weights, downloaded on demand. */
+    INDEX_TRANSLATE_2B_Q4_K_M(
+        displayName = "Index-Translate-2B (Q4_K_M)",
+        fileName = "Index-Translate-2B.Q4_K_M.gguf",
+        downloadUrl = "https://huggingface.co/IndexTeam/Index-Translate-2B-GGUF/resolve/main/Index-Translate-2B.Q4_K_M.gguf",
+        approxSizeMb = 1310,
+        targetLangMode = TargetLangMode.FOLLOWS_SETTINGS,
+    ),
+    QWEN3_0_6B_Q8_0(
+        displayName = "Qwen3-0.6B (Q8_0)",
+        fileName = "Qwen3-0.6B-Q8_0.gguf",
+        downloadUrl = "https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf",
+        approxSizeMb = 639,
+        targetLangMode = TargetLangMode.FOLLOWS_SETTINGS,
+        quantization = "Q8_0",
+    ),
+    LFM2_5_1_2B_INSTRUCT_Q4_K_M(
+        "LFM2.5-1.2B-Instruct", "LFM2.5-1.2B-Instruct-Q4_K_M.gguf",
+        "https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF/resolve/main/LFM2.5-1.2B-Instruct-Q4_K_M.gguf",
+        697, TargetLangMode.FOLLOWS_SETTINGS,
+    ),
+    GEMMA4_E2B_Q4_0(
+        "Gemma-4-E2B-it", "gemma-4-E2B_q4_0-it.gguf",
+        "https://huggingface.co/google/gemma-4-E2B-it-qat-q4_0-gguf/resolve/main/gemma-4-E2B_q4_0-it.gguf",
+        3194, TargetLangMode.FOLLOWS_SETTINGS, quantization = "Q4_0",
+    ),
+    GEMMA4_E4B_Q4_0(
+        "Gemma-4-E4B-it", "gemma-4-E4B_q4_0-it.gguf",
+        "https://huggingface.co/google/gemma-4-E4B-it-qat-q4_0-gguf/resolve/main/gemma-4-E4B_q4_0-it.gguf",
+        4916, TargetLangMode.FOLLOWS_SETTINGS, quantization = "Q4_0",
+    ),
+    GEMMA3_4B_Q4_K_M(
+        "Gemma-3-4B-it", "gemma-3-4b-it-Q4_K_M.gguf",
+        "https://huggingface.co/ggml-org/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf",
+        2374, TargetLangMode.FOLLOWS_SETTINGS,
+    ),
+    TRANSLATEGEMMA_4B_Q4_K_M(
+        "TranslateGemma-4B-it", "translategemma-4b_Q4_K_M.gguf",
+        "https://huggingface.co/SandLogicTechnologies/translategemma-4b-it-GGUF/resolve/main/translategemma-4b_Q4_K_M.gguf",
+        2375, TargetLangMode.FOLLOWS_SETTINGS,
     );
+
+    val usesGgufTemplate: Boolean get() = this != SAKURA_1_5B_Q4 && this != HY_MT2_1_8B_Q4_K_M
+
+    /** These presets share the generic engine but keep their own stable file/configuration ID. */
+    val managedViaGeneric: Boolean get() = this != SAKURA_1_5B_Q4 &&
+        this != HY_MT2_1_8B_Q4_K_M && this != INDEX_TRANSLATE_2B_Q4_K_M
+
+    /**
+     * Translation-tuned models keep their own prompt and sampling; user prompt and sampling
+     * overrides apply only to general models (this preset and every imported GGUF).
+     */
+    val specialized: Boolean get() = this == SAKURA_1_5B_Q4 || this == HY_MT2_1_8B_Q4_K_M ||
+        this == INDEX_TRANSLATE_2B_Q4_K_M || this == TRANSLATEGEMMA_4B_Q4_K_M
+
+    companion object {
+        fun fromBuiltInId(id: String?): LlmModelKind? =
+            id?.takeIf { it.startsWith("builtin:") }?.removePrefix("builtin:")?.let { name ->
+                entries.firstOrNull { it.name == name }
+            }
+    }
 
     enum class TargetLangMode {
         /** 跟 Settings 里 targetLang 走（多语种翻译模型用）。当前无此模式枚举值的 kind。 */

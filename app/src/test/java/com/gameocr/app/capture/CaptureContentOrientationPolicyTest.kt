@@ -5,11 +5,28 @@ import com.gameocr.app.data.CaptureContentOrientation
 import com.gameocr.app.ocr.BubbleClusterer.IntRect
 import com.gameocr.app.ocr.ShapeAwareBubblePatch
 import com.gameocr.app.ocr.TextBlock
+import com.gameocr.app.ocr.mapBlocksFromRotated180
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class CaptureContentOrientationPolicyTest {
+
+    @Test
+    fun textAndMaskCoordinates_sharePixelGeometry_tableDriven() {
+        listOf(
+            0 to IntRect(20, 10, 40, 30),
+            90 to IntRect(70, 20, 90, 40),
+            180 to IntRect(60, 50, 80, 70),
+            270 to IntRect(10, 40, 30, 60),
+        ).forEach { (angle, expected) ->
+            val ocr = IntRect(20, 10, 40, 30)
+            val display = CaptureContentOrientationPolicy.mapIntRectToOriginal(ocr, 100, 80, angle)
+            assertEquals("angle=$angle", expected, display)
+            assertEquals("inverse angle=$angle", ocr,
+                CaptureContentOrientationPolicy.mapIntRectToOcr(display, 100, 80, angle))
+        }
+    }
 
     @Test
     fun canUseOcrSpacePixelMask_acceptsExactlyInvertibleQuarterTurns_tableDriven() {
@@ -100,6 +117,38 @@ class CaptureContentOrientationPolicyTest {
             assertRectEquals("${case.name} source box", case.expected, mapped.sourceBoxes.single())
             assertEquals(case.name, "text", mapped.text)
             assertEquals(case.name, ((case.angle % 360) + 360) % 360, mapped.presentationRotationDegrees)
+        }
+    }
+
+    @Test
+    fun correctedOcr_preservesFinalTextDirectionAndMaskCoordinates_tableDriven() {
+        data class Case(val turn: Int, val corrected: Boolean, val expectedTurn: Int, val expectedBounds: Rect)
+        listOf(
+            Case(0, false, 0, Rect(20, 10, 40, 30)),
+            Case(90, false, 90, Rect(70, 20, 90, 40)),
+            Case(180, false, 180, Rect(60, 50, 80, 70)),
+            Case(270, false, 270, Rect(10, 40, 30, 60)),
+            Case(0, true, 180, Rect(60, 50, 80, 70)),
+            Case(90, true, 270, Rect(10, 40, 30, 60)),
+            Case(180, true, 0, Rect(20, 10, 40, 30)),
+            Case(270, true, 90, Rect(70, 20, 90, 40)),
+        ).forEach { case ->
+            val name = "normalization=${case.turn} corrected=${case.corrected}"
+            val upright = listOf(TextBlock("translated", Rect(20, 10, 40, 30),
+                sourceBoxes = listOf(Rect(22, 12, 38, 28))))
+            val quarterTurn = case.turn == 90 || case.turn == 270
+            val ocrBlocks = if (case.corrected) {
+                mapBlocksFromRotated180(upright, if (quarterTurn) 80 else 100, if (quarterTurn) 100 else 80)
+            } else upright
+            val display = CaptureContentOrientationPolicy.mapBlocksToOriginal(ocrBlocks, 100, 80, case.turn).single()
+            assertEquals(name, case.expectedTurn, display.presentationRotationDegrees)
+            assertRectEquals(name, case.expectedBounds, display.boundingBox)
+            assertEquals(name, "translated", display.text)
+            // Erasing still uses the first OCR bitmap's coordinates, even when the text view
+            // needs the additional 180-degree turn. Do not rotate the mask a second time.
+            val mask = CaptureContentOrientationPolicy.mapBlocksToOcr(listOf(display), 100, 80, case.turn).single()
+            assertRectEquals("$name mask", ocrBlocks.single().boundingBox, mask.boundingBox)
+            assertRectEquals("$name source mask", ocrBlocks.single().sourceBoxes.single(), mask.sourceBoxes.single())
         }
     }
 

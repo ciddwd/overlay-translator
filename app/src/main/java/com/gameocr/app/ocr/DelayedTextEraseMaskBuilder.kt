@@ -78,6 +78,7 @@ internal object DelayedTextEraseMaskBuilder {
         )
         val memberToModel = buildMemberToModelMap(modelGroups)
         val output = BooleanArray(candidateTextMask.size)
+        val componentCoverageCache = mutableMapOf<Pair<Int, Int>, Int>()
         val decisions = confirmedBlocks.map { block ->
             buildBlock(
                 width = width,
@@ -88,6 +89,7 @@ internal object DelayedTextEraseMaskBuilder {
                 modelMasks = modelMasks,
                 components = components,
                 output = output,
+                componentCoverageCache = componentCoverageCache,
             )
         }
         return Result(mask = output, decisions = decisions)
@@ -102,6 +104,7 @@ internal object DelayedTextEraseMaskBuilder {
         modelMasks: List<BubbleSegmentationPostprocessor.InstanceMask>,
         components: Components,
         output: BooleanArray,
+        componentCoverageCache: MutableMap<Pair<Int, Int>, Int>,
     ): Decision {
         if (block.sourceBoxes.isEmpty()) {
             return rejected(block, Reason.NO_SOURCE_BOXES)
@@ -177,13 +180,15 @@ internal object DelayedTextEraseMaskBuilder {
                 components.items[selection.label].pixelCount
             }
             val insideModelCount = selected.sumOf { selection ->
-                countComponentInsideModelMask(
-                    component = components.items[selection.label],
-                    componentLabel = selection.label,
-                    labels = components.labels,
-                    width = width,
-                    modelMask = modelMask,
-                )
+                componentCoverageCache.getOrPut(selection.label to modelIndex) {
+                    countComponentInsideModelMask(
+                        component = components.items[selection.label],
+                        componentLabel = selection.label,
+                        labels = components.labels,
+                        width = width,
+                        modelMask = modelMask,
+                    )
+                }
             }
             val coverage = if (selectedCoreCount == 0) {
                 0f
@@ -206,9 +211,9 @@ internal object DelayedTextEraseMaskBuilder {
         val uniqueSelections = selections.distinctBy { selection ->
             selection.label to selection.modelIndex
         }
-        val beforePixels = output.countTrue()
+        var outputPixels = 0
         uniqueSelections.forEach { selection ->
-            dilateComponentInto(
+            outputPixels += dilateComponentInto(
                 output = output,
                 width = width,
                 height = height,
@@ -219,7 +224,6 @@ internal object DelayedTextEraseMaskBuilder {
                 modelMask = modelMasks[selection.modelIndex],
             )
         }
-        val outputPixels = output.countTrue() - beforePixels
         return Decision(
             blockIndex = block.blockIndex,
             accepted = true,
@@ -425,7 +429,8 @@ internal object DelayedTextEraseMaskBuilder {
         componentLabel: Int,
         radius: Int,
         modelMask: BubbleSegmentationPostprocessor.InstanceMask,
-    ) {
+    ): Int {
+        var addedPixels = 0
         for (y in component.bounds.top until component.bounds.bottom) {
             val row = y * width
             for (x in component.bounds.left until component.bounds.right) {
@@ -438,12 +443,17 @@ internal object DelayedTextEraseMaskBuilder {
                         val targetX = x + dx
                         if (targetX !in 0 until width) continue
                         if (modelMask.contains(targetX, targetY)) {
-                            output[targetY * width + targetX] = true
+                            val index = targetY * width + targetX
+                            if (!output[index]) {
+                                output[index] = true
+                                addedPixels++
+                            }
                         }
                     }
                 }
             }
         }
+        return addedPixels
     }
 
     private fun componentSearchRadius(source: IntRect): Int =
@@ -477,12 +487,6 @@ internal object DelayedTextEraseMaskBuilder {
 
     private fun IntRect.area(): Long =
         width.coerceAtLeast(0).toLong() * height.coerceAtLeast(0)
-
-    private fun BooleanArray.countTrue(): Int {
-        var count = 0
-        forEach { value -> if (value) count++ }
-        return count
-    }
 
     private fun rejected(
         block: ConfirmedBlock,

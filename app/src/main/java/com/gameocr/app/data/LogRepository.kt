@@ -22,7 +22,7 @@ import kotlinx.coroutines.flow.asStateFlow
 class LogRepository @Inject constructor() {
 
     enum class Level { INFO, WARN, ERROR }
-    enum class Category { CAPTURE, OCR, TRANSLATE, CRASH }
+    enum class Category { CAPTURE, OCR, TRANSLATE, CRASH, SPEECH }
 
     data class Entry(
         /** 全局递增唯一 id。同毫秒并发产生多条日志时也保证不撞，给 LazyColumn 用作稳定 key。 */

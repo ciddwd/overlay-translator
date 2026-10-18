@@ -1,5 +1,34 @@
 package com.gameocr.app.shizuku
 
+import com.gameocr.app.capture.CaptureStartMode
+import kotlinx.coroutines.delay
+
+internal fun shouldPrepareSelectedShizukuOverlay(
+    mode: CaptureStartMode,
+    overlayGranted: Boolean,
+    availability: ShizukuCapabilities.Availability,
+    isForeground: Boolean,
+): Boolean = isForeground && mode == CaptureStartMode.SHIZUKU && !overlayGranted &&
+    availability == ShizukuCapabilities.Availability.READY
+
+/** Grant only the overlay permission using existing authorization, then verify propagation. */
+internal suspend fun prepareOverlayPermissionIfReady(
+    overlayGranted: () -> Boolean,
+    shizukuReady: () -> Boolean,
+    grantOverlay: suspend () -> Boolean,
+    waitForRetry: suspend () -> Unit = { delay(100) },
+): Boolean {
+    if (overlayGranted()) return true
+    if (!shizukuReady()) return false
+    val accepted = grantOverlay()
+    if (!accepted) return overlayGranted()
+    repeat(20) {
+        if (overlayGranted()) return true
+        waitForRetry()
+    }
+    return overlayGranted()
+}
+
 internal enum class OverlayPermissionEntryAction {
     ALREADY_GRANTED,
     TRY_SHIZUKU,

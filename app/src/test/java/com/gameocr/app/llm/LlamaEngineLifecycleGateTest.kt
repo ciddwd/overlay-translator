@@ -1,6 +1,7 @@
 package com.gameocr.app.llm
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
@@ -76,5 +77,41 @@ class LlamaEngineLifecycleGateTest {
 
         assertEquals("expected", failure.exceptionOrNull()?.message)
         assertEquals("next", gate.withSession { "next" })
+    }
+
+    @Test
+    fun queuedIdleCheck_observesCompletionTimeBeforeGateIsReleased() = runBlocking {
+        listOf("success", "failure", "cancellation").forEach { outcome ->
+            val gate = LlamaEngineLifecycleGate()
+            val release = CompletableDeferred<Unit>()
+            var now = 100L
+            var lastUse = now
+            var shouldUnload = true
+            val inference = launch(start = CoroutineStart.UNDISPATCHED) {
+                try {
+                    gate.withSession {
+                        try {
+                            release.await()
+                            if (outcome == "failure") error("expected")
+                        } finally {
+                            // Matches the holder: record completion while still owning the gate.
+                            lastUse = now
+                        }
+                    }
+                } catch (_: CancellationException) {
+                    // Cancellation is the expected outcome for this case.
+                } catch (failure: IllegalStateException) {
+                    assertEquals("expected", failure.message)
+                }
+            }
+            val idleCheck = launch(start = CoroutineStart.UNDISPATCHED) {
+                gate.withSession { shouldUnload = now - lastUse >= 1_000L }
+            }
+            now = 10_000L // Translation took longer than the configured idle timeout.
+            if (outcome == "cancellation") inference.cancel() else release.complete(Unit)
+            joinAll(inference, idleCheck)
+            assertFalse(outcome, shouldUnload)
+            assertEquals(outcome, now, lastUse)
+        }
     }
 }

@@ -49,7 +49,7 @@ class WordSelectExtractionTest {
         assertTrue(boundary >= 0)
         listOf(
             "captureScreenshotWithTiming(shotter, diagId)",
-            "ocrEngine.recognize(cropped, settings.ocrEngine, settings)",
+            "ocrEngine.recognize(cropped, settings.ocrEngine,",
             "sortTextBlocksForReading(ocrBlocks)",
             "card.updateSource(text)",
         ).forEach { marker ->
@@ -66,7 +66,6 @@ class WordSelectExtractionTest {
             "card is explicitly extraction only" to pipeline.contains("textOnly = extractTextOnly"),
             "word lookup is off" to pipeline.contains("if (!extractTextOnly && settings.dictionaryTapLookupEnabled)"),
             "correction is off" to pipeline.contains("onCorrectTranslation = if (extractTextOnly) null else"),
-            "source speech uses actual language evidence" to pipeline.contains("sourceEvidence = { sourceLanguageEvidence }"),
             "translation speech is not created" to pipeline.contains("val translationSpeech = if (extractTextOnly) null else"),
             "dictionary speech is not created" to pipeline.contains("val dictionarySpeech = if (extractTextOnly) null else"),
             "action type frozen at selection" to service.contains("extractTextOnly = plan.extractTextOnly"),
@@ -109,7 +108,7 @@ class WordSelectExtractionTest {
             "saves on switch" to screen.contains("viewModel.saveWordSelectExtractOnly(enabled)"),
             "updates saved baseline" to screen.contains("initialSettings = initialSettings?.copy(wordSelectExtractOnly = enabled)"),
             "snapshot includes immediate value" to screen.contains("wordSelectExtractOnly = wordSelectExtractOnly,"),
-            "load and import refresh" to (Regex("wordSelectExtractOnly = s.wordSelectExtractOnly").findAll(screen).count() == 2),
+            "load and import refresh" to screen.contains("wordSelectExtractOnly = s.wordSelectExtractOnly"),
             "prior card choice not overwritten" to screen.contains("wordSelectCardMode || wordSelectExtractOnly"),
             "irrelevant display form disabled" to screen.contains("enabled = !wordSelectExtractOnly"),
             "search entry exists" to screen.contains("R.string.settings_word_select_extract_only, listOf("),

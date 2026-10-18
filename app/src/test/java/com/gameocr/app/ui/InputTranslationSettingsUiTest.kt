@@ -11,14 +11,14 @@ class InputTranslationSettingsUiTest {
         val source = moduleFile("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
         val start = source.indexOf("item(key = SectionKeys.INPUT_TRANSLATION)")
         val trigger = source.indexOf("item(key = SectionKeys.TRIGGER)")
-        val end = source.indexOf("item(key = SectionKeys.ARC_MENU)", start)
+        val end = source.indexOf("item(key = SectionKeys.TRIGGER)", start)
         val card = source.substring(start, end)
 
         assertTrue("input translation card must be before loop settings", start in 0 until trigger)
 
         listOf(
             "SectionCard(title = stringResource(R.string.settings_section_input_translation))",
-            "SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth())",
+            "SettingsChoiceRow(",
             "InputTranslationDoubleAction.FULL_SCREEN",
             "InputTranslationDoubleAction.WORD_SELECT",
             "viewModel.saveInputTranslationDoubleAction(action)",

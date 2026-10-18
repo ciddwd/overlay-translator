@@ -26,6 +26,9 @@ internal object TextPixelMaskBuilder {
         val corePixels: BooleanArray = pixels,
         val supportPixels: BooleanArray = pixels,
         val semanticPixels: BooleanArray = supportPixels,
+        val barrierPixels: BooleanArray = BooleanArray(0),
+        val recognizedBoxPixels: BooleanArray = BooleanArray(0),
+        val recognizedSourceBoxes: List<IntRect> = emptyList(),
     ) {
         init {
             require(bounds.width > 0 && bounds.height > 0)
@@ -33,6 +36,8 @@ internal object TextPixelMaskBuilder {
             require(corePixels.size == pixels.size)
             require(supportPixels.size == pixels.size)
             require(semanticPixels.size == pixels.size)
+            require(barrierPixels.isEmpty() || barrierPixels.size == pixels.size)
+            require(recognizedBoxPixels.isEmpty() || recognizedBoxPixels.size == pixels.size)
             require(selectedCorePixels > 0)
             require(corePixels.count { it } == selectedCorePixels)
         }

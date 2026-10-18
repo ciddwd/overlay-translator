@@ -17,7 +17,17 @@ internal object MangaOcrTextEvidencePolicy {
         val assignments: List<MangaTextEvidenceMatcher.EntryAssignment>,
         val unassignedTextBubbleDetectionIndices: Set<Int>,
         val duplicateCropEntryIndices: Set<Int>,
-    )
+    ) {
+        fun toModelGroups(): List<BubbleModelRegrouper.Group> = entries.map { entry ->
+            BubbleModelRegrouper.Group(
+                source = entry.guidedSource ?: BubbleModelRegrouper.Source.LEGACY_FALLBACK,
+                modelBubbleIndex = entry.modelBubbleIndex,
+                cropBounds = entry.bubble.rect,
+                contentBounds = entry.bubble.contentRect,
+                memberIndices = entry.bubble.memberIndices,
+            )
+        }
+    }
 
     fun filter(
         entries: List<MangaOcrBubbleGroupingPolicy.Entry>,
@@ -42,6 +52,21 @@ internal object MangaOcrTextEvidencePolicy {
         val assignmentsByEntry = assignments.groupBy(
             MangaTextEvidenceMatcher.EntryAssignment::entryIndex,
         )
+        // A model text extent can include DBNet columns which were left in the fallback path.
+        // Recognizing those columns separately repeats a substring of the complete balloon.
+        // Move their members to the sole supported owner; preserve free text and ambiguous ties.
+        val absorbedByOwner = entries.indices.mapNotNull { index ->
+            val entry = entries[index]
+            if (entry.guidedSource != BubbleModelRegrouper.Source.LEGACY_FALLBACK ||
+                entry.regionGranularity == TextRegionGranularity.FREE_TEXT
+            ) return@mapNotNull null
+            val owners = assignments.filter { assignment ->
+                coverage(entry.bubble.contentRect, textDetections[assignment.detectionIndex].toIntRect()) >=
+                    MIN_FRAGMENT_COVERAGE
+            }.map { it.entryIndex }.distinct()
+            owners.singleOrNull()?.let { owner -> index to owner }
+        }.toMap()
+        val absorbedEntries = absorbedByOwner.entries.groupBy({ it.value }, { it.key })
         val assignedDetectionIndices = assignments
             .mapTo(mutableSetOf(), MangaTextEvidenceMatcher.EntryAssignment::detectionIndex)
         val unassignedTextBubbleDetectionIndices = textDetections.indices
@@ -55,6 +80,10 @@ internal object MangaOcrTextEvidencePolicy {
         val dropped = mutableListOf<Int>()
         val textSupported = mutableSetOf<Int>()
         entries.forEachIndexed { index, entry ->
+            if (index in absorbedByOwner) {
+                dropped += index
+                return@forEachIndexed
+            }
             val supportingDetections = assignmentsByEntry[index].orEmpty()
                 .map { assignment -> textDetections[assignment.detectionIndex] }
             val isUnsupportedLineArtifact =
@@ -68,10 +97,16 @@ internal object MangaOcrTextEvidencePolicy {
             } else {
                 val keptIndex = kept.size
                 keptIndexByOriginalIndex[index] = keptIndex
+                val absorbed = absorbedEntries[index].orEmpty().map(entries::get)
+                val contentBounds = absorbed.fold(entry.bubble.contentRect) { bounds, fragment ->
+                    union(bounds, fragment.bubble.contentRect)
+                }
+                val members = (entry.bubble.memberIndices +
+                    absorbed.flatMap { it.bubble.memberIndices }).distinct().sorted()
                 val recognitionBase = if (
                     entry.guidedSource == BubbleModelRegrouper.Source.MODEL
                 ) {
-                    entry.bubble.contentRect
+                    contentBounds
                 } else {
                     entry.bubble.rect
                 }
@@ -86,7 +121,8 @@ internal object MangaOcrTextEvidencePolicy {
                             rect = recognitionBounds,
                             // TEXT_BUBBLE is text extent, not padding or the enclosing balloon.
                             // Recognition, erasure and rendering must retain the same content.
-                            contentRect = union(entry.bubble.contentRect, evidenceBounds),
+                            contentRect = union(contentBounds, evidenceBounds),
+                            memberIndices = members,
                         ),
                     )
                 } else {
@@ -139,5 +175,16 @@ internal object MangaOcrTextEvidencePolicy {
         bottom = maxOf(first.bottom, second.bottom),
     )
 
+    private fun coverage(fragment: IntRect, owner: IntRect): Double {
+        val area = fragment.width.toDouble() * fragment.height
+        if (area <= 0) return 0.0
+        val overlapWidth = (minOf(fragment.right, owner.right) - maxOf(fragment.left, owner.left))
+            .coerceAtLeast(0)
+        val overlapHeight = (minOf(fragment.bottom, owner.bottom) - maxOf(fragment.top, owner.top))
+            .coerceAtLeast(0)
+        return overlapWidth.toDouble() * overlapHeight / area
+    }
+
     internal const val MIN_LINE_ARTIFACT_ASPECT_RATIO: Float = 8f
+    private const val MIN_FRAGMENT_COVERAGE = 0.80
 }

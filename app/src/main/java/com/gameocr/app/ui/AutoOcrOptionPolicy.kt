@@ -26,10 +26,19 @@ internal fun autoOcrModelSpec(route: AutoOcrRoute?): ModelDownloadSpec? = when (
 }
 
 internal fun autoOcrOptionState(settings: Settings, language: String, route: AutoOcrRoute?,
-    available: Set<AutoOcrRoute>?, activeModels: Set<ModelDownloadSpec>): AutoOcrOptionState {
+    available: Set<AutoOcrRoute>?, activeModels: Set<ModelDownloadSpec>,
+    activeModules: Set<OcrEngineKind> = emptySet()): AutoOcrOptionState {
     if (route == null) return AutoOcrOptionState.READY
     if (!AutoOcrRoutingPolicy.supports(settings, language, route)) return AutoOcrOptionState.UNSUPPORTED
     if (!AutoOcrRoutingPolicy.configured(settings, route)) return AutoOcrOptionState.UNCONFIGURED
+    if (route.engine in OcrEngineCatalog.downloadable) {
+        return when {
+            route.engine in activeModules -> AutoOcrOptionState.DOWNLOADING
+            available == null -> AutoOcrOptionState.CHECKING
+            route in available -> AutoOcrOptionState.READY
+            else -> AutoOcrOptionState.DOWNLOAD
+        }
+    }
     val model = autoOcrModelSpec(route) ?: return AutoOcrOptionState.READY
     if (available?.contains(route) == true) return AutoOcrOptionState.READY
     if (ModelDownloadDependencies.expand(listOf(model)).any { it in activeModels }) return AutoOcrOptionState.DOWNLOADING

@@ -40,8 +40,8 @@ internal object PresetCredentialPolicy {
 
     private fun selectedGroups(settings: Settings): Set<Group> = buildSet {
         when (settings.translatorEngine) {
-            // Local LLM routing already uses the configured OpenAI endpoint as its compatibility fallback.
-            TranslatorEngine.OPENAI, TranslatorEngine.LOCAL_SAKURA, TranslatorEngine.LOCAL_HY_MT2 -> add(Group.OPENAI)
+            // Offline presets must not own or clear the retained cloud compatibility connection.
+            TranslatorEngine.OPENAI -> add(Group.OPENAI)
             TranslatorEngine.ANTHROPIC -> add(Group.ANTHROPIC)
             TranslatorEngine.DEEPL -> add(if (settings.deeplBaseUrl.isBlank()) Group.DEEPL else Group.DEEPL_CUSTOM)
             TranslatorEngine.NIUTRANS -> add(Group.NIUTRANS)
@@ -97,7 +97,9 @@ internal object PresetCredentialPolicy {
     fun matches(id: String, settings: Settings, record: PresetCredentialRecord?): Boolean {
         val expected = capture(id, settings)
         if (record == null) return expected.groups.values.all { group -> group.values.values.all(String::isEmpty) }
-        return expected == record
+        // Older offline presets may contain an obsolete OPENAI group; unused groups do not
+        // participate in restoration or the modified-state check.
+        return expected == record.copy(groups = record.groups.filterKeys { it in expected.groups })
     }
 
     fun apply(id: String, settings: Settings, record: PresetCredentialRecord?): Settings {

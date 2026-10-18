@@ -5,14 +5,9 @@ import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.Color
 import android.os.SystemClock
 import com.gameocr.app.util.CpuThreadPolicy
 import java.io.File
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
-import java.nio.FloatBuffer
-import java.nio.LongBuffer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -38,9 +33,25 @@ internal object MangaBubbleDetectionDebugEngine {
     private val inferenceLock = Mutex()
     private var session: OrtSession? = null
     private var loadedModelStamp: Pair<String, Long>? = null
+    private var workspace: MangaBubbleInputWorkspace? = null
     fun modelFile(context: Context): File? = BubbleDetectionModelProvider.prepare(context)
 
     fun isInstalled(context: Context): Boolean = modelFile(context) != null
+
+    /** Prepare weights and buffers without reading a screenshot or running recognition. */
+    suspend fun prewarm(context: Context): Boolean {
+        val model = modelFile(context) ?: return false
+        return inferenceLock.withLock {
+            withContext(Dispatchers.Default) {
+                ensureSession(model)
+                ensureWorkspace()
+                true
+            }
+        }
+    }
+
+    private fun ensureWorkspace(): MangaBubbleInputWorkspace = workspace
+        ?: MangaBubbleInputWorkspace(INPUT_SIZE).also { workspace = it }
 
     suspend fun runIfInstalled(context: Context, bitmap: Bitmap): Output? {
         val model = modelFile(context) ?: return null
@@ -58,24 +69,19 @@ internal object MangaBubbleDetectionDebugEngine {
         val sessionPrepareMs = SystemClock.elapsedRealtime() - sessionStartedAt
 
         val preprocessStartedAt = SystemClock.elapsedRealtime()
-        val inputBuffer = allocateFloatBuffer(3 * INPUT_SIZE * INPUT_SIZE)
-        bitmapToResizedRgbNchw(bitmap, inputBuffer)
-        val originalSizeBuffer = allocateLongBuffer(2).apply {
-            put(bitmap.width.toLong())
-            put(bitmap.height.toLong())
-            rewind()
-        }
+        val io = ensureWorkspace()
+        bitmapToResizedRgbNchw(bitmap, io)
         val preprocessMs = SystemClock.elapsedRealtime() - preprocessStartedAt
 
         val environment = OrtEnvironment.getEnvironment()
         val imageTensor = OnnxTensor.createTensor(
             environment,
-            inputBuffer,
+            io.imageBuffer,
             longArrayOf(1, 3, INPUT_SIZE.toLong(), INPUT_SIZE.toLong()),
         )
         val originalSizeTensor = OnnxTensor.createTensor(
             environment,
-            originalSizeBuffer,
+            io.sizeBuffer,
             longArrayOf(1, 2),
         )
         val inferenceStartedAt = SystemClock.elapsedRealtime()
@@ -125,6 +131,8 @@ internal object MangaBubbleDetectionDebugEngine {
         val stamp = model.absolutePath to model.lastModified()
         session?.takeIf { loadedModelStamp == stamp }?.let { return it }
         runCatching { session?.close() }
+        session = null
+        loadedModelStamp = null
         val options = OrtSession.SessionOptions().apply {
             setIntraOpNumThreads(
                 CpuThreadPolicy.select(CpuThreadPolicy.availableProcessors())
@@ -145,7 +153,7 @@ internal object MangaBubbleDetectionDebugEngine {
 
     private fun bitmapToResizedRgbNchw(
         bitmap: Bitmap,
-        output: FloatBuffer,
+        io: MangaBubbleInputWorkspace,
     ) {
         val resized = if (bitmap.width == INPUT_SIZE && bitmap.height == INPUT_SIZE) {
             bitmap
@@ -153,17 +161,8 @@ internal object MangaBubbleDetectionDebugEngine {
             Bitmap.createScaledBitmap(bitmap, INPUT_SIZE, INPUT_SIZE, true)
         }
         try {
-            val pixels = IntArray(INPUT_SIZE * INPUT_SIZE)
-            resized.getPixels(pixels, 0, INPUT_SIZE, 0, 0, INPUT_SIZE, INPUT_SIZE)
-            val planeSize = INPUT_SIZE * INPUT_SIZE
-            output.clear()
-            pixels.forEachIndexed { index, color ->
-                output.put(index, Color.red(color) / 255f)
-                output.put(planeSize + index, Color.green(color) / 255f)
-                output.put(planeSize * 2 + index, Color.blue(color) / 255f)
-            }
-            output.position(planeSize * 3)
-            output.flip()
+            resized.getPixels(io.pixels, 0, INPUT_SIZE, 0, 0, INPUT_SIZE, INPUT_SIZE)
+            io.pack(bitmap.width, bitmap.height)
         } finally {
             if (resized !== bitmap && !resized.isRecycled) resized.recycle()
         }
@@ -195,16 +194,6 @@ internal object MangaBubbleDetectionDebugEngine {
                 ?: error("Unexpected RT-DETR box row: ${row?.javaClass?.name}")
         }.toTypedArray()
     }
-
-    private fun allocateFloatBuffer(elements: Int): FloatBuffer =
-        ByteBuffer.allocateDirect(elements * Float.SIZE_BYTES)
-            .order(ByteOrder.nativeOrder())
-            .asFloatBuffer()
-
-    private fun allocateLongBuffer(elements: Int): LongBuffer =
-        ByteBuffer.allocateDirect(elements * Long.SIZE_BYTES)
-            .order(ByteOrder.nativeOrder())
-            .asLongBuffer()
 
     private data class RawOutput(
         val labels: LongArray,

@@ -6,6 +6,24 @@ import org.junit.Test
 
 class MangaSeedSearchOrderTest {
     @Test
+    fun spatialSeeds_tableDriven_includeSeparatedBackgroundAndIgnoreBlockedOrOutOfRoiPoints() {
+        val points = listOf(4 to 4, 1 to 4, 7 to 4, 4 to 1, 4 to 7, 9 to 9)
+        val order = MangaSeedSearchOrder.prepare(10,
+            points.map { (x, y) -> y * 10 + x }.toIntArray(), floatArrayOf(0f, 9f, 9f, 9f, 9f, 50f))
+        data class Case(val allowed: List<Int>, val expected: List<Int>)
+        val roi = IntRect(0, 0, 8, 8)
+        listOf(
+            Case(listOf(36, 33, 39, 12, 60), listOf(36, 33, 39, 12, 60)),
+            Case(listOf(33, 39), listOf(33, 39)),
+            Case(listOf(36), listOf(36)),
+            Case(emptyList(), emptyList()),
+        ).forEach { case ->
+            val candidate = BooleanArray(roi.width * roi.height) { it in case.allowed }
+            assertEquals(case.allowed.toString(), case.expected, order.spatialSeeds(candidate, roi))
+        }
+    }
+
+    @Test
     fun nearest_tableDriven_preservesDistanceAndStableTiePriority() {
         data class Case(
             val name: String,

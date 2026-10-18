@@ -9,24 +9,17 @@ class TranslationLogElapsedCoverageTest {
 
     @Test
     fun translatePairLogs_includeElapsedTime() {
-        data class Case(
-            val path: String,
-            val expectedPairCalls: Int,
-        )
-
-        val cases = listOf(
-            Case("src/main/java/com/gameocr/app/service/CaptureService.kt", expectedPairCalls = 5),
-            Case("src/main/java/com/gameocr/app/translate/ProcessTextTranslateActivity.kt", expectedPairCalls = 1),
-        )
-
-        cases.forEach { case ->
-            val source = File(case.path).readText()
-            val starts = translatePairCallStarts(source)
-            assertEquals(case.path, case.expectedPairCalls, starts.size)
-            starts.forEachIndexed { index, start ->
-                val snippet = source.substring(start, (start + 260).coerceAtMost(source.length))
-                assertTrue("${case.path} translate pair #${index + 1} is missing elapsedMs", "elapsedMs =" in snippet)
-            }
+        // Every translation log in the app records its duration, wherever new calls are added.
+        val files = File("src/main/java/com/gameocr/app").walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .toList()
+        val calls = files.flatMap { file ->
+            val source = file.readText()
+            translatePairCallStarts(source).map { start -> file.name to source.substring(start, (start + 260).coerceAtMost(source.length)) }
+        }
+        assertTrue("translation pair logs exist", calls.isNotEmpty())
+        calls.forEachIndexed { index, (name, snippet) ->
+            assertTrue("$name translate pair #${index + 1} is missing elapsedMs", "elapsedMs =" in snippet)
         }
     }
 

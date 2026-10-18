@@ -6,6 +6,41 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ShapeAwareTextLayoutTest {
+    @Test fun shortButtonPrefersACompleteSingleLineOverLargerWrappedGlyphs() {
+        val result=ShapeAwareTextLayout.layout(43,35,BooleanArray(43*35) { true },"确定",
+            ShapeAwareTextLayout.Orientation.HORIZONTAL,13,56,
+            ShapeAwareTextLayout.TextMeasurer { value,size -> value.length*size.toFloat() },true)
+        assertTrue(result.accepted)
+        assertEquals(1,result.runs.size)
+        assertEquals("确定",result.runs.single().text)
+    }
+
+    @Test fun verticalRunsBalanceTheTranslatedTextAndPreserveReadingOrder() {
+        val text="今天起要重新开始调查遗迹"
+        val result=ShapeAwareTextLayout.layout(120,180,BooleanArray(120*180) { true },text,
+            ShapeAwareTextLayout.Orientation.VERTICAL_RIGHT_TO_LEFT,26,26,
+            ShapeAwareTextLayout.TextMeasurer { value,size -> value.length*size.toFloat() })
+        assertTrue(result.accepted)
+        assertEquals(text,result.runs.joinToString("") { it.text })
+        val lengths=result.runs.map { it.text.length }
+        assertTrue(lengths.max()-lengths.min()<=1)
+    }
+
+    @Test
+    fun `table driven reflow removes CJK line breaks without joining separated Latin words`() {
+        data class Case(val text: String, val expected: String)
+        listOf(
+            Case("你今天居然选了\n一条超短的裙子……\n来工作室……", "你今天居然选了一条超短的裙子……来工作室……"),
+            Case("翻訳した\r\n文章です", "翻訳した文章です"),
+            Case("Hello\nworld", "Hello world"),
+            Case("오늘\n번역", "오늘 번역"),
+            Case("\n  原文 \r\n  译文\n", "原文译文"),
+            Case("第一句 第二句", "第一句 第二句"),
+            Case("", ""),
+        ).forEach { case ->
+            assertEquals(case.text, case.expected, ShapeAwareTextLayout.normalize(case.text))
+        }
+    }
 
     private val measurer = ShapeAwareTextLayout.TextMeasurer { text, size ->
         text.sumOf { character ->

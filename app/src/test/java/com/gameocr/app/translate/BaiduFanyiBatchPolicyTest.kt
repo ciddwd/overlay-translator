@@ -87,4 +87,25 @@ class BaiduFanyiBatchPolicyTest {
 
         assertNull(cache.get(currentKey, settings))
     }
+
+    @Test
+    fun `only exact same language echoes can restore batch boundaries`() {
+        val query = "第一段\n第二段\n第三段"
+        data class Case(val name: String, val from: String?, val to: String?, val src: String?, val dst: String?, val accepted: Boolean)
+        listOf(
+            Case("same language exact echo", "zh", "zh", query, query, true),
+            Case("different language", "en", "zh", query, query, false),
+            Case("source unknown", null, "zh", query, query, false),
+            Case("source blank", "", "", query, query, false),
+            Case("target unknown", "zh", null, query, query, false),
+            Case("source truncated", "zh", "zh", "第一段", query, false),
+            Case("translation truncated", "zh", "zh", query, "第一段", false),
+            Case("translation changed", "zh", "zh", query, "一\n二\n三", false),
+            Case("source missing", "zh", "zh", null, query, false),
+            Case("translation missing", "zh", "zh", query, null, false),
+        ).forEach { case ->
+            val mapped = BaiduFanyiBatchPolicy.unchangedBatchLines(query, case.from, case.to, case.src, case.dst)
+            assertEquals(case.name, if (case.accepted) query.split('\n') else null, mapped)
+        }
+    }
 }

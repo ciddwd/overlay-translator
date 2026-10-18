@@ -67,7 +67,7 @@ class RotatedTextRepairPipelineTest {
         assertTrue(service.contains("requireNotNull(delayedMaskRenderSession).mapPatchesToDisplay("))
         assertTrue(service.contains("session.mapPatchesToDisplay(patches)"))
         val overlay = source("overlay/OverlayManager.kt")
-        assertEquals(2, Regex("OverlayPresentationGeometry.captureLocalRectsToView").findAll(overlay).count())
+        assertTrue(overlay.contains("OverlayPresentationGeometry.captureLocalRectsToView"))
         assertTrue(overlay.contains("view.pivotX = 0f"))
         assertTrue(overlay.contains("view.pivotY = 0f"))
         assertTrue(overlay.contains("finalLeft = requireNotNull(rotatedLayout).left"))

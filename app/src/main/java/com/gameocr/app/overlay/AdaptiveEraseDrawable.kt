@@ -10,6 +10,8 @@ internal class AdaptiveEraseDrawable(
     color: Int,
     private val eraseRects: List<OverlayIntRect>,
 ) : Drawable() {
+    internal var renderOffsetYPx: Int = 0
+    internal var renderOffsetXPx: Int = 0
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         this.color = color
         style = Paint.Style.FILL
@@ -18,10 +20,10 @@ internal class AdaptiveEraseDrawable(
     override fun draw(canvas: Canvas) {
         eraseRects.forEach { rect ->
             canvas.drawRect(
-                (bounds.left + rect.left).toFloat(),
-                (bounds.top + rect.top).toFloat(),
-                (bounds.left + rect.right).toFloat(),
-                (bounds.top + rect.bottom).toFloat(),
+                (bounds.left + rect.left + renderOffsetXPx).toFloat(),
+                (bounds.top + rect.top + renderOffsetYPx).toFloat(),
+                (bounds.left + rect.right + renderOffsetXPx).toFloat(),
+                (bounds.top + rect.bottom + renderOffsetYPx).toFloat(),
                 paint,
             )
         }

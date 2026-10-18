@@ -8,6 +8,7 @@ import com.gameocr.app.data.SettingsSecretCipher
 import com.gameocr.app.glossary.TranslationGlossaryDao
 import com.gameocr.app.glossary.TranslationGlossaryDatabase
 import com.gameocr.app.gallery.GalleryTranslationDao
+import com.gameocr.app.gallery.GALLERY_TRANSLATION_MIGRATION_1_2
 import com.gameocr.app.gallery.GalleryTranslationDatabase
 import com.gameocr.app.ocr.OcrEngine
 import com.gameocr.app.ocr.RoutingOcrEngine
@@ -117,7 +118,7 @@ object AppModule {
         context,
         GalleryTranslationDatabase::class.java,
         "gallery-translation.db",
-    ).build()
+    ).addMigrations(GALLERY_TRANSLATION_MIGRATION_1_2).build()
 
     @Provides
     fun provideGalleryTranslationDao(

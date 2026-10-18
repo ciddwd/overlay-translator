@@ -52,4 +52,21 @@ class LocalLlmThreadPolicyTest {
             environment,
         )
     }
+
+    @Test
+    fun configured_threadsCoverAutomaticExplicitAndCoreBoundaries() {
+        data class Case(val cores: Int, val generation: Int?, val prompt: Int?, val expected: LocalLlmThreadConfig)
+        listOf(
+            Case(8, null, null, LocalLlmThreadConfig(6, 6)),
+            Case(8, 1, 2, LocalLlmThreadConfig(1, 2)),
+            Case(8, 8, 8, LocalLlmThreadConfig(8, 8)),
+            Case(2, 64, 64, LocalLlmThreadConfig(2, 2)),
+            Case(0, 64, 64, LocalLlmThreadConfig(1, 1)),
+            Case(8, 0, -1, LocalLlmThreadConfig(6, 6)),
+            Case(8, 4, null, LocalLlmThreadConfig(4, 6)),
+        ).forEach { case ->
+            assertEquals(case.toString(), case.expected, LocalLlmThreadPolicy.configured(case.cores, 6,
+                LocalModelConfig(generationThreads = case.generation, promptThreads = case.prompt)))
+        }
+    }
 }

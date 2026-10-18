@@ -9,8 +9,9 @@ import kotlin.math.roundToInt
  * Converts permissively licensed detector boxes into local bubble masks using image edges/colors.
  *
  * Boundary leaks can fall back to a conservative ellipse inside a detector box for association and
- * text-repair routing. That synthetic mask is explicitly marked approximate and cannot define a
- * final shape patch. All other failed extractions still produce an empty instance mask.
+ * text-repair routing. A second pixel-based extraction can use that ellipse as a strict outer
+ * limit, while retaining observed outlines and artwork as barriers. The synthetic ellipse alone
+ * remains approximate and cannot define a final shape patch.
  */
 internal object DetectorGuidedBubbleMaskExtractor {
     data class Timing(
@@ -36,6 +37,7 @@ internal object DetectorGuidedBubbleMaskExtractor {
         val detectionIndex: Int,
         val memberIndices: List<Int>,
         val diagnostic: MangaMaskDebugAnalyzer.BubbleDiagnostic,
+        val recoverySourceReason: String? = null,
     ) {
         val accepted: Boolean
             get() = diagnostic.accepted
@@ -161,6 +163,43 @@ internal object DetectorGuidedBubbleMaskExtractor {
                 )
                 ellipseFallbackNs += System.nanoTime() - ellipseStartedAtNs
                 if (ellipseFallback != null) {
+                    val recoveryStartedAtNs = System.nanoTime()
+                    estimateCalls++
+                    val recovered = MangaMaskDebugAnalyzer.estimateBubbleInterior(
+                        width = width,
+                        height = height,
+                        argb = argb,
+                        polygons = polygons,
+                        bubble = MangaMaskDebugAnalyzer.BubbleInput(
+                            contentBounds = contentBounds,
+                            memberIndices = members,
+                            searchBounds = detectorBounds,
+                            useExactSearchBounds = true,
+                            interiorConstraint = ellipseFallback.instanceMask,
+                        ),
+                        output = scratch,
+                        timing = bubbleTiming,
+                        workspace = analyzerWorkspace,
+                    )
+                    estimateNs += System.nanoTime() - recoveryStartedAtNs
+                    if (recovered.accepted) {
+                        val materializeStartedAtNs = System.nanoTime()
+                        val crop = cropMask(scratch, width, height, recovered.roi)
+                        mergeIntoUnion(crop, unionMask, width)
+                        clear(scratch, width, recovered.roi)
+                        maskIoNs += System.nanoTime() - materializeStartedAtNs
+                        decisions += Decision(
+                            detectionIndex = detectionIndex,
+                            memberIndices = members,
+                            diagnostic = recovered.copy(
+                                confidence = detection.confidence * recovered.memberCoverage,
+                                reason = "accepted_detector_constrained_interior",
+                            ),
+                            recoverySourceReason = diagnostic.reason,
+                        )
+                        return@mapIndexed crop
+                    }
+                    clear(scratch, width, recovered.roi)
                     val mergeStartedAtNs = System.nanoTime()
                     mergeIntoUnion(
                         instanceMask = ellipseFallback.instanceMask,
@@ -179,6 +218,7 @@ internal object DetectorGuidedBubbleMaskExtractor {
                             regionPixels = ellipseFallback.pixelCount,
                             memberCoverage = ellipseFallback.memberCoverage,
                         ),
+                        recoverySourceReason = diagnostic.reason,
                     )
                     return@mapIndexed ellipseFallback.instanceMask
                 }
@@ -205,7 +245,13 @@ internal object DetectorGuidedBubbleMaskExtractor {
         return Result(
             detections = modelDetections,
             instanceMasks = instanceMasks,
-            memberDetectionIndices = memberDetectionIndices,
+            memberDetectionIndices = refineMemberAssignmentsByInterior(
+                width = width,
+                height = height,
+                memberBounds = polygons.map { it.bounds },
+                assignments = memberDetectionIndices,
+                masks = instanceMasks,
+            ),
             unionMask = unionMask,
             decisions = decisions,
             durationMs = totalNs / 1_000_000L,
@@ -228,6 +274,33 @@ internal object DetectorGuidedBubbleMaskExtractor {
                 ellipseFallbackCalls = ellipseFallbackCalls,
             ),
         )
+    }
+
+    internal fun refineMemberAssignmentsByInterior(
+        width: Int,
+        height: Int,
+        memberBounds: List<IntRect>,
+        assignments: List<Int?>,
+        masks: List<BubbleSegmentationPostprocessor.InstanceMask>,
+    ): List<Int?> {
+        require(memberBounds.size == assignments.size)
+        return assignments.mapIndexed { memberIndex, modelIndex ->
+            val mask = modelIndex?.let(masks::getOrNull) ?: return@mapIndexed null
+            val member = clamp(memberBounds[memberIndex], width, height)
+            val area = member.width.toLong() * member.height
+            if (area <= 0 || !mask.contains((member.left + member.right) / 2,
+                    (member.top + member.bottom) / 2)) return@mapIndexed null
+            var inside = 0L
+            for (y in maxOf(member.top, mask.top) until minOf(member.bottom, mask.bottom)) {
+                for (x in maxOf(member.left, mask.left) until minOf(member.right, mask.right)) {
+                    if (mask.contains(x, y)) inside++
+                }
+            }
+            // A detector rectangle can also contain narration beside the outline. Require the
+            // actual interior to cover the line before merging it into bubble dialogue. Rejected
+            // ownership leaves OCR intact and lets adjacent outside lines form their own paragraph.
+            modelIndex.takeIf { inside.toDouble() / area >= MIN_LAYOUT_MEMBER_COVERAGE }
+        }
     }
 
     private fun assignMembers(
@@ -502,6 +575,7 @@ internal object DetectorGuidedBubbleMaskExtractor {
         "edge_region_too_large",
     )
     private const val MIN_MEMBER_BOX_COVERAGE = 0.35f
+    private const val MIN_LAYOUT_MEMBER_COVERAGE = 0.85
     private const val MIN_ELLIPSE_MEMBER_COVERAGE = 0.72f
     private const val ELLIPSE_INSET_PX = 7
     private const val PIXEL_CENTER_OFFSET = 0.5f

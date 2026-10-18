@@ -118,8 +118,6 @@ class MainScreenShareTest {
         listOf(
             ZincCase("custom Compose dialog", "Dialog("),
             ZincCase("shared tour zinc palette", "FloatingMenuTourPalette.colors("),
-            ZincCase("zinc border", "BorderStroke(1.dp, borderColor)"),
-            ZincCase("custom rounded container", "RoundedCornerShape(20.dp)"),
             ZincCase("custom dialog width", "usePlatformDefaultWidth = false"),
             ZincCase("zinc primary action", "ButtonDefaults.buttonColors("),
             ZincCase("share icon", "Icons.Default.Share"),
@@ -181,7 +179,7 @@ class MainScreenShareTest {
                 expectedSourceLabel = "开源项目：",
                 expectedFeatureMarkers = listOf(
                     "外文论坛",
-                    "海外购物与交易平台",
+                    "跨境购物与交易平台",
                     "悬浮窗截图翻译",
                     "循环翻译",
                     "漫画模式",

@@ -1,10 +1,8 @@
 package com.gameocr.app.ocr
 
-import com.gameocr.app.data.PaddleModelVersion
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PaddleRecognitionSizingTest {
@@ -20,15 +18,17 @@ class PaddleRecognitionSizingTest {
             val expectedCapped: Boolean,
         )
 
+        // Expected widths computed with PaddleX OCRReisizeNormImg (int padded width, ceil content).
         val cases = listOf(
             Case("minimum width", 1, 48, 8, 8, false),
+            Case("short crop keeps natural width", 100, 48, 100, 100, false),
             Case("official default width", 320, 48, 320, 320, false),
             Case("former local limit", 480, 48, 480, 480, false),
-            Case("short line from failing screen", 347, 35, 476, 476, false),
-            Case("long line from failing screen A", 1114, 37, 1446, 1446, false),
-            Case("long line from failing screen B", 1174, 39, 1445, 1445, false),
-            Case("long line from failing screen C", 1153, 36, 1538, 1538, false),
-            Case("long line from failing screen D", 1036, 36, 1382, 1382, false),
+            Case("short line from failing screen", 347, 35, 475, 475, false),
+            Case("long line from failing screen A", 1114, 37, 1445, 1445, false),
+            Case("long line from failing screen B", 1174, 39, 1444, 1444, false),
+            Case("long line from failing screen C", 1153, 36, 1537, 1537, false),
+            Case("long line from failing screen D", 1036, 36, 1381, 1381, false),
             Case("official dynamic maximum", 3200, 48, 3200, 3200, false),
             Case("extreme line is bounded", 4000, 48, 4000, 3200, true),
         )
@@ -79,29 +79,14 @@ class PaddleRecognitionSizingTest {
     }
 
     @Test
-    fun tensorWidth_tableDriven_onlyPadsKoreanV5ShortLines() {
-        data class Case(
-            val name: String,
-            val modelVersion: PaddleModelVersion?,
-            val contentWidth: Int,
-            val expectedTensorWidth: Int,
-        )
-
-        val cases = listOf(
-            Case("Korean short crop", PaddleModelVersion.V5_KOREAN, 76, 320),
-            Case("Korean boundary", PaddleModelVersion.V5_KOREAN, 320, 320),
-            Case("Korean long crop", PaddleModelVersion.V5_KOREAN, 476, 476),
-            Case("v5 mobile unchanged", PaddleModelVersion.V5_MOBILE, 76, 76),
-            Case("v6 small unchanged", PaddleModelVersion.V6_SMALL, 153, 153),
-            Case("unknown model unchanged", null, 120, 120),
-        )
-
-        cases.forEach { case ->
-            assertEquals(
-                case.name,
-                case.expectedTensorWidth,
-                PaddleRecognitionSizing.tensorWidth(case.modelVersion, case.contentWidth),
-            )
+    fun tensorWidth_tableDriven_padsEveryModelToOfficialBaseWidth() {
+        listOf(
+            Triple("short crop", 76, 320),
+            Triple("boundary", 320, 320),
+            Triple("long crop", 476, 476),
+            Triple("maximum", 3200, 3200),
+        ).forEach { (name, contentWidth, expected) ->
+            assertEquals(name, expected, PaddleRecognitionSizing.tensorWidth(contentWidth))
         }
     }
 
@@ -112,7 +97,7 @@ class PaddleRecognitionSizingTest {
             "above maximum" to PaddleRecognitionSizing.MAX_DYNAMIC_WIDTH + 1,
         ).forEach { (name, width) ->
             val error = assertThrows(name, IllegalArgumentException::class.java) {
-                PaddleRecognitionSizing.tensorWidth(PaddleModelVersion.V5_KOREAN, width)
+                PaddleRecognitionSizing.tensorWidth(width)
             }
             assertFalse(name, error.message.isNullOrBlank())
         }

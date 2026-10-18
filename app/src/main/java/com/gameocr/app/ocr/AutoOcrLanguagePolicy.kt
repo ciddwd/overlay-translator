@@ -33,8 +33,11 @@ internal object AutoOcrLanguagePolicy {
 
     private fun Float?.orZero(): Float = this ?: 0f
 
+    // Language ID describes the recognized string, not whether the pixels were read correctly.
+    // Short valid words may be unidentified; a confidently identified hallucination must not
+    // receive a 6.7x advantage over them. Apply the same OCR evidence weight to every script.
     fun score(evidence: List<AutoOcrEvidence>): Float = evidence.sumOf {
-        (weight(it) * if (it.language == null) 0.15f else 1f).toDouble()
+        weight(it).toDouble()
     }.toFloat()
 
     fun dominant(evidence: List<AutoOcrEvidence>): String? {
@@ -50,6 +53,9 @@ internal object AutoOcrLanguagePolicy {
     fun canRefine(original: List<AutoOcrEvidence>, refined: AutoOcrEvidence, language: String): Boolean {
         if (refined.text.none(Char::isLetterOrDigit)) return false
         if (refined.language != language) return false
+        // A later language-specific pass must not undo the region competition. In particular,
+        // an unidentified Chinese/Korean UI label is still valid evidence, not an empty region.
+        if (original.any { it.language == null && weight(it) > weight(refined) }) return false
         val targets = original.filter { it.language == language }
         if (targets.isEmpty()) return true
         val previousLetters = targets.sumOf { it.text.count(Char::isLetter) }

@@ -332,7 +332,8 @@ class OnboardingPolicyTest {
             val actual = OnboardingPolicy.apply(
                 Settings(
                     overlayPlacement = OverlayPlacement.ABOVE,
-                    mergeAdjacentBlocks = true,
+                    mergeAdjacentBlocks = false,
+                    mergeStrength = MergeStrength.AGGRESSIVE,
                     translationOutputFollowRecognition = false,
                     translationOutputLayout = TranslationOutputLayout.VERTICAL,
                     translationOutputDirection = TranslationOutputDirection.RIGHT_TO_LEFT,
@@ -345,7 +346,8 @@ class OnboardingPolicyTest {
             assertEquals(case.display.name, case.renderMode, actual.renderMode)
             assertEquals(case.display.name, case.styleMode, actual.overlayStyleMode)
             assertEquals(case.display.name, case.placement, actual.overlayPlacement)
-            assertEquals(false, actual.mergeAdjacentBlocks)
+            assertEquals(true, actual.mergeAdjacentBlocks)
+            assertEquals(MergeStrength.STANDARD, actual.mergeStrength)
             assertTrue(actual.translationOutputFollowRecognition)
             assertEquals(
                 TranslationOutputLayout.FOLLOW_RECOGNITION,
@@ -411,34 +413,111 @@ class OnboardingPolicyTest {
     }
 
     @Test
-    fun mangaMergePolicy_enablesStandardMergeOnlyForNonJapaneseSources() {
+    fun quickSetupMergePolicy_enablesStandardMergeExceptJapaneseToChineseManga() {
         data class Case(
             val sourceLang: String,
-            val expectedEnabled: Boolean,
-            val expectedStrength: MergeStrength,
+            val targetLang: String,
+            val expectedMangaMerge: Boolean,
         )
         val cases = listOf(
-            Case("ja", false, MergeStrength.AGGRESSIVE),
-            Case("ja-JP", false, MergeStrength.AGGRESSIVE),
-            Case("ko", true, MergeStrength.STANDARD),
-            Case("ko_KR", true, MergeStrength.STANDARD),
-            Case("zh-TW", true, MergeStrength.STANDARD),
-            Case("en-US", true, MergeStrength.STANDARD),
+            Case("ja", "zh-CN", false),
+            Case("ja-JP", "zh-CN", false),
+            Case("ja", "en", true),
+            Case("ja", "zh-TW", true),
+            Case("ko", "zh-CN", true),
+            Case("ko_KR", "en", true),
+            Case("zh-TW", "zh-CN", true),
+            Case("en-US", "zh-CN", true),
+            Case("fr", "en", true),
+            Case("ru", "zh-CN", true),
+            Case("ar", "en", true),
         )
 
-        cases.forEach { case ->
+        for (case in cases) {
+            for (usage in OnboardingUsage.entries) {
+                for (method in OnboardingTranslationMethod.entries) {
+                    for (supported in listOf(false, true)) {
+                        for (previousMerge in listOf(false, true)) {
+                            for (strength in MergeStrength.entries) {
+                                for (display in OnboardingDisplayMode.entries) {
+                                    val expectedMerge = usage == OnboardingUsage.DAILY || case.expectedMangaMerge
+                                    val name = "${case.sourceLang}->${case.targetLang}/$usage/$method/" +
+                                        "local=$supported/previous=$previousMerge,$strength/$display"
+                                    val actual = OnboardingPolicy.apply(
+                                        settings = Settings(
+                                            mergeAdjacentBlocks = previousMerge,
+                                            mergeStrength = strength,
+                                        ),
+                                        draft = OnboardingDraft(
+                                            sourceLang = case.sourceLang,
+                                            targetLang = case.targetLang,
+                                            usage = usage,
+                                            displayMode = display,
+                                            translationMethod = method,
+                                        ),
+                                        localLlmSupported = supported,
+                                    )
+                                    assertEquals(name, expectedMerge, actual.mergeAdjacentBlocks)
+                                    assertEquals(name,
+                                        if (expectedMerge) MergeStrength.STANDARD else strength,
+                                        actual.mergeStrength)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun reopeningQuickSetup_keepsTheChosenUsageWithSharedMergeDefaults() {
+        for (usage in OnboardingUsage.entries) {
+            for (source in listOf("ja", "ko", "ar")) {
+                val settings = OnboardingPolicy.apply(
+                    settings = Settings(mergeStrength = MergeStrength.ALL),
+                    draft = OnboardingDraft(sourceLang = source, usage = usage),
+                )
+                val restored = OnboardingPolicy.fromSettings(settings, usageHint = usage)
+                assertEquals("$source/$usage", usage, restored.usage)
+                assertEquals("$source/$usage", settings.sourceLang, restored.sourceLang)
+                assertEquals("$source/$usage", settings.targetLang, restored.targetLang)
+            }
+        }
+    }
+
+    @Test
+    fun reopeningLegacyQuickSetup_withoutUsageHintRetainsExistingInference() {
+        data class Case(val settings: Settings, val expected: OnboardingUsage)
+        listOf(
+            Case(Settings(), OnboardingUsage.DAILY),
+            Case(Settings(ocrEngine = OcrEngineKind.MANGA_OCR_JA), OnboardingUsage.MANGA),
+            Case(Settings(translatorEngine = TranslatorEngine.LOCAL_SAKURA), OnboardingUsage.MANGA),
+            Case(Settings(overlayStyleMode = OverlayStyleMode.ADAPTIVE,
+                mergeAdjacentBlocks = true, mergeStrength = MergeStrength.STANDARD),
+                OnboardingUsage.MANGA),
+        ).forEach { case ->
+            assertEquals(case.expected, OnboardingPolicy.fromSettings(case.settings).usage)
+        }
+    }
+
+    @Test
+    fun switchingQuickSetupFromMangaToDaily_replacesPreviousMergeChoice() {
+        for (display in OnboardingDisplayMode.entries) {
+            val manga = OnboardingPolicy.apply(
+                Settings(mergeStrength = MergeStrength.AGGRESSIVE),
+                OnboardingDraft(usage = OnboardingUsage.MANGA),
+            )
+            assertEquals(false, manga.mergeAdjacentBlocks)
             val actual = OnboardingPolicy.apply(
-                settings = Settings(
-                    mergeAdjacentBlocks = false,
-                    mergeStrength = MergeStrength.AGGRESSIVE,
-                ),
+                settings = manga,
                 draft = OnboardingDraft(
-                    sourceLang = case.sourceLang,
-                    usage = OnboardingUsage.MANGA,
+                    usage = OnboardingUsage.DAILY,
+                    displayMode = display,
                 ),
             )
-            assertEquals(case.sourceLang, case.expectedEnabled, actual.mergeAdjacentBlocks)
-            assertEquals(case.sourceLang, case.expectedStrength, actual.mergeStrength)
+            assertEquals(display.name, true, actual.mergeAdjacentBlocks)
+            assertEquals(display.name, MergeStrength.STANDARD, actual.mergeStrength)
         }
     }
 

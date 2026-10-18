@@ -30,6 +30,7 @@ internal enum class ModelDownloadNetworkTarget {
     PADDLE_OCR,
     MANGA_OCR,
     ORIENTATION,
+    ASR,
 }
 
 internal enum class ModelDownloadNetworkFailureKind {
@@ -81,6 +82,7 @@ class ModelDownloadNetworkTester @Inject constructor(
     private val paddleInstaller: PaddleModelInstaller,
     private val mangaOcrInstaller: MangaOcrModelInstaller,
     private val orientationModelInstaller: OrientationModelInstaller,
+    private val asrModelInstaller: com.gameocr.app.asr.AsrModelInstaller,
 ) {
     internal suspend fun requireReachable(spec: ModelDownloadSpec): ModelDownloadNetworkProbeResult {
         val target = targetFor(spec)
@@ -119,6 +121,9 @@ class ModelDownloadNetworkTester @Inject constructor(
         )
         ModelDownloadType.MANGA_OCR -> mangaOcrInstaller.downloadProbeUrl()
         ModelDownloadType.ORIENTATION -> orientationModelInstaller.downloadProbeUrl()
+        ModelDownloadType.ASR -> asrModelInstaller.downloadProbeUrl(
+            com.gameocr.app.asr.AsrModelId.valueOf(spec.variant),
+        )
     }
 
     private fun targetFor(spec: ModelDownloadSpec): ModelDownloadNetworkTarget = when (spec.type) {
@@ -126,6 +131,7 @@ class ModelDownloadNetworkTester @Inject constructor(
         ModelDownloadType.PADDLE -> ModelDownloadNetworkTarget.PADDLE_OCR
         ModelDownloadType.MANGA_OCR -> ModelDownloadNetworkTarget.MANGA_OCR
         ModelDownloadType.ORIENTATION -> ModelDownloadNetworkTarget.ORIENTATION
+        ModelDownloadType.ASR -> ModelDownloadNetworkTarget.ASR
     }
 
     private suspend fun probe(

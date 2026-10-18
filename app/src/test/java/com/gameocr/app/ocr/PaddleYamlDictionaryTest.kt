@@ -20,7 +20,7 @@ class PaddleYamlDictionaryTest {
                     Global:
                       model_name: PP-OCRv5_mobile_rec
                       character_dict:
-                      - 　
+                      - ${"　"}
                       - 一
                       - 乙
                       use_space_char: true
@@ -28,15 +28,23 @@ class PaddleYamlDictionaryTest {
                 expected = listOf("　", "一", "乙"),
             ),
             Case(
-                name = "quoted and escaped entries",
+                name = "YAML scalar styles",
                 yaml = """
                     character_dict:
                     - 'A'
                     - "B"
+                    - ''''
+                    - 'it''s'
                     - '\n'
+                    - "\n"
+                    - "\\"
+                    - "\""
+                    - "　"
+                    - "\U0001F600"
+                    - \
                     next_field: value
                 """.trimIndent(),
-                expected = listOf("A", "B", "\n"),
+                expected = listOf("A", "B", "'", "it's", "\\n", "\n", "\\", "\"", "　", "😀", "\\"),
             ),
             Case(
                 name = "missing dictionary",
@@ -53,4 +61,5 @@ class PaddleYamlDictionaryTest {
             )
         }
     }
+
 }

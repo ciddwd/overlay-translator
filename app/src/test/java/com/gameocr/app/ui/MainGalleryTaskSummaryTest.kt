@@ -9,71 +9,25 @@ import org.junit.Test
 class MainGalleryTaskSummaryTest {
 
     @Test
-    fun `task slot defaults to placeholder until availability is known`() {
+    fun `task slot depends only on loaded task data`() {
         data class Case(
             val name: String,
-            val canDrawOverlay: Boolean,
             val isLoaded: Boolean,
             val hasTask: Boolean,
             val expected: MainGalleryTaskSlot,
         )
-
         listOf(
-            Case(
-                "permission granted while loading",
-                true,
-                false,
-                false,
-                MainGalleryTaskSlot.PLACEHOLDER,
-            ),
-            Case(
-                "permission granted with loaded task",
-                true,
-                true,
-                true,
-                MainGalleryTaskSlot.TASK,
-            ),
-            Case(
-                "permission granted with confirmed empty result",
-                true,
-                true,
-                false,
-                MainGalleryTaskSlot.EMPTY,
-            ),
-            Case(
-                "permission missing while loading",
-                false,
-                false,
-                false,
-                MainGalleryTaskSlot.HIDDEN,
-            ),
-            Case(
-                "permission missing with loaded task",
-                false,
-                true,
-                true,
-                MainGalleryTaskSlot.HIDDEN,
-            ),
-            Case(
-                "permission missing with confirmed empty result",
-                false,
-                true,
-                false,
-                MainGalleryTaskSlot.HIDDEN,
-            ),
+            Case("loading without cached task", false, false, MainGalleryTaskSlot.PLACEHOLDER),
+            Case("loading with cached task", false, true, MainGalleryTaskSlot.PLACEHOLDER),
+            Case("loaded task", true, true, MainGalleryTaskSlot.TASK),
+            Case("confirmed empty result", true, false, MainGalleryTaskSlot.EMPTY),
         ).forEach { case ->
             assertEquals(
-                case.name,
-                case.expected,
-                mainGalleryTaskSlot(
-                    canDrawOverlay = case.canDrawOverlay,
-                    isLoaded = case.isLoaded,
-                    hasTask = case.hasTask,
-                ),
+                case.name, case.expected,
+                mainGalleryTaskSlot(isLoaded = case.isLoaded, hasTask = case.hasTask),
             )
         }
     }
-
     @Test
     fun `active task classification covers every status`() {
         data class Case(
@@ -167,7 +121,7 @@ class MainGalleryTaskSummaryTest {
     }
 
     @Test
-    fun `featured query prioritizes active work and summary is permission gated`() {
+    fun `featured query prioritizes active work and summary is independent of overlay permission`() {
         val database = sourceFile(
             "src/main/java/com/gameocr/app/gallery/GalleryTranslationDatabase.kt"
         ).readText()
@@ -188,11 +142,11 @@ class MainGalleryTaskSummaryTest {
             ),
             Case(
                 "recent creation time breaks ties",
-                database.contains("createdAtMs DESC LIMIT 1"),
+                database.contains("createdAtMs DESC LIMIT 2"),
             ),
             Case(
-                "summary checks overlay permission",
-                screen.contains("canDrawOverlay = canDrawOverlay"),
+                "task visibility is independent of overlay permission",
+                 !screen.substring(screen.indexOf("internal fun mainGalleryTaskSlot("), screen.indexOf("internal fun isMainGalleryTaskActive(")).contains("canDrawOverlay"),
             ),
             Case(
                 "database result starts in loading state",
@@ -218,13 +172,14 @@ class MainGalleryTaskSummaryTest {
                     screen.contains(".clearAndSetSemantics {}"),
             ),
             Case(
-                "empty placeholder preserves the summary footprint",
+                "empty state centers the image stack in the available task area",
                 screen.substring(
                     screen.indexOf("private fun MainGalleryTaskEmptyPlaceholder("),
                     screen.indexOf("private fun MainGalleryTaskSummaryContent("),
                 ).let { placeholder ->
-                    placeholder.contains("MainGalleryTaskSummaryContent(task = null)") &&
-                        placeholder.contains("Modifier.align(Alignment.Center)")
+                    placeholder.contains("Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center)") &&
+                        placeholder.contains("horizontalAlignment = Alignment.CenterHorizontally") &&
+                        !placeholder.contains("MainGalleryTaskSummaryContent(task = null)")
                 },
             ),
             Case(
@@ -235,19 +190,24 @@ class MainGalleryTaskSummaryTest {
                 ) > screen.indexOf("R.string.gallery_main_all_tasks"),
             ),
             Case(
-                "task list action includes a list icon",
+                "task list is the gallery card header action and the import button follows the summary",
                 screen.substring(
-                    screen.indexOf(
-                        "OutlinedButton(",
-                        screen.indexOf("R.string.gallery_main_import"),
-                    ),
+                    screen.indexOf("galleryPage = { pageModifier ->"),
                     screen.indexOf("mainGalleryTaskSlot("),
-                ).contains("Icon(Icons.AutoMirrored.Filled.List"),
+                ).contains("actionLabel = stringResource(R.string.gallery_main_all_tasks)") &&
+                    screen.indexOf("R.string.gallery_main_import", screen.indexOf("mainGalleryTaskSlot(")) >
+                    screen.indexOf("mainGalleryTaskSlot("),
             ),
             Case(
-                "summary keeps normal padding instead of hard filling height",
-                screen.contains(".padding(12.dp)") &&
-                    !screen.contains("vertical = 16.dp"),
+                "empty history uses two quiet photo layers and an image icon",
+                screen.substring(
+                    screen.indexOf("private fun MainGalleryTaskEmptyPlaceholder("),
+                    screen.indexOf("private fun MainGalleryTaskSummaryContent("),
+                ).let { placeholder ->
+                    placeholder.contains("Icons.Outlined.Image") &&
+                        placeholder.contains("rotationZ = -10f") && placeholder.contains("rotationZ = 7f") &&
+                        placeholder.contains("MaterialTheme.typography.bodyMedium")
+                },
             ),
             Case(
                 "placeholder derives its size from summary content",
@@ -263,12 +223,6 @@ class MainGalleryTaskSummaryTest {
                 "success and failure are real summary elements",
                 screen.contains("R.string.gallery_task_success_count") &&
                     screen.contains("R.string.gallery_task_failed_count"),
-            ),
-            Case(
-                "summary uses only an outline without a background fill",
-                screen.contains(
-                    "border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)"
-                ) && screen.contains("color = Color.Transparent"),
             ),
             Case(
                 "summary sends the selected task id",

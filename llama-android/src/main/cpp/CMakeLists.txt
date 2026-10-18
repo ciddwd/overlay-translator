@@ -55,6 +55,172 @@ string(REPLACE
         "#include \"gameocr_logging.h\""
         GAMEOCR_AI_CHAT_SOURCE "${GAMEOCR_AI_CHAT_SOURCE}")
 
+# Resources can exist while the binding is in Error (e.g. model loaded, context failed).
+# Keep cleanup idempotent and safe for every partially initialized ownership state.
+set(GAMEOCR_OWNERSHIP_ORIGINAL "static common_sampler                   * g_sampler;")
+set(GAMEOCR_OWNERSHIP_PATCHED [=[
+#include <stdexcept>
+static common_sampler                   * g_sampler;
+static bool gameocr_batch_initialized = false;
+static void reset_long_term_states(const bool clear_kv_cache);
+static void reset_short_term_states();
+extern "C" llama_model * gameocr_retry_cpu_f16_model(llama_model * previous);
+extern "C" void gameocr_configure_runtime_threads(llama_context * context);
+std::vector<std::string> gameocr_native_initialization_info(const llama_context * context);
+std::vector<std::string> gameocr_native_runtime_info(llama_context * context);
+
+static void gameocr_release_loaded_resources() {
+    if (g_context != nullptr) {
+        llama_synchronize(g_context);
+        llama_set_abort_callback(g_context, nullptr, nullptr);
+    }
+    if (g_sampler != nullptr) {
+        common_sampler_free(g_sampler);
+        g_sampler = nullptr;
+    }
+    g_chat_templates.reset();
+    if (gameocr_batch_initialized) {
+        llama_batch_free(g_batch);
+        gameocr_batch_initialized = false;
+    }
+    g_batch = {};
+    llama_free(g_context);
+    g_context = nullptr;
+    llama_model_free(g_model);
+    g_model = nullptr;
+    reset_long_term_states(false);
+    reset_short_term_states();
+}
+]=])
+string(FIND "${GAMEOCR_AI_CHAT_SOURCE}" "${GAMEOCR_OWNERSHIP_ORIGINAL}" GAMEOCR_OWNERSHIP_INDEX)
+if(GAMEOCR_OWNERSHIP_INDEX EQUAL -1)
+    message(FATAL_ERROR "GameOCR native ownership patch no longer matches upstream")
+endif()
+string(REPLACE "${GAMEOCR_OWNERSHIP_ORIGINAL}" "${GAMEOCR_OWNERSHIP_PATCHED}"
+        GAMEOCR_AI_CHAT_SOURCE "${GAMEOCR_AI_CHAT_SOURCE}")
+
+set(GAMEOCR_LOAD_ORIGINAL [=[
+    llama_model_params model_params = llama_model_default_params();
+
+    const auto *model_path = env->GetStringUTFChars(jmodel_path, 0);
+    LOGd("%s: Loading model from: \n%s\n", __func__, model_path);
+
+    auto *model = llama_model_load_from_file(model_path, model_params);
+    env->ReleaseStringUTFChars(jmodel_path, model_path);
+    if (!model) {
+        return 1;
+    }
+    g_model = model;
+    return 0;
+]=])
+set(GAMEOCR_LOAD_PATCHED [=[
+    gameocr_release_loaded_resources();
+    if (jmodel_path == nullptr) return 1;
+    const auto *chars = env->GetStringUTFChars(jmodel_path, nullptr);
+    if (chars == nullptr) return 1;
+    std::string model_path;
+    try { model_path = chars; }
+    catch (...) { env->ReleaseStringUTFChars(jmodel_path, chars); return 1; }
+    env->ReleaseStringUTFChars(jmodel_path, chars);
+    try {
+        auto params = llama_model_default_params();
+        g_model = llama_model_load_from_file(model_path.c_str(), params);
+        if (g_model != nullptr) return 0;
+    } catch (const std::exception & error) {
+        LOGe("model initialization failed: %s", error.what());
+    } catch (...) {
+        LOGe("model initialization failed with unknown native exception");
+    }
+    gameocr_release_loaded_resources();
+    return 1;
+]=])
+string(FIND "${GAMEOCR_AI_CHAT_SOURCE}" "${GAMEOCR_LOAD_ORIGINAL}" GAMEOCR_LOAD_INDEX)
+if(GAMEOCR_LOAD_INDEX EQUAL -1)
+    message(FATAL_ERROR "GameOCR native load ownership patch no longer matches upstream")
+endif()
+string(REPLACE "${GAMEOCR_LOAD_ORIGINAL}" "${GAMEOCR_LOAD_PATCHED}"
+        GAMEOCR_AI_CHAT_SOURCE "${GAMEOCR_AI_CHAT_SOURCE}")
+
+set(GAMEOCR_PREPARE_ORIGINAL [=[
+    auto *context = init_context(g_model);
+    if (!context) { return 1; }
+    g_context = context;
+    g_batch = llama_batch_init(BATCH_SIZE, 0, 1);
+    g_chat_templates = common_chat_templates_init(g_model, "");
+    g_sampler = new_sampler(DEFAULT_SAMPLER_TEMP);
+    return 0;
+]=])
+set(GAMEOCR_PREPARE_PATCHED [=[
+    if (g_model == nullptr) return 1;
+    try {
+        g_context = init_context(g_model);
+        if (g_context == nullptr) {
+            auto *previous = g_model;
+            g_model = nullptr; // retry helper takes ownership, including failure.
+            g_model = gameocr_retry_cpu_f16_model(previous);
+            if (g_model != nullptr) g_context = init_context(g_model);
+        }
+        if (g_context == nullptr) { gameocr_release_loaded_resources(); return 1; }
+        g_batch = llama_batch_init((int) llama_n_batch(g_context), 0, 1);
+        gameocr_batch_initialized = true;
+        if (g_batch.token == nullptr || g_batch.pos == nullptr || g_batch.seq_id == nullptr ||
+                g_batch.n_seq_id == nullptr || g_batch.logits == nullptr) {
+            throw std::runtime_error("native batch allocation failed");
+        }
+        g_chat_templates = common_chat_templates_init(g_model, "");
+        if (!g_chat_templates) throw std::runtime_error("native chat template initialization failed");
+        g_sampler = new_sampler(DEFAULT_SAMPLER_TEMP);
+        if (!g_sampler) throw std::runtime_error("native sampler initialization failed");
+        return 0;
+    } catch (const std::exception & error) {
+        LOGe("prepare initialization failed: %s", error.what());
+    } catch (...) {
+        LOGe("prepare initialization failed with unknown native exception");
+    }
+    gameocr_release_loaded_resources();
+    return 1;
+]=])
+string(FIND "${GAMEOCR_AI_CHAT_SOURCE}" "${GAMEOCR_PREPARE_ORIGINAL}" GAMEOCR_PREPARE_INDEX)
+if(GAMEOCR_PREPARE_INDEX EQUAL -1)
+    message(FATAL_ERROR "GameOCR native prepare ownership patch no longer matches upstream")
+endif()
+string(REPLACE "${GAMEOCR_PREPARE_ORIGINAL}" "${GAMEOCR_PREPARE_PATCHED}"
+        GAMEOCR_AI_CHAT_SOURCE "${GAMEOCR_AI_CHAT_SOURCE}")
+
+set(GAMEOCR_UNLOAD_ORIGINAL [=[
+    // Reset long-term & short-term states
+    reset_long_term_states();
+    reset_short_term_states();
+
+    // Free up resources
+    common_sampler_free(g_sampler);
+    g_chat_templates.reset();
+    llama_batch_free(g_batch);
+    llama_free(g_context);
+    llama_model_free(g_model);
+]=])
+string(FIND "${GAMEOCR_AI_CHAT_SOURCE}" "${GAMEOCR_UNLOAD_ORIGINAL}" GAMEOCR_UNLOAD_INDEX)
+if(GAMEOCR_UNLOAD_INDEX EQUAL -1)
+    message(FATAL_ERROR "GameOCR native unload ownership patch no longer matches upstream")
+endif()
+string(REPLACE "${GAMEOCR_UNLOAD_ORIGINAL}" "    gameocr_release_loaded_resources();"
+        GAMEOCR_AI_CHAT_SOURCE "${GAMEOCR_AI_CHAT_SOURCE}")
+
+set(GAMEOCR_BATCH_LOOP_ORIGINAL "for (int i = 0; i < (int) tokens.size(); i += BATCH_SIZE)")
+set(GAMEOCR_BATCH_LOOP_PATCHED "for (int i = 0; i < (int) tokens.size(); i += (int) llama_n_batch(context))")
+string(FIND "${GAMEOCR_AI_CHAT_SOURCE}" "${GAMEOCR_BATCH_LOOP_ORIGINAL}" GAMEOCR_BATCH_LOOP_INDEX)
+if(GAMEOCR_BATCH_LOOP_INDEX EQUAL -1)
+    message(FATAL_ERROR "GameOCR actual native batch loop patch no longer matches upstream")
+endif()
+string(REPLACE "${GAMEOCR_BATCH_LOOP_ORIGINAL}" "${GAMEOCR_BATCH_LOOP_PATCHED}"
+        GAMEOCR_AI_CHAT_SOURCE "${GAMEOCR_AI_CHAT_SOURCE}")
+string(REPLACE "std::min((int) tokens.size() - i, BATCH_SIZE)"
+        "std::min((int) tokens.size() - i, (int) llama_n_batch(context))"
+        GAMEOCR_AI_CHAT_SOURCE "${GAMEOCR_AI_CHAT_SOURCE}")
+string(REPLACE "DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM"
+        "(int) llama_n_ctx(g_context) - OVERFLOW_HEADROOM"
+        GAMEOCR_AI_CHAT_SOURCE "${GAMEOCR_AI_CHAT_SOURCE}")
+
 set(GAMEOCR_USER_RESET_ORIGINAL [=[
     // Reset short-term states
     reset_short_term_states();
@@ -291,7 +457,10 @@ Java_com_gameocr_app_llm_LlamaPromptMetrics_countUserPromptTokens(
     }
 
     const auto *prompt = env->GetStringUTFChars(jprompt, nullptr);
+    if (prompt == nullptr) return -1;
     std::string formatted_prompt(prompt);
+    env->ReleaseStringUTFChars(jprompt, prompt);
+    try {
     const bool has_chat_template = common_chat_templates_was_explicit(g_chat_templates.get());
     if (has_chat_template) {
         // processUserPrompt() resets every request to the optional system message before
@@ -302,7 +471,7 @@ Java_com_gameocr_app_llm_LlamaPromptMetrics_countUserPromptTokens(
         }
         common_chat_msg user_message;
         user_message.role = ROLE_USER;
-        user_message.content = prompt;
+        user_message.content = formatted_prompt;
         formatted_prompt = common_chat_format_single(
                 g_chat_templates.get(),
                 base_messages,
@@ -310,14 +479,16 @@ Java_com_gameocr_app_llm_LlamaPromptMetrics_countUserPromptTokens(
                 true,
                 /* use_jinja */ false);
     }
-    env->ReleaseStringUTFChars(jprompt, prompt);
-
     const auto tokens = common_tokenize(
             g_context,
             formatted_prompt,
             has_chat_template,
             has_chat_template);
     return (jint) tokens.size();
+    } catch (const std::exception & error) {
+        LOGe("Cannot count GGUF template tokens: %s", error.what());
+        return -1;
+    }
 }
 
 extern "C"
@@ -359,7 +530,19 @@ set_property(
         DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_LIST_DIR}/llama_multi_sequence.inc")
 file(READ "${CMAKE_CURRENT_LIST_DIR}/llama_multi_sequence.inc" GAMEOCR_MULTI_SEQUENCE_SOURCE)
+set(GAMEOCR_MULTI_RELEASE_ORIGINAL "    ~gameocr_multi_resources() {")
+string(FIND "${GAMEOCR_MULTI_SEQUENCE_SOURCE}" "${GAMEOCR_MULTI_RELEASE_ORIGINAL}" GAMEOCR_MULTI_RELEASE_INDEX)
+if(GAMEOCR_MULTI_RELEASE_INDEX EQUAL -1)
+    message(FATAL_ERROR "GameOCR asynchronous batch release patch no longer matches multi-sequence source")
+endif()
+string(REPLACE "${GAMEOCR_MULTI_RELEASE_ORIGINAL}"
+        "    ~gameocr_multi_resources() {\n        if (g_context) llama_synchronize(g_context);"
+        GAMEOCR_MULTI_SEQUENCE_SOURCE "${GAMEOCR_MULTI_SEQUENCE_SOURCE}")
 string(APPEND GAMEOCR_AI_CHAT_SOURCE "\n${GAMEOCR_MULTI_SEQUENCE_SOURCE}\n")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_LIST_DIR}/llama_template_generation.inc")
+file(READ "${CMAKE_CURRENT_LIST_DIR}/llama_template_generation.inc" GAMEOCR_TEMPLATE_GENERATION_SOURCE)
+string(APPEND GAMEOCR_AI_CHAT_SOURCE "\n${GAMEOCR_TEMPLATE_GENERATION_SOURCE}\n")
 
 set(GAMEOCR_AI_CHAT_CPP "${CMAKE_CURRENT_BINARY_DIR}/gameocr_ai_chat.cpp")
 file(WRITE "${GAMEOCR_AI_CHAT_CPP}" "${GAMEOCR_AI_CHAT_SOURCE}")
@@ -457,6 +640,7 @@ target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
         llama_model_load_from_file=gameocr_llama_model_load_from_file
         llama_init_from_model=gameocr_llama_init_from_model
         common_sampler_init=gameocr_common_sampler_init
+        common_chat_format_single=gameocr_common_chat_format_single
 )
 
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE

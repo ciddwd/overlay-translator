@@ -566,8 +566,6 @@
     <string name="model_download_in_app_title">تنزيل نموذج في الخلفية</string>
     <string name="model_download_notification_title">جارٍ تنزيل النموذج</string>
     <string name="model_download_preparing_format">جارٍ تحضير %1$s للتنزيل (%2$d/%3$d)</string>
-    <string name="model_download_progress_batch_format">%1$s %2$d%% %3$s (%4$d/%5$d)</string>
-    <string name="model_download_progress_bytes_batch_format">%1$s %2$d ميجابايت %3$s (%4$d/%5$d)</string>
     <string name="model_download_retry">إعادة المحاولة</string>
     <string name="model_download_retrying_format">توقف التنزيل؛ في انتظار إعادة المحاولة: %1$s</string>
     <string name="model_download_starting_format">جارٍ فحص مصدر التنزيل %1$s (%2$d/%3$d)</string>
@@ -1200,7 +1198,6 @@
     <string name="settings_offset_x_format">إزاحة أفقية (X): %1$d بكسل</string>
     <string name="settings_offset_y_format">إزاحة عمودية (Y): %1$d بكسل</string>
     <string name="settings_on_device_translation_english">الإنجليزية</string>
-    <string name="settings_on_device_translation_more">المزيد</string>
     <string name="settings_openai_max_tokens">max_tokens (اختياري)</string>
     <string name="settings_openai_max_tokens_hint">اتركه فارغًا للسماح للخادم بالاختيار.</string>
     <string name="settings_openai_request_options_reset">إعادة تعيين حقول الطلب المتوافقة</string>

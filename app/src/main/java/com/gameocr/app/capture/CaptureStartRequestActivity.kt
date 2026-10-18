@@ -7,6 +7,7 @@ import android.media.projection.MediaProjectionManager
 import android.media.projection.MediaProjectionConfig
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
@@ -66,6 +67,13 @@ class CaptureStartRequestActivity : ComponentActivity() {
                         openOverlayPermissionSettings(this@CaptureStartRequestActivity)
                         finishRequest()
                     }
+                    CaptureStartStage.ACCESSIBILITY_SETTINGS -> {
+                        runCatching {
+                            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                        }
+                        finishRequest()
+                    }
                     CaptureStartStage.SETUP -> {
                         startActivity(Intent(this@CaptureStartRequestActivity, MainActivity::class.java)
                             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or
@@ -84,14 +92,18 @@ class CaptureStartRequestActivity : ComponentActivity() {
     }
 
     companion object {
-        fun newIntent(context: Context): Intent =
+        internal const val EXTRA_MODE_OVERRIDE = "com.gameocr.app.capture.MODE_OVERRIDE"
+
+        /** [modeOverride]: the method the home one-button setup resolved; used for this launch only. */
+        fun newIntent(context: Context, modeOverride: CaptureStartMode? = null): Intent =
             Intent(context, CaptureStartRequestActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                modeOverride?.let { putExtra(EXTRA_MODE_OVERRIDE, it.name) }
             }
     }
 }
 
-enum class CaptureStartStage { WAITING, PROJECTION, OVERLAY_PERMISSION, SETUP, FINISHED }
+enum class CaptureStartStage { WAITING, PROJECTION, OVERLAY_PERMISSION, ACCESSIBILITY_SETTINGS, SETUP, FINISHED }
 
 @HiltViewModel
 class CaptureStartViewModel @Inject constructor(
@@ -112,10 +124,14 @@ class CaptureStartViewModel @Inject constructor(
                 // The ActivityResultRegistry restores the outstanding consent request after recreation.
                 currentStage.value = CaptureStartStage.PROJECTION
             } else try {
-                when (val decision = coordinator.prepare()) {
+                val modeOverride = savedState.get<String>(CaptureStartRequestActivity.EXTRA_MODE_OVERRIDE)
+                    ?.let { name -> CaptureStartMode.entries.firstOrNull { it.name == name } }
+                when (val decision = coordinator.prepare(modeOverride)) {
                     CaptureStartDecision.AlreadyRunning -> currentStage.value = CaptureStartStage.FINISHED
                     CaptureStartDecision.OpenSetup -> currentStage.value = CaptureStartStage.SETUP
                     CaptureStartDecision.OpenOverlaySettings -> currentStage.value = CaptureStartStage.OVERLAY_PERMISSION
+                    CaptureStartDecision.OpenAccessibilitySettings ->
+                        currentStage.value = CaptureStartStage.ACCESSIBILITY_SETTINGS
                     is CaptureStartDecision.Ready -> {
                         if (decision.backend == CaptureBackend.MEDIA_PROJECTION) {
                             currentStage.value = CaptureStartStage.PROJECTION

@@ -25,6 +25,7 @@ internal sealed interface CaptureStartDecision {
     data object AlreadyRunning : CaptureStartDecision
     data object OpenSetup : CaptureStartDecision
     data object OpenOverlaySettings : CaptureStartDecision
+    data object OpenAccessibilitySettings : CaptureStartDecision
     data class Ready(val backend: CaptureBackend) : CaptureStartDecision
 }
 
@@ -36,17 +37,35 @@ class CaptureStartCoordinator @Inject constructor(
     private val permissions: AppPermissionCoordinator,
     private val capabilities: ShizukuCapabilities,
     private val logs: LogRepository,
+    private val rootShell: RootShell,
 ) {
     internal val gate = CaptureStartGate()
 
-    internal suspend fun prepare(): CaptureStartDecision {
+    /**
+     * [modeOverride] is the method the home one-button setup already resolved and showed, so this
+     * launch uses exactly that method once. Without it the session choice ([CaptureStartPreference]) applies.
+     */
+    internal suspend fun prepare(modeOverride: CaptureStartMode? = null): CaptureStartDecision {
         if (CaptureServiceState.running.value) {
             return CaptureStartDecision.AlreadyRunning
         }
-        val preference = CaptureStartPreference.mode.value
+        val preference = modeOverride ?: CaptureStartPreference.mode.value
+        // Root comes first in Auto. A refusal is remembered for the session, so Auto then moves on.
+        rootShell.refreshInstalled()
+        val rootFirst = resolveCaptureStartMode(
+            preference, rootUsableForAuto(rootShell.access.value), capabilities.availability(context),
+            Build.VERSION.SDK_INT, AccessibilityServiceStatus.isEnabled(context),
+        ) == CaptureStartMode.ROOT
+        if (rootFirst) {
+            if (rootShell.ensureGranted()) return prepareRoot()
+            if (preference == CaptureStartMode.ROOT) return CaptureStartDecision.OpenSetup
+        }
         // Resolve initial asynchronous readiness before choosing a backend, not from a stale UI snapshot.
-        if (preference != CaptureStartMode.SYSTEM) shizuku.verifyShellPrivilegeAsync()
-        val useShizuku = resolveCaptureStartMode(preference, capabilities.availability(context)) == CaptureStartMode.SHIZUKU
+        if (preference == null || preference == CaptureStartMode.SHIZUKU) shizuku.verifyShellPrivilegeAsync()
+        val useShizuku = resolveCaptureStartMode(
+            preference.takeUnless { it == CaptureStartMode.ROOT }, false, capabilities.availability(context),
+            Build.VERSION.SDK_INT, AccessibilityServiceStatus.isEnabled(context),
+        ) == CaptureStartMode.SHIZUKU
         if (useShizuku && !shizuku.ensureReady()) return CaptureStartDecision.OpenSetup
         val permissionState = permissions.currentState()
         if (shouldConfigureCapturePermissions(
@@ -60,7 +79,8 @@ class CaptureStartCoordinator @Inject constructor(
         if (!Settings.canDrawOverlays(context)) return CaptureStartDecision.OpenOverlaySettings
         if (CaptureServiceState.running.value) return CaptureStartDecision.AlreadyRunning
         if (useShizuku) return CaptureStartDecision.Ready(CaptureBackend.SHIZUKU)
-        if (Build.VERSION.SDK_INT >= 30 && AccessibilityServiceStatus.isEnabled(context)) {
+        if (preference != CaptureStartMode.SYSTEM &&
+            Build.VERSION.SDK_INT >= 30 && AccessibilityServiceStatus.isEnabled(context)) {
             repeat(15) {
                 if (GameOcrAccessibilityService.isScreenshotReady()) {
                     return CaptureStartDecision.Ready(CaptureBackend.ACCESSIBILITY)
@@ -68,8 +88,26 @@ class CaptureStartCoordinator @Inject constructor(
                 delay(100)
             }
         }
-        return CaptureStartDecision.Ready(systemCaptureBackend(Build.VERSION.SDK_INT,
-            GameOcrAccessibilityService.isConnected(), GameOcrAccessibilityService.isScreenshotReady()))
+        val backend = nonShizukuCaptureBackend(preference, Build.VERSION.SDK_INT,
+            GameOcrAccessibilityService.isConnected(), GameOcrAccessibilityService.isScreenshotReady())
+            ?: return CaptureStartDecision.OpenAccessibilitySettings
+        return CaptureStartDecision.Ready(backend)
+    }
+
+    /** Root is granted: grant the overlay through root when it is missing, then start. */
+    private suspend fun prepareRoot(): CaptureStartDecision {
+        // Root-only path: grant the overlay ourselves; the shared Shizuku/system checks are not involved.
+        val overlayMissing = !Settings.canDrawOverlays(context)
+        if (overlayMissing) {
+            rootShell.run("appops set ${context.packageName} SYSTEM_ALERT_WINDOW allow")
+            for (attempt in 0 until 10) {
+                if (Settings.canDrawOverlays(context)) break
+                delay(100)
+            }
+        }
+        if (!Settings.canDrawOverlays(context)) return CaptureStartDecision.OpenOverlaySettings
+        if (CaptureServiceState.running.value) return CaptureStartDecision.AlreadyRunning
+        return CaptureStartDecision.Ready(CaptureBackend.ROOT)
     }
 
     internal fun start(backend: CaptureBackend, resultCode: Int = 0, data: Intent? = null) {

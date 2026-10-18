@@ -98,6 +98,9 @@ import com.gameocr.app.translate.TestResult
 import com.gameocr.app.ui.ExternalBrowserLinkButton
 import com.gameocr.app.ui.TranslatorConnectionTestPanel
 import com.gameocr.app.ui.TranslatorModelPicker
+import com.gameocr.app.ui.ModelDownloadProgressLine
+import com.gameocr.app.download.ModelDownloadWorker
+import androidx.work.WorkInfo
 
 private sealed interface MlKitDownloadState {
     data object Checking : MlKitDownloadState
@@ -114,6 +117,7 @@ private sealed interface MangaOfflineDownloadState {
     data class Downloading(
         val readiness: MangaOfflineModelReadiness,
         val status: String,
+        val progress: WorkInfo? = null,
     ) : MangaOfflineDownloadState
     data class Error(
         val readiness: MangaOfflineModelReadiness,
@@ -127,6 +131,7 @@ private sealed interface RecommendedModelsDownloadState {
     data class Downloading(
         val readiness: RecommendedModelsReadiness,
         val status: String,
+        val progress: WorkInfo? = null,
     ) : RecommendedModelsDownloadState
     data class Error(
         val readiness: RecommendedModelsReadiness,
@@ -254,9 +259,14 @@ fun OnboardingScreen(
             RecommendedModelsDownloadState.Downloading(readiness, "")
         scope.launch {
             runCatching {
-                viewModel.downloadMissingRecommendedModels(currentDraft) { status ->
-                    recommendedModelsDownloadState =
-                        RecommendedModelsDownloadState.Downloading(readiness, status)
+                viewModel.downloadMissingRecommendedModels(currentDraft, onWorkInfo = { info ->
+                    (recommendedModelsDownloadState as? RecommendedModelsDownloadState.Downloading)?.let {
+                        recommendedModelsDownloadState = it.copy(progress = info)
+                    }
+                }) { status ->
+                    (recommendedModelsDownloadState as? RecommendedModelsDownloadState.Downloading)?.let {
+                        recommendedModelsDownloadState = it.copy(status = status)
+                    }
                 }
                 viewModel.recommendedModelsReadiness(currentDraft)
             }.onSuccess {
@@ -277,9 +287,14 @@ fun OnboardingScreen(
         mangaDownloadState = MangaOfflineDownloadState.Downloading(readiness, "")
         scope.launch {
             runCatching {
-                viewModel.downloadMissingMangaOfflineModels(includeSakura) { status ->
-                    mangaDownloadState =
-                        MangaOfflineDownloadState.Downloading(readiness, status)
+                viewModel.downloadMissingMangaOfflineModels(includeSakura, onWorkInfo = { info ->
+                    (mangaDownloadState as? MangaOfflineDownloadState.Downloading)?.let {
+                        mangaDownloadState = it.copy(progress = info)
+                    }
+                }) { status ->
+                    (mangaDownloadState as? MangaOfflineDownloadState.Downloading)?.let {
+                        mangaDownloadState = it.copy(status = status)
+                    }
                 }
                 viewModel.mangaOfflineModelReadiness(includeSakura)
             }.onSuccess {
@@ -1046,8 +1061,8 @@ private fun RecommendedModelsDownloadPage(
                 )
             }
             when (state) {
-                is RecommendedModelsDownloadState.Downloading -> StatusRow(
-                    loading = true,
+                is RecommendedModelsDownloadState.Downloading -> OnboardingDownloadProgress(
+                    progress = state.progress,
                     text = state.status.ifBlank {
                         stringResource(R.string.onboarding_recommended_models_downloading)
                     },
@@ -1204,8 +1219,8 @@ private fun MangaOfflineDownloadPage(
                 )
             }
             when (state) {
-                is MangaOfflineDownloadState.Downloading -> StatusRow(
-                    loading = true,
+                is MangaOfflineDownloadState.Downloading -> OnboardingDownloadProgress(
+                    progress = state.progress,
                     text = state.status.ifBlank {
                         stringResource(R.string.onboarding_manga_offline_downloading)
                     },
@@ -1654,6 +1669,23 @@ private fun ChoiceChip(
             text = label,
             modifier = Modifier.basicMarquee(),
             maxLines = 1,
+        )
+    }
+}
+
+@Composable
+private fun OnboardingDownloadProgress(progress: WorkInfo?, text: String) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (progress?.progress?.keyValueMap?.containsKey(ModelDownloadWorker.KEY_DOWNLOADED) != true) {
+            Text(text, style = MaterialTheme.typography.bodyLarge)
+        }
+        ModelDownloadProgressLine(
+            downloaded = progress?.progress?.getLong(ModelDownloadWorker.KEY_DOWNLOADED, 0L) ?: 0L,
+            total = progress?.progress?.getLong(ModelDownloadWorker.KEY_TOTAL, -1L) ?: -1L,
+            bytesPerSecond = progress?.progress?.getLong(ModelDownloadWorker.KEY_SPEED, 0L) ?: 0L,
+            active = progress == null || (progress.state == WorkInfo.State.RUNNING &&
+                progress.progress.getBoolean(ModelDownloadWorker.KEY_ACTIVE, true)),
+            modifier = Modifier.fillMaxWidth(),
         )
     }
 }

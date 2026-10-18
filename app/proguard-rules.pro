@@ -76,3 +76,6 @@
 -keep class rikka.shizuku.** { *; }
 -keep interface rikka.shizuku.** { *; }
 -dontwarn rikka.shizuku.**
+
+# sherpa-onnx: native code reads config fields and calls constructors by name through JNI.
+-keep class com.k2fsa.sherpa.onnx.** { *; }

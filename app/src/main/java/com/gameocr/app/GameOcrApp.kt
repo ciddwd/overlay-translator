@@ -84,6 +84,13 @@ class GameOcrApp : Application(), Configuration.Provider {
                     }
                 }
                 .onFailure { Timber.w(it, "Failed to migrate Manga OCR detector") }
+            runCatching { settingsRepository.migrateDetectionThresholdsToModelDefaultsIfNeeded() }
+                .onSuccess { changed ->
+                    if (changed) {
+                        Timber.i("Migrated legacy DBNet thresholds to model defaults")
+                    }
+                }
+                .onFailure { Timber.w(it, "Failed to migrate DBNet thresholds") }
             settingsRepository.settings.collect { settings ->
                 logRepository.configureVerbose(settings.developerOptionsEnabled)
                 CrashRecorder.updateSettingsSummary(CrashRecorder.formatSettings(settings))

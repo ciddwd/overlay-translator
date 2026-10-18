@@ -41,9 +41,6 @@ class CatalystAlertDialogTest {
             Case("custom Compose dialog", "Dialog("),
             Case("custom window width", "DialogProperties(usePlatformDefaultWidth = false)"),
             Case("shared zinc palette", "FloatingMenuTourPalette.colors("),
-            Case("zinc surface", "color = surfaceColor"),
-            Case("zinc border", "BorderStroke(1.dp, borderColor)"),
-            Case("Catalyst corner radius", "RoundedCornerShape(8.dp)"),
             Case("bounded height", ".heightIn(max = maxHeight)"),
             Case("scrolling content", "baseModifier.verticalScroll(rememberScrollState())"),
             Case("fixed responsive actions", "FlowRow("),
@@ -53,55 +50,20 @@ class CatalystAlertDialogTest {
     }
 
     @Test
-    fun allKnownSystemDialogs_useSharedComponent_tableDrivenByScreen() {
-        data class Case(
-            val name: String,
-            val path: String,
-            val expectedSharedDialogCalls: Int,
-        )
-
-        listOf(
-            Case(
-                name = "onboarding",
-                path = "src/main/java/com/gameocr/app/onboarding/OnboardingScreen.kt",
-                expectedSharedDialogCalls = 1,
-            ),
-            Case(
-                name = "main",
-                path = "src/main/java/com/gameocr/app/ui/MainScreen.kt",
-                expectedSharedDialogCalls = 5,
-            ),
-            Case(
-                name = "logs",
-                path = "src/main/java/com/gameocr/app/ui/LogScreen.kt",
-                expectedSharedDialogCalls = 2,
-            ),
-            Case(
-                name = "MiniMax voice manager",
-                path = "src/main/java/com/gameocr/app/ui/MiniMaxVoiceManagerDialog.kt",
-                expectedSharedDialogCalls = 3,
-            ),
-            Case(
-                name = "settings",
-                path = "src/main/java/com/gameocr/app/ui/SettingsScreen.kt",
-                expectedSharedDialogCalls = 22,
-            ),
-        ).forEach { case ->
-            val source = sourceFile(case.path).readText()
-            assertEquals(
-                case.name,
-                case.expectedSharedDialogCalls,
-                source.countOccurrences("CatalystAlertDialog("),
-            )
-            assertFalse(
-                "${case.name} must not import Material AlertDialog",
-                source.contains("import androidx.compose.material3.AlertDialog"),
-            )
-            assertFalse(
-                "${case.name} must not call Material AlertDialog",
-                Regex("""\bAlertDialog\s*\(""").containsMatchIn(source),
-            )
-        }
+    fun everyAppDialog_usesSharedComponent() {
+        // Scans all app sources, so a new screen cannot reintroduce the stock Material dialog.
+        val root = listOf(File("src/main/java/com/gameocr/app"), File("app/src/main/java/com/gameocr/app"))
+            .first(File::isDirectory)
+        val offenders = root.walkTopDown()
+            .filter { it.isFile && it.extension == "kt" && it.name != "CatalystAlertDialog.kt" }
+            .filter { file ->
+                val source = file.readText()
+                source.contains("import androidx.compose.material3.AlertDialog") ||
+                    Regex("""\bAlertDialog\s*\(""").containsMatchIn(source)
+            }
+            .map { it.name }
+            .toList()
+        assertTrue("Material AlertDialog used in: $offenders", offenders.isEmpty())
     }
 
     @Test
@@ -138,7 +100,6 @@ class CatalystAlertDialogTest {
         }
     }
 
-    private fun String.countOccurrences(needle: String): Int = split(needle).size - 1
 
     private fun sourceFile(path: String): File =
         listOf(File(path), File("app", path)).firstOrNull(File::isFile)

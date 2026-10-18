@@ -152,10 +152,7 @@ internal class MangaDelayedMaskDebugSessionManager {
             if (input.width != imageWidth || input.height != imageHeight) {
                 return@synchronized null
             }
-            Batch(
-                sessionId = current.first,
-                input = input,
-                blocks = blocks.mapIndexed { index, block ->
+            val confirmed = blocks.mapIndexed { index, block ->
                     DelayedTextEraseMaskBuilder.ConfirmedBlock(
                         blockIndex = index,
                         sourceBoxes = block.sourceBoxesOrBoundingBox().map { source ->
@@ -173,8 +170,16 @@ internal class MangaDelayedMaskDebugSessionManager {
                             bottom = ceil(block.boundingBox.bottom * coordinateScale).toInt(),
                         ),
                     )
+                }
+            Batch(
+                sessionId = current.first,
+                input = input,
+                blocks = confirmed,
+                textBlocks = blocks.mapIndexed { index, block ->
+                    block.copy(regionGranularity = RecognizedTextBoxPolicy.classify(
+                        confirmed[index].sourceBoxes, input.modelMasks, input.modelMaskQualities,
+                    ))
                 },
-                textBlocks = blocks.toList(),
                 coordinateScale = coordinateScale,
             )
         }
@@ -188,6 +193,7 @@ internal class MangaDelayedMaskDebugSessionManager {
             block.blockIndex in blockIndices
         }
         val input = batch.input
+        val prepareStartedNs = System.nanoTime()
         val result = DelayedTextEraseMaskBuilder.build(
             width = input.width,
             height = input.height,
@@ -197,31 +203,14 @@ internal class MangaDelayedMaskDebugSessionManager {
             modelMasks = input.modelMasks,
             confirmedBlocks = confirmed,
         )
-        val repairStartedNs = System.nanoTime()
-        val localRepairResult = LocalBubbleBackgroundRepairer.repair(
-            width = input.width,
-            height = input.height,
-            sourceArgb = input.sourceArgb,
-            eraseMask = result.mask,
-            regions = buildLocalRepairRegions(input, result, confirmed),
-        )
-        val repairResult = localRepairResult.repairResult
-        val repairDurationMs = (System.nanoTime() - repairStartedNs) / 1_000_000L
-        val modelBackgroundPatches = buildModelBackgroundPatches(
-            input = input,
-            batch = batch,
-            result = result,
-            localRepairResult = localRepairResult,
-        ).map { it.protectSourceRegions(input.protectedSourceBounds) }
-        val modelBackgroundBlockIndices = modelBackgroundPatches
-            .flatMapTo(linkedSetOf()) { it.blockIndices }
+        val associationDurationMs = (System.nanoTime() - prepareStartedNs) / 1_000_000L
         val textRepairStartedNs = System.nanoTime()
         val textMaskStartedNs = System.nanoTime()
-        val textMaskResult = TextPixelMaskBuilder.build(
+        val textMaskResult = RecognizedTextBoxPolicy.build(
             width = input.width,
             height = input.height,
-            candidateTextMask = input.candidateTextMask,
-            confirmedBlocks = confirmed.filter { it.blockIndex !in modelBackgroundBlockIndices },
+            candidate = input.candidateTextMask,
+            blocks = confirmed,
         )
         val textMaskDurationUs = (System.nanoTime() - textMaskStartedNs) / NANOS_PER_MICROSECOND
         val textRepairCoreStartedNs = System.nanoTime()
@@ -231,6 +220,9 @@ internal class MangaDelayedMaskDebugSessionManager {
             sourceArgb = input.sourceArgb,
             masks = textMaskResult.masks,
             coordinateScale = batch.coordinateScale,
+            texturedBlockIndices = batch.textBlocks.indices.filterTo(linkedSetOf()) {
+                batch.textBlocks[it].regionGranularity == TextRegionGranularity.FREE_TEXT
+            },
         )
         val textRepairCoreDurationUs =
             (System.nanoTime() - textRepairCoreStartedNs) / NANOS_PER_MICROSECOND
@@ -240,6 +232,32 @@ internal class MangaDelayedMaskDebugSessionManager {
             repairResult = textRepairResult,
             coordinateScale = batch.coordinateScale,
         ).map { it.protectSourceRegions(input.protectedSourceBounds) }
+        val completedTextBlocks = textRepairResult.blocks.filter { it.fullyRepaired }
+            .mapTo(linkedSetOf()) { it.blockIndex }
+        val associatedBlocks = acceptedBlockIndicesByModel(result)
+        val rescueRegions = buildLocalRepairRegions(input, result, confirmed).filter { region ->
+            ShapeAwareBubbleBackgroundPolicy.needsModelRepair(
+                associatedBlocks[region.modelBubbleIndex].orEmpty(), completedTextBlocks,
+            )
+        }
+        val repairStartedNs = System.nanoTime()
+        val localRepairResult = LocalBubbleBackgroundRepairer.repair(
+            width = input.width,
+            height = input.height,
+            sourceArgb = input.sourceArgb,
+            eraseMask = result.mask,
+            regions = rescueRegions,
+        )
+        val repairResult = localRepairResult.repairResult
+        val repairDurationMs = (System.nanoTime() - repairStartedNs) / 1_000_000L
+        val modelBackgroundPatches = buildModelBackgroundPatches(
+            input = input, batch = batch, result = result, localRepairResult = localRepairResult,
+        ).map { it.protectSourceRegions(input.protectedSourceBounds) }
+        timber.log.Timber.tag("MangaMaskPerf").i(
+            "prepare blocks=%d associationMs=%d textMaskUs=%d textRepairMs=%d rescueRegions=%d rescueMs=%d totalMs=%d",
+            confirmed.size, associationDurationMs, textMaskDurationUs, textRepairDurationMs,
+            rescueRegions.size, repairDurationMs, (System.nanoTime() - prepareStartedNs) / 1_000_000L,
+        )
         Prepared(
             batch = batch,
             confirmedBlocks = confirmed,
@@ -271,6 +289,7 @@ internal class MangaDelayedMaskDebugSessionManager {
             batch = prepared.batch,
             delayedMaskResult = prepared.result,
             localRepairResult = prepared.localRepairResult,
+            textRepairResult = prepared.textRepairResult,
             successfulBlockIndices = successfulBlockIndices,
             translatedBlockTexts = translatedBlockTexts,
             outputOrientation = outputOrientation,
@@ -453,6 +472,7 @@ internal class MangaDelayedMaskDebugSessionManager {
         batch: Batch,
         delayedMaskResult: DelayedTextEraseMaskBuilder.Result,
         localRepairResult: LocalBubbleBackgroundRepairer.Result,
+        textRepairResult: LocalTextBackgroundRepairer.Result,
         successfulBlockIndices: Set<Int>,
         translatedBlockTexts: Map<Int, String>,
         outputOrientation: TextOrientation,
@@ -465,9 +485,20 @@ internal class MangaDelayedMaskDebugSessionManager {
         val repairedModels = LocalBubbleBackgroundRepairer.fullyRepairedModelIndices(
             localRepairResult.crops,
         )
-        val blockIndicesByModel = acceptedBlockIndicesByModel(
-            result = delayedMaskResult,
-            includedBlockIndices = successfulBlockIndices,
+        val textRepairs = textRepairResult.blocks.associate { block ->
+            block.blockIndex to ShapeAwareBubbleBackgroundPolicy.TextRepair(
+                blockIndex = block.blockIndex,
+                bounds = block.mask.bounds,
+                pixels = block.patchPixels,
+                complete = block.fullyRepaired,
+            )
+        }
+        val blockIndicesByModel = ShapeAwareBubbleBackgroundPolicy.layoutBlockIndicesByModel(
+            decisions = delayedMaskResult.decisions,
+            successfulBlocks = successfulBlockIndices.filterTo(linkedSetOf()) {
+                batch.textBlocks[it].regionGranularity == TextRegionGranularity.BUBBLE
+            },
+            completedTextRepairs = textRepairs.values.filter { it.complete }.mapTo(linkedSetOf()) { it.blockIndex },
         )
         val decisions = mutableListOf<ShapeLayoutDecision>()
         val patches = mutableListOf<ShapeAwareBubblePatch>()
@@ -479,16 +510,26 @@ internal class MangaDelayedMaskDebugSessionManager {
             }
             .map { it.blockIndex }
             .toSet()
-        blockIndicesByModel.forEach { (modelIndex, blockIndices) ->
+        val layoutGroups = blockIndicesByModel.flatMap { (modelIndex, indices) ->
+            val ordered = indices.sorted()
+            val boxes = ordered.map { index ->
+                val sources = batch.blocks[index].sourceBoxes
+                IntRect(sources.minOf { it.left },sources.minOf { it.top },sources.maxOf { it.right },sources.maxOf { it.bottom })
+            }
+            val orientation = resolveShapeLayoutOrientation(batch,indices,outputOrientation,followBlockOrientations)
+            BubbleTextGroupingPolicy.partition(boxes,orientation==ShapeAwareTextLayout.Orientation.HORIZONTAL)
+                .map { group -> modelIndex to group.mapTo(linkedSetOf()) { ordered[it] } }
+        }
+        layoutGroups.forEach { (modelIndex, blockIndices) ->
             val modelMask = input.modelMasks.getOrNull(modelIndex)
             val maskQuality = input.modelMaskQualities.getOrNull(modelIndex)
                 ?: BubbleShapeMaskQuality.REJECTED
-            val text = blockIndices.asSequence()
+            val text = ShapeTranslationLayoutPolicy.joinTranslations(blockIndices.asSequence()
                 .sorted()
                 .mapNotNull(translatedBlockTexts::get)
                 .map(String::trim)
                 .filter(String::isNotEmpty)
-                .joinToString(" ")
+                .toList())
             val orientation = resolveShapeLayoutOrientation(
                 batch = batch,
                 blockIndices = blockIndices,
@@ -519,7 +560,21 @@ internal class MangaDelayedMaskDebugSessionManager {
                 )
                 return@forEach
             }
-            if (modelIndex !in repairedModels) {
+            val background = ShapeAwareBubbleBackgroundPolicy.compose(
+                modelMask = modelMask,
+                modelBackground = if (modelIndex in repairedModels) {
+                    ShapeAwareBubblePatchComposer.composeBackground(
+                        imageWidth = input.width,
+                        imageHeight = input.height,
+                        repairedPixels = localRepairResult.repairResult.pixels,
+                        repairedMask = localRepairResult.repairResult.repairedMask,
+                        modelMask = modelMask,
+                    )
+                } else null,
+                blockIndices = blockIndices,
+                textRepairs = textRepairs,
+            )
+            if (background == null) {
                 decisions += shapeLayoutFallback(
                     modelIndex = modelIndex,
                     reason = "BACKGROUND_REPAIR_UNAVAILABLE",
@@ -550,18 +605,30 @@ internal class MangaDelayedMaskDebugSessionManager {
             val maximumFontSize = (
                 minOf(modelMask.width, modelMask.height) * MAX_FONT_MINOR_AXIS_RATIO
             ).toInt().coerceIn(MIN_SHAPE_FONT_PX, MAX_SHAPE_FONT_PX)
+            val sourceBoxes = batch.blocks.asSequence()
+                .filter { it.blockIndex in blockIndices }
+                .flatMap { it.sourceBoxes.asSequence() }.toList()
+            val plan = ShapeTranslationLayoutPolicy.plan(modelMask, sourceBoxes, orientation, maximumFontSize,
+                sourceGlyphCount = blockIndices.sumOf { index ->
+                    batch.textBlocks[index].text.codePoints().filter { !Character.isWhitespace(it) }.count().toInt()
+                })
+            if (plan == null) {
+                decisions += shapeLayoutFallback(modelIndex, "SOURCE_LAYOUT_UNAVAILABLE", orientation, text.length)
+                return@forEach
+            }
             val layout = ShapeAwareTextLayout.layout(
-                width = modelMask.width,
-                height = modelMask.height,
-                mask = modelMask.pixels,
+                width = plan.bounds.width,
+                height = plan.bounds.height,
+                mask = plan.mask,
                 text = text,
                 orientation = orientation,
-                minimumFontSizePx = MIN_SHAPE_FONT_PX,
-                maximumFontSizePx = maximumFontSize,
+                minimumFontSizePx = plan.minimumFontSizePx,
+                maximumFontSizePx = plan.maximumFontSizePx,
                 textMeasurer = ShapeAwareTextLayout.TextMeasurer { candidate, fontSize ->
                     paint.textSize = fontSize.toFloat()
                     paint.measureText(candidate)
                 },
+                preferSingleLine = sourceBoxes.size==1,
             )
             if (!layout.accepted) {
                 decisions += shapeLayoutFallback(
@@ -572,25 +639,19 @@ internal class MangaDelayedMaskDebugSessionManager {
                 )
                 return@forEach
             }
+            com.gameocr.app.util.VerticalDiagnosticLog.i(
+                "shape layout viewport model=$modelIndex orientation=$orientation " +
+                    "container=${modelMask.left},${modelMask.top},${modelMask.width},${modelMask.height} " +
+                    "textBounds=${plan.bounds} sourceFontCeiling=${plan.maximumFontSizePx} " +
+                    "fontPx=${layout.fontSizePx} runs=${layout.runs.size}",
+            )
 
             paint.textSize = layout.fontSizePx.toFloat()
-            paint.color = readableShapeTextColor(
-                width = input.width,
-                height = input.height,
-                pixels = localRepairResult.repairResult.pixels,
-                repairedMask = localRepairResult.repairResult.repairedMask,
-                modelMask = modelMask,
-            )
+            paint.color = ShapeAwareBubbleBackgroundPolicy.textColor(background)
             val patchBitmap = renderPixels(
                 width = modelMask.width,
                 height = modelMask.height,
-                pixels = ShapeAwareBubblePatchComposer.composeBackground(
-                    imageWidth = input.width,
-                    imageHeight = input.height,
-                    repairedPixels = localRepairResult.repairResult.pixels,
-                    repairedMask = localRepairResult.repairResult.repairedMask,
-                    modelMask = modelMask,
-                ),
+                pixels = background,
             )
             val patchCanvas = Canvas(patchBitmap)
             when (layout.orientation) {
@@ -598,8 +659,8 @@ internal class MangaDelayedMaskDebugSessionManager {
                     drawHorizontalShapeLayout(
                         canvas = patchCanvas,
                         paint = paint,
-                        originX = 0,
-                        originY = 0,
+                        originX = plan.bounds.left - modelMask.left,
+                        originY = plan.bounds.top - modelMask.top,
                         runs = layout.runs,
                     )
                 ShapeAwareTextLayout.Orientation.VERTICAL_RIGHT_TO_LEFT,
@@ -607,8 +668,8 @@ internal class MangaDelayedMaskDebugSessionManager {
                     drawVerticalShapeLayout(
                         canvas = patchCanvas,
                         paint = paint,
-                        originX = 0,
-                        originY = 0,
+                        originX = plan.bounds.left - modelMask.left,
+                        originY = plan.bounds.top - modelMask.top,
                         runs = layout.runs,
                     )
             }
@@ -638,7 +699,7 @@ internal class MangaDelayedMaskDebugSessionManager {
             decisions += ShapeLayoutDecision(
                 modelBubbleIndex = modelIndex,
                 accepted = true,
-                reason = layout.reason.name,
+                reason = if (modelIndex in repairedModels) layout.reason.name else "FIT_TEXT_REPAIR",
                 orientation = orientation,
                 fontSizePx = layout.fontSizePx,
                 runCount = layout.runs.size,
@@ -722,45 +783,6 @@ internal class MangaDelayedMaskDebugSessionManager {
                 canvas.drawText(character, centerX, baseline, paint)
             }
         }
-    }
-
-    private fun readableShapeTextColor(
-        width: Int,
-        height: Int,
-        pixels: IntArray,
-        repairedMask: BooleanArray,
-        modelMask: BubbleSegmentationPostprocessor.InstanceMask,
-    ): Int {
-        var red = 0L
-        var green = 0L
-        var blue = 0L
-        var count = 0
-        for (localY in 0 until modelMask.height) {
-            val y = modelMask.top + localY
-            if (y !in 0 until height) continue
-            for (localX in 0 until modelMask.width) {
-                if (!modelMask.pixels[localY * modelMask.width + localX]) continue
-                val x = modelMask.left + localX
-                if (x !in 0 until width) continue
-                val index = y * width + x
-                if (!repairedMask[index]) continue
-                val color = pixels[index]
-                red += Color.red(color)
-                green += Color.green(color)
-                blue += Color.blue(color)
-                count++
-            }
-        }
-        if (count == 0) return Color.BLACK
-        val averageRed = red.toFloat() / count
-        val averageGreen = green.toFloat() / count
-        val averageBlue = blue.toFloat() / count
-        val luminance = (
-            averageRed * 0.2126f +
-                averageGreen * 0.7152f +
-                averageBlue * 0.0722f
-        ) / 255f
-        return if (luminance >= 0.55f) Color.BLACK else Color.WHITE
     }
 
     private fun graphemeClusters(text: String): List<String> {

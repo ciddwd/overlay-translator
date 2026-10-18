@@ -24,11 +24,11 @@ class WordSelectImmediateCardTest {
             Case(
                 name = "loading card is visible before OCR starts",
                 before = "sourceText = \"\"",
-                after = "ocrEngine.recognize(cropped, settings.ocrEngine, settings)",
+                after = "ocrEngine.recognize(cropped, settings.ocrEngine,",
             ),
             Case(
                 name = "recognized source replaces the loading placeholder",
-                before = "ocrEngine.recognize(cropped, settings.ocrEngine, settings)",
+                before = "ocrEngine.recognize(cropped, settings.ocrEngine,",
                 after = "card.updateSource(text)",
             ),
             Case(

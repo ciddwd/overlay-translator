@@ -26,7 +26,8 @@ import timber.log.Timber
  *
  * 当前 binding 的生成接口只直接接收最大输出长度；模型专用采样参数由
  * [com.gameocr.app.llm.LocalLlmSamplingPolicy] 在加载模型前传给 native 层。
- * [Settings.localLlmContextSize] 用作批译的逻辑 token 预算，不改变 native context 的物理容量。
+ * [Settings.localLlmContextSize] 用作批译的逻辑 token 预算；模型管理页提供请求级配置时，
+ * 同时用于加载对应的 native context，旧的未管理调用保留原有容量规则。
  */
 abstract class LocalLlamaTranslator(
     protected val holder: LlamaEngineHolder,
@@ -35,6 +36,8 @@ abstract class LocalLlamaTranslator(
 ) : Translator {
 
     protected abstract val modelKind: LlmModelKind
+    private val requestedBatchSize: Int
+        get() = BuildConfig.LOCAL_LLM_BATCH_SIZE
 
     /**
      * 该引擎要不要 system prompt。返回 null 表示不设（Hy-MT2 走纯 user prompt）。
@@ -48,6 +51,9 @@ abstract class LocalLlamaTranslator(
 
     protected abstract fun buildUserPrompt(source: String, settings: Settings): String
 
+    protected open fun nativeContextSize(settings: Settings): Int? =
+        settings.runtimeLocalModelConfig?.let { settings.localLlmContextSize.coerceIn(512, 4096) }
+
     /** Trims only the oldest continuous-history turns and measures with the loaded model tokenizer. */
     protected suspend fun trimContinuousHistoryForPrompts(
         promptSources: List<String>,
@@ -59,7 +65,7 @@ abstract class LocalLlamaTranslator(
             context.previousFrame.isEmpty() ||
             promptSources.isEmpty()
         ) return settings
-        return holder.withEngineSession(modelKind, systemPrompt) {
+        return holder.withManagedEngineSession(modelKind, settings, systemPrompt, nativeContextSize(settings)) {
             val capacity = minOf(
                 settings.localLlmContextSize,
                 LlamaPromptMetrics.contextSizeTokens(),
@@ -72,7 +78,7 @@ abstract class LocalLlamaTranslator(
             )
             val basePromptTokens = promptSources.maxOf { source ->
                 LlamaPromptMetrics.countUserPromptTokens(
-                    runtimePrompt(buildUserPrompt(source, withoutHistory), withoutHistory)
+                    managedRuntimePrompt(buildUserPrompt(source, withoutHistory), withoutHistory)
                 )
             }
             val selected = DialogueHistoryTokenBudgetPolicy.selectNewest(
@@ -93,7 +99,7 @@ abstract class LocalLlamaTranslator(
             while (selected.isNotEmpty()) {
                 val fits = promptSources.all { source ->
                     LlamaPromptMetrics.countUserPromptTokens(
-                        runtimePrompt(buildUserPrompt(source, candidate), candidate)
+                        managedRuntimePrompt(buildUserPrompt(source, candidate), candidate)
                     ) <= maxPromptTokens
                 }
                 if (fits) break
@@ -180,14 +186,17 @@ abstract class LocalLlamaTranslator(
 
     internal fun isPrewarmModelInstalled(): Boolean = holder.isModelInstalled(modelKind)
 
-    internal suspend fun prewarm(settings: Settings) {
+    internal suspend fun isPrewarmModelInstalled(settings: Settings): Boolean =
+        holder.isManagedModelInstalled(modelKind, settings)
+
+    internal open suspend fun prewarm(settings: Settings) {
         val startedAt = SystemClock.elapsedRealtime()
         var modelReadyAt = startedAt
         var outputPieces = 0
-        holder.withEngineSession(modelKind, systemPrompt) { engine ->
+        holder.withManagedEngineSession(modelKind, settings, systemPrompt, nativeContextSize(settings)) { engine ->
             modelReadyAt = SystemClock.elapsedRealtime()
             engine.sendUserPrompt(
-                buildUserPrompt(PREWARM_SOURCE, settings),
+                managedRuntimePrompt(buildUserPrompt(PREWARM_SOURCE, settings), settings),
                 PREWARM_PREDICT_LENGTH,
             ).collect { outputPieces++ }
         }
@@ -239,7 +248,7 @@ abstract class LocalLlamaTranslator(
                 publish(index, null, 0L)
                 return@forEachIndexed
             }
-            val individualPrompt = runtimePrompt(buildUserPrompt(source, settings), settings)
+            val individualPrompt = managedRuntimePrompt(buildUserPrompt(source, settings), settings)
             val key = cacheKey(source, settings, individualPrompt)
             val cached = cache.get(key, settings)?.let { value ->
                 validatedCachedOutput(
@@ -267,7 +276,7 @@ abstract class LocalLlamaTranslator(
         if (pendingByKey.isEmpty()) return results
 
         val modelReadyStartedAt = SystemClock.elapsedRealtime()
-        holder.withEngineSession(modelKind, systemPrompt) { engine ->
+        holder.withManagedEngineSession(modelKind, settings, systemPrompt, nativeContextSize(settings)) { engine ->
             val sessionReadyAt = SystemClock.elapsedRealtime()
             val modelReadyMs = InferenceTiming.elapsedMs(modelReadyStartedAt, sessionReadyAt)
             val queuedAt = sessionReadyAt
@@ -292,19 +301,19 @@ abstract class LocalLlamaTranslator(
                     false
                 }
             }
-            if (pending.isEmpty()) return@withEngineSession
+            if (pending.isEmpty()) return@withManagedEngineSession
 
             val engineContextTokens = LlamaPromptMetrics.contextSizeTokens()
             val nativePromptBatchTokens = LlamaPromptMetrics.batchSizeTokens()
             val nativeSequenceCapacity = LlamaPromptMetrics.sequenceCapacity()
             val systemPromptTokens = LlamaPromptMetrics.systemPromptTokens()
             val selectedBatchSize = LocalLlmNativeBatchPolicy.selectedBatchSize(
-                requested = BuildConfig.LOCAL_LLM_BATCH_SIZE,
+                requested = requestedBatchSize,
                 nativeSequenceCapacity = nativeSequenceCapacity,
             )
             val plans = LocalLlmNativeBatchPolicy.plan(
                 items = pending,
-                requestedBatchSize = BuildConfig.LOCAL_LLM_BATCH_SIZE,
+                requestedBatchSize = requestedBatchSize,
                 configuredContextTokens = settings.localLlmContextSize,
                 engineContextTokens = engineContextTokens,
                 systemPromptTokens = systemPromptTokens,
@@ -502,7 +511,7 @@ abstract class LocalLlamaTranslator(
 
     override suspend fun translate(source: String, settings: Settings): String? {
         if (source.isBlank()) return null
-        val userPrompt = runtimePrompt(buildUserPrompt(source, settings), settings)
+        val userPrompt = managedRuntimePrompt(buildUserPrompt(source, settings), settings)
         val cacheKey = cacheKey(source, settings, userPrompt)
         cache.get(cacheKey, settings)?.let { cached ->
             validatedCachedOutput(source, userPrompt, cached, cacheKey, settings)
@@ -511,7 +520,7 @@ abstract class LocalLlamaTranslator(
             return it
         }
         val modelReadyStartedAt = SystemClock.elapsedRealtime()
-        return holder.withEngineSession(modelKind, systemPrompt) { engine ->
+        return holder.withManagedEngineSession(modelKind, settings, systemPrompt, nativeContextSize(settings)) { engine ->
             val sessionReadyAt = SystemClock.elapsedRealtime()
             val modelReadyMs = InferenceTiming.elapsedMs(modelReadyStartedAt, sessionReadyAt)
             val queuedAt = sessionReadyAt
@@ -525,7 +534,7 @@ abstract class LocalLlamaTranslator(
                     InferenceTiming.elapsedMs(queuedAt, startedAt),
                     source.length,
                 )
-                return@withEngineSession it
+                return@withManagedEngineSession it
             }
             val sb = StringBuilder()
             var firstOutputAt: Long? = null
@@ -567,7 +576,7 @@ abstract class LocalLlamaTranslator(
 
     override fun translateStream(source: String, settings: Settings): Flow<String> = flow {
         if (source.isBlank()) return@flow
-        val userPrompt = runtimePrompt(buildUserPrompt(source, settings), settings)
+        val userPrompt = managedRuntimePrompt(buildUserPrompt(source, settings), settings)
         val cacheKey = cacheKey(source, settings, userPrompt)
         cache.get(cacheKey, settings)?.let { cached ->
             validatedCachedOutput(source, userPrompt, cached, cacheKey, settings)
@@ -577,7 +586,7 @@ abstract class LocalLlamaTranslator(
             return@flow
         }
         val modelReadyStartedAt = SystemClock.elapsedRealtime()
-        holder.withEngineSession(modelKind, systemPrompt) { engine ->
+        holder.withManagedEngineSession(modelKind, settings, systemPrompt, nativeContextSize(settings)) { engine ->
             val sessionReadyAt = SystemClock.elapsedRealtime()
             val modelReadyMs = InferenceTiming.elapsedMs(modelReadyStartedAt, sessionReadyAt)
             val queuedAt = sessionReadyAt
@@ -592,7 +601,7 @@ abstract class LocalLlamaTranslator(
                     source.length,
                 )
                 emit(cached)
-                return@withEngineSession
+                return@withManagedEngineSession
             }
             val sb = StringBuilder()
             var firstOutputAt: Long? = null
@@ -663,13 +672,13 @@ abstract class LocalLlamaTranslator(
         predictLength: Int = settings.localLlmMaxNewTokens,
     ): GenerationResult {
         val modelReadyStartedAt = SystemClock.elapsedRealtime()
-        return holder.withEngineSession(modelKind, systemPrompt) { engine ->
+        return holder.withManagedEngineSession(modelKind, settings, systemPrompt, nativeContextSize(settings)) { engine ->
             val sessionReadyAt = SystemClock.elapsedRealtime()
             val modelReadyMs = InferenceTiming.elapsedMs(modelReadyStartedAt, sessionReadyAt)
             val queuedAt = sessionReadyAt
             generateLockedResult(
                 engine = engine,
-                userPrompt = runtimePrompt(userPrompt, settings),
+                userPrompt = managedRuntimePrompt(userPrompt, settings),
                 predictLength = predictLength,
                 mode = mode,
                 sourceForLog = sourceForLog,
@@ -690,16 +699,16 @@ abstract class LocalLlamaTranslator(
     ): List<GenerationResult>? {
         if (requests.isEmpty()) return emptyList()
         val modelReadyStartedAt = SystemClock.elapsedRealtime()
-        return holder.withEngineSession(modelKind, systemPrompt) {
+        return holder.withManagedEngineSession(modelKind, settings, systemPrompt, nativeContextSize(settings)) {
             val sessionReadyAt = SystemClock.elapsedRealtime()
             val startedAt = SystemClock.elapsedRealtime()
-            val prompts = requests.map { runtimePrompt(it.userPrompt, settings) }
+            val prompts = requests.map { managedRuntimePrompt(it.userPrompt, settings) }
             val nativeResult = LlamaMultiSequence.generateWithMetrics(
                 prompts = prompts,
                 predictLengths = requests.map { it.predictLength.coerceAtLeast(1) },
                 maxOutputLines = requests.map { it.maxOutputLines.coerceAtLeast(0) },
                 markLimitAsInvalid = markLimitAsInvalid,
-            ) ?: return@withEngineSession null
+            ) ?: return@withManagedEngineSession null
             val outputs = nativeResult.outputs
             val finishedAt = SystemClock.elapsedRealtime()
             if (performanceDiagnostics.isPerformanceOverlayEnabled()) {
@@ -988,7 +997,7 @@ abstract class LocalLlamaTranslator(
             rejectedUserPrompt = rejectedUserPrompt,
             settings = settings,
             rejection = rejection,
-        )?.let { runtimePrompt(it, settings) }
+        )?.let { managedRuntimePrompt(it, settings) }
         if (recoveryPrompt == null) {
             Timber.tag(PERF_TAG).w(
                 "output policy fail-closed kind=%s reason=%s inputChars=%d recovery=unavailable",
@@ -1179,8 +1188,25 @@ abstract class LocalLlamaTranslator(
             targetLang = settings.targetLang,
             maxNewTokens = settings.localLlmMaxNewTokens,
             systemPrompt = systemPrompt,
-            userPrompt = userPrompt,
+            userPrompt = ManagedLocalModelRequestPolicy.cacheFingerprint(modelKind, settings, userPrompt),
         )
+
+    /** Keep model instructions outside background data and apply them once on every request path. */
+    /**
+     * General models take the stored prompt as-is. A translation-tuned model keeps its official
+     * template; once unlocked, the stored text is only added before it as extra requirements.
+     */
+    protected fun runtimeModelKind(settings: Settings): LlmModelKind =
+        LlmModelKind.fromBuiltInId(settings.localModelId)?.takeIf { modelKind.managedViaGeneric } ?: modelKind
+
+    protected open fun managedRuntimePrompt(basePrompt: String, settings: Settings, source: String? = null): String =
+        when {
+            !runtimeModelKind(settings).specialized ->
+                ManagedLocalModelRequestPolicy.withInstructions(runtimePrompt(basePrompt, settings), settings, source)
+            settings.runtimeLocalModelConfig?.unlocked == true ->
+                ManagedLocalModelRequestPolicy.withInstructions(runtimePrompt(basePrompt, settings), settings)
+            else -> runtimePrompt(basePrompt, settings)
+        }
 
     protected open fun runtimePrompt(basePrompt: String, settings: Settings): String =
         if (settings.runtimeTranslationContext.isBlank()) {
@@ -1193,8 +1219,9 @@ abstract class LocalLlamaTranslator(
         if (!holder.isDeviceCapable()) {
             return@runCatching TestResult(success = false, message = "Android 13+ required")
         }
-        holder.withEngineSession(modelKind, systemPrompt) { }
-        TestResult(success = true, message = "Model loaded: ${modelKind.displayName}")
+        holder.withManagedEngineSession(modelKind, settings, systemPrompt, nativeContextSize(settings)) { }
+        val modelName = settings.runtimeLocalModelName?.takeIf(String::isNotBlank) ?: modelKind.displayName
+        TestResult(success = true, message = "Model loaded: $modelName")
     }.getOrElse { t ->
         TestResult(success = false, message = "${t.javaClass.simpleName}: ${t.message}")
     }
@@ -1218,4 +1245,42 @@ abstract class LocalLlamaTranslator(
         private const val PREWARM_PREDICT_LENGTH = 1
         private const val CONTINUOUS_CONTEXT_HEADROOM_TOKENS = 64
     }
+}
+
+/** Request-local identity prevents imports or model-specific settings from sharing cached output. */
+internal object ManagedLocalModelRequestPolicy {
+    /** Same names as the remote LLM prompt: {source}/{source_lang}, {target}/{target_lang}, {text}. */
+    private val instructionVariable = Regex("\\{(source|source_lang|target|target_lang|text)\\}")
+
+    /**
+     * A prompt containing {text} replaces the built-in instruction (terminology and background are
+     * still prepended); any other prompt is added before it as extra requirements.
+     */
+    fun withInstructions(basePrompt: String, settings: Settings, source: String? = null): String {
+        val template = settings.runtimeLocalModelConfig?.translationPrompt?.trim().orEmpty()
+        if (template.isEmpty()) return basePrompt
+        val replacesBase = source != null && template.contains("{text}")
+        // Expand only the trusted configuration string. Markers in OCR text or background data
+        // are literal content, and replacement values are not scanned a second time.
+        val instructions = instructionVariable.replace(template) { match ->
+            when (match.groupValues[1]) {
+                "source", "source_lang" -> if (settings.sourceLang.isBlank() || settings.sourceLang.trim().equals("auto", true)) {
+                    "automatically detected source language"
+                } else IndexTranslatePromptPolicy.languageName(settings.sourceLang)
+                "target", "target_lang" -> IndexTranslatePromptPolicy.languageName(settings.targetLang)
+                else -> if (replacesBase) checkNotNull(source) else match.value
+            }
+        }
+        if (replacesBase) return GenericLocalPromptPolicy.contextSection(checkNotNull(source), settings) + instructions
+        return "Additional translation instructions:\n$instructions\n\n$basePrompt"
+    }
+
+    fun cacheFingerprint(kind: LlmModelKind, settings: Settings, userPrompt: String): String =
+        buildString {
+            append("managed-model-v2|id=")
+            append(settings.localModelId?.takeIf(String::isNotBlank) ?: kind.name)
+            append("|context=").append(settings.localLlmContextSize)
+            append("|config=").append(settings.runtimeLocalModelConfig?.generationFingerprint().orEmpty())
+            append("|user=").append(userPrompt)
+        }
 }

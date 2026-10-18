@@ -44,6 +44,10 @@ internal object ShapeAwareTextLayout {
         fun measure(text: String, fontSizePx: Int): Float
     }
 
+    fun layout(width:Int,height:Int,mask:BooleanArray,text:String,orientation:Orientation,
+               minimumFontSizePx:Int,maximumFontSizePx:Int,textMeasurer:TextMeasurer):Result =
+        layout(width,height,mask,text,orientation,minimumFontSizePx,maximumFontSizePx,textMeasurer,false)
+
     fun layout(
         width: Int,
         height: Int,
@@ -53,6 +57,7 @@ internal object ShapeAwareTextLayout {
         minimumFontSizePx: Int,
         maximumFontSizePx: Int,
         textMeasurer: TextMeasurer,
+        preferSingleLine: Boolean,
     ): Result {
         require(width >= 0 && height >= 0)
         require(mask.size == width * height)
@@ -67,11 +72,13 @@ internal object ShapeAwareTextLayout {
             return rejected(Reason.MASK_TOO_SMALL, orientation)
         }
 
-        var low = minimumFontSizePx
-        var high = minOf(maximumFontSizePx, maxOf(width, height))
-        var best: Result? = null
-        while (low <= high) {
-            val size = (low + high) ushr 1
+        if(preferSingleLine && orientation==Orientation.HORIZONTAL) {
+            for(size in maximumFontSizePx downTo minimumFontSizePx) {
+                val runs=layoutHorizontal(width,height,mask,normalized,size,textMeasurer,1)
+                if(runs!=null)return Result(true,Reason.FIT,orientation,size,runs)
+            }
+        }
+        for (size in maximumFontSizePx downTo minimumFontSizePx) {
             val candidate = when (orientation) {
                 Orientation.HORIZONTAL -> layoutHorizontal(
                     width = width,
@@ -92,19 +99,16 @@ internal object ShapeAwareTextLayout {
                 )
             }
             if (candidate != null) {
-                best = Result(
+                return Result(
                     accepted = true,
                     reason = Reason.FIT,
                     orientation = orientation,
                     fontSizePx = size,
                     runs = candidate,
                 )
-                low = size + 1
-            } else {
-                high = size - 1
             }
         }
-        return best ?: rejected(Reason.NO_FIT, orientation)
+        return rejected(Reason.NO_FIT, orientation)
     }
 
     internal fun respectsKinsoku(lines: List<String>): Boolean =
@@ -121,9 +125,10 @@ internal object ShapeAwareTextLayout {
         text: String,
         fontSizePx: Int,
         textMeasurer: TextMeasurer,
+        lineLimit: Int = Int.MAX_VALUE,
     ): List<Run>? {
         val lineHeight = ceil(fontSizePx * HORIZONTAL_LINE_HEIGHT_RATIO).toInt().coerceAtLeast(1)
-        val maximumLines = height / lineHeight
+        val maximumLines = minOf(height / lineHeight,lineLimit)
         if (maximumLines == 0) return null
         val clusters = clusters(text)
         for (lineCount in 1..maximumLines) {
@@ -310,10 +315,19 @@ internal object ShapeAwareTextLayout {
     ): List<String>? {
         val output = mutableListOf<String>()
         var start = 0
-        capacities.forEach { capacity ->
-            if (start >= clusters.size) return@forEach
+        capacities.forEachIndexed { index, capacity ->
+            if (start >= clusters.size) return@forEachIndexed
             if (capacity <= 0) return null
-            var end = minOf(clusters.size, start + capacity)
+            val remaining=clusters.size-start
+            val laterCapacity=capacities.drop(index+1).sum()
+            val minimumTake=maxOf(1,remaining-laterCapacity)
+            val maximumTake=minOf(remaining,capacity)
+            if(minimumTake>maximumTake)return null
+            val ideal=ceil(remaining.toDouble()/(capacities.size-index)).toInt()
+                .coerceIn(minimumTake,maximumTake)
+            var end=(minimumTake..maximumTake).filter { canBreak(clusters,start+it) }
+                .minByOrNull { kotlin.math.abs(it-ideal) }?.let { start+it }
+                ?: (start+maximumTake)
             if (end < clusters.size) {
                 val preferred = (end downTo start + 1).firstOrNull { canBreak(clusters, it) }
                 if (preferred != null) end = preferred
@@ -366,8 +380,23 @@ internal object ShapeAwareTextLayout {
         return index
     }
 
-    private fun normalize(text: String): String =
-        text.replace(Regex("\\s+"), " ").trim()
+    internal fun normalize(text: String): String =
+        Regex("[\\t ]*[\\r\\n]+[\\t ]*").replace(text) { match ->
+            val before = match.range.first.takeIf { it > 0 }
+                ?.let { Character.codePointBefore(text, it) }
+            val after = (match.range.last + 1).takeIf { it < text.length }
+                ?.let { Character.codePointAt(text, it) }
+            // OCR/translation line breaks are layout hints, not spaces in Chinese or Japanese.
+            // Retain a separator for Latin and other scripts whose words need one.
+            if (before.isUnspacedScript() || after.isUnspacedScript()) "" else " "
+        }.replace(Regex("\\s+"), " ").trim()
+
+    private fun Int?.isUnspacedScript(): Boolean = this != null && when (Character.UnicodeScript.of(this)) {
+        Character.UnicodeScript.HAN,
+        Character.UnicodeScript.HIRAGANA,
+        Character.UnicodeScript.KATAKANA -> true
+        else -> false
+    }
 
     private fun clusters(text: String): List<String> {
         val iterator = BreakIterator.getCharacterInstance(Locale.ROOT)

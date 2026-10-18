@@ -9,6 +9,13 @@ import android.view.ActionMode
 import android.view.Gravity
 import android.view.View
 import android.widget.TextView
+import android.util.TypedValue
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.StaticLayout
+import android.text.Layout
+import android.text.TextPaint
+import android.text.method.ScrollingMovementMethod
 import com.gameocr.app.data.OverlayTextAlignment
 import com.gameocr.app.data.OverlayTextStyle
 import com.gameocr.app.util.VerticalDiagnosticLog
@@ -18,12 +25,17 @@ internal data class AdaptiveHorizontalTextLayoutSnapshot(
     val textHash: Int,
     val textLength: Int,
     val finalTextSizePx: Float,
+    val autoSizeMinTextSizePx: Int,
     val autoSizeMaxTextSizePx: Int,
     val measuredWidthPx: Int,
     val measuredHeightPx: Int,
+    val leftPx: Int,
+    val topPx: Int,
     val contentWidthPx: Int,
     val contentHeightPx: Int,
     val layoutHeightPx: Int,
+    val targetLayoutHeightPx: Int,
+    val targetLayoutWidthPx: Int,
     val lineCount: Int,
     val visibleTextEnd: Int,
     val ellipsized: Boolean,
@@ -35,7 +47,106 @@ internal data class AdaptiveHorizontalTextLayoutSnapshot(
 @SuppressLint("AppCompatCustomView") // Platform TextView keeps the framework text-selection ActionMode.
 class StyledTranslationTextView(context: Context) : TextView(context) {
     var horizontalRightToLeft: Boolean = false
+    internal var reflowOcrParagraph: Boolean = false
     internal var adaptiveTextFitEnabled: Boolean = false
+    internal var adaptiveBoundsConstrained: Boolean = false
+    private var sourceGlyphHeightPx = 0f
+    private var sourceLineBudget = 1
+    private var adaptiveGlyphRange: TranslationGlyphSizeRange? = null
+    internal var adaptiveBackgroundOffsetYPx = 0
+    internal var adaptiveBackgroundOffsetXPx = 0
+    private var overflowScrolling = false
+
+    internal fun setAdaptiveOverflowScrolling(enabled: Boolean) {
+        if (overflowScrolling == enabled) return
+        overflowScrolling = enabled
+        isVerticalScrollBarEnabled = enabled
+        if (!isTextSelectable) {
+            movementMethod = if (enabled) ScrollingMovementMethod.getInstance() else null
+        }
+        if (!enabled) scrollTo(0, 0)
+    }
+
+    override fun setText(text: CharSequence?, type: BufferType?) {
+        val display = if (sourceGlyphHeightPx > 0f && !text.isNullOrEmpty()) {
+            SpannableString(text).apply {
+                getSpans(0, length, TranslationInkLineHeight::class.java).forEach(::removeSpan)
+                setSpan(TranslationInkLineHeight(), 0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+        } else text
+        super.setText(display, type)
+    }
+
+    internal fun configureAdaptiveGlyphHeight(heightPx: Float, lineBudget: Int = 1) {
+        sourceGlyphHeightPx = heightPx
+        sourceLineBudget = lineBudget.coerceAtLeast(1)
+        includeFontPadding = false
+        // Initial text was assigned before the adaptive target became known.
+        setText(text, BufferType.SPANNABLE)
+        updateAdaptiveGlyphRange(text)
+    }
+
+    override fun onTextChanged(text: CharSequence?, start: Int, lengthBefore: Int, lengthAfter: Int) {
+        super.onTextChanged(text, start, lengthBefore, lengthAfter)
+        // TextView may call this during construction, before a glyph target has been configured.
+        if (sourceGlyphHeightPx > 0f) updateAdaptiveGlyphRange(text ?: "")
+    }
+
+    private fun updateAdaptiveGlyphRange(value: CharSequence) {
+        val range = measureTranslationGlyphRange(
+            paint, value, sourceGlyphHeightPx, adaptiveBoundsConstrained,
+        ) ?: return
+        val contentWidth = width - compoundPaddingLeft - compoundPaddingRight
+        val maximum = if (!adaptiveBoundsConstrained && contentWidth > 0 && value.isNotEmpty()) {
+            translationWrapLimitedMaxFontPx(range, sourceLineBudget) { candidate ->
+                val probe = TextPaint(paint).apply { textSize = candidate.toFloat() }
+                StaticLayout.Builder.obtain(value, 0, value.length, probe, contentWidth)
+                    .setIncludePad(false)
+                    .setBreakStrategy(breakStrategy)
+                    .setHyphenationFrequency(hyphenationFrequency)
+                    .build().lineCount
+            }
+        } else range.targetPx
+        val resolved = range.copy(targetPx = maximum)
+        if (adaptiveGlyphRange == resolved) return
+        adaptiveGlyphRange = resolved
+        setAutoSizeTextTypeWithDefaults(AUTO_SIZE_TEXT_TYPE_NONE)
+        requestLayout()
+    }
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+        if (!adaptiveTextFitEnabled) return
+        val range = adaptiveGlyphRange ?: return
+        val contentWidth = measuredWidth - compoundPaddingLeft - compoundPaddingRight
+        val contentHeight = measuredHeight - compoundPaddingTop - compoundPaddingBottom
+        if (contentWidth <= 0 || contentHeight <= 0) return
+        fun fits(size: Int, singleLine: Boolean): Boolean {
+            val probe = TextPaint(paint).apply { textSize = size.toFloat() }
+            val candidate = StaticLayout.Builder.obtain(text, 0, text.length, probe, contentWidth)
+                .setIncludePad(includeFontPadding)
+                .setLineSpacing(lineSpacingExtra, lineSpacingMultiplier)
+                .setBreakStrategy(breakStrategy)
+                .setHyphenationFrequency(hyphenationFrequency)
+                .build()
+            return candidate.height <= contentHeight && candidate.lineCount <= (if(singleLine) 1 else maxLines) &&
+                (0 until candidate.lineCount).all { candidate.getLineWidth(it) <= contentWidth }
+        }
+        // Button labels keep one line when a complete readable fit exists.
+        val single = if(adaptiveBoundsConstrained && sourceLineBudget==1)
+            adaptiveLargestFittingTextSizePx(range.minPx,range.targetPx) { fits(it,true) } else null
+        val fit = if(single!=null && fits(single.sizePx,true)) single else
+            adaptiveLargestFittingTextSizePx(range.minPx,range.targetPx) { fits(it,false) }
+        if (textSize != fit.sizePx.toFloat()) {
+            setTextSize(TypedValue.COMPLEX_UNIT_PX, fit.sizePx.toFloat())
+            super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+        }
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        if (sourceGlyphHeightPx > 0f && w != oldw) updateAdaptiveGlyphRange(text)
+    }
     internal var adaptiveTextLayoutPhase: AdaptiveTextLayoutPhase = AdaptiveTextLayoutPhase.FINAL
         set(value) {
             if (field == value) return
@@ -82,6 +193,44 @@ class StyledTranslationTextView(context: Context) : TextView(context) {
 
     override fun invalidate() {
         if (!drawingPass) super.invalidate()
+    }
+
+    override fun draw(canvas: Canvas) {
+        (background as? AdaptiveEraseDrawable)?.renderOffsetYPx = adaptiveBackgroundOffsetYPx
+        (background as? AdaptiveEraseDrawable)?.renderOffsetXPx = adaptiveBackgroundOffsetXPx
+        super.draw(canvas)
+    }
+
+    private fun targetLayoutHeight(widthPx: Int): Int {
+        val maximum = adaptiveGlyphRange?.targetPx ?: return layout?.height ?: 0
+        if (widthPx <= 0) return layout?.height ?: 0
+        val targetPaint = TextPaint(paint).apply { textSize = maximum.toFloat() }
+        return StaticLayout.Builder.obtain(text, 0, text.length, targetPaint, widthPx)
+            .setAlignment(layout?.alignment ?: Layout.Alignment.ALIGN_NORMAL)
+            .setIncludePad(includeFontPadding)
+            .setLineSpacing(lineSpacingExtra, lineSpacingMultiplier)
+            .setBreakStrategy(breakStrategy)
+            .setHyphenationFrequency(hyphenationFrequency)
+            .build().height
+    }
+
+    private fun preferredLayoutWidth(widthPx: Int): Int {
+        if (adaptiveBoundsConstrained) return widthPx
+        val range = measureTranslationGlyphRange(paint, text, sourceGlyphHeightPx) ?: return widthPx
+        if (widthPx <= 0 || text.isEmpty()) return widthPx
+        val targetPaint = TextPaint(paint).apply { textSize = range.targetPx.toFloat() }
+        fun linesAt(width: Int) = StaticLayout.Builder.obtain(text, 0, text.length, targetPaint, width)
+            .setIncludePad(false).setBreakStrategy(breakStrategy)
+            .setHyphenationFrequency(hyphenationFrequency).build().lineCount
+        if (linesAt(widthPx) <= sourceLineBudget) return widthPx
+        var low = widthPx
+        var high = maxOf(widthPx, kotlin.math.ceil(Layout.getDesiredWidth(text, targetPaint).toDouble())
+            .toInt().coerceAtMost(resources.displayMetrics.widthPixels.coerceAtLeast(widthPx)))
+        while (low < high) {
+            val middle = low + (high - low) / 2
+            if (linesAt(middle) <= sourceLineBudget) high = middle else low = middle + 1
+        }
+        return low
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -154,12 +303,17 @@ class StyledTranslationTextView(context: Context) : TextView(context) {
             textHash = text.toString().hashCode(),
             textLength = text.length,
             finalTextSizePx = textSize,
-            autoSizeMaxTextSizePx = autoSizeMaxTextSize,
+            autoSizeMinTextSizePx = adaptiveGlyphRange?.minPx ?: autoSizeMinTextSize,
+            autoSizeMaxTextSizePx = adaptiveGlyphRange?.targetPx ?: autoSizeMaxTextSize,
             measuredWidthPx = measuredWidth,
             measuredHeightPx = measuredHeight,
+            leftPx = left,
+            topPx = top,
             contentWidthPx = contentWidth,
             contentHeightPx = contentHeight,
             layoutHeightPx = textLayout.height,
+            targetLayoutHeightPx = targetLayoutHeight(contentWidth),
+            targetLayoutWidthPx = preferredLayoutWidth(contentWidth),
             lineCount = resolvedLineCount,
             visibleTextEnd = visibleTextEnd,
             ellipsized = ellipsized,

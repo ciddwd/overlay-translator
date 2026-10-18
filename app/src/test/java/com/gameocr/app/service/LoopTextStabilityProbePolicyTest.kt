@@ -21,6 +21,7 @@ class LoopTextStabilityProbePolicyTest {
             OcrEngineKind.ML_KIT_JAPANESE,
             OcrEngineKind.ML_KIT_CHINESE,
             OcrEngineKind.ML_KIT_KOREAN,
+            OcrEngineKind.ML_KIT_DEVANAGARI,
             OcrEngineKind.PADDLE_ONNX,
             OcrEngineKind.MANGA_OCR_JA,
         )

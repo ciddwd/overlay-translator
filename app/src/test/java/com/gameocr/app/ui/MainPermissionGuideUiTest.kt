@@ -19,21 +19,22 @@ class MainPermissionGuideUiTest {
             "canDrawOverlay = true" to false,
         ).forEach { (marker, expected) -> assertEquals(marker, expected, home.contains(marker)) }
         listOf(
-            "if (!showCaptureControls)" to true,
+            "showSetup = !showCaptureControls || captureSetupActive" to true,
             "if (!canDrawOverlay)" to false,
             "mainUsageTextRes(showCaptureControls)" to true,
             "mainUsageTextRes(canDrawOverlay)" to false,
             "CaptureStartRequestActivity.newIntent(context)" to true,
-            "if (serviceRunning)" to true,
+            "serviceRunning = serviceRunning" to true,
+            "overlayGranted = canDrawOverlay" to true,
         ).forEach { (marker, expected) -> assertEquals(marker, expected, captureSection.contains(marker)) }
-        val statusArguments = home.substringAfter("StatusPresetCarousel(").substringBefore("CaptureGalleryCarousel(")
-        assertTrue(statusArguments.contains("canDrawOverlay = canDrawOverlay"))
-        assertFalse(statusArguments.contains("showCaptureControls"))
+        assertFalse("the separate status pager is gone", home.contains("StatusPresetCarousel("))
     }
 
     @Test
     fun homeRemovesOnlyTheTileGuideAndRetainsPermissionEntries() {
-        val home = moduleFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readText()
+        // The capture-method hints moved into the home screen's capture-method sheet.
+        val home = moduleFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readText() +
+            moduleFile("src/main/java/com/gameocr/app/ui/CaptureMethodSheet.kt").readText()
         listOf(
             "R.string.quick_settings_tile_title" to false,
             "R.string.quick_settings_tile_description" to false,

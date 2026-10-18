@@ -1,5 +1,7 @@
 package com.gameocr.app.download
 
+import com.gameocr.app.asr.AsrModelId
+import com.gameocr.app.asr.AsrModelInstaller
 import com.gameocr.app.data.PaddleModelVersion
 import com.gameocr.app.llm.LlmModelInstaller
 import com.gameocr.app.llm.LlmModelKind
@@ -48,6 +50,7 @@ class ModelReadinessChecker @Inject constructor(
     private val orientationModelInstaller: OrientationModelInstaller,
     private val llmInstaller: LlmModelInstaller,
     private val localLlmDeviceCapability: LocalLlmDeviceCapability,
+    private val asrModelInstaller: AsrModelInstaller,
 ) {
     fun check(spec: ModelDownloadSpec): ModelReadiness =
         modelReadinessWithDependencies(spec, ::checkArtifact)
@@ -94,7 +97,18 @@ class ModelReadinessChecker @Inject constructor(
                 totalBytes = file?.length() ?: 0L,
             )
         }
+        ModelDownloadType.ASR -> {
+            val model = AsrModelId.valueOf(spec.variant)
+            ModelReadiness(
+                spec = spec,
+                installed = asrModelInstaller.checkInstalled(model) != null,
+                supported = true,
+                totalBytes = asrModelInstaller.installedBytes(model),
+            )
+        }
     }
+
+    fun asr(model: AsrModelId): ModelReadiness = check(ModelDownloadSpec.asr(model))
 
     fun paddle(version: PaddleModelVersion): ModelReadiness =
         check(ModelDownloadSpec.paddle(version))

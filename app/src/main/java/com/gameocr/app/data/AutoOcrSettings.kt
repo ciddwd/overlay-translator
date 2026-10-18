@@ -44,6 +44,7 @@ data class AutoOcrSettings(
                 "zh" -> OcrEngineKind.ML_KIT_CHINESE
                 "ja" -> OcrEngineKind.ML_KIT_JAPANESE
                 "ko" -> OcrEngineKind.ML_KIT_KOREAN
+                "hi", "mr", "ne", "sa" -> OcrEngineKind.ML_KIT_DEVANAGARI
                 else -> OcrEngineKind.ML_KIT_LATIN.takeIf {
                     OcrLanguageCapability.supports(it, code)
                 }

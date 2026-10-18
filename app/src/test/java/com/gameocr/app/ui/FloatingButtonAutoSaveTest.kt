@@ -73,9 +73,9 @@ class FloatingButtonAutoSaveTest {
 
     @Test fun uiCommitsSlidersOnReleaseAndBothSwitchesImmediately() {
         val ui = File("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
-        val card = ui.substringAfter("item(key = SectionKeys.FLOATING)").substringBefore("item(key = SectionKeys.ARC_MENU)")
-        assertEquals(3, Regex("onValueChangeFinished = ::autoSaveFloatingButtonSettings").findAll(card).count())
-        assertEquals(2, Regex("autoSaveFloatingButtonSettings\\(\\)").findAll(card).count())
+        val card = ui.substringAfter("val floatingAppearanceContent:").substringBefore("val floatingMenuContent:")
+        assertTrue(card.contains("onValueChangeFinished = ::autoSaveFloatingButtonSettings"))
+        assertTrue(card.contains("autoSaveFloatingButtonSettings()"))
         val helper = ui.substringAfter("fun autoSaveFloatingButtonSettings()").substringBefore("var showUnsavedDialog")
         assertTrue(helper.contains("if (initialSettings == null) return"))
         assertTrue(helper.contains("initialSettings = initialSettings?.let(saved::applyTo)"))

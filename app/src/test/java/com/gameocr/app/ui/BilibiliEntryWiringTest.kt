@@ -25,6 +25,7 @@ class BilibiliEntryWiringTest {
     fun allOpenAiRoutingEntrypointsResolveOnlyRequestSnapshots() {
         val routing = source("translate/RoutingTranslator.kt")
         assertEquals(7, Regex("settings\\.resolveOpenAiProvider\\(\\)").findAll(routing).count())
+        assertEquals(7, Regex("localModelSnapshot\\(settings\\.resolveOpenAiProvider\\(\\)\\)").findAll(routing).count())
         assertTrue(routing.contains("TranslatorEngine.OPENAI -> openAi"))
         assertFalse(routing.contains("BilibiliIndexTranslator"))
         assertFalse(routing.contains("TranslatorEngine.BILIBILI_INDEX"))
@@ -42,8 +43,37 @@ class BilibiliEntryWiringTest {
         assertFalse(ui.contains("index-translate.bilibili.com"))
         assertTrue(ui.contains("else if (bilibiliSelected)"))
         assertTrue(ui.contains("stringResource(R.string.settings_bilibili_index_hint)"))
+        val testSection = ui.substringAfter("// —— 测试连接 ——").substringBefore("TranslatorConnectionTestPanel(")
+        assertTrue(testSection.contains("translatorEngine != TranslatorEngine.GOOGLE_ML_KIT"))
+        assertFalse("Bilibili must expose the shared connection test", testSection.contains("!bilibiliSelected"))
+        val testCall = ui.substringAfter("viewModel.testTranslator(").substringBefore("onModels =")
+        assertTrue(testCall.contains("openAiProvider = openAiProvider,"))
+        val testMethod = source("ui/SettingsViewModel.kt").substringAfter("suspend fun testTranslator(")
+        assertTrue(testMethod.contains("openAiProvider: OpenAiProvider"))
+        assertTrue(testMethod.contains("openAiProvider = openAiProvider,"))
+        assertFalse(testMethod.contains("openAiProvider = OpenAiProvider.CUSTOM,"))
         assertTrue(source("data/SettingsRepository.kt").contains("next.openAiProvider.name"))
         assertTrue(source("ui/SettingsViewModel.kt").contains("openAiProvider = openAiProvider"))
+    }
+
+    @Test
+    fun settingsMerge_tableDriven_preservesProviderAndLocalModelSelection() {
+        listOf(
+            "ui/SettingsScreen.kt" to listOf(
+                "openAiProvider = s.openAiProvider",
+                "localModelId = s.localModelId",
+                "openAiProvider = openAiProvider,",
+                "localModelId = localModelId,",
+            ),
+            "ui/SettingsViewModel.kt" to listOf(
+                "openAiProvider = openAiProvider,",
+                "localModelId = localModelId.takeIf { translatorEngine == TranslatorEngine.LOCAL_QWEN3 }",
+            ),
+        ).forEach { (path, markers) ->
+            val text = source(path)
+            markers.forEach { assertTrue("$path: missing $it", text.contains(it)) }
+            assertFalse("$path: legacy local model section must not return", text.contains("                LocalLlmSection("))
+        }
     }
 
     @Test

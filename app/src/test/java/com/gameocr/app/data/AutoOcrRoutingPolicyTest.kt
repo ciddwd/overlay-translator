@@ -22,6 +22,7 @@ class AutoOcrRoutingPolicyTest {
         val expected = listOf(
             OcrEngineKind.ML_KIT_JAPANESE, OcrEngineKind.ML_KIT_KOREAN,
             OcrEngineKind.ML_KIT_CHINESE, OcrEngineKind.ML_KIT_LATIN,
+            OcrEngineKind.ML_KIT_DEVANAGARI,
             OcrEngineKind.PADDLE_ONNX, OcrEngineKind.MANGA_OCR_JA,
             OcrEngineKind.UMI_OCR, OcrEngineKind.LUNA_OCR,
             OcrEngineKind.BAIDU, OcrEngineKind.TENCENT, OcrEngineKind.YOUDAO,

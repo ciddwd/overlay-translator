@@ -24,7 +24,9 @@ import com.gameocr.app.overlay.AdaptiveOverlayStyle
 import com.gameocr.app.overlay.AdaptiveOverlayStyleAnalyzer
 import com.gameocr.app.overlay.VerticalTextDrawer
 import com.gameocr.app.overlay.horizontalRtlDisplayText
+import com.gameocr.app.overlay.horizontalTranslationDisplayText
 import com.gameocr.app.overlay.normalizeVerticalOverlayText
+import com.gameocr.app.overlay.reflowsHorizontalOcrParagraph
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -59,7 +61,15 @@ class GalleryTranslatedImageRenderer @Inject constructor(
         val effectiveSettings = settings.effectiveOverlayRenderSettings()
         val mode = galleryExportRenderMode(settings)
         val baseSegments = segments.mapNotNull { segment ->
-            val translatedText = normalizeGalleryExportText(segment.translatedText)
+            val orientation = galleryExportOrientation(settings, segment.layoutOrientation)
+            val horizontal = orientation == TextOrientation.HORIZONTAL_LTR ||
+                orientation == TextOrientation.HORIZONTAL_RTL
+            val translatedText = horizontalTranslationDisplayText(
+                normalizeGalleryExportText(segment.translatedText),
+                mode == GalleryExportRenderMode.ADAPTIVE_BLOCKS && horizontal &&
+                    effectiveSettings.overlayAllowWrap &&
+                    reflowsHorizontalOcrParagraph(segment.sourceText, segment.sourceBoxes.size),
+            )
             if (translatedText.isEmpty()) return@mapNotNull null
             val bounds = scaledGalleryRect(
                 rect = segment.boundingBox,
@@ -88,7 +98,7 @@ class GalleryTranslatedImageRenderer @Inject constructor(
                 sourceBounds = bounds,
                 renderBounds = Rect(bounds),
                 sourceBoxes = sourceBoxes,
-                orientation = galleryExportOrientation(settings, segment.layoutOrientation),
+                orientation = orientation,
             )
         }
         val renderSegments = baseSegments.mapNotNull { segment ->

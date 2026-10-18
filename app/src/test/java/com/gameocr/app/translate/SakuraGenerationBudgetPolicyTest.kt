@@ -17,7 +17,7 @@ class SakuraGenerationBudgetPolicyTest {
 
         data class Case(val name: String, val marker: String)
         listOf(
-            Case("token count stays inside engine lifecycle session", "holder.withEngineSession(modelKind, systemPrompt)"),
+            Case("token count stays inside engine lifecycle session", "val sourceTokens = holder.withManagedEngineSession("),
             Case("source uses native tokenizer", "LlamaPromptMetrics.countTextTokens(it.joinedSource)"),
             Case("adaptive policy receives line count", "lineCount = group.sourceLines.size"),
             Case("effective budget reaches generation", "predictLength = group.generationBudget.effectiveMaxNewTokens"),

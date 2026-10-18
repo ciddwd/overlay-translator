@@ -8,6 +8,7 @@ enum class ModelDownloadType {
     PADDLE,
     MANGA_OCR,
     ORIENTATION,
+    ASR,
 }
 
 data class ModelDownloadSpec(
@@ -21,6 +22,7 @@ data class ModelDownloadSpec(
         fun paddle(version: PaddleModelVersion) = ModelDownloadSpec(ModelDownloadType.PADDLE, version.name)
         fun mangaOcr() = ModelDownloadSpec(ModelDownloadType.MANGA_OCR)
         fun orientation() = ModelDownloadSpec(ModelDownloadType.ORIENTATION)
+        fun asr(model: com.gameocr.app.asr.AsrModelId) = ModelDownloadSpec(ModelDownloadType.ASR, model.name)
 
         fun decode(value: String): ModelDownloadSpec? {
             val parts = value.split('|', limit = 2)
@@ -29,6 +31,11 @@ data class ModelDownloadSpec(
             } ?: return null
             val variant = parts.getOrElse(1) { "" }
             if ((type == ModelDownloadType.LLM || type == ModelDownloadType.PADDLE) && variant.isBlank()) {
+                return null
+            }
+            if (type == ModelDownloadType.ASR &&
+                com.gameocr.app.asr.AsrModelId.entries.none { it.name == variant }
+            ) {
                 return null
             }
             return ModelDownloadSpec(type, variant)
@@ -87,6 +94,12 @@ internal fun latestUnresolvedModelDownloadFailure(
 
 object ModelDownloadWorkPolicy {
     const val WORK_TAG = "model-download"
+    private const val SPEC_TAG_PREFIX = "$WORK_TAG-spec:"
+    private const val CREATED_TAG_PREFIX = "$WORK_TAG-created:"
+    fun specTag(spec: ModelDownloadSpec): String = "$SPEC_TAG_PREFIX${spec.encode()}"
+    fun createdTag(time: Long): String = "$CREATED_TAG_PREFIX$time"
+    fun createdAt(tags: Set<String>): Long = tags.firstOrNull { it.startsWith(CREATED_TAG_PREFIX) }
+        ?.removePrefix(CREATED_TAG_PREFIX)?.toLongOrNull() ?: 0L
     const val MAX_ATTEMPTS = 3
     private const val OWNER_TAG_PREFIX = "$WORK_TAG-owner:"
 

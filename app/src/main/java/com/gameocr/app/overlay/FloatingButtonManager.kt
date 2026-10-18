@@ -8,6 +8,7 @@ import android.graphics.Rect
 import android.os.Build
 import android.os.SystemClock
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
@@ -18,6 +19,8 @@ import androidx.dynamicanimation.animation.FloatValueHolder
 import androidx.dynamicanimation.animation.SpringAnimation
 import androidx.dynamicanimation.animation.SpringForce
 import com.gameocr.app.R
+import com.gameocr.app.capture.LoopIndicatorMode
+import com.gameocr.app.capture.LoopIndicatorSpec
 import com.gameocr.app.data.FloatingMenu
 import com.gameocr.app.data.FloatingSkill
 import com.gameocr.app.data.InputTranslationDoubleAction
@@ -102,8 +105,9 @@ class FloatingButtonManager(
             val v = view ?: return
             if (dockSide != DockSide.NONE) v.post { snapToEdge() }
         }
-    /** 当前是否处于循环模式（影响菜单第一项的视觉指示）。由 CaptureService 通过 setLoopActive 同步。 */
-    @Volatile private var isLooping: Boolean = false
+    private val loopProgressState = FloatingLoopProgressState()
+    /** Loop state survives temporary removal of the floating-ball window. */
+    private val isLooping: Boolean get() = loopProgressState.isActive
 
     /**
      * 主球当前技能。决定 [onSingleTap] 触发的行为 + 球本体显示的图标。
@@ -114,9 +118,34 @@ class FloatingButtonManager(
     @Volatile var inputTranslationDoubleAction: InputTranslationDoubleAction =
         InputTranslationDoubleAction.FULL_SCREEN
 
+    /** Mirrors the speech session; the session controller is the only authority for this value. */
+    @Volatile var speechState: SpeechBallState = SpeechBallState.IDLE
+        private set
+
+    /** Main thread only. */
+    fun applySpeechState(state: SpeechBallState) {
+        speechState = state
+        if (skill != FloatingSkill.SPEECH) return
+        if (state == SpeechBallState.PREPARING) {
+            progressView?.startIndeterminate(INPUT_TRANSLATION_PROGRESS_PERIOD_MS)
+        } else {
+            progressView?.stop()
+        }
+        applySkillIcon()
+    }
+
     /** 弧菜单按钮顺序（来自 Settings.floatingMenuItemOrder）。CaptureService 在 settings collect 时同步。 */
     @Volatile var menuItemOrder: List<MenuItemId> = FloatingMenu.DEFAULT_ORDER
     @Volatile var arcMenuPageSize: Int = FloatingMenu.DEFAULT_PAGE_SIZE
+    @Volatile private var quickPanelEnabled: Boolean = false
+    @Volatile var quickPanelLanguages: Pair<String, String> = "auto" to "zh-CN"
+    private var quickPanelOpen = false
+
+    fun applyQuickPanelPreference(enabled: Boolean) {
+        if (quickPanelEnabled == enabled) return
+        quickPanelEnabled = enabled
+        if (tourStage == TourStage.NONE) dismissArcMenu()
+    }
     @Volatile var firstUseTourPending: Boolean = false
     @Volatile var onFirstUseTourCompleted: () -> Unit = {}
     @Volatile var onInputTranslationGuideCompleted: () -> Unit = {}
@@ -230,6 +259,10 @@ class FloatingButtonManager(
 
     fun isShown(): Boolean = view != null
 
+    fun performCaptureHapticFeedback(): Boolean = runCatching {
+        view?.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK) ?: false
+    }.getOrDefault(false)
+
     fun requestFirstUseTour() {
         if (tourStage != TourStage.NONE) {
             cancelFirstUseTour(markCompleted = false)
@@ -338,6 +371,13 @@ class FloatingButtonManager(
         }
         wm.addView(container, params)
         view = container
+        loopProgressState.attach { spec ->
+            when {
+                spec == null -> progress.stop()
+                spec.mode == LoopIndicatorMode.INDETERMINATE -> progress.startIndeterminate(spec.periodMs)
+                else -> progress.start(spec.periodMs)
+            }
+        }
         com.gameocr.app.data.AppLocalePrefs.observe(container) {
             updateAccessibilityDescription()
             if (inputTranslationGuideVisible) {
@@ -351,8 +391,9 @@ class FloatingButtonManager(
             }
             if (arcMenuView != null) {
                 val page = localeMenuPage
+                val panel = quickPanelOpen
                 dismissArcMenu(restorePosition = false)
-                openArcMenuPage(page)
+                if (panel) showArcMenu() else openArcMenuPage(page)
             }
             when (tourStage) {
                 TourStage.WAITING_FOR_LONG_PRESS -> showMainBallTourStep()
@@ -415,6 +456,8 @@ class FloatingButtonManager(
      * 还是同样的 clamp + re-dock，best effort。
      */
     fun onConfigurationChanged() {
+        val reopenPanel = quickPanelOpen
+        if (reopenPanel) dismissArcMenu()
         val params = layoutParams ?: run {
             android.util.Log.w("FBM", "onConfigurationChanged: layoutParams null, skip")
             return
@@ -430,6 +473,7 @@ class FloatingButtonManager(
         // post 到下一帧再 snap：避开 onConfigurationChanged 到达时 wm 尺寸尚未切换的窗口期
         v.post {
             if (dockSide != DockSide.NONE) snapToEdge()
+            if (reopenPanel && view === v && tourStage == TourStage.NONE) showArcMenu()
             if (tourStage != TourStage.NONE) {
                 restartFirstUseTourAfterConfigurationChange()
             }
@@ -502,6 +546,7 @@ class FloatingButtonManager(
         cancelAutoDock()
         snapAnimX?.cancel(); snapAnimX = null
         snapAnimY?.cancel(); snapAnimY = null
+        loopProgressState.detach()
         progressView?.stop()
         progressView = null
         longPressGuideView?.stop()
@@ -726,14 +771,10 @@ class FloatingButtonManager(
 
     /** 循环模式开关：固定间隔显示倒计时环，智能等待显示平滑旋转的短弧。 */
     fun setLoopActive(active: Boolean, intervalMs: Long, indeterminate: Boolean = false) {
-        isLooping = active
-        progressView?.let { progress ->
-            when {
-                !active -> progress.stop()
-                indeterminate -> progress.startIndeterminate(intervalMs)
-                else -> progress.start(intervalMs)
-            }
-        }
+        loopProgressState.update(if (active) LoopIndicatorSpec(
+            mode = if (indeterminate) LoopIndicatorMode.INDETERMINATE else LoopIndicatorMode.COUNTDOWN,
+            periodMs = intervalMs,
+        ) else null)
         updateAccessibilityDescription()
     }
 
@@ -759,6 +800,12 @@ class FloatingButtonManager(
         FloatingSkill.WORD_SELECT -> R.drawable.ic_overlay_button_word
         FloatingSkill.LOOP -> R.drawable.ic_overlay_button_loop
         FloatingSkill.INPUT_TRANSLATE -> R.drawable.ic_overlay_button_input_translate
+        FloatingSkill.GESTURE -> R.drawable.ic_gesture_ball
+        FloatingSkill.SPEECH -> when (speechState) {
+            SpeechBallState.RECOGNIZING -> R.drawable.ic_overlay_button_speech_pause
+            SpeechBallState.PAUSED -> R.drawable.ic_overlay_button_speech_play
+            SpeechBallState.IDLE, SpeechBallState.PREPARING -> R.drawable.ic_overlay_button_speech
+        }
     }
 
     private fun updateAccessibilityDescription() {
@@ -771,6 +818,8 @@ class FloatingButtonManager(
             )
             FloatingSkill.INPUT_TRANSLATE ->
                 context.getString(R.string.a11y_floating_mode_input_translate)
+            FloatingSkill.GESTURE -> context.getString(R.string.gesture_mode)
+            FloatingSkill.SPEECH -> context.getString(R.string.menu_speech_recognition)
         }
         val hint = when (skill) {
             FloatingSkill.FULL_SCREEN -> context.getString(R.string.a11y_floating_hint_full_screen)
@@ -781,6 +830,14 @@ class FloatingButtonManager(
             )
             FloatingSkill.INPUT_TRANSLATE ->
                 context.getString(R.string.a11y_floating_hint_input_translate)
+            FloatingSkill.GESTURE -> context.getString(R.string.gesture_ball_hint)
+            FloatingSkill.SPEECH -> context.getString(
+                when (speechState) {
+                    SpeechBallState.RECOGNIZING -> R.string.a11y_speech_pause
+                    SpeechBallState.PAUSED -> R.string.a11y_speech_resume
+                    SpeechBallState.IDLE, SpeechBallState.PREPARING -> R.string.a11y_speech_start
+                }
+            )
         }
         view?.contentDescription = OverlayAccessibilityLabels.actionWithState(
             action = context.getString(R.string.a11y_floating_ball),
@@ -826,6 +883,8 @@ class FloatingButtonManager(
             FloatingSkill.WORD_SELECT -> R.string.floating_skill_word_select_label
             FloatingSkill.LOOP -> R.string.menu_loop_translate
             FloatingSkill.INPUT_TRANSLATE -> R.string.menu_input_translate
+            FloatingSkill.GESTURE -> R.string.gesture_mode
+            FloatingSkill.SPEECH -> R.string.menu_speech_recognition
         }
     )
 
@@ -1267,7 +1326,101 @@ class FloatingButtonManager(
         inputSingleTapPending = false
     }
 
-    private fun showArcMenu() = openArcMenuPage(0)
+    private fun showArcMenu() {
+        if (FloatingQuickPanelPolicy.usePanel(quickPanelEnabled, tourStage != TourStage.NONE)) {
+            openQuickPanel()
+        } else openArcMenuPage(0)
+    }
+
+    private fun openQuickPanel() {
+        if (arcMenuView != null || hiddenForCapture) return
+        val ball = captureExclusionRect() ?: return
+        cancelAutoDock()
+        cancelPendingInputTap()
+        fun selectMode(target: FloatingSkill) {
+            dismissArcMenu()
+            // Selecting a mode must never run a screenshot, input translation or loop action.
+            FloatingQuickPanelPolicy.modeChange(skill, target)?.let(onSwitchSkill)
+        }
+        val callbacks = MenuItemRegistry.Callbacks(
+            onSwitchToLoop = { selectMode(FloatingSkill.LOOP) },
+            onSwitchToFullScreen = { selectMode(FloatingSkill.FULL_SCREEN) },
+            onSwitchToWordSelect = { selectMode(FloatingSkill.WORD_SELECT) },
+            onSwitchToInputTranslate = { selectMode(FloatingSkill.INPUT_TRANSLATE) },
+            onSwitchToGesture = { selectMode(FloatingSkill.GESTURE) },
+            onSwitchToSpeech = { selectMode(FloatingSkill.SPEECH) },
+            onRegion = { dismissArcMenu(); onMenuPickRegion() },
+            onLanguagePair = { dismissArcMenu(); onMenuLanguagePair() },
+            onPresetSwitch = { dismissArcMenu(); onMenuPresetSwitch() },
+            onOpenSettings = { dismissArcMenu(); onMenuOpenSettings() },
+            onOpenMain = { dismissArcMenu(); onMenuOpenMainActivity() },
+        )
+        val density = context.resources.displayMetrics.density
+        fun dp(value: Int) = (value * density).toInt()
+        val (screenW, screenH) = currentScreenSize()
+        val insets = systemInsetsLtrb()
+        val left = insets[0] + dp(8)
+        val top = insets[1].coerceAtLeast(dp(24)) + dp(8)
+        val right = (screenW - insets[2] - dp(8)).coerceAtLeast(left + 1)
+        val bottom = (screenH - insets[3].coerceAtLeast(dp(24)) - dp(8)).coerceAtLeast(top + 1)
+        val panelLayout = FloatingQuickPanelPolicy.layout(
+            right - left, bottom - top, dp(320), dp(560), dp(480),
+        )
+        val panel = FloatingQuickPanelView.create(
+            context,
+            modeItems = FloatingQuickPanelPolicy.modes.map { MenuItemRegistry.buildSkillItem(it, callbacks) },
+            selectedMode = FloatingQuickPanelPolicy.modes.indexOf(skill),
+            actionItems = MenuItemRegistry.build(FloatingQuickPanelPolicy.actions, skill, callbacks),
+            home = MenuItemRegistry.build(listOf(MenuItemId.HOME), skill, callbacks).single(),
+            languagePair = quickPanelLanguages.let { (source, target) ->
+                com.gameocr.app.data.Languages.nameOf(context, source) to
+                    com.gameocr.app.data.Languages.nameOf(context, target)
+            },
+            sideBySide = panelLayout.sideBySide,
+        )
+        val width = panelLayout.width
+        panel.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(bottom - top, View.MeasureSpec.AT_MOST))
+        val bounds = FloatingQuickPanelPolicy.place(left, top, right, bottom,
+            ball.left, ball.top, ball.right, ball.bottom, width, panel.measuredHeight, dp(8))
+        android.util.Log.d(TAG_MENU, "quickPanel sideBySide=${panelLayout.sideBySide} " +
+            "viewport=${right - left}x${bottom - top} bounds=$bounds")
+        val root = object : FrameLayout(context) {
+            override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+                if (event.keyCode == android.view.KeyEvent.KEYCODE_BACK) {
+                    if (event.action == android.view.KeyEvent.ACTION_UP) dismissArcMenu()
+                    return true
+                }
+                return super.dispatchKeyEvent(event)
+            }
+        }.apply {
+            isFocusableInTouchMode = true
+            isClickable = true
+            setOnClickListener { dismissArcMenu() }
+            androidx.core.view.ViewCompat.setAccessibilityPaneTitle(this, context.getString(R.string.settings_quick_panel_title))
+            addView(panel, FrameLayout.LayoutParams(bounds.width, bounds.height).apply {
+                leftMargin = bounds.left; topMargin = bounds.top
+            })
+        }
+        val params = WindowManager.LayoutParams(-1, -1, overlayType,
+            WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT).apply {
+            gravity = Gravity.TOP or Gravity.START
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            }
+        }
+        runCatching { wm.addView(root, params) }.onSuccess {
+            arcMenuView = root
+            quickPanelOpen = true
+            root.requestFocus()
+            panel.alpha = 0f; panel.scaleX = .9f; panel.scaleY = .9f
+            panel.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(220).start()
+        }.onFailure {
+            android.util.Log.e(TAG_MENU, "Cannot open quick panel", it)
+            scheduleAutoDock()
+        }
+    }
 
     /** 真正展开某一页菜单（含必要时的腾位 spring）。翻页按钮 / 入口都走这里。 */
     private fun openArcMenuPage(pageIndex: Int) {
@@ -1283,7 +1436,7 @@ class FloatingButtonManager(
         }
 
         val allItems = MenuItemRegistry.build(
-            ids = menuItemOrder,
+            ids = MenuItemRegistry.withSpeechSlot(menuItemOrder),
             currentSkill = skill,
             callbacks = MenuItemRegistry.Callbacks(
                 onSwitchToLoop = { dismissArcMenu(); onSwitchToLoop() },
@@ -1298,6 +1451,8 @@ class FloatingButtonManager(
                     dismissArcMenu()
                     onSwitchSkill(FloatingSkill.INPUT_TRANSLATE)
                 },
+                onSwitchToGesture = { dismissArcMenu(); onSwitchSkill(FloatingSkill.GESTURE) },
+                onSwitchToSpeech = { dismissArcMenu(); onSwitchSkill(FloatingSkill.SPEECH) },
             )
         )
         val pages = MenuItemRegistry.paginate(allItems, pageSize = arcMenuPageSize) { nextIdx ->
@@ -1489,6 +1644,7 @@ class FloatingButtonManager(
         restoreMenuTourVisuals()
         arcMenuView?.let { runCatching { wm.removeView(it) } }
         arcMenuView = null
+        quickPanelOpen = false
         if (restorePosition) {
             positionBeforeMenu?.let { (origX, origY) ->
                 positionBeforeMenu = null

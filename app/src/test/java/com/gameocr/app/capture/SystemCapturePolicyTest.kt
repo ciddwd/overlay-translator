@@ -43,13 +43,38 @@ class SystemCapturePolicyTest {
             for (accessibilityReady in listOf(false, true)) for (mode in CaptureStartMode.entries) {
             val expected = if (granted && accessibilityReady) false else when (mode) {
                 CaptureStartMode.SHIZUKU -> true // ensureReady() is checked first by the coordinator.
-                CaptureStartMode.SYSTEM -> case.systemNeedsGrant
+                CaptureStartMode.ROOT, CaptureStartMode.ACCESSIBILITY, CaptureStartMode.SYSTEM -> case.systemNeedsGrant
             }
             assertEquals("${case.availability} overlay=$granted accessibility=$accessibilityReady mode=$mode", expected,
                 shouldConfigureCapturePermissions(granted, accessibilityReady,
                     mode == CaptureStartMode.SHIZUKU, case.availability))
-            assertEquals(mode, resolveCaptureStartMode(mode, case.availability))
+            assertEquals(mode, resolveCaptureStartMode(mode, false, case.availability, 34, accessibilityReady))
         }
+    }
+
+    @Test fun nonShizukuBackendHonoursExplicitChoiceAndNeverSkipsAccessibilityInAuto() {
+        for (sdk in listOf(29, 30, 34)) for (connected in listOf(false, true)) for (capable in listOf(false, true)) {
+            val ready = sdk >= 30 && connected && capable
+            val case = "sdk=$sdk connected=$connected capable=$capable"
+            assertEquals(case, CaptureBackend.MEDIA_PROJECTION,
+                nonShizukuCaptureBackend(CaptureStartMode.SYSTEM, sdk, connected, capable))
+            assertEquals(case, if (ready) CaptureBackend.ACCESSIBILITY else CaptureBackend.MEDIA_PROJECTION,
+                nonShizukuCaptureBackend(null, sdk, connected, capable))
+            val explicitAccessibility = when {
+                ready -> CaptureBackend.ACCESSIBILITY
+                sdk >= 30 -> null // Send the user to accessibility settings instead of a silent fallback.
+                else -> CaptureBackend.MEDIA_PROJECTION
+            }
+            assertEquals(case, explicitAccessibility,
+                nonShizukuCaptureBackend(CaptureStartMode.ACCESSIBILITY, sdk, connected, capable))
+        }
+    }
+
+    @Test fun captureMethodSheetKeepsTheFixedOrder() {
+        assertEquals(
+            listOf(null, CaptureStartMode.ROOT, CaptureStartMode.SHIZUKU, CaptureStartMode.ACCESSIBILITY, CaptureStartMode.SYSTEM),
+            com.gameocr.app.ui.captureMethodSheetOptions,
+        )
     }
 
     @Test fun systemBackendTable() {
@@ -63,16 +88,59 @@ class SystemCapturePolicyTest {
         }
     }
 
-    @Test fun explicitChoiceWinsAndAutomaticChoiceUsesOnlyUsableShizukuStates() {
-        for (state in ShizukuCapabilities.Availability.entries) {
+    @Test fun explicitChoiceWinsAndAutoTriesRootThenShizukuThenAccessibilityThenSystem() {
+        for (state in ShizukuCapabilities.Availability.entries) for (sdk in listOf(29, 30, 34))
+            for (accessibility in listOf(false, true)) for (root in listOf(false, true)) {
             for (choice in CaptureStartMode.entries) {
-                assertEquals(choice, resolveCaptureStartMode(choice, state))
+                assertEquals(choice, resolveCaptureStartMode(choice, root, state, sdk, accessibility))
             }
-            val expected = if (state == ShizukuCapabilities.Availability.READY ||
-                state == ShizukuCapabilities.Availability.INSTALLED_NOT_GRANTED)
-                CaptureStartMode.SHIZUKU else CaptureStartMode.SYSTEM
-            assertEquals(expected, resolveCaptureStartMode(null, state))
+            val shizukuUsable = state == ShizukuCapabilities.Availability.READY ||
+                state == ShizukuCapabilities.Availability.INSTALLED_NOT_GRANTED
+            val expected = when {
+                root -> CaptureStartMode.ROOT
+                shizukuUsable -> CaptureStartMode.SHIZUKU
+                sdk >= 30 && accessibility -> CaptureStartMode.ACCESSIBILITY
+                else -> CaptureStartMode.SYSTEM
+            }
+            assertEquals("$state sdk=$sdk accessibility=$accessibility root=$root", expected,
+                resolveCaptureStartMode(null, root, state, sdk, accessibility))
         }
+    }
+
+    @Test fun rootDetectionNeverPromptsAndARefusalStopsAuto() {
+        assertTrue(rootBinaryPresent { it == "/data/adb/ksu/bin/su" })
+        assertTrue(rootBinaryPresent { it == "/system/xbin/su" })
+        assertFalse(rootBinaryPresent { false })
+        assertEquals(
+            listOf(true, false, true, false),
+            listOf(RootAccess.UNKNOWN, RootAccess.NOT_INSTALLED, RootAccess.GRANTED, RootAccess.DENIED)
+                .map(::rootUsableForAuto),
+        )
+    }
+
+    @Test fun rootFramingTellsLegacyHeadersApart() {
+        assertTrue(rootFrameIsLegacy(ROOT_FRAME_MARKER.substring(0, 4).toByteArray()))
+        assertFalse(rootFrameIsLegacy(byteArrayOf(0, 0, 0, -1)))
+        assertFalse(rootFrameIsLegacy(ROOT_FRAME_MARKER.substring(4).toByteArray()))
+    }
+
+    @Test fun rootWiringUsesOneShellAndFallsBackInOrder() {
+        fun source(path: String) = File("src/main/$path").readText()
+        val shell = source("java/com/gameocr/app/capture/RootShell.kt")
+        val coordinator = source("java/com/gameocr/app/capture/CaptureStartCoordinator.kt")
+        val service = source("java/com/gameocr/app/service/CaptureService.kt")
+        assertTrue("one persistent su process", shell.contains("ProcessBuilder(\"su\").redirectErrorStream(false).start()"))
+        assertTrue("refusal remembered for the session",
+            shell.contains("state.value = if (granted) RootAccess.GRANTED else RootAccess.DENIED"))
+        assertTrue("stuck reads are broken by killing the shell", shell.contains("shell.destroy()"))
+        assertTrue(coordinator.indexOf("if (rootShell.ensureGranted()) return prepareRoot()") <
+            coordinator.indexOf("val useShizuku = resolveCaptureStartMode("))
+        assertTrue("explicit root refusal does not silently switch",
+            coordinator.contains("if (preference == CaptureStartMode.ROOT) return CaptureStartDecision.OpenSetup"))
+        assertTrue(coordinator.contains("appops set ${'$'}{context.packageName} SYSTEM_ALERT_WINDOW allow"))
+        assertTrue(service.contains("screenshotter = com.gameocr.app.capture.RootScreenshotter(rootShell)"))
+        assertTrue(service.contains("(useRoot && !rootShell.isGranted)"))
+        assertTrue(service.contains("if (useShizuku || useRoot) {"))
     }
 
     @Test fun startGateRejectsDuplicateAndReleasesForRetry() {
@@ -111,8 +179,13 @@ class SystemCapturePolicyTest {
         assertTrue(activity.contains("savedState[\"projectionRequested\"] = true"))
         assertTrue(activity.contains("Activity.RESULT_OK"))
         assertTrue(activity.contains("coordinator.start(CaptureBackend.MEDIA_PROJECTION"))
-        assertTrue(coordinator.indexOf("verifyShellPrivilegeAsync()") < coordinator.indexOf("resolveCaptureStartMode("))
+        assertTrue(coordinator.indexOf("verifyShellPrivilegeAsync()") <
+            coordinator.indexOf("val useShizuku = resolveCaptureStartMode("))
         assertTrue(coordinator.contains("CaptureServiceState.running.value"))
+        assertTrue("explicit system capture must skip accessibility",
+            coordinator.contains("if (preference != CaptureStartMode.SYSTEM &&"))
+        assertTrue(coordinator.contains("?: return CaptureStartDecision.OpenAccessibilitySettings"))
+        assertTrue(activity.contains("Settings.ACTION_ACCESSIBILITY_SETTINGS"))
         assertTrue(coordinator.contains("val permissionState = permissions.currentState()"))
         assertTrue(coordinator.contains("overlayPermissionGranted = permissionState.overlayGranted"))
         assertTrue(coordinator.contains("accessibilityReady = permissionState.accessibilityReady"))

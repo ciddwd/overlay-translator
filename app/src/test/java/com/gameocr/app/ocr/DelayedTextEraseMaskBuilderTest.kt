@@ -7,6 +7,41 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DelayedTextEraseMaskBuilderTest {
+    @Test
+    fun componentCoverageCache_keepsDifferentModelMasksAndFramesIndependent() {
+        for (reverse in listOf(false, true)) {
+            val members = listOf(IntRect(8, 8, 18, 18), IntRect(22, 8, 32, 18))
+            val candidate = BooleanArray(WIDTH * HEIGHT).apply {
+                for (x in 12..28) point(this, WIDTH, x, 12)
+            }
+            val blocks = members.mapIndexed { index, bounds -> confirmedBlock(bounds, index) }
+                .let { if (reverse) it.reversed() else it }
+            val result = DelayedTextEraseMaskBuilder.build(WIDTH, HEIGHT, candidate, members,
+                listOf(modelGroup(listOf(0), 0), modelGroup(listOf(1), 1)),
+                listOf(filledMask(IntRect(0, 0, WIDTH, HEIGHT)), filledMask(IntRect(22, 8, 34, 18))), blocks)
+            assertTrue(result.decisions.single { it.blockIndex == 0 }.accepted)
+            assertEquals(DelayedTextEraseMaskBuilder.Reason.MODEL_MASK_COVERAGE_LOW,
+                result.decisions.single { it.blockIndex == 1 }.reason)
+        }
+    }
+
+    @Test
+    fun incrementalPixelCounts_matchUnionForRepeatedAndOverlappingBlocks() {
+        for (repeats in listOf(1, 2, 8)) {
+            val source = IntRect(8, 8, 18, 18)
+            val candidate = BooleanArray(WIDTH * HEIGHT).apply {
+                point(this, WIDTH, 12, 12); point(this, WIDTH, 13, 12)
+            }
+            val result = DelayedTextEraseMaskBuilder.build(WIDTH, HEIGHT, candidate,
+                listOf(source), listOf(modelGroup(listOf(0))), listOf(filledMask(IntRect(0, 0, WIDTH, HEIGHT))),
+                (0 until repeats).map { confirmedBlock(source, blockIndex = it) })
+            assertEquals(repeats, result.acceptedBlockCount)
+            assertEquals(result.mask.count { it }, result.decisions.sumOf { it.outputPixels })
+            assertTrue(result.decisions.first().outputPixels > 0)
+            result.decisions.drop(1).forEach { assertEquals(0, it.outputPixels) }
+        }
+    }
+
 
     private data class SafetyCase(
         val name: String,

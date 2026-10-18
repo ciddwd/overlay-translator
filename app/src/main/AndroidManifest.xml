@@ -16,6 +16,15 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Speech recognition: required by AudioPlaybackCapture for other apps' playback audio.
+         The microphone is never recorded; capture runs under the mediaProjection service type. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Gallery "Choose album" only; requested on first use after an explainer. Pick images and Choose folder need none. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
     <uses-permission
         android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions" />
@@ -85,6 +94,14 @@
         <!-- Unified user-initiated capture startup and optional system consent. -->
         <activity
             android:name=".capture.CaptureStartRequestActivity"
+            android:exported="false"
+            android:theme="@style/Theme.GameOcr.Transparent"
+            android:taskAffinity=""
+            android:excludeFromRecents="true" />
+
+        <!-- Speech recognition permission and projection consent, launched from the ball. -->
+        <activity
+            android:name=".asr.SpeechCaptureRequestActivity"
             android:exported="false"
             android:theme="@style/Theme.GameOcr.Transparent"
             android:taskAffinity=""

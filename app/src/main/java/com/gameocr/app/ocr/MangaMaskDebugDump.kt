@@ -170,7 +170,7 @@ internal suspend fun dumpMangaMaskDebugSet(
     runLegacySegmentation: Boolean,
 ): MangaMaskDebugReport? {
     if (!analyzeFrame) return null
-
+    val frameStartedNs = System.nanoTime()
     val width = bitmap.width
     val height = bitmap.height
     val argb = IntArray(width * height)
@@ -207,6 +207,7 @@ internal suspend fun dumpMangaMaskDebugSet(
         },
     )
     val shouldRunBoxDetector = runBoxDetector && useDetectorGuidedPatches
+    val textMaskAnalysisMs = (System.nanoTime() - frameStartedNs) / 1_000_000L
     val boxDetection = if (shouldRunBoxDetector) {
         runCatching {
             MangaBubbleDetectionDebugEngine.runIfInstalled(context, bitmap)
@@ -291,7 +292,7 @@ internal suspend fun dumpMangaMaskDebugSet(
         }
         result.decisions.forEach { decision ->
             timber.log.Timber.i(
-                "Manga detector-guided mask[%d] accepted=%s reason=%s confidence=%.3f members=%s roi=%s pixels=%d",
+                "Manga detector-guided mask[%d] accepted=%s reason=%s confidence=%.3f members=%s roi=%s pixels=%d recoveryFrom=%s",
                 decision.detectionIndex,
                 decision.accepted,
                 decision.diagnostic.reason,
@@ -299,6 +300,7 @@ internal suspend fun dumpMangaMaskDebugSet(
                 decision.memberIndices.joinToString(","),
                 decision.diagnostic.roi,
                 decision.diagnostic.regionPixels,
+                decision.recoverySourceReason ?: "none",
             )
         }
     }
@@ -579,6 +581,11 @@ internal suspend fun dumpMangaMaskDebugSet(
         modelMemberAssociations = modelMemberAssociations,
         modelRegroupedGroups = modelRegroupedGroups,
         delayedMaskInput = delayedMaskInput,
+    )
+    timber.log.Timber.tag("MangaFramePerf").i(
+        "prepare totalMs=%d textMaskAnalysisMs=%d boxMs=%d shapeMaskMs=%d members=%d",
+        (System.nanoTime() - frameStartedNs) / 1_000_000L, textMaskAnalysisMs,
+        boxDetection?.totalMs ?: 0L, detectorGuidedMasks?.durationMs ?: 0L, polygons.size,
     )
     return report
 }

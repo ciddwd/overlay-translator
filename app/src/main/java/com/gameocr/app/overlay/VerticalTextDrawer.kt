@@ -90,34 +90,22 @@ object VerticalTextDrawer {
         val cps = text.codePoints().toArray()
         val lineH = glyphStep(paint, letterSpacingEm)
         val colW = columnWidth(paint) * lineSpacingMultiplier.coerceIn(1f, 2f)
-        val effectiveMaxH = if (maxHeightPx <= 0) Int.MAX_VALUE.toFloat() else maxHeightPx.toFloat()
+        return measureColumns(cps, lineH, colW, maxHeightPx)
+    }
 
-        var y = 0f
-        var cols = 1
-        for (cp in cps) {
-            if (cp == 0x000A) {
-                // 显式换行：进入下一列
-                y = 0f
-                cols++
-                continue
-            }
-            y += lineH
-            if (y > effectiveMaxH) {
-                y = lineH
-                cols++
-            }
-        }
-
-        // 单列剩余文本的实际高度（不到 maxHeightPx 的情况）
-        val measuredH = if (cols == 1) {
-            ceil(y).toInt()
-        } else if (maxHeightPx > 0) {
-            maxHeightPx
-        } else {
-            ceil(y).toInt()
-        }
-        val measuredW = ceil(colW * cols).toInt()
-        return max(measuredW, 1) to max(measuredH, 1)
+    /** Use the drawing column breaks, and report real height even when a glyph is too tall. */
+    internal fun measureColumns(
+        codePoints: IntArray,
+        glyphStepPx: Float,
+        columnWidthPx: Float,
+        maxHeightPx: Int,
+    ): Pair<Int, Int> {
+        if (codePoints.isEmpty()) return 0 to 0
+        val capacity = if (maxHeightPx <= 0) Int.MAX_VALUE else
+            max(1, (maxHeightPx / glyphStepPx).toInt())
+        val columns = layoutColumns(codePoints, capacity)
+        return ceil(columnWidthPx * columns.size).toInt().coerceAtLeast(1) to
+            ceil(columns.maxOf { it.size } * glyphStepPx).toInt().coerceAtLeast(1)
     }
 
     /**
@@ -140,7 +128,8 @@ object VerticalTextDrawer {
         leftToRight: Boolean = false,
         letterSpacingEm: Float = 0f,
         lineSpacingMultiplier: Float = 1f,
-        alignment: OverlayTextAlignment = OverlayTextAlignment.START
+        alignment: OverlayTextAlignment = OverlayTextAlignment.START,
+        centerInBounds: Boolean = false,
     ) {
         if (text.isEmpty()) return
         val cps = text.codePoints().toArray()
@@ -149,19 +138,22 @@ object VerticalTextDrawer {
         val colW = columnWidth(paint) * lineSpacingMultiplier.coerceIn(1f, 2f)
 
         // 列起始 x：RTL 起最右一列中心；LTR 起最左一列中心。每列向左 / 向右步进 colW
-        val firstColCenterX = if (leftToRight) colW / 2f else boundsW - colW / 2f
+        val perColCap = max(1, (boundsH / lineH).toInt())
+        val balancedCapacity = if(centerInBounds && cps.none { it==0x000A })
+            balancedVerticalColumnCapacity(cps.size,perColCap) else perColCap
+        val columns = layoutColumns(cps, balancedCapacity)
+        val inset = if(centerInBounds) ((boundsW-columns.size*colW)/2f).coerceAtLeast(0f) else 0f
+        val firstColCenterX = if (leftToRight) inset + colW / 2f else boundsW - inset - colW / 2f
         val colStepX = if (leftToRight) colW else -colW
 
         // 每列字数上限 = floor(boundsH / lineH)；至少 1（避免 boundsH 太小整段卡住）
-        val perColCap = max(1, (boundsH / lineH).toInt())
-
-        val columns = layoutColumns(cps, perColCap)
         columns.forEachIndexed { colIdx, column ->
             val colCenterX = firstColCenterX + colIdx * colStepX
             // 越界保护：列起点已超出画布范围则停止绘制（避免画到外面）
             if (colCenterX < -colW || colCenterX > boundsW + colW) return@forEachIndexed
             val columnHeight = column.size * lineH
-            val yOffset = alignmentOffset(boundsH, columnHeight, alignment)
+            val yOffset = alignmentOffset(boundsH, columnHeight,
+                if(centerInBounds) OverlayTextAlignment.CENTER else alignment)
             column.forEachIndexed { inColIdx, cp ->
                 // baseline y = (inColIdx + 1) 个字格的下沿 + 字格内 baseline 偏移
                 val cellTop = yOffset + inColIdx * lineH

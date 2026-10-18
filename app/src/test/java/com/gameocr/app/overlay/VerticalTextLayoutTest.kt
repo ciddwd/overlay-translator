@@ -5,6 +5,15 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class VerticalTextLayoutTest {
+    @Test fun balancedColumnsAvoidATallColumnAndAnOrphanWithoutAddingColumns() {
+        for(count in 1..100)for(capacity in 1..20) {
+            val balanced=balancedVerticalColumnCapacity(count,capacity)
+            assertEquals((count-1)/capacity+1,(count-1)/balanced+1)
+            org.junit.Assert.assertTrue(balanced<=capacity)
+        }
+        assertEquals(6,balancedVerticalColumnCapacity(12,11))
+        assertEquals(5,balancedVerticalColumnCapacity(15,7))
+    }
 
     @Test
     fun resolveOverlayBlockOrientation_tableDriven_respectsFollowAndManualModes() {

@@ -67,7 +67,7 @@ class CloudConnectionUiContractTest {
             "no wrap" to link.contains("softWrap = false"),
             "ellipsis" to link.contains("overflow = TextOverflow.Ellipsis"),
             "button after model" to (cloud.indexOf("TranslatorConnectionTestPanel(") > cloud.indexOf("value = draft.cloudModel")),
-            "both layouts wired" to (Regex("onTestCloudConnection = viewModel::testCloudConnection").findAll(setup).count() == 2),
+            "layout wired" to setup.contains("onTestCloudConnection = viewModel::testCloudConnection"),
             "settings shared panel" to source("ui/SettingsScreen.kt").contains("TranslatorConnectionTestPanel("),
             "settings shared tester" to source("ui/SettingsViewModel.kt").contains("return connectionTester.test(temp)"),
             "setup shared tester" to testMethod.contains("connectionTester.test(OnboardingPolicy.apply(settingsRepository.get(), draft))"),

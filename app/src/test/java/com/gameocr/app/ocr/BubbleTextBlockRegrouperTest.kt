@@ -6,6 +6,26 @@ import org.junit.Test
 
 class BubbleTextBlockRegrouperTest {
 
+    @Test
+    fun regroup_recordedBubbleEdgeDialogue_preservesOutsideParagraphAcrossMergeStrengths() {
+        val lines = listOf(
+            block("WHY IS A", Rect(708, 371, 974, 432)),
+            block("MOBILE TABLET SO", Rect(579, 427, 1097, 490)),
+            block("DAMN HEAVY!", Rect(649, 490, 1031, 545)),
+            block("My arms almost", Rect(894, 588, 1225, 692)),
+            block("fell off carrying it!!", Rect(865, 632, 1265, 772)),
+        )
+        val grouped = BubbleTextBlockRegrouper.regroup(lines, listOf(2, 2, 2, null, null))
+        assertEquals(listOf("WHY IS A\nMOBILE TABLET SO\nDAMN HEAVY!", "My arms almost", "fell off carrying it!!"), grouped.map(TextBlock::text))
+        listOf(0.5f to 0.5f, 0.8f to 0.3f, 1.3f to 0.15f).forEach { (gap, overlap) ->
+            assertEquals(listOf(listOf(0), listOf(1, 2)), groupHorizontalParagraphRects(
+                listOf(MergeDebugRect(579, 371, 1097, 545), MergeDebugRect(894, 588, 1225, 692),
+                    MergeDebugRect(865, 632, 1265, 772)),
+                grouped.map(TextBlock::bubbleGroupId), gap, overlap,
+            ))
+        }
+    }
+
     private data class Case(
         val name: String,
         val blocks: List<TextBlock>,
@@ -92,6 +112,13 @@ class BubbleTextBlockRegrouperTest {
                 actual.map { it.sourceBoxes.size },
             )
             assertEquals(case.name, case.expectedBubbleIds, actual.map(TextBlock::bubbleGroupId))
+            actual.filter { it.bubbleGroupId != null }.forEach { bubble ->
+                assertEquals(case.name, TextRegionGranularity.BUBBLE, bubble.regionGranularity)
+                assertEquals(case.name, bubble.bubbleGroupId, bubble.parentRegionId)
+                assertEquals(case.name, false, SemanticBoxMergePolicy.isMergeEligible(
+                    bubble.regionGranularity, bubble.parentRegionId,
+                ))
+            }
         }
     }
 

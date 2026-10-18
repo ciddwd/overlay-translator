@@ -14,7 +14,8 @@ class LocalLlmSamplingWiringTest {
 
         data class Case(val name: String, val source: String, val marker: String)
         listOf(
-            Case("holder exports model profile", holder, "LocalLlmSamplingPolicy.nativeEnvironment(kind).forEach"),
+            Case("holder exports per-model profile", holder, "LocalLlmSamplingPolicy.nativeEnvironment(kind, value, imported)"),
+            Case("holder writes runtime environment before model load", holder, "runtimeEnvironment.forEach { (name, value) ->"),
             Case("holder overwrites stale variables", holder, "Os.setenv(name, value, true)"),
             Case("native reads temperature", native, "GAMEOCR_SAMPLER_TEMPERATURE"),
             Case("native reads top-p", native, "GAMEOCR_SAMPLER_TOP_P"),

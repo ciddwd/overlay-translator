@@ -1,3 +1,8 @@
+import java.io.File
+import java.net.URI
+import java.security.MessageDigest
+import java.util.zip.ZipFile
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -10,6 +15,90 @@ plugins {
 hilt {
     enableAggregatingTask = false
 }
+
+/**
+ * sherpa-onnx (on-device speech recognition) from the official v1.13.8 AAR:
+ * https://github.com/k2-fsa/sherpa-onnx/releases/tag/v1.13.8
+ *
+ * The AAR bundles its own libonnxruntime.so (ORT 1.28.2) and imports the versioned symbol
+ * `OrtGetApiBase@VERS_1.28.2`, while OCR uses the Maven ORT 1.20.0 runtime
+ * (`OrtGetApiBase@VERS_1.20.0`). Neither library can replace the other, and both are named
+ * libonnxruntime.so. This task keeps only arm64-v8a, renames sherpa's runtime to
+ * libsherpa-ort.so (DT_SONAME in the runtime, DT_NEEDED in libsherpa-onnx-jni.so), and exposes the
+ * Java classes, so both runtimes load side by side without a packaging conflict.
+ */
+abstract class PrepareSherpaOnnxTask : DefaultTask() {
+    @get:Input abstract val aarUrl: Property<String>
+    @get:Input abstract val aarSha256: Property<String>
+    @get:Internal abstract val localAar: RegularFileProperty
+    @get:OutputDirectory abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun prepare() {
+        val out = outputDir.get().asFile
+        val expected = aarSha256.get()
+        val local = localAar.orNull?.asFile?.takeIf { it.isFile && sha256(it) == expected }
+        val aar = local ?: File(out, "sherpa-onnx.aar").also { cached ->
+            if (!cached.isFile || sha256(cached) != expected) {
+                out.mkdirs()
+                logger.lifecycle("Downloading ${aarUrl.get()}")
+                URI(aarUrl.get()).toURL().openStream().use { input ->
+                    cached.outputStream().use { input.copyTo(it) }
+                }
+                check(sha256(cached) == expected) { "sherpa-onnx AAR SHA-256 mismatch" }
+            }
+        }
+        val jni = File(out, "jni/arm64-v8a").apply { deleteRecursively(); mkdirs() }
+        ZipFile(aar).use { zip ->
+            fun extract(entry: String): ByteArray =
+                zip.getInputStream(checkNotNull(zip.getEntry(entry)) { "missing $entry" }).use { it.readBytes() }
+            File(out, "classes.jar").writeBytes(extract("classes.jar"))
+            File(jni, "libsherpa-onnx-jni.so")
+                .writeBytes(renameRuntime(extract("jni/arm64-v8a/libsherpa-onnx-jni.so")))
+            File(jni, "libsherpa-ort.so")
+                .writeBytes(renameRuntime(extract("jni/arm64-v8a/libonnxruntime.so")))
+        }
+    }
+
+    /** Same-length-or-shorter, NUL-padded replacement keeps every ELF offset unchanged. */
+    private fun renameRuntime(bytes: ByteArray): ByteArray {
+        val from = "libonnxruntime.so\u0000".toByteArray(Charsets.US_ASCII)
+        val to = "libsherpa-ort.so\u0000".toByteArray(Charsets.US_ASCII).copyOf(from.size)
+        var replaced = 0
+        var i = 0
+        while (i <= bytes.size - from.size) {
+            if ((from.indices).all { bytes[i + it] == from[it] }) {
+                to.copyInto(bytes, i)
+                replaced++
+                i += from.size
+            } else i++
+        }
+        check(replaced > 0) { "libonnxruntime.so reference not found" }
+        return bytes
+    }
+
+    private fun sha256(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(1 shl 16)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+}
+
+val prepareSherpaOnnx = tasks.register<PrepareSherpaOnnxTask>("prepareSherpaOnnx") {
+    aarUrl.set("https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-1.13.8.aar")
+    aarSha256.set("633c24321e06b1fe79feafa03ea16cbc0f8a286641e2da3559bac91bdb13bd96")
+    // A verified local research copy avoids the 50 MB download; it is optional.
+    localAar.set(rootProject.layout.projectDirectory.file("artifacts/asr-research/sherpa-onnx-1.13.8.aar"))
+    outputDir.set(layout.buildDirectory.dir("generated/sherpa-onnx"))
+}
+tasks.named("preBuild") { dependsOn(prepareSherpaOnnx) }
 
 val localLlmGenerationThreads = providers
     .gradleProperty("localLlmGenerationThreads")
@@ -120,6 +209,12 @@ android {
         buildConfig = true
     }
 
+    sourceSets {
+        getByName("main") {
+            jniLibs.srcDir(prepareSherpaOnnx.flatMap { it.outputDir.dir("jni") })
+        }
+    }
+
     packaging {
         resources {
             excludes += "/META-INF/AL2.0"
@@ -175,6 +270,7 @@ dependencies {
     implementation(libs.mlkit.text.recognition.japanese)
     implementation(libs.mlkit.text.recognition.chinese)
     implementation(libs.mlkit.text.recognition.korean)
+    implementation("com.google.android.gms:play-services-mlkit-text-recognition-devanagari:16.0.1")
     implementation(libs.mlkit.translate)
     implementation("com.google.mlkit:language-id:17.0.6")
 
@@ -201,6 +297,9 @@ dependencies {
 
     // ONNX Runtime (PaddleOCR PP-OCRv4)
     implementation(libs.onnxruntime.android)
+
+    // sherpa-onnx Java API; native libraries come from prepareSherpaOnnx (see above).
+    implementation(files(prepareSherpaOnnx.flatMap { it.outputDir.file("classes.jar") }).builtBy(prepareSherpaOnnx))
 
     // 端侧 LLM 翻译（llama.cpp + GGUF）。运行时仅在 Build.VERSION.SDK_INT >= 33 启用，
     // 详见 :llama-android 模块说明与 LlamaEngineHolder。

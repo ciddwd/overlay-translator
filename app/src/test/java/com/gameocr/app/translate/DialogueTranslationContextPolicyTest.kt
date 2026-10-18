@@ -19,6 +19,8 @@ class DialogueTranslationContextPolicyTest {
             TranslatorEngine.ANTHROPIC,
             TranslatorEngine.LOCAL_SAKURA,
             TranslatorEngine.LOCAL_HY_MT2,
+            TranslatorEngine.LOCAL_INDEX_TRANSLATE,
+            TranslatorEngine.LOCAL_QWEN3,
         )
 
         TranslatorEngine.values().forEach { engine ->

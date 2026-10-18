@@ -29,8 +29,13 @@ internal object BubbleTextBlockRegrouper {
             }
         }
 
-        val grouped = matchedByBubble.map { (bubbleId, members) ->
-            mergeBubbleMembers(bubbleId, members)
+        val grouped = matchedByBubble.flatMap { (bubbleId, members) ->
+            val boxes = members.map { it.boundingBox.let { b -> IntRect(b.left,b.top,b.right,b.bottom) } }
+            val union = IntRect(boxes.minOf { it.left },boxes.minOf { it.top },boxes.maxOf { it.right },boxes.maxOf { it.bottom })
+            val horizontal = inferSourceLayoutOrientation(boxes,union,TextOrientation.HORIZONTAL_LTR) == TextOrientation.HORIZONTAL_LTR
+            BubbleTextGroupingPolicy.partition(boxes,horizontal).map { group ->
+                mergeBubbleMembers(bubbleId,group.map(members::get))
+            }
         }
         return (grouped + unmatched).sortedWith(
             compareBy(
@@ -78,6 +83,8 @@ internal object BubbleTextBlockRegrouper {
             layoutOrientation = orientation,
             sourceBoxes = sourceBoxes.map(::Rect),
             bubbleGroupId = bubbleId,
+            regionGranularity = TextRegionGranularity.BUBBLE,
+            parentRegionId = bubbleId,
         )
     }
 

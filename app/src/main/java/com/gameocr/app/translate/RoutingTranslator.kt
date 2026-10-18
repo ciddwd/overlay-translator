@@ -7,6 +7,8 @@ import com.gameocr.app.data.TranslatorEngine
 import com.gameocr.app.data.resolveOpenAiProvider
 import com.gameocr.app.glossary.TranslationContextResolver
 import com.gameocr.app.llm.LlamaEngineHolder
+import com.gameocr.app.llm.LocalModelCatalog
+import com.gameocr.app.llm.LlmModelKind
 import com.gameocr.app.ocr.TextBlock
 import com.gameocr.app.util.RuntimePerformanceDiagnostics
 import com.gameocr.app.util.RuntimePerformanceKeyPolicy
@@ -34,12 +36,17 @@ class RoutingTranslator @Inject constructor(
     private val tencent: TencentTranslator,
     private val sakura: SakuraGalTranslator,
     private val hyMt2: HyMt2Translator,
+    private val indexTranslate: IndexTranslateTranslator,
+    private val genericLocal: GenericLocalTranslator,
     private val llamaEngineHolder: LlamaEngineHolder,
+    private val modelCatalog: LocalModelCatalog,
     private val translationContextResolver: TranslationContextResolver,
     private val translationMemory: TranslationMemoryService,
     private val performanceDiagnostics: RuntimePerformanceDiagnostics,
+    private val recentSourceText: RecentSourceText,
 ) : Translator {
     override suspend fun translate(source: String, settings: Settings): String? {
+        recentSourceText.record(listOf(source))
         performanceDiagnostics.beginTranslation()
         translationMemory.recall(source, settings)?.let { memory ->
             return normalizePlain(memory.correctedTranslation, settings)
@@ -48,7 +55,7 @@ class RoutingTranslator @Inject constructor(
             logNumericPassthrough(stage = "translate", count = 1, total = 1)
             return source
         }
-        val enriched = translationContextResolver.enrich(source, settings.resolveOpenAiProvider())
+        val enriched = translationContextResolver.enrich(source, localModelSnapshot(settings.resolveOpenAiProvider()))
         val startedAt = SystemClock.elapsedRealtime()
         val translated = engineFor(enriched).translate(source, enriched)
         performanceDiagnostics.observe(
@@ -79,7 +86,7 @@ class RoutingTranslator @Inject constructor(
                 emit(source)
                 return@flow
             }
-            val enriched = translationContextResolver.enrich(source, settings.resolveOpenAiProvider())
+            val enriched = translationContextResolver.enrich(source, localModelSnapshot(settings.resolveOpenAiProvider()))
             val startedAt = SystemClock.elapsedRealtime()
             var completed = false
             try {
@@ -137,14 +144,15 @@ class RoutingTranslator @Inject constructor(
         googleMlKit.deleteSourceLanguageModel(sourceLang, targetLang)
 
     internal suspend fun prewarmLocalModel(settings: Settings): LocalLlmPrewarmResult {
-        val local = engineFor(settings) as? LocalLlamaTranslator
-        val installed = local?.isPrewarmModelInstalled() == true
+        val snapshot = localModelSnapshot(settings)
+        val local = engineFor(snapshot) as? LocalLlamaTranslator
+        val installed = local?.isPrewarmModelInstalled(snapshot) == true
         val decision = LocalLlmPrewarmPolicy.decide(
             routedToLocalModel = local != null,
             modelInstalled = installed,
         )
         if (decision == LocalLlmPrewarmDecision.PREWARM) {
-            checkNotNull(local).prewarm(settings)
+            checkNotNull(local).prewarm(snapshot)
         }
         return LocalLlmPrewarmResult(
             decision = decision,
@@ -163,6 +171,7 @@ class RoutingTranslator @Inject constructor(
         onUpdate: (BatchTranslationUpdate) -> Unit,
     ): List<String?> {
         if (sources.isEmpty()) return emptyList()
+        recentSourceText.record(sources)
         performanceDiagnostics.beginTranslation()
         val selectedEngine = engineFor(settings)
         val promptScope = selectedEngine.batchPromptScope(settings)
@@ -212,7 +221,7 @@ class RoutingTranslator @Inject constructor(
 
         val enriched = translationContextResolver.enrich(
             passthroughPlan.translatableSources.joinToString("\n"),
-            settings.resolveOpenAiProvider(),
+            localModelSnapshot(settings.resolveOpenAiProvider()),
         )
         val rawResults = engineFor(enriched).translateBatchIncremental(
             passthroughPlan.translatableSources,
@@ -280,7 +289,7 @@ class RoutingTranslator @Inject constructor(
         }
         if (overrides.all { it != null }) return results
 
-        val enriched = translationContextResolver.enrich(sources.joinToString("\n"), settings.resolveOpenAiProvider())
+        val enriched = translationContextResolver.enrich(sources.joinToString("\n"), localModelSnapshot(settings.resolveOpenAiProvider()))
         val rawResults = engineFor(enriched).translateBatchIncremental(
             sources = sources,
             settings = enriched,
@@ -306,8 +315,10 @@ class RoutingTranslator @Inject constructor(
         return results
     }
 
-    override suspend fun testConnection(settings: Settings): TestResult =
-        engineFor(settings).testConnection(settings.resolveOpenAiProvider())
+    override suspend fun testConnection(settings: Settings): TestResult {
+        val snapshot = localModelSnapshot(settings.resolveOpenAiProvider())
+        return engineFor(snapshot).testConnection(snapshot)
+    }
 
     override val isEndToEnd: Boolean get() = false
     /** RoutingTranslator 的 isEndToEnd 不能静态判，调用方应用 [isEndToEndFor]。 */
@@ -335,16 +346,36 @@ class RoutingTranslator @Inject constructor(
 
     override suspend fun translateWord(source: String, settings: Settings): WordResult? {
         performanceDiagnostics.beginTranslation()
-        val enriched = translationContextResolver.enrich(source, settings.resolveOpenAiProvider())
+        val enriched = translationContextResolver.enrich(source, localModelSnapshot(settings.resolveOpenAiProvider()))
         return engineFor(enriched).translateWord(source, enriched)
             ?.let { normalizeWordResult(it, enriched) }
     }
 
     override suspend fun translateWordCompact(source: String, settings: Settings): WordResult? {
         performanceDiagnostics.beginTranslation()
-        val enriched = translationContextResolver.enrich(source, settings.resolveOpenAiProvider())
+        val enriched = translationContextResolver.enrich(source, localModelSnapshot(settings.resolveOpenAiProvider()))
         return engineFor(enriched).translateWordCompact(source, enriched)
             ?.let { normalizeWordResult(it, enriched) }
+    }
+
+    private suspend fun localModelSnapshot(settings: Settings): Settings {
+        val kind = when (settings.translatorEngine) {
+            TranslatorEngine.LOCAL_SAKURA -> LlmModelKind.SAKURA_1_5B_Q4
+            TranslatorEngine.LOCAL_HY_MT2 -> LlmModelKind.HY_MT2_1_8B_Q4_K_M
+            TranslatorEngine.LOCAL_INDEX_TRANSLATE -> LlmModelKind.INDEX_TRANSLATE_2B_Q4_K_M
+            TranslatorEngine.LOCAL_QWEN3 -> LlmModelKind.QWEN3_0_6B_Q8_0
+            else -> return settings
+        }
+        val id = if (kind == LlmModelKind.QWEN3_0_6B_Q8_0) settings.localModelId else null
+        val managed = id?.let { llamaEngineHolder.managedEntry(it) }
+        val config = modelCatalog.config(id ?: LocalModelCatalog.builtInId(kind)).normalized()
+        return settings.copy(
+            localModelId = id,
+            localLlmContextSize = config.contextTokens,
+            localLlmMaxNewTokens = config.maxNewTokens,
+            runtimeLocalModelConfig = config,
+            runtimeLocalModelName = managed?.name ?: kind.displayName,
+        )
     }
 
     private fun normalizeText(text: String?, settings: Settings, stage: String): String? {
@@ -487,6 +518,10 @@ class RoutingTranslator @Inject constructor(
             } else {
                 openAi
             }
+        TranslatorEngine.LOCAL_INDEX_TRANSLATE ->
+            if (llamaEngineHolder.isDeviceCapable()) indexTranslate else openAi
+        TranslatorEngine.LOCAL_QWEN3 ->
+            if (llamaEngineHolder.isDeviceCapable()) genericLocal else openAi
         TranslatorEngine.LOCAL_HY_MT2 ->
             if (shouldUseLocalHyMt2(llamaEngineHolder.isDeviceCapable())) {
                 hyMt2

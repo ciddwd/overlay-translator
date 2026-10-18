@@ -28,6 +28,7 @@ import kotlin.coroutines.resumeWithException
 @Singleton
 class MlKitOcrEngine @Inject constructor(
     @ApplicationContext private val context: Context,
+    private val optionalModule: MlKitOcrModuleManager,
 ) : OcrEngine {
 
     private val latin: TextRecognizer by lazy {
@@ -58,6 +59,10 @@ class MlKitOcrEngine @Inject constructor(
             OcrEngineKind.ML_KIT_JAPANESE -> recognizeJapanese(bitmap)
             OcrEngineKind.ML_KIT_CHINESE -> runRecognizer(chinese, bitmap, "zh", "full")
             OcrEngineKind.ML_KIT_KOREAN -> runRecognizer(korean, bitmap, "ko", "full")
+            OcrEngineKind.ML_KIT_DEVANAGARI -> {
+                check(optionalModule.available()) { context.getString(com.gameocr.app.R.string.model_download_failure_card_title) }
+                runRecognizer(optionalModule.recognizer, bitmap, "und", "full")
+            }
             OcrEngineKind.ML_KIT_AUTO -> autoRecognize(bitmap)
             OcrEngineKind.BAIDU,
             OcrEngineKind.TENCENT,

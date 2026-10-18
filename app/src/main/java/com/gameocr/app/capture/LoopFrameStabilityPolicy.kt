@@ -39,7 +39,7 @@ internal data class LoopFramePostOcrResult(
 
 internal object LoopFrameStabilityPolicy {
     const val DEFAULT_STABLE_DURATION_MS: Long = Settings.DEFAULT_LOOP_TEXT_STABLE_DURATION_MS
-    const val MIN_STABLE_DURATION_MS: Long = 200L
+    const val MIN_STABLE_DURATION_MS: Long = 100L
     const val MAX_STABLE_DURATION_MS: Long = 2000L
     const val PROBE_INTERVAL_MS: Long = 200L
     const val DEFAULT_LOOP_INTERVAL_MS: Long = 2000L

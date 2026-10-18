@@ -1,3 +1,12 @@
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.file.FileSystemOperations
+import org.gradle.api.tasks.InputDirectory
+import org.gradle.api.tasks.OutputDirectory
+import org.gradle.api.tasks.PathSensitive
+import org.gradle.api.tasks.PathSensitivity
+import org.gradle.api.tasks.TaskAction
+import javax.inject.Inject
+
 // 端侧 LLM 翻译（HY-MT1.5 1.25bit / Sakura-1.5B）的 llama.cpp Android 封装。
 //
 // 命名空间 com.arm.aichat 与上游 ggml-org/llama.cpp examples/llama.android/lib 保持一致：
@@ -6,7 +15,7 @@
 //
 // 与上游 build.gradle.kts 的关键差异：
 //   1. ABI 收窄到 arm64-v8a：屏译 :app 也只打 arm64-v8a；
-//   2. Kotlin/Java 源码通过 srcDirs 直接指向 third_party/llama.cpp submodule，本模块不维护 Kotlin 副本；
+//   2. 上游 binding 在 build/ 中生成带失败清理补丁的镜像，不修改 submodule；
 //   3. CMakeLists.txt 本地复制并改 LLAMA_SRC 路径，避免 AGP 在 submodule 内生成 build 产物污染 git status；
 //   4. minSdk=33 是 llama.android 上游硬要求；:app minSdk=26 不变，App 主 Manifest 用
 //      tools:overrideLibrary 抑制 merge 报错，运行时 Build.VERSION.SDK_INT >= 33 才允许选 LOCAL_* 引擎。
@@ -14,6 +23,52 @@
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
+}
+
+/** Exact-match patches fail loudly after an upstream change rather than silently leaking weights. */
+abstract class PrepareLlamaBindingSources : DefaultTask() {
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val upstreamDirectory: DirectoryProperty
+
+    @get:OutputDirectory
+    abstract val generatedDirectory: DirectoryProperty
+
+    @get:Inject
+    abstract val fileOperations: FileSystemOperations
+
+    @TaskAction
+    fun prepare() {
+        fileOperations.sync {
+            from(upstreamDirectory)
+            into(generatedDirectory)
+        }
+        val binding = generatedDirectory.file("com/arm/aichat/internal/InferenceEngineImpl.kt").get().asFile
+        var source = binding.readText().replace("\r\n", "\n")
+        val errorCleanup = """
+                is InferenceEngine.State.Error -> {
+                    Log.i(TAG, "Resetting error states...")
+                    _state.value = InferenceEngine.State.Initialized
+        """.trimIndent()
+        val cleanedError = """
+                is InferenceEngine.State.Error -> {
+                    Log.i(TAG, "Resetting error states...")
+                    _readyForSystemPrompt = false
+                    unload()
+                    _state.value = InferenceEngine.State.Initialized
+        """.trimIndent()
+        // Match the block independent of its indentation, preserving all other upstream code.
+        val original = errorCleanup.prependIndent("                ")
+        val patched = cleanedError.prependIndent("                ")
+        check(source.contains(original)) { "Upstream Error cleanup no longer matches the resource-release patch" }
+        source = source.replace(original, patched)
+        binding.writeText(source)
+    }
+}
+
+val prepareLlamaBindingSources = tasks.register<PrepareLlamaBindingSources>("prepareLlamaBindingSources") {
+    upstreamDirectory.set(layout.projectDirectory.dir("../third_party/llama.cpp/examples/llama.android/lib/src/main/java"))
+    generatedDirectory.set(layout.buildDirectory.dir("generated/llamaBinding/java"))
 }
 
 android {
@@ -64,8 +119,7 @@ android {
 
     sourceSets {
         getByName("main") {
-            // 直接复用上游 Kotlin binding 源码 + AndroidManifest，git submodule update 即同步。
-            java.srcDirs("../third_party/llama.cpp/examples/llama.android/lib/src/main/java")
+            java.setSrcDirs(listOf(layout.buildDirectory.dir("generated/llamaBinding/java")))
             // 本模块自留 AndroidManifest 与 CMakeLists：避免 Gradle 在 submodule 内生成 build/。
             manifest.srcFile("src/main/AndroidManifest.xml")
         }
@@ -123,6 +177,8 @@ android {
         }
     }
 }
+
+tasks.named("preBuild").configure { dependsOn(prepareLlamaBindingSources) }
 
 dependencies {
     implementation(libs.androidx.core.ktx)

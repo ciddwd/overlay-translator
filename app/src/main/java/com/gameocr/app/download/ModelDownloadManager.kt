@@ -60,11 +60,15 @@ class ModelDownloadManager @Inject constructor(
         specs: List<ModelDownloadSpec>,
         onProgress: (String) -> Unit,
         ownerPresetId: String? = null,
+        onEnqueued: (UUID) -> Unit = {},
+        onWorkInfo: (WorkInfo) -> Unit = {},
     ) {
         val workId = enqueue(specs, ownerPresetId)
+        onEnqueued(workId)
         val terminal = workManager.getWorkInfoByIdFlow(workId)
             .filterNotNull()
             .onEach { info ->
+                onWorkInfo(info)
                 val status = info.progress.getString(ModelDownloadWorker.KEY_STATUS)
                     ?: info.outputData.getString(ModelDownloadWorker.KEY_STATUS)
                 if (!status.isNullOrBlank()) onProgress(status)
@@ -83,9 +87,10 @@ class ModelDownloadManager @Inject constructor(
         specs: List<ModelDownloadSpec>,
         onProgress: (String) -> Unit,
         ownerPresetId: String? = null,
+        onWorkInfo: (WorkInfo) -> Unit = {},
     ) {
         val failures = runModelDownloadsIndependently(splitModelDownloadRequests(specs)) { request ->
-            enqueueAndAwait(request, onProgress, ownerPresetId)
+            enqueueAndAwait(request, onProgress, ownerPresetId, onWorkInfo = onWorkInfo)
         }
         if (failures.isNotEmpty()) {
             throw RuntimeException(
@@ -124,7 +129,9 @@ class ModelDownloadManager @Inject constructor(
                 )
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
                 .addTag(ModelDownloadWorkPolicy.WORK_TAG)
+                .addTag(ModelDownloadWorkPolicy.createdTag(System.currentTimeMillis()))
                 .apply {
+                    requiredSpecs.forEach { addTag(ModelDownloadWorkPolicy.specTag(it)) }
                     ownerPresetId?.takeIf { it.isNotBlank() }?.let {
                         addTag(ModelDownloadWorkPolicy.ownerTag(it))
                     }

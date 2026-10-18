@@ -11,6 +11,8 @@ class TranslationPromptContextPolicyTest {
             TranslatorEngine.OPENAI to TranslationPromptContextStrategy.GENERIC_STRUCTURED,
             TranslatorEngine.ANTHROPIC to TranslationPromptContextStrategy.GENERIC_STRUCTURED,
             TranslatorEngine.LOCAL_HY_MT2 to TranslationPromptContextStrategy.HY_MT2_OFFICIAL,
+            TranslatorEngine.LOCAL_INDEX_TRANSLATE to TranslationPromptContextStrategy.INDEX_OFFICIAL,
+            TranslatorEngine.LOCAL_QWEN3 to TranslationPromptContextStrategy.GGUF_STRUCTURED,
             TranslatorEngine.LOCAL_SAKURA to TranslationPromptContextStrategy.SAKURA_OFFICIAL,
             TranslatorEngine.DEEPL to TranslationPromptContextStrategy.NONE,
             TranslatorEngine.NIUTRANS to TranslationPromptContextStrategy.NONE,

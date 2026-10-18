@@ -23,6 +23,9 @@ class PaddleDocOriClassifierTest {
             Case(90, PaddleDocOriClassifier.MIN_VERTICAL_CONFIDENCE - 0.01f, TextOrientation.UNKNOWN),
             Case(-90, 0.80f, TextOrientation.VERTICAL_RTL),
             Case(450, 0.80f, TextOrientation.VERTICAL_RTL),
+            Case(90, Float.NaN, TextOrientation.UNKNOWN),
+            Case(90, Float.POSITIVE_INFINITY, TextOrientation.UNKNOWN),
+            Case(270, 1.01f, TextOrientation.UNKNOWN),
         )
 
         cases.forEach { case ->
@@ -42,6 +45,27 @@ class PaddleDocOriClassifierTest {
         assertEquals(1, probabilities.indices.maxByOrNull { probabilities[it] })
         assertTrue(probabilities.all { it in 0f..1f })
         assertEquals(1f, probabilities.sum(), 0.0001f)
+    }
+
+    @Test
+    fun probabilitiesFromScores_preservesModelConfidenceAndRejectsInvalidOutputs_tableDriven() {
+        data class Case(val name: String, val scores: FloatArray, val expected: FloatArray)
+        listOf(
+            Case("document probabilities", floatArrayOf(0.01f, 0.96f, 0.02f, 0.01f),
+                floatArrayOf(0.01f, 0.96f, 0.02f, 0.01f)),
+            Case("text line confidence exceeds correction threshold", floatArrayOf(0.03f, 0.97f),
+                floatArrayOf(0.03f, 0.97f)),
+            Case("certain class", floatArrayOf(0f, 1f), floatArrayOf(0f, 1f)),
+            Case("uniform probabilities", floatArrayOf(0.25f, 0.25f, 0.25f, 0.25f),
+                floatArrayOf(0.25f, 0.25f, 0.25f, 0.25f)),
+            Case("legacy logits", floatArrayOf(0f, 2f), floatArrayOf(0.11920292f, 0.8807971f)),
+            Case("empty", floatArrayOf(), floatArrayOf()),
+            Case("NaN", floatArrayOf(Float.NaN, 1f), floatArrayOf()),
+            Case("infinity", floatArrayOf(0f, Float.POSITIVE_INFINITY), floatArrayOf()),
+        ).forEach { case ->
+            assertArrayEquals(case.name, case.expected,
+                PaddleDocOriClassifier.probabilitiesFromScores(case.scores), 0.0001f)
+        }
     }
 
     @Test

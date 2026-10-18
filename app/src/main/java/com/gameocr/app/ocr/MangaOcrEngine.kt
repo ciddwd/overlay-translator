@@ -23,6 +23,7 @@ import com.gameocr.app.data.OcrEngineKind
 import com.gameocr.app.data.Settings
 import com.gameocr.app.data.adaptiveOverlayActive
 import com.gameocr.app.data.dbnetUnclipRatioFor
+import com.gameocr.app.data.paddleDetectionThresholds
 import com.gameocr.app.util.CpuThreadPolicy
 import com.gameocr.app.util.DecoderStepTimingSample
 import com.gameocr.app.util.DecoderStepTimingSummary
@@ -288,7 +289,19 @@ class MangaOcrEngine @Inject constructor(
         )
         var skipped = false
         var inference = InferenceWarmupTiming()
+        var bubblePrepareMs = 0L
         warmupLock.withLock {
+            if (adaptiveOverlayActive(settings.overlayStyleMode, settings.renderMode)) {
+                val bubbleStartedAt = SystemClock.elapsedRealtime()
+                try {
+                    MangaBubbleDetectionDebugEngine.prewarm(context)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (failure: Exception) {
+                    Timber.w(failure, "Manga bubble detector prewarm failed; first capture will retry")
+                }
+                bubblePrepareMs = SystemClock.elapsedRealtime() - bubbleStartedAt
+            }
             if (!MangaOcrStartupPolicy.shouldRunInferenceWarmup(inferenceWarmupCompleted)) {
                 skipped = true
                 return@withLock
@@ -307,11 +320,12 @@ class MangaOcrEngine @Inject constructor(
             inferenceWarmupCompleted = true
         }
         Timber.tag(PERF_TAG).i(
-            "prewarm totalMs=%d settingsMs=%d mangaMs=%d paddleMs=%d inferenceMs=%d dbnetMs=%d encoderMs=%d decoderMs=%d encoderRuns=%d decoderSteps=%d skipped=%s completed=%s",
+            "prewarm totalMs=%d settingsMs=%d mangaMs=%d paddleMs=%d bubblePrepareMs=%d inferenceMs=%d dbnetMs=%d encoderMs=%d decoderMs=%d encoderRuns=%d decoderSteps=%d skipped=%s completed=%s",
             InferenceTiming.elapsedMs(startedAt, SystemClock.elapsedRealtime()),
             settingsMs,
             mangaMs,
             paddleMs,
+            bubblePrepareMs,
             inference.totalMs,
             inference.dbnetMs,
             inference.encoderMs,
@@ -350,8 +364,8 @@ class MangaOcrEngine @Inject constructor(
         try {
             paddle.detectQuads(
                 bitmap = detectorBitmap,
-                binThresh = settings.dbnetProbThresh,
-                scoreThresh = settings.dbnetBoxScoreThresh,
+                binThresh = settings.detectorThresholds.binThresh,
+                scoreThresh = settings.detectorThresholds.boxThresh,
                 unclipRatio = settings.dbnetUnclipRatioFor(OcrEngineKind.MANGA_OCR_JA),
                 profile = settings.paddleDetectionProfile,
                 passLabel = "manga-prewarm",
@@ -701,7 +715,6 @@ class MangaOcrEngine @Inject constructor(
                 )
             }.onSuccess { report ->
                 shapeAwareReport = report
-                report?.delayedMaskInput?.let(shapeAwareSessionStore.manager::publish)
             }.onFailure { error ->
                 Timber.w(error, "Unable to prepare shape-aware manga frame")
             }
@@ -720,8 +733,25 @@ class MangaOcrEngine @Inject constructor(
             entries = bubbleSelection.entries,
             memberBounds = rects,
         )
+        val textDetections = shapeAwareReport?.boxDetection?.textDetections.orEmpty()
+        val memberConsolidation = MangaTextMemberConsolidator.consolidate(
+            freeTextParagraphs.entries, rects, textDetections,
+        )
+        val preservedFragmentBounds = mutableListOf<BubbleClusterer.IntRect>()
+        val fragmentEntries = memberConsolidation.entries.filterNot { entry ->
+            val drop = MangaOcrFragmentPolicy.dropBeforeRecognition(entry, textDetections, bitmap.width, bitmap.height)
+            if (drop) {
+                preservedFragmentBounds += entry.bubble.contentRect
+                Timber.i("MangaOcr unsupported tiny fragment skipped bounds=%s members=%s",
+                    entry.bubble.contentRect, entry.bubble.memberIndices)
+            }
+            drop
+        }
+        Timber.i("MangaOcr member consolidation before=%d after=%d moved=%s tinySkipped=%d",
+            freeTextParagraphs.entries.size, memberConsolidation.entries.size, memberConsolidation.movedMembers,
+            memberConsolidation.entries.size - fragmentEntries.size)
         val filteredTextEvidence = MangaOcrTextEvidencePolicy.filter(
-            entries = freeTextParagraphs.entries,
+            entries = fragmentEntries,
             textDetections = shapeAwareReport?.boxDetection?.textDetections.orEmpty(),
             evidenceAvailable = shapeAwareReport?.boxDetection != null,
         )
@@ -732,18 +762,30 @@ class MangaOcrEngine @Inject constructor(
             imageHeight = bitmap.height,
         )
         val textEvidenceResult = textRecovery.evidence
-        val selectedEntries = textEvidenceResult.entries
+        val panelPixels = shapeAwareReport?.delayedMaskInput?.sourceArgb ?: IntArray(bitmap.width * bitmap.height).also {
+            bitmap.getPixels(it, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+        }
+        val panelGrouping = MangaPanelGroupingPolicy.split(textEvidenceResult.entries, rects,
+            MangaPanelGroupingPolicy.separators(bitmap.width, bitmap.height, panelPixels))
+        val selectedEntries = panelGrouping.entries
+        val cropMemberRects = panelGrouping.memberBounds
+        com.gameocr.app.util.VerticalDiagnosticLog.i(
+            "manga panel grouping before=${textEvidenceResult.entries.size} after=${selectedEntries.size} " +
+                "split=${panelGrouping.splitOriginalIndices}")
         val bubbles = selectedEntries.map(MangaOcrBubbleGroupingPolicy.Entry::bubble)
+        val recognizedConfidenceTotals = DoubleArray(bubbles.size)
+        val recognizedConfidenceWeights = IntArray(bubbles.size)
         val splitByTextBandBubbleIndices = selectedEntries.mapIndexedNotNull { index, entry ->
             index.takeIf {
                 entry.guidedSource == BubbleModelRegrouper.Source.LEGACY_FALLBACK &&
                     !entry.paragraphRegrouped &&
-                    index !in textEvidenceResult.textSupportedEntryIndices
+                    (panelGrouping.originalIndices[index] !in textEvidenceResult.textSupportedEntryIndices ||
+                        panelGrouping.originalIndices[index] in panelGrouping.splitOriginalIndices)
             }
         }.toSet()
         Timber.i(
             "MangaOcr grouping source=%s legacy=%d selected=%d guided=%d excluded=%s freeText=%s " +
-                "paragraphRegrouped=%s droppedUnsupported=%s textSupported=%s splitFallback=%s",
+                "paragraphRegrouped=%s removedEntries=%s textSupported=%s splitFallback=%s",
             bubbleSelection.source,
             legacyBubbles.size,
             bubbles.size,
@@ -774,13 +816,13 @@ class MangaOcrEngine @Inject constructor(
             settings.paddleDetectionProfile.enableMangaTiling,
             bubbleClusterGap,
             cropPaddingPx,
-            settings.dbnetProbThresh, settings.dbnetBoxScoreThresh, mangaUnclipRatio
+            settings.detectorThresholds.binThresh, settings.detectorThresholds.boxThresh, mangaUnclipRatio
         )
 
         // 3) 每气泡裁切 + 推理
         val cropPlans = MangaOcrCropPlanner.plan(
             bubbles = bubbles,
-            rects = rects,
+            rects = cropMemberRects,
             imageWidth = bitmap.width,
             imageHeight = bitmap.height,
             padding = cropPaddingPx,
@@ -803,6 +845,7 @@ class MangaOcrEngine @Inject constructor(
         val bubblesStartedAt = SystemClock.elapsedRealtime()
         val recognizedChunks = Array(bubbles.size) { mutableListOf<String>() }
         val paddleMixedScriptCache = mutableMapOf<Int, PaddleMangaLineRecognition>()
+        var shortFragmentChecks = 0
         val ocrBatchSize = MangaOcrBatchPolicy.effectiveBatchSize(
             BuildConfig.MANGA_OCR_BATCH_SIZE,
         )
@@ -865,7 +908,7 @@ class MangaOcrEngine @Inject constructor(
                 val plan = input.plan
                 val bubble = plan.bubble
                 val mangaText = recognition.text.trim()
-                val memberRects = bubble.memberIndices.mapNotNull(rects::getOrNull)
+                val memberRects = bubble.memberIndices.mapNotNull(cropMemberRects::getOrNull)
                 Timber.tag(PERF_TAG).i(
                     "bubble index=%d crop=%d/%d batch=%d encoderMs=%d decoderMs=%d decoderSteps=%d crop=%dx%d chars=%d",
                     plan.sourceBubbleIndex,
@@ -897,7 +940,50 @@ class MangaOcrEngine @Inject constructor(
                     mangaText.length,
                 )
                 if (mangaText.isEmpty()) continue
-                val text = if (
+                val recognitionEntry = selectedEntries[plan.sourceBubbleIndex]
+                if (MangaOcrFragmentPolicy.dropAfterRecognition(mangaText, recognitionEntry, textDetections,
+                        bitmap.width, bitmap.height, recognition.averageTokenConfidence)) {
+                    Timber.i("MangaOcr unsupported fragment rejected bubble=%d chars=%d confidence=%.3f",
+                        plan.sourceBubbleIndex, mangaText.length, recognition.averageTokenConfidence)
+                    preservedFragmentBounds += plan.bubble.contentRect
+                    continue
+                }
+                val text = if (MangaOcrFragmentPolicy.needsSecondaryCheck(mangaText, recognitionEntry,
+                        textDetections, bitmap.width, bitmap.height)) {
+                    // Bound secondary work even on heavily textured pages. An unverified glyph
+                    // preserves the source image rather than publishing an arbitrary translation.
+                    if (shortFragmentChecks >= 4) {
+                        Timber.i("MangaOcr short fragment preserved bubble=%d reason=check_budget", plan.sourceBubbleIndex)
+                        preservedFragmentBounds += plan.bubble.contentRect
+                        continue
+                    }
+                    shortFragmentChecks++
+                    coroutineContext.ensureActive()
+                    val checkStartedAt = SystemClock.elapsedRealtime()
+                    val missing = plan.bubble.memberIndices.filterNot(paddleMixedScriptCache::containsKey)
+                    try {
+                        if (missing.isNotEmpty()) paddle.recognizeMangaMembers(bitmap, quads, missing).forEach { line ->
+                            paddleMixedScriptCache[line.memberIndex] = line
+                        }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (failure: Exception) {
+                        Timber.w(failure, "MangaOcr short fragment comparison failed")
+                    }
+                    val decision = MangaOcrFragmentPolicy.resolveSecondary(mangaText,
+                        plan.bubble.memberIndices.mapNotNull(paddleMixedScriptCache::get).map {
+                            MangaMixedScriptPaddleLine(it.text, it.confidence)
+                        })
+                    Timber.i("MangaOcr short fragment bubble=%d reason=%s accepted=%s elapsedMs=%d",
+                        plan.sourceBubbleIndex, decision.reason, decision.outputText != null,
+                        SystemClock.elapsedRealtime() - checkStartedAt)
+                    val verified = decision.outputText
+                    if (verified == null) {
+                        preservedFragmentBounds += plan.bubble.contentRect
+                        continue
+                    }
+                    verified
+                } else if (
                     MangaMixedScriptCorrectionPolicy.requiresPaddleComparison(mangaText)
                 ) {
                     coroutineContext.ensureActive()
@@ -927,14 +1013,35 @@ class MangaOcrEngine @Inject constructor(
                     continue
                 }
                 recognizedChunks[plan.sourceBubbleIndex] += text
+                if (recognition.averageTokenConfidence.isFinite()) {
+                    val weight = recognition.confidenceTokenCount.coerceAtLeast(1)
+                    recognizedConfidenceTotals[plan.sourceBubbleIndex] += recognition.averageTokenConfidence * weight
+                    recognizedConfidenceWeights[plan.sourceBubbleIndex] += weight
+                }
             }
         }
 
+        val consolidated = MangaRecognizedTextConsolidator.consolidate(
+            entries = selectedEntries,
+            texts = recognizedChunks.map { it.joinToString(separator = "").trim() },
+        )
+        Timber.i("MangaOcr recognized consolidation before=%d after=%d absorbed=%s",
+            selectedEntries.size, consolidated.entries.size, consolidated.absorbedByOwner)
+        // Publish final ownership after both geometry-based and text-confirmed consolidation.
+        shapeAwareReport?.delayedMaskInput?.let { input ->
+            shapeAwareSessionStore.manager.publish(input.copy(
+                protectedSourceBounds = (input.protectedSourceBounds + preservedFragmentBounds).distinct(),
+                modelGroups = if (bubbleSelection.source == MangaOcrBubbleGroupingPolicy.Source.DETECTOR_GUIDED) {
+                    textEvidenceResult.copy(entries = consolidated.entries).toModelGroups()
+                } else input.modelGroups,
+            ))
+        }
         val results = mutableListOf<TextBlock>()
-        for ((bubbleIndex, bubble) in bubbles.withIndex()) {
-            val text = recognizedChunks[bubbleIndex].joinToString(separator = "").trim()
+        for ((bubbleIndex, entry) in consolidated.entries.withIndex()) {
+            val bubble = entry.bubble
+            val text = consolidated.texts[bubbleIndex]
             if (text.isEmpty()) continue
-            val memberRects = bubble.memberIndices.mapNotNull(rects::getOrNull)
+            val memberRects = bubble.memberIndices.mapNotNull(cropMemberRects::getOrNull)
             val sourceBoxes = memberRects.map { rect ->
                 Rect(rect.left, rect.top, rect.right, rect.bottom)
             }
@@ -947,7 +1054,11 @@ class MangaOcrEngine @Inject constructor(
             results += TextBlock(
                 text = text,
                 boundingBox = bubbleBounds,
-                confidence = 1f,
+                confidence = consolidated.retainedIndices[bubbleIndex].let { original ->
+                    if (recognizedConfidenceWeights[original] > 0) {
+                        (recognizedConfidenceTotals[original] / recognizedConfidenceWeights[original]).toFloat().coerceIn(0f, 1f)
+                    } else 0f
+                },
                 recognizedLanguage = "ja",
                 layoutOrientation = inferSourceLayoutOrientation(
                     sourceBoxes = memberRects,
@@ -955,10 +1066,8 @@ class MangaOcrEngine @Inject constructor(
                 ),
                 sourceBoxes = sourceBoxes,
                 regionId = bubbleIndex,
-                parentRegionId = selectedEntries.getOrNull(bubbleIndex)?.modelBubbleIndex,
-                regionGranularity = selectedEntries.getOrNull(bubbleIndex)
-                    ?.regionGranularity
-                    ?: TextRegionGranularity.BUBBLE,
+                parentRegionId = entry.modelBubbleIndex,
+                regionGranularity = entry.regionGranularity,
             )
         }
         val bubblesMs = InferenceTiming.elapsedMs(bubblesStartedAt, SystemClock.elapsedRealtime())
@@ -1076,8 +1185,8 @@ class MangaOcrEngine @Inject constructor(
     ): List<DBPostprocessor.Quad> {
         val base = paddle.detectQuads(
             bitmap,
-            binThresh = settings.dbnetProbThresh,
-            scoreThresh = settings.dbnetBoxScoreThresh,
+            binThresh = settings.detectorThresholds.binThresh,
+            scoreThresh = settings.detectorThresholds.boxThresh,
             unclipRatio = mangaUnclipRatio,
             profile = settings.paddleDetectionProfile,
             passLabel = "manga-full",
@@ -1089,7 +1198,7 @@ class MangaOcrEngine @Inject constructor(
                         scaleY = scaleY,
                         offsetX = 0,
                         offsetY = 0,
-                        threshold = settings.dbnetProbThresh,
+                        threshold = settings.detectorThresholds.binThresh,
                     )
                 }
             },
@@ -1119,8 +1228,8 @@ class MangaOcrEngine @Inject constructor(
             try {
                 val tileQuads = paddle.detectQuads(
                     crop,
-                    binThresh = settings.dbnetProbThresh,
-                    scoreThresh = settings.dbnetBoxScoreThresh,
+                    binThresh = settings.detectorThresholds.binThresh,
+                    scoreThresh = settings.detectorThresholds.boxThresh,
                     unclipRatio = mangaUnclipRatio,
                     profile = settings.paddleDetectionProfile,
                     passLabel = "manga-tile[$tile]",
@@ -1132,7 +1241,7 @@ class MangaOcrEngine @Inject constructor(
                                 scaleY = scaleY,
                                 offsetX = tile.left,
                                 offsetY = tile.top,
-                                threshold = settings.dbnetProbThresh,
+                                threshold = settings.detectorThresholds.binThresh,
                             )
                         }
                     },
@@ -2404,3 +2513,7 @@ private inline fun <T> traceSection(
         Trace.endSection()
     }
 }
+
+/** Manga OCR runs the configured (normalized v6 small) detector with its thresholds. */
+private val Settings.detectorThresholds
+    get() = paddleDetectionThresholds(paddleModelVersion)

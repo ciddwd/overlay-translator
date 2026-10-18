@@ -16,38 +16,41 @@ internal data class DisplayPixelSize(
 }
 
 /**
- * Chooses one full-display coordinate space for screenshots and overlay windows.
- * Real display metrics are preferred because some ROMs expose an inset application workspace
- * through service-context WindowMetrics. The remaining candidates are defensive fallbacks.
+ * Reads one full-display coordinate space for screenshots and overlay windows on demand.
+ * WindowMetrics bounds already include system bars/cutouts; do not subtract their insets.
+ * Legacy Display metrics are a fallback, never an authority over current WindowMetrics.
  */
-internal fun selectPhysicalDisplaySize(
-    realDisplay: DisplayPixelSize,
-    maximumWindow: DisplayPixelSize,
-    resources: DisplayPixelSize,
-): DisplayPixelSize = sequenceOf(realDisplay, maximumWindow, resources)
-    .firstOrNull(DisplayPixelSize::isValid)
-    ?: DisplayPixelSize(width = 1, height = 1)
+internal fun readFullDisplaySize(
+    maximumWindow: () -> DisplayPixelSize,
+    legacyDisplay: () -> DisplayPixelSize,
+    resources: () -> DisplayPixelSize,
+): DisplayPixelSize {
+    for (read in listOf(maximumWindow, legacyDisplay, resources)) {
+        val size = runCatching(read).getOrNull()
+        if (size != null && size.isValid) return size
+    }
+    return DisplayPixelSize(width = 1, height = 1)
+}
 
 @Suppress("DEPRECATION")
-internal fun physicalDisplaySize(context: Context): DisplayPixelSize {
-    val realMetrics = DisplayMetrics()
-    val displayManager = context.getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager
-    val display = displayManager?.getDisplay(Display.DEFAULT_DISPLAY)
-    runCatching { display?.getRealMetrics(realMetrics) }
-
-    val wm = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
-    val maximumWindow = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-        runCatching {
+internal fun physicalDisplaySize(context: Context): DisplayPixelSize = readFullDisplaySize(
+    maximumWindow = {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val wm = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
             val bounds = requireNotNull(wm).maximumWindowMetrics.bounds
             DisplayPixelSize(bounds.width(), bounds.height())
-        }.getOrDefault(DisplayPixelSize(0, 0))
-    } else {
-        DisplayPixelSize(0, 0)
-    }
-    val resourceMetrics = context.resources.displayMetrics
-    return selectPhysicalDisplaySize(
-        realDisplay = DisplayPixelSize(realMetrics.widthPixels, realMetrics.heightPixels),
-        maximumWindow = maximumWindow,
-        resources = DisplayPixelSize(resourceMetrics.widthPixels, resourceMetrics.heightPixels),
-    )
-}
+        } else {
+            DisplayPixelSize(0, 0)
+        }
+    },
+    legacyDisplay = {
+        val metrics = DisplayMetrics()
+        val manager = context.getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager
+        manager?.getDisplay(Display.DEFAULT_DISPLAY)?.getRealMetrics(metrics)
+        DisplayPixelSize(metrics.widthPixels, metrics.heightPixels)
+    },
+    resources = {
+        val metrics = context.resources.displayMetrics
+        DisplayPixelSize(metrics.widthPixels, metrics.heightPixels)
+    },
+)

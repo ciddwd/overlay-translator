@@ -9,23 +9,18 @@ import org.junit.Test
 class MainScreenHelpPlacementTest {
 
     @Test
-    fun helpAction_tableDriven_isOppositeUsageAndAbsentFromTopBar() {
+    fun helpAction_tableDriven_isTheCaptureCardUsageRowAndAbsentFromTopBar() {
         val source = sourceFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readText()
+        val card = sourceFile("src/main/java/com/gameocr/app/ui/CaptureServiceCard.kt").readText()
         val topBar = source.substring(
             source.indexOf("TopAppBar("),
             source.indexOf("snackbarHost ="),
         )
         val captureSection = source.substring(
-            source.indexOf("CaptureGalleryCarousel("),
-            source.indexOf("ActionCard(title = stringResource(R.string.main_section_region))"),
+            source.indexOf("capturePage = { pageModifier ->"),
+            source.indexOf("galleryPage = { pageModifier ->"),
         )
-        val overlayPermissionGate = captureSection.substring(
-            captureSection.indexOf("if (!showCaptureControls)"),
-            captureSection.indexOf("// 可启动时使用完整说明布局"),
-        )
-        val usageSection = captureSection.substring(
-            captureSection.indexOf("// 可启动时使用完整说明布局"),
-        )
+        val usageRow = card.substring(card.indexOf("private fun UsageRow("))
 
         data class Case(
             val name: String,
@@ -34,57 +29,25 @@ class MainScreenHelpPlacementTest {
             val expectedPresent: Boolean,
         )
 
-        val cases = listOf(
-            Case("top bar no longer owns help", topBar, "onClick = onOpenOnboarding", false),
-            Case("capture section owns help", captureSection, "onClick = onOpenOnboarding", true),
-            Case(
-                "overlay permission gate no longer hides help",
-                overlayPermissionGate,
-                "onClick = onOpenOnboarding",
-                false,
-            ),
-            Case("usage and help share a row", captureSection, "horizontalArrangement = Arrangement.SpaceBetween", true),
-            Case("usage label remains visible", captureSection, "R.string.main_label_usage", true),
-            Case(
-                "usage description selects permission-aware copy in both layouts",
-                usageSection,
-                "mainUsageTextRes(showCaptureControls)",
-                true,
-            ),
-            Case(
-                "usage copy keeps compact local spacing",
-                captureSection,
-                "verticalArrangement = Arrangement.spacedBy(2.dp)",
-                true,
-            ),
-            Case("help keeps its icon", captureSection, "Icons.AutoMirrored.Outlined.HelpOutline", true),
-            Case("help keeps its text", captureSection, "R.string.main_help", true),
-        )
-
-        cases.forEach { case ->
+        listOf(
+            Case("top bar no longer owns help", topBar, "onOpenOnboarding", false),
+            Case("capture card owns help", captureSection, "onOpenHelp = onOpenOnboarding", true),
+            Case("usage text is permission-aware", captureSection, "mainUsageTextRes(showCaptureControls)", true),
+            Case("usage row is shown in setup and ready states", card, "UsageRow(usageText = usageText, onClick = onOpenHelp)", true),
+            Case("usage label remains visible", usageRow, "R.string.main_label_usage", true),
+            Case("help keeps its icon", usageRow, "Icons.AutoMirrored.Outlined.HelpOutline", true),
+            Case("help keeps its text", usageRow, "R.string.main_help", true),
+        ).forEach { case ->
             assertEquals(case.name, case.expectedPresent, case.marker in case.content)
         }
         assertTrue(
             "usage label must remain to the left of the help action",
-            captureSection.indexOf("R.string.main_label_usage") <
-                captureSection.indexOf("onClick = onOpenOnboarding"),
-        )
-        assertTrue(
-            "unauthorized hint must remain between its label and the help action",
-            usageSection.indexOf("R.string.main_label_usage") <
-                usageSection.indexOf("mainUsageTextRes(showCaptureControls)") &&
-                usageSection.indexOf("mainUsageTextRes(showCaptureControls)") <
-                usageSection.indexOf("onClick = onOpenOnboarding"),
-        )
-        assertTrue(
-            "authorized instructions must return below the original help row",
-            usageSection.indexOf("onClick = onOpenOnboarding") <
-                usageSection.lastIndexOf("mainUsageTextRes(showCaptureControls)"),
+            usageRow.indexOf("R.string.main_label_usage") < usageRow.indexOf("R.string.main_help"),
         )
         assertEquals(
             "onboarding help must have exactly one main-screen entry",
             1,
-            Regex("""onClick\s*=\s*onOpenOnboarding""").findAll(source).count(),
+            Regex("""\bonOpenOnboarding\b""").findAll(captureSection).count(),
         )
     }
 
@@ -141,10 +104,7 @@ class MainScreenHelpPlacementTest {
         val settings = sourceFile("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
         val englishStrings = sourceFile("src/main/res/values/strings.xml").readText()
         val chineseStrings = sourceFile("src/main/res/values-zh-rCN/strings.xml").readText()
-        val statusCard = main.substring(
-            main.indexOf("private fun StatusCard("),
-            main.indexOf("private fun StatusRow("),
-        )
+        val captureCard = sourceFile("src/main/java/com/gameocr/app/ui/CaptureServiceCard.kt").readText()
         val disabledRegion = main.substring(
             main.indexOf("BEGIN_DISABLED_SCREENSHOT_REGION"),
             main.indexOf("END_DISABLED_SCREENSHOT_REGION"),
@@ -162,7 +122,7 @@ class MainScreenHelpPlacementTest {
             Case(
                 "system compatibility is restored to the home screen",
                 main.contains(
-                    "ActionCard(title = stringResource(R.string.main_section_rom_guide))"
+                    "ActionCard(title = stringResource(R.string.main_section_rom_guide), listStyle = true)"
                 ),
             ),
             Case(
@@ -171,8 +131,10 @@ class MainScreenHelpPlacementTest {
                     !settings.contains("SystemCompatibilityGuide()"),
             ),
             Case(
-                "battery whitelist is restored to current status",
-                statusCard.contains("R.string.main_status_battery_whitelist"),
+                "battery whitelist is a key status tile on the capture card",
+                captureCard.contains("R.string.main_key_background") &&
+                    captureCard.contains("ok = batteryOk") &&
+                    main.contains("batteryOk = batteryOk"),
             ),
             Case(
                 "home compatibility retains the auto-start action",

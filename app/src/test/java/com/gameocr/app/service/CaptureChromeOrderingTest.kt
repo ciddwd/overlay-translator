@@ -34,7 +34,7 @@ class CaptureChromeOrderingTest {
 
         cases.forEach { case ->
             val snippet = functionSnippet(source, case.signature)
-            val captureIndex = snippet.indexOf("shotter.capture()")
+            val captureIndex = snippet.indexOf("captureScreenshotWithTiming(shotter, diagId)")
             val restoreIndex = snippet.indexOf(case.expectedRestore, captureIndex)
 
             assertTrue("${case.name} should capture before restoring loading", captureIndex >= 0)
@@ -213,7 +213,7 @@ class CaptureChromeOrderingTest {
         val cases = listOf(
             Case(
                 name = "screenshot success",
-                marker = "var full = shotter.capture()",
+                marker = "full = captureScreenshotWithTiming(shotter, diagId)",
                 expectedRestore = "restoreCaptureChromeOnce(showLoading = showLoadingAfterScreenshot)",
             ),
             Case(
@@ -250,7 +250,7 @@ class CaptureChromeOrderingTest {
         )
         val blockingResultIndex = snippet.indexOf("overlay?.hasBlockingLoopResult()")
         val preparationIndex = snippet.indexOf("prepareFloatingWindowForCapture(")
-        val captureIndex = snippet.indexOf("var full = shotter.capture()", preparationIndex)
+        val captureIndex = snippet.indexOf("full = captureScreenshotWithTiming(shotter, diagId)", preparationIndex)
         val restoreIndex = snippet.indexOf(
             "restoreFloatingWindowAfterCapture(floatingWindowPreparation)",
             captureIndex,

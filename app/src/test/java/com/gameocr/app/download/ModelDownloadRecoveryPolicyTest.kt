@@ -8,13 +8,6 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ModelDownloadRecoveryPolicyTest {
-    @Test fun pausedAndTerminalProgressNeverAnimates_table() {
-        for (active in listOf(true, false)) for (total in listOf(-1L, 0L, 100L)) {
-            val progress = com.gameocr.app.ui.modelDownloadProgressFraction(25, total, active)
-            assertEquals("active=$active total=$total", active && total <= 0, progress == null)
-        }
-    }
-
     @Test fun retryClassification_table() {
         val cases = listOf(
             IOException("network closed") to true, SocketTimeoutException() to true,

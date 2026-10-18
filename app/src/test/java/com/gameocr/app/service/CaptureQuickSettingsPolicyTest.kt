@@ -54,8 +54,9 @@ class CaptureQuickSettingsPolicyTest {
         data class Case(val stage: CaptureStartStage, val expected: String, val opensHome: Boolean)
         val cases = listOf(
             Case(CaptureStartStage.WAITING, "Unit", false),
-            Case(CaptureStartStage.PROJECTION, "launcher.launch(mpm.createScreenCaptureIntent())", false),
+            Case(CaptureStartStage.PROJECTION, "launcher.launch(intent)", false),
             Case(CaptureStartStage.OVERLAY_PERMISSION, "openOverlayPermissionSettings(this@CaptureStartRequestActivity)", false),
+            Case(CaptureStartStage.ACCESSIBILITY_SETTINGS, "Settings.ACTION_ACCESSIBILITY_SETTINGS", false),
             Case(CaptureStartStage.SETUP, "finishRequest()", true),
             Case(CaptureStartStage.FINISHED, "finishRequest()", false),
         )

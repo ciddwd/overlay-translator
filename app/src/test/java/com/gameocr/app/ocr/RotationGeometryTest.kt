@@ -71,9 +71,22 @@ class RotationGeometryTest {
         assertEquals(0.8f, mapped.confidence, 0.0001f)
         assertEquals("en", mapped.recognizedLanguage)
         assertEquals(TextOrientation.HORIZONTAL_LTR, mapped.layoutOrientation)
+        assertEquals(180, mapped.presentationRotationDegrees)
         assertEquals(2, mapped.sourceBoxes.size)
         assertRectEquals(Rect(80, 30, 90, 60), mapped.sourceBoxes[0])
         assertRectEquals(Rect(70, 30, 80, 60), mapped.sourceBoxes[1])
+    }
+
+    @Test
+    fun mapBlocksFromRotated180_composesDisplayTurnsAndRoundTrips_tableDriven() {
+        listOf(0 to 180, 90 to 270, 180 to 0, 270 to 90, -90 to 90, 450 to 270).forEach { (turn, expected) ->
+            val block = TextBlock("text", Rect(10, 20, 30, 50), presentationRotationDegrees = turn)
+            val once = mapBlocksFromRotated180(listOf(block), 100, 80).single()
+            val twice = mapBlocksFromRotated180(listOf(once), 100, 80).single()
+            assertEquals("turn=$turn", expected, once.presentationRotationDegrees)
+            assertRectEquals(block.boundingBox, twice.boundingBox)
+            assertEquals("round trip turn=$turn", ((turn % 360) + 360) % 360, twice.presentationRotationDegrees)
+        }
     }
 
     private fun assertRectEquals(expected: Rect, actual: Rect) {

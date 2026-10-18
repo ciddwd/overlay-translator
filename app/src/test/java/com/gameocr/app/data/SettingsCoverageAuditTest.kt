@@ -17,7 +17,10 @@ class SettingsCoverageAuditTest {
             fields,
             SettingsFieldPolicy.rules.map(SettingsFieldRule::name),
         )
-        val missingPersistence = fields.filterNot { field -> wordPattern(field).containsMatchIn(repositorySource) }
+        // Request-scoped fields are never persisted, so only DataStore fields must appear in the repository.
+        val persisted = SettingsFieldPolicy.rules
+            .filter { it.persistence == SettingsPersistence.DATA_STORE }.map(SettingsFieldRule::name)
+        val missingPersistence = persisted.filterNot { field -> wordPattern(field).containsMatchIn(repositorySource) }
         assertTrue("SettingsRepository missing Settings fields: $missingPersistence", missingPersistence.isEmpty())
     }
 

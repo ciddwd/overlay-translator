@@ -2,6 +2,14 @@ package com.gameocr.app.overlay
 
 import com.gameocr.app.ocr.TextOrientation
 
+/** Keep the same number of columns while avoiding a full column plus a one-glyph tail. */
+internal fun balancedVerticalColumnCapacity(glyphCount:Int,capacity:Int):Int {
+    val limit=capacity.coerceAtLeast(1)
+    if(glyphCount<=0)return limit
+    val columns=(glyphCount-1)/limit+1
+    return (glyphCount-1)/columns+1
+}
+
 internal fun resolveOverlayBlockOrientation(
     pageOrientation: TextOrientation,
     blockOrientation: TextOrientation?,

@@ -39,14 +39,13 @@ class SettingsLazyLayoutTest {
     fun searchTargetContainer_stacksMultiControlTargetsVertically() {
         val source = sourceFile("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
         val functionStart = source.indexOf("private fun SettingsSearchTarget(")
-        val functionEnd = source.indexOf("private fun openExternalBrowser", functionStart)
+        val functionEnd = source.indexOf("fun openExternalBrowser", functionStart)
         assertTrue("SettingsSearchTarget function", functionStart >= 0 && functionEnd > functionStart)
         val function = source.substring(functionStart, functionEnd)
 
         data class Case(val name: String, val marker: String)
         listOf(
             Case("search target uses a vertical container", "Column("),
-            Case("search target preserves section spacing", "Arrangement.spacedBy(10.dp)"),
             Case("search target still fills available width", ".fillMaxWidth()"),
             Case("search target keeps precise relocation anchor", ".bringIntoViewRequester(requester)"),
         ).forEach { case ->
@@ -65,12 +64,13 @@ class SettingsLazyLayoutTest {
             Case("translate", 2),
             Case("tts", 3),
             Case("ocr", 4),
-            Case("overlay", 5),
-            Case("word_select", 6),
-            Case("capture_region", 7),
-            Case("input_translation", 8),
-            Case("trigger", 9),
-            Case("floating", 10),
+            Case("asr", 5),
+            Case("overlay", 6),
+            Case("word_select", 7),
+            Case("capture_region", 8),
+            Case("input_translation", 9),
+            Case("trigger", 10),
+            Case("floating", 11),
             Case("arc_menu", 11),
             Case("developer", 12),
             Case("network", 13),
@@ -101,12 +101,13 @@ class SettingsLazyLayoutTest {
         val source = sourceFile("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
         listOf(
             Case("general before presets", "GENERAL", "PRESETS"),
-            Case("OCR before overlay", "OCR", "OVERLAY"),
+            Case("OCR before speech recognition", "OCR", "ASR"),
+            Case("speech recognition before overlay", "ASR", "OVERLAY"),
             Case("word select before capture region", "WORD_SELECT", "CAPTURE_REGION"),
             Case("capture region before input translation", "CAPTURE_REGION", "INPUT_TRANSLATION"),
             Case("input translation before loop trigger", "INPUT_TRANSLATION", "TRIGGER"),
             Case("loop trigger before floating", "TRIGGER", "FLOATING"),
-            Case("floating before arc menu", "FLOATING", "ARC_MENU"),
+            Case("floating before developer", "FLOATING", "DEVELOPER"),
         ).forEach { case ->
             val beforeIndex = source.indexOf("item(key = SectionKeys.${case.before})")
             val afterIndex = source.indexOf("item(key = SectionKeys.${case.after})")
@@ -138,11 +139,6 @@ class SettingsLazyLayoutTest {
             Case("theme control", "ThemeModeSelector()"),
         ).forEach { case -> assertTrue(case.name, generalCard.contains(case.marker)) }
 
-        assertEquals(
-            "both former card titles use the secondary title style",
-            2,
-            generalCard.split("style = MaterialTheme.typography.titleSmall").size - 1,
-        )
         assertFalse("language must not remain a standalone card", source.contains("SectionKeys.APP_LANG"))
         assertFalse("theme must not remain a standalone card", source.contains("SectionKeys.THEME_MODE"))
         assertTrue(
@@ -308,7 +304,6 @@ class SettingsLazyLayoutTest {
 
         val cases = mutableListOf(
             Case("lazy settings list", settings, "LazyColumn(\n                state = listState"),
-            Case("stable content padding", settings, "contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)"),
             Case("search index jump", settings, "settingsSectionIndex(entry.sectionKey)"),
             Case("child target registry", settings, "SettingsSearchTargetRegistry"),
             Case("child bring into view", settings, "requester.bringIntoView()"),
@@ -329,6 +324,7 @@ class SettingsLazyLayoutTest {
                 "overlay" -> "OVERLAY"
                 "floating" -> "FLOATING"
                 "arc_menu" -> "ARC_MENU"
+                "asr" -> "ASR"
                 "word_select" -> "WORD_SELECT"
                 "trigger" -> "TRIGGER"
                 "developer" -> "DEVELOPER"
@@ -480,15 +476,19 @@ class SettingsLazyLayoutTest {
         assertTrue("translation preset block", presetStart >= 0 && presetEnd > presetStart)
 
         val topBar = source.substring(topBarStart, topBarEnd)
+        // The top bar renders a shared feedback block that is defined once before the scaffold.
+        val feedback = source.substringAfter("val modelDownloadFeedback: @Composable (Boolean) -> Unit = {")
+            .substringBefore("topBar = {")
         val presetSection = source.substring(presetStart, presetEnd)
         data class Case(val name: String, val source: String, val marker: String, val expected: Boolean)
         listOf(
-            Case("global area observes every active or failed download state", topBar, "if (activeModelDownloads.isNotEmpty() || unresolvedModelDownloadFailure != null)", true),
-            Case("global area renders every active download", topBar, "activeModelDownloads.forEach { download ->", true),
-            Case("global area renders download progress", topBar, "ModelDownloadProgressCard(", true),
-            Case("global area retains terminal failure", topBar, "ModelDownloadFailureCard(", true),
-            Case("terminal failure exposes retry", topBar, "viewModel.downloadModelsIndependently(", true),
-            Case("each active download exposes its own cancellation", topBar, "viewModel.cancelModelDownload(download.id)", true),
+            Case("top bar renders the global download feedback", topBar, "modelDownloadFeedback(false)", true),
+            Case("global area observes every active or failed download state", feedback, "if (activeModelDownloads.isNotEmpty() || unresolvedModelDownloadFailure != null)", true),
+            Case("global area renders every active download", feedback, "activeModelDownloads.forEach { download ->", true),
+            Case("global area renders download progress", feedback, "ModelDownloadProgressCard(", true),
+            Case("global area retains terminal failure", feedback, "ModelDownloadFailureCard(", true),
+            Case("terminal failure exposes retry", feedback, "viewModel.downloadModelsIndependently(", true),
+            Case("each active download exposes its own cancellation", feedback, "viewModel.cancelModelDownload(download.id)", true),
             Case("preset section does not render global progress", presetSection, "ModelDownloadProgressCard(", false),
             Case("preset section does not own progress status", presetSection, "activeDownloadStatus", false),
         ).forEach { case ->

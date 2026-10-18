@@ -11,6 +11,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import java.nio.FloatBuffer
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
@@ -51,8 +52,8 @@ class PaddleDocOriClassifier @Inject constructor(
             )
             tensor.use { t ->
                 s.run(mapOf(s.inputNames.first() to t)).use { result ->
-                    val scores = extractScores(result.get(0).value)
-                    if (scores.isEmpty()) {
+                    val probabilities = probabilitiesFromScores(extractScores(result.get(0).value))
+                    if (probabilities.size != LABEL_ANGLES.size) {
                         return@withContext OrientationResult(
                             orientation = TextOrientation.UNKNOWN,
                             confidence = 0f,
@@ -60,7 +61,6 @@ class PaddleDocOriClassifier @Inject constructor(
                             source = SOURCE,
                         )
                     }
-                    val probabilities = softmax(scores)
                     val bestIndex = probabilities.indices.maxByOrNull { probabilities[it] } ?: 0
                     val angle = LABEL_ANGLES.getOrElse(bestIndex) { 0 }
                     val confidence = probabilities[bestIndex]
@@ -176,12 +176,22 @@ class PaddleDocOriClassifier @Inject constructor(
         private val STD = floatArrayOf(0.229f, 0.224f, 0.225f)
 
         internal fun orientationForAngle(angle: Int, confidence: Float): TextOrientation {
-            if (confidence < MIN_VERTICAL_CONFIDENCE) return TextOrientation.UNKNOWN
+            if (!confidence.isFinite() || confidence !in MIN_VERTICAL_CONFIDENCE..1f) return TextOrientation.UNKNOWN
             val normalized = ((angle % 360) + 360) % 360
             return when (normalized) {
                 90, 270 -> TextOrientation.VERTICAL_RTL
                 else -> TextOrientation.UNKNOWN
             }
+        }
+
+        /** Bundled ONNX graphs end in Softmax; only legacy logits need normalization. */
+        internal fun probabilitiesFromScores(scores: FloatArray): FloatArray {
+            if (scores.isEmpty() || scores.any { !it.isFinite() }) return FloatArray(0)
+            val sum = scores.sum()
+            if (scores.all { it in 0f..1f } && abs(sum - 1f) <= 0.001f) {
+                return FloatArray(scores.size) { scores[it] / sum }
+            }
+            return softmax(scores)
         }
 
         internal fun softmax(scores: FloatArray): FloatArray {

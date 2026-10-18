@@ -1,5 +1,6 @@
 package com.gameocr.app.gallery
 
+import androidx.room.ColumnInfo
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Entity
@@ -13,6 +14,8 @@ import androidx.room.RoomDatabase
 import androidx.room.Transaction
 import androidx.room.TypeConverter
 import androidx.room.TypeConverters
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 @Entity(tableName = "gallery_translation_tasks")
@@ -36,6 +39,12 @@ data class GalleryTranslationTaskEntity(
     val failedCount: Int = 0,
     val currentItemName: String = "",
     val lastError: String = "",
+    /** User-facing title; empty shows the creation date. Added in schema version 2. */
+    @ColumnInfo(defaultValue = "")
+    val title: String = "",
+    /** [GalleryImportKind] name. Added in schema version 2; older tasks are PICKED. */
+    @ColumnInfo(defaultValue = "PICKED")
+    val sourceKind: String = GalleryImportKind.PICKED.name,
 )
 
 @Entity(
@@ -94,6 +103,13 @@ interface GalleryTranslationDao {
             "THEN 0 ELSE 1 END, createdAtMs DESC LIMIT 1"
     )
     fun observeFeaturedTask(): Flow<GalleryTranslationTaskEntity?>
+
+    @Query(
+        "SELECT * FROM gallery_translation_tasks " +
+            "ORDER BY CASE WHEN status IN ('QUEUED', 'RUNNING', 'WAITING_RETRY') " +
+            "THEN 0 ELSE 1 END, createdAtMs DESC LIMIT 2"
+    )
+    fun observeFeaturedTasks(): Flow<List<GalleryTranslationTaskEntity>>
 
     @Query("SELECT * FROM gallery_translation_tasks WHERE id = :taskId LIMIT 1")
     fun observeTask(taskId: String): Flow<GalleryTranslationTaskEntity?>
@@ -272,6 +288,9 @@ interface GalleryTranslationDao {
     @Query("SELECT COUNT(*) FROM gallery_translation_items WHERE sourceUri = :sourceUri")
     suspend fun countSourceUriReferences(sourceUri: String): Int
 
+    @Query("UPDATE gallery_translation_tasks SET title = :title WHERE id = :taskId")
+    suspend fun renameTask(taskId: String, title: String)
+
     @Query("DELETE FROM gallery_translation_tasks WHERE id = :taskId")
     suspend fun deleteTask(taskId: String)
 }
@@ -294,10 +313,18 @@ class GalleryTranslationTypeConverters {
 
 @Database(
     entities = [GalleryTranslationTaskEntity::class, GalleryTranslationItemEntity::class],
-    version = 1,
+    version = 2,
     exportSchema = false,
 )
 @TypeConverters(GalleryTranslationTypeConverters::class)
 abstract class GalleryTranslationDatabase : RoomDatabase() {
     abstract fun galleryTranslationDao(): GalleryTranslationDao
+}
+
+/** v2: task titles and import source. Existing tasks keep an empty title, so they still show their date. */
+internal val GALLERY_TRANSLATION_MIGRATION_1_2 = object : Migration(1, 2) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE gallery_translation_tasks ADD COLUMN title TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE gallery_translation_tasks ADD COLUMN sourceKind TEXT NOT NULL DEFAULT 'PICKED'")
+    }
 }

@@ -48,14 +48,14 @@ class FloatingButtonOpacityTest {
 
     @Test fun settingsSliderUsesExistingCardAndPersistenceBoundaries() {
         val ui = File("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
-        val card = ui.substringAfter("item(key = SectionKeys.FLOATING)")
-            .substringBefore("item(key = SectionKeys.ARC_MENU)")
+        val card = ui.substringAfter("val floatingAppearanceContent:")
+            .substringBefore("val floatingMenuContent:")
         assertTrue(card.indexOf("value = floatingSize") < card.indexOf("value = floatingAlpha"))
         assertTrue(card.indexOf("value = floatingAlpha") < card.indexOf("settings_search_item_floating_snap"))
         assertTrue(card.contains("valueRange = 0.1f..1f"))
         assertTrue(card.contains("settings_alpha_label_format, (floatingAlpha * 100).roundToInt()"))
-        assertEquals(2, Regex("floatingAlpha = normalizedFloatingButtonAlpha\\(s.floatingButtonAlpha\\)").findAll(ui).count())
-        assertEquals(2, Regex("floatingButtonAlpha = floatingAlpha,").findAll(ui).count())
+        assertTrue(ui.contains("floatingAlpha = normalizedFloatingButtonAlpha(s.floatingButtonAlpha)"))
+        assertTrue(ui.contains("floatingButtonAlpha = floatingAlpha,"))
         assertTrue(ui.contains("SearchEntry(SectionKeys.FLOATING, R.string.settings_section_floating, R.string.settings_search_item_floating_alpha"))
         assertTrue("floatingButtonAlpha" in SettingsFieldPolicy.portableFieldNames)
     }

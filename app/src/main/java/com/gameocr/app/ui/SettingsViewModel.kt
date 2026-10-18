@@ -28,6 +28,7 @@ import com.gameocr.app.data.normalizedFloatingButtonAlpha
 import com.gameocr.app.data.SettingsBundleExportResult
 import com.gameocr.app.data.SettingsBundleImportResult
 import com.gameocr.app.data.SettingsBundlePreview
+import com.gameocr.app.data.SettingsBundleImportTransaction
 import com.gameocr.app.data.SettingsBundleTransfer
 import com.gameocr.app.data.SettingsRepository
 import com.gameocr.app.data.StagedOverlayFont
@@ -96,7 +97,9 @@ class SettingsViewModel @Inject constructor(
     private val routingTranslator: RoutingTranslator,
     private val connectionTester: com.gameocr.app.translate.TranslatorConnectionTester,
     private val llmInstaller: LlmModelInstaller,
+    private val localModelCatalog: com.gameocr.app.llm.LocalModelCatalog,
     private val modelReadinessChecker: ModelReadinessChecker,
+    private val asrModelInstaller: com.gameocr.app.asr.AsrModelInstaller,
     private val overlayFontManager: OverlayFontManager,
     private val glossaryRepository: TranslationGlossaryRepository,
     private val modelDownloadManager: ModelDownloadManager,
@@ -107,11 +110,31 @@ class SettingsViewModel @Inject constructor(
     private val voiceDesignPromptGenerator: VoiceDesignPromptGenerator,
     private val miniMaxVoiceManager: MiniMaxVoiceManager,
     private val appPermissions: com.gameocr.app.shizuku.AppPermissionCoordinator,
+    private val mlKitOcrModules: com.gameocr.app.ocr.MlKitOcrModuleManager,
 ) : ViewModel() {
 
     val modelDownloadWorkInfos: Flow<List<WorkInfo>> = modelDownloadManager.workInfos
 
     suspend fun load(): Settings = repo.get()
+
+    internal suspend fun selectedLocalModel(settings: Settings): com.gameocr.app.llm.LocalModelEntry? {
+        val id = selectedLocalModelId(settings) ?: return null
+        return localModelCatalog.entry(id)
+    }
+
+    internal suspend fun quickLocalModels(settings: Settings): List<com.gameocr.app.llm.LocalModelEntry> =
+        com.gameocr.app.llm.LocalModelQuickAccessPolicy.visible(
+            entries = localModelCatalog.list(),
+            selectedId = selectedLocalModelId(settings),
+            recentIds = localModelCatalog.recentModelIds(),
+        )
+
+    internal suspend fun rememberLocalModel(id: String) = localModelCatalog.recordUse(id)
+
+    internal suspend fun availableMlKitOcrModules(): Set<OcrEngineKind> =
+        if (mlKitOcrModules.available(refresh = true)) setOf(OcrEngineKind.ML_KIT_DEVANAGARI) else emptySet()
+
+    internal suspend fun downloadMlKitOcrModule() = mlKitOcrModules.download()
 
     private val recentLanguageMutex = Mutex()
 
@@ -142,6 +165,7 @@ class SettingsViewModel @Inject constructor(
                 com.gameocr.app.data.AutoOcrRoutingPolicy.configured(settings, route) && when (route.engine) {
                     OcrEngineKind.PADDLE_ONNX -> modelReadinessChecker.paddle(route.paddleVersion).ready
                     OcrEngineKind.MANGA_OCR_JA -> modelReadinessChecker.mangaOcr().ready
+                    OcrEngineKind.ML_KIT_DEVANAGARI -> mlKitOcrModules.available(refresh = true)
                     else -> true
                 }
             }.toSet()
@@ -293,7 +317,6 @@ class SettingsViewModel @Inject constructor(
         val stagingDir = File(appContext.cacheDir, "settings-import-${System.nanoTime()}")
         require(stagingDir.mkdirs()) { "Could not create settings import staging storage." }
         val stagedFonts = mutableListOf<StagedOverlayFont>()
-        val commits = mutableListOf<OverlayFontCommit>()
         try {
             val input = appContext.contentResolver.openInputStream(uri)
                 ?: error("Could not open the selected settings file.")
@@ -318,49 +341,37 @@ class SettingsViewModel @Inject constructor(
             val importedSettings = requireNotNull(preview.settings)
             val beforeSettings = repo.get()
             val beforeGlossary = glossaryRepository.listAll()
-            var glossaryCommitted = false
-            var settingsCommitted = false
-            try {
-                stagedFonts.forEach { commits += overlayFontManager.commitTransferredFont(it) }
-                val installedFonts = commits.map(OverlayFontCommit::entry)
-                val availableFonts = overlayFontManager.existingFontEntries(
-                    beforeSettings.overlayFonts + importedSettings.overlayFonts + installedFonts,
-                )
-                val merged = SettingsBundleTransfer.mergeImportedSettings(
-                    current = beforeSettings,
-                    imported = importedSettings,
-                    availableFonts = availableFonts,
-                )
-                val importedGlossaryCount = glossaryRepository.importTerms(preview.glossaryTerms)
-                glossaryCommitted = true
-                val importedState = repo.updateAfterPresetImport(
-                    (merged.presetResult.addedNames + merged.presetResult.overwrittenNames).toSet(),
-                ) { merged.settings }
-                settingsCommitted = true
-                commits.forEach(overlayFontManager::finishTransferredFont)
-                SettingsBundleImportResult(
-                    settings = importedState,
-                    importedPresetCount = merged.presetResult.importedCount,
-                    overwrittenPresetNames = merged.presetResult.overwrittenNames,
-                    importedFontCount = installedFonts.size,
-                    importedGlossaryTermCount = importedGlossaryCount,
-                    legacyPresetOnly = false,
-                    skippedSettingFieldCount = preview.skippedSettingFields.size,
-                )
-            } catch (error: Throwable) {
-                if (settingsCommitted) {
-                    runCatching { repo.update { beforeSettings } }.exceptionOrNull()?.let(error::addSuppressed)
-                }
-                if (glossaryCommitted) {
-                    runCatching { glossaryRepository.restoreTerms(beforeGlossary) }
-                        .exceptionOrNull()?.let(error::addSuppressed)
-                }
-                commits.asReversed().forEach { commit ->
-                    runCatching { overlayFontManager.rollbackTransferredFont(commit) }
-                        .exceptionOrNull()?.let(error::addSuppressed)
-                }
-                throw error
-            }
+            val outcome = SettingsBundleImportTransaction(
+                commitFont = overlayFontManager::commitTransferredFont,
+                prepareSettings = { fonts: List<OverlayFontCommit> ->
+                    SettingsBundleTransfer.mergeImportedSettings(
+                        current = beforeSettings,
+                        imported = importedSettings,
+                        availableFonts = overlayFontManager.existingFontEntries(
+                            beforeSettings.overlayFonts + importedSettings.overlayFonts + fonts.map(OverlayFontCommit::entry),
+                        ),
+                    )
+                },
+                importGlossary = { glossaryRepository.importTerms(preview.glossaryTerms) },
+                commitSettings = { merged ->
+                    repo.updateAfterPresetImport(
+                        (merged.presetResult.addedNames + merged.presetResult.overwrittenNames).toSet(),
+                    ) { merged.settings }
+                },
+                finishFont = overlayFontManager::finishTransferredFont,
+                restoreSettings = { repo.update { beforeSettings } },
+                restoreGlossary = { glossaryRepository.restoreTerms(beforeGlossary) },
+                rollbackFont = overlayFontManager::rollbackTransferredFont,
+            ).run(stagedFonts)
+            SettingsBundleImportResult(
+                settings = outcome.settings,
+                importedPresetCount = outcome.prepared.presetResult.importedCount,
+                overwrittenPresetNames = outcome.prepared.presetResult.overwrittenNames,
+                importedFontCount = outcome.fonts.size,
+                importedGlossaryTermCount = outcome.glossaryCount,
+                legacyPresetOnly = false,
+                skippedSettingFieldCount = preview.skippedSettingFields.size,
+            )
         } finally {
             stagingDir.deleteRecursively()
         }
@@ -400,6 +411,7 @@ class SettingsViewModel @Inject constructor(
         loopMs: Long,
         loopTriggerMode: com.gameocr.app.data.LoopTriggerMode,
         loopTextStableDurationMs: Long,
+        loopCaptureVibrationEnabled: Boolean,
         loopSkipSimilarFrames: Boolean,
         loopFrameSimilarityThreshold: Float,
         loopTextRegionMode: com.gameocr.app.data.LoopTextRegionMode,
@@ -509,9 +521,11 @@ class SettingsViewModel @Inject constructor(
         baiduFanyiSecretKey: String,
         overlayFonts: List<OverlayFontEntry>,
         activeTranslationPresetId: String,
+        localModelId: String? = null,
+        asrCredentialDraft: com.gameocr.app.data.AsrCredentialDraft? = null,
     ) {
         repo.update {
-            it.copy(
+            (asrCredentialDraft?.applyTo(it, normalize = true) ?: it).copy(
                 baseUrl = baseUrl.trim(),
                 apiKey = apiKey.trim(),
                 model = model.trim(),
@@ -527,7 +541,8 @@ class SettingsViewModel @Inject constructor(
                 overlayAlpha = alpha.coerceIn(0.3f, 1f),
                 captureLoopIntervalMs = loopMs.coerceAtLeast(200),
                 loopTriggerMode = loopTriggerMode,
-                loopTextStableDurationMs = loopTextStableDurationMs.coerceIn(200L, 2000L),
+                loopTextStableDurationMs = loopTextStableDurationMs.coerceIn(100L, 2000L),
+                loopCaptureVibrationEnabled = loopCaptureVibrationEnabled,
                 loopSkipSimilarFrames = loopSkipSimilarFrames,
                 loopFrameSimilarityThreshold = loopFrameSimilarityThreshold.coerceIn(0.50f, 0.99f),
                 loopTextRegionMode = loopTextRegionMode,
@@ -630,6 +645,7 @@ class SettingsViewModel @Inject constructor(
                 ),
                 translatorEngine = translatorEngine,
                 openAiProvider = openAiProvider,
+                localModelId = localModelId.takeIf { translatorEngine == TranslatorEngine.LOCAL_QWEN3 },
                 deeplApiKey = deeplKey.trim(),
                 deeplPro = deeplPro,
                 deeplProtocol = deeplProtocol,
@@ -730,6 +746,108 @@ class SettingsViewModel @Inject constructor(
 
     suspend fun saveArcMenuPageSize(size: Int) {
         repo.update { it.copy(arcMenuPageSize = FloatingMenu.coercePageSize(size)) }
+    }
+
+    private val quickPanelSettingsSaver by lazy {
+        QuickPanelSettingsSaver(viewModelScope) { enabled ->
+            withContext(Dispatchers.IO) { repo.update { it.copy(quickPanelEnabled = enabled) } }
+        }
+    }
+
+    internal fun saveQuickPanelEnabled(enabled: Boolean) = quickPanelSettingsSaver.save(enabled)
+
+    // —— Speech recognition ——
+
+    /** Speech settings save immediately, like other floating-ball options; only these fields change. */
+    internal suspend fun saveAsrSettings(transform: (Settings) -> Settings) {
+        withContext(Dispatchers.IO) {
+            repo.update { current ->
+                transform(current).let { next ->
+                    current.copy(
+                        asrEngine = next.asrEngine,
+                        asrWhisperVariant = next.asrWhisperVariant,
+                        asrCloudModel = next.asrCloudModel,
+                        asrCloudProvider = next.asrCloudProvider,
+                        asrCloudConnections = current.asrCloudConnections.copy(
+                            tencentModel = next.asrCloudConnections.tencentModel,
+                            volcResource = next.asrCloudConnections.volcResource,
+                        ),
+                        asrLanguage = next.asrLanguage,
+                        asrMaxDisplayedRecords = next.asrMaxDisplayedRecords,
+                    )
+                }
+            }
+        }
+    }
+
+    internal fun asrModelReady(model: com.gameocr.app.asr.AsrModelId): Boolean =
+        modelReadinessChecker.asr(model).ready
+
+    /** Copies the picked files through the manifest check; the running session releases the model first. */
+    internal suspend fun importAsrModel(
+        model: com.gameocr.app.asr.AsrModelId,
+        uris: List<android.net.Uri>,
+    ): com.gameocr.app.asr.AsrImportResult {
+        val resolver = appContext.contentResolver
+        val sources = withContext(Dispatchers.IO) {
+            uris.map { uri ->
+                var name = uri.lastPathSegment.orEmpty()
+                var size: Long? = null
+                resolver.query(
+                    uri,
+                    arrayOf(android.provider.OpenableColumns.DISPLAY_NAME, android.provider.OpenableColumns.SIZE),
+                    null, null, null,
+                )?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        cursor.getString(0)?.let { name = it }
+                        if (!cursor.isNull(1)) size = cursor.getLong(1)
+                    }
+                }
+                com.gameocr.app.asr.AsrImportSource(name, size) {
+                    resolver.openInputStream(uri) ?: throw java.io.FileNotFoundException(name)
+                }
+            }
+        }
+        return asrModelInstaller.import(model, sources)
+    }
+
+    internal suspend fun deleteAsrModel(model: com.gameocr.app.asr.AsrModelId) {
+        asrModelInstaller.delete(model)
+    }
+
+    internal suspend fun downloadAsrModel(
+        model: com.gameocr.app.asr.AsrModelId,
+        onEnqueued: (java.util.UUID) -> Unit,
+        onWorkInfo: (androidx.work.WorkInfo) -> Unit = {},
+    ) {
+        modelDownloadManager.enqueueAndAwait(
+            listOf(ModelDownloadSpec.asr(model)),
+            onProgress = {},
+            onEnqueued = onEnqueued,
+            onWorkInfo = onWorkInfo,
+        )
+    }
+
+    suspend fun saveGestureBinding(
+        gesture: com.gameocr.app.data.PresetGesture,
+        action: com.gameocr.app.data.GestureAction,
+    ) {
+        repo.update { it.copy(gestureBindings = it.gestureBindings + (gesture to action)) }
+    }
+
+    suspend fun saveGestureEdge(enabled: Boolean, right: Boolean, height: Int) {
+        repo.update { it.copy(
+            gestureEdgeEnabled = enabled,
+            gestureEdgeRight = right,
+            gestureEdgeHeightPercent = height.coerceIn(10, 40),
+        ) }
+    }
+
+    suspend fun saveGestureMotion(twist: Boolean, enabled: Boolean, sensitivity: Int, action: com.gameocr.app.data.GestureAction?) {
+        repo.update {
+            if (twist) it.copy(gestureTwistEnabled = enabled, gestureTwistSensitivity = sensitivity.coerceIn(1, 5), gestureTwistAction = action)
+            else it.copy(gestureTiltEnabled = enabled, gestureTiltSensitivity = sensitivity.coerceIn(1, 5), gestureTiltAction = action)
+        }
     }
 
     suspend fun saveInputTranslationDoubleAction(action: InputTranslationDoubleAction) {
@@ -1056,39 +1174,33 @@ class SettingsViewModel @Inject constructor(
         repo.update { it.copy(paddleDetectionProfile = profile) }
     }
 
-    /** DBNet 阈值即时落盘；prob/score 共用，unclip 按 Paddle/MangaOCR 分开。 */
+    /**
+     * DBNet 阈值即时落盘；prob/score 共用，unclip 按 Paddle/MangaOCR 分开。
+     * null = 使用所选检测模型的官方值（MangaOCR 的 unclip 没有模型默认，null 回到其固定默认）。
+     */
     suspend fun saveDbnetThresholds(
         ocrEngine: OcrEngineKind,
-        prob: Float,
-        score: Float,
-        unclip: Float,
+        prob: Float?,
+        score: Float?,
+        unclip: Float?,
     ) {
         repo.update {
-            val clampedUnclip = unclip.coerceIn(1.2f, 2.6f)
+            val clampedUnclip = unclip?.coerceIn(1.2f, 2.6f)
             it.copy(
-                dbnetProbThresh = prob.coerceIn(0.05f, 0.5f),
-                dbnetBoxScoreThresh = score.coerceIn(0.2f, 0.8f),
+                dbnetProbThresh = prob?.coerceIn(0.05f, 0.5f),
+                dbnetBoxScoreThresh = score?.coerceIn(0.2f, 0.8f),
                 dbnetUnclipRatio = if (ocrEngine == OcrEngineKind.MANGA_OCR_JA) {
                     it.dbnetUnclipRatio
                 } else {
                     clampedUnclip
                 },
                 mangaOcrDbnetUnclipRatio = if (ocrEngine == OcrEngineKind.MANGA_OCR_JA) {
-                    clampedUnclip
+                    clampedUnclip ?: Settings().mangaOcrDbnetUnclipRatio
                 } else {
                     it.mangaOcrDbnetUnclipRatio
                 },
                 bubbleClusterGap = MangaOcrAdvancedSettingsPolicy.BUBBLE_CLUSTER_GAP,
                 mangaOcrCropPaddingPx = MangaOcrAdvancedSettingsPolicy.CROP_PADDING_PX,
-            )
-        }
-    }
-
-    suspend fun saveLocalLlmInferenceParams(contextSize: Int, maxNewTokens: Int) {
-        repo.update {
-            it.copy(
-                localLlmContextSize = contextSize.coerceIn(512, 4096),
-                localLlmMaxNewTokens = maxNewTokens.coerceIn(32, 512),
             )
         }
     }
@@ -1105,6 +1217,7 @@ class SettingsViewModel @Inject constructor(
      */
     suspend fun testTranslator(
         translatorEngine: TranslatorEngine,
+        openAiProvider: OpenAiProvider,
         baseUrl: String,
         apiKey: String,
         model: String,
@@ -1137,7 +1250,7 @@ class SettingsViewModel @Inject constructor(
         val base = repo.get()
         val temp = base.copy(
             translatorEngine = translatorEngine,
-            openAiProvider = OpenAiProvider.CUSTOM,
+            openAiProvider = openAiProvider,
             baseUrl = baseUrl.trim(),
             apiKey = apiKey.trim(),
             model = model.trim(),

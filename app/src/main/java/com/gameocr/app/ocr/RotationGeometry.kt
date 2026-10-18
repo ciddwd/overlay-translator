@@ -27,5 +27,6 @@ internal fun mapBlocksFromRotated180(blocks: List<TextBlock>, imageW: Int, image
             sourceBoxes = block.sourceBoxes.map { box ->
                 mapRectFromRotated180(box, imageW, imageH)
             },
+            presentationRotationDegrees = ((block.presentationRotationDegrees + 180) % 360 + 360) % 360,
         )
     }

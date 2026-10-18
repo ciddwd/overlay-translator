@@ -13,6 +13,8 @@ import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.gameocr.app.R
+import com.gameocr.app.asr.AsrModelId
+import com.gameocr.app.asr.AsrModelInstaller
 import com.gameocr.app.data.PaddleModelVersion
 import com.gameocr.app.llm.LlmModelInstaller
 import com.gameocr.app.llm.LlmModelKind
@@ -35,9 +37,12 @@ class ModelDownloadWorker @AssistedInject constructor(
     private val orientationModelInstaller: OrientationModelInstaller,
     private val modelReadinessChecker: ModelReadinessChecker,
     private val networkTester: ModelDownloadNetworkTester,
+    private val asrModelInstaller: AsrModelInstaller,
 ) : CoroutineWorker(appContext, workerParams) {
 
     private var lastProgressUpdateAt = 0L
+    private var lastPublishedVerifying = false
+    private val speedMeter = DownloadSpeedMeter()
     private var lastSpec: ModelDownloadSpec? = null
     private var lastFile = ""
     private var lastDownloaded = 0L
@@ -163,6 +168,11 @@ class ModelDownloadWorker @AssistedInject constructor(
                     publishProgress(spec, label, index, count, progress.file, progress.downloaded, progress.total, progress.done, progress.error)
                 }
             }
+            ModelDownloadType.ASR -> {
+                asrModelInstaller.download(AsrModelId.valueOf(spec.variant)).collect { progress ->
+                    publishProgress(spec, label, index, count, progress.file, progress.downloaded, progress.total, progress.done, progress.error, progress.verifying)
+                }
+            }
         }
         check(modelReadinessChecker.checkArtifact(spec).installed) {
             "Downloaded model did not pass the shared installation check: ${spec.encode()}"
@@ -181,32 +191,32 @@ class ModelDownloadWorker @AssistedInject constructor(
         total: Long,
         done: Boolean,
         error: String?,
+        verifying: Boolean = false,
     ) {
-        val status = when {
-            error != null -> applicationContext.getString(R.string.model_download_failed_format, error)
-            total > 0 -> applicationContext.getString(
-                R.string.model_download_progress_batch_format,
-                label,
-                (downloaded * 100 / total).coerceIn(0, 100),
-                file,
-                index + 1,
-                count,
-            )
-            else -> applicationContext.getString(
-                R.string.model_download_progress_bytes_batch_format,
-                label,
-                downloaded / 1024 / 1024,
-                file,
-                index + 1,
-                count,
-            )
+        // Same concise line everywhere this text appears: onboarding, presets and the notification.
+        val status = if (error != null) {
+            applicationContext.getString(R.string.model_download_failed_format, error)
+        } else {
+            val name = if (count > 1) {
+                applicationContext.getString(R.string.model_download_status_batch, label, index + 1, count)
+            } else label
+            val amount = ModelDownloadProgressText.percent(downloaded, total)?.let { percent ->
+                applicationContext.getString(R.string.model_download_amount_total,
+                    ModelDownloadProgressText.megabytes(downloaded), ModelDownloadProgressText.megabytes(total), percent)
+            } ?: applicationContext.getString(R.string.model_download_amount, ModelDownloadProgressText.megabytes(downloaded))
+            val speed = speedMeter.bytesPerSecond.takeIf { it > 0 }?.let {
+                "  " + applicationContext.getString(R.string.model_download_speed,
+                    android.text.format.Formatter.formatShortFileSize(applicationContext, it))
+            }.orEmpty()
+            "$name  $amount$speed"
         }
         publish(
             status,
             file,
             downloaded,
             total,
-            force = done || error != null,
+            force = done || error != null || verifying,
+            verifying = verifying,
             spec = spec,
             batchIndex = index + 1,
             batchCount = count,
@@ -223,6 +233,7 @@ class ModelDownloadWorker @AssistedInject constructor(
         batchIndex: Int,
         batchCount: Int,
         active: Boolean = true,
+        verifying: Boolean = false,
     ) {
         if (spec != null) lastSpec = spec
         if (file.isNotBlank()) lastFile = file
@@ -232,7 +243,9 @@ class ModelDownloadWorker @AssistedInject constructor(
         lastBatchCount = batchCount
 
         val now = SystemClock.elapsedRealtime()
-        if (!force && now - lastProgressUpdateAt < PROGRESS_UPDATE_INTERVAL_MS) return
+        val speed = speedMeter.update(now, downloaded)
+        if (!force && verifying == lastPublishedVerifying && now - lastProgressUpdateAt < PROGRESS_UPDATE_INTERVAL_MS) return
+        lastPublishedVerifying = verifying
         lastProgressUpdateAt = now
 
         setProgress(
@@ -240,9 +253,11 @@ class ModelDownloadWorker @AssistedInject constructor(
                 KEY_STATUS to status,
                 KEY_SPECS to requiredSpecs.map { it.encode() }.toTypedArray(),
                 KEY_ACTIVE to active,
+                KEY_VERIFYING to verifying,
                 KEY_FILE to file,
                 KEY_DOWNLOADED to downloaded,
                 KEY_TOTAL to total,
+                KEY_SPEED to speed,
                 KEY_CURRENT_SPEC to spec?.encode().orEmpty(),
                 KEY_BATCH_INDEX to batchIndex,
                 KEY_BATCH_COUNT to batchCount,
@@ -318,16 +333,20 @@ class ModelDownloadWorker @AssistedInject constructor(
         ModelDownloadType.PADDLE -> applicationContext.getString(PaddleModelVersion.valueOf(spec.variant).displayNameRes)
         ModelDownloadType.MANGA_OCR -> applicationContext.getString(R.string.settings_manga_ocr_model_name)
         ModelDownloadType.ORIENTATION -> applicationContext.getString(R.string.settings_orientation_model_name)
+        ModelDownloadType.ASR -> AsrModelId.valueOf(spec.variant).displayName
     }
 
     companion object {
         const val KEY_SPECS = "model_download_specs"
+        const val KEY_VERIFYING = "model_download_verifying"
         const val KEY_STATUS = "model_download_status"
         const val KEY_ACTIVE = "model_download_active"
         const val KEY_ERROR = "model_download_error"
         const val KEY_FILE = "model_download_file"
         const val KEY_DOWNLOADED = "model_download_downloaded"
         const val KEY_TOTAL = "model_download_total"
+        /** Smoothed bytes per second; 0 when unknown. */
+        const val KEY_SPEED = "model_download_speed"
         const val KEY_CURRENT_SPEC = "model_download_current_spec"
         const val KEY_BATCH_INDEX = "model_download_batch_index"
         const val KEY_BATCH_COUNT = "model_download_batch_count"

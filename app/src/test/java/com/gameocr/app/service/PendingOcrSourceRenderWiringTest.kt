@@ -31,7 +31,7 @@ class PendingOcrSourceRenderWiringTest {
             Case(
                 "prepared backgrounds publish before translation planning",
                 capture,
-                "patches = preparedDelayedMask.backgroundPatches",
+                "mapPatchesToDisplay(it.backgroundPatches)",
             ),
             Case(
                 "final layout consumes prepared repair",

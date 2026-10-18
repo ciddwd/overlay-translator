@@ -33,7 +33,7 @@ private val Context.dataStore by preferencesDataStore("game_ocr_settings")
 private fun normalizeLoopFrameSimilarity(value: Float): Float =
     if (value.isFinite()) value.coerceIn(0.50f, 0.99f) else 0.95f
 
-private fun normalizeLoopTextStableDuration(value: Long): Long = value.coerceIn(200L, 2000L)
+private fun normalizeLoopTextStableDuration(value: Long): Long = value.coerceIn(100L, 2000L)
 
 @Singleton
 class SettingsRepository internal constructor(
@@ -61,6 +61,7 @@ class SettingsRepository internal constructor(
         val LoopInterval = longPreferencesKey("loop_interval_ms")
         val LoopTriggerMode = stringPreferencesKey("loop_trigger_mode")
         val LoopTextStableDuration = longPreferencesKey("loop_text_stable_duration_ms")
+        val LoopCaptureVibrationEnabled = booleanPreferencesKey("loop_capture_vibration_enabled")
         val LoopSkipSimilarFrames = booleanPreferencesKey("loop_skip_similar_frames")
         val LoopFrameSimilarityThreshold = floatPreferencesKey("loop_frame_similarity_threshold")
         val LoopTextRegionMode = stringPreferencesKey("loop_text_region_mode")
@@ -225,10 +226,29 @@ class SettingsRepository internal constructor(
         // 弧菜单按钮顺序：逗号分隔 MenuItemId.name 列表。MenuItemId.name 不含逗号，分隔安全。
         val FloatingMenuOrder = stringPreferencesKey("floating_menu_item_order")
         val ArcMenuPageSize = intPreferencesKey("arc_menu_page_size")
+        val QuickPanelEnabled = booleanPreferencesKey("quick_panel_enabled")
         val TranslationPresets = stringPreferencesKey("translation_presets_json")
         val ActiveTranslationPresetId = stringPreferencesKey("active_translation_preset_id")
         // 主球当前技能（FULL_SCREEN / WORD_SELECT）
         val FloatingSkillKey = stringPreferencesKey("floating_button_skill")
+        val AsrEngine = stringPreferencesKey("asr_engine")
+        val AsrWhisperVariant = stringPreferencesKey("asr_whisper_variant")
+        val AsrCloudModel = stringPreferencesKey("asr_cloud_model")
+        val AsrCloudProvider = stringPreferencesKey("asr_cloud_provider")
+        val AsrCloudConnections = stringPreferencesKey("asr_cloud_connections")
+        val AsrLanguage = stringPreferencesKey("asr_language")
+        val AsrMaxDisplayedRecords = intPreferencesKey("asr_max_displayed_records")
+        val AsrDashScopeApiKey = stringPreferencesKey("asr_dashscope_api_key")
+        val GestureBindingsKey = stringPreferencesKey("gesture_bindings")
+        val GestureEdgeEnabled = booleanPreferencesKey("gesture_edge_enabled")
+        val GestureEdgeRight = booleanPreferencesKey("gesture_edge_right")
+        val GestureEdgeHeight = intPreferencesKey("gesture_edge_height")
+        val GestureTwistEnabled = booleanPreferencesKey("gesture_twist_enabled")
+        val GestureTwistSensitivity = intPreferencesKey("gesture_twist_sensitivity")
+        val GestureTiltEnabled = booleanPreferencesKey("gesture_tilt_enabled")
+        val GestureTiltSensitivity = intPreferencesKey("gesture_tilt_sensitivity")
+        val GestureTwistAction = stringPreferencesKey("gesture_twist_action")
+        val GestureTiltAction = stringPreferencesKey("gesture_tilt_action")
         val InputTranslationDoubleAction =
             stringPreferencesKey("input_translation_double_action")
         // 划词翻译行为开关
@@ -246,12 +266,14 @@ class SettingsRepository internal constructor(
         // 端侧 LLM 推理参数
         val LocalLlmCtxSize = intPreferencesKey("local_llm_ctx_size")
         val LocalLlmMaxNewTokens = intPreferencesKey("local_llm_max_new_tokens")
+        val LocalModelId = stringPreferencesKey("local_model_id")
         val LocalLlmMirrorChoice = stringPreferencesKey("local_llm_mirror_choice")
         val LocalLlmMirror = stringPreferencesKey("local_llm_mirror_url")
         // DBNet 检测阈值：prob/score/gap 共用；unclip 按 Paddle/MangaOCR 分开。
         val DbnetProbThresh = floatPreferencesKey("dbnet_prob_thresh")
         val DbnetBoxScoreThresh = floatPreferencesKey("dbnet_box_score_thresh")
         val DbnetUnclipRatio = floatPreferencesKey("dbnet_unclip_ratio")
+        val DbnetModelDefaultsMigrated = booleanPreferencesKey("dbnet_model_defaults_migrated")
         val MangaOcrDbnetUnclipRatio = floatPreferencesKey("manga_ocr_dbnet_unclip_ratio")
         val BubbleClusterGap = intPreferencesKey("bubble_cluster_gap")
         val MangaOcrCropPaddingPx = intPreferencesKey("manga_ocr_crop_padding_px")
@@ -270,7 +292,7 @@ class SettingsRepository internal constructor(
         Keys.NiuTransApiKey, Keys.NiuTransAppId, Keys.YoudaoAppKey, Keys.YoudaoAppSecret,
         Keys.PaddleAiStudioToken, Keys.VolcAccessKeyId, Keys.VolcSecretAccessKey,
         Keys.BaiduFanyiAppId, Keys.BaiduFanyiSecretKey, Keys.TtsHttpBearerToken,
-        Keys.TtsVolcengineApiKey, Keys.TtsMiniMaxApiKey, Keys.TtsMimoApiKey,
+        Keys.TtsVolcengineApiKey, Keys.TtsMiniMaxApiKey, Keys.TtsMimoApiKey, Keys.AsrDashScopeApiKey, Keys.AsrCloudConnections,
     )
     private var defaultPromptProvider: () -> String = { context.getString(R.string.default_prompt) }
     private var defaultDictionaryPromptProvider: () -> String = {
@@ -312,6 +334,8 @@ class SettingsRepository internal constructor(
         Keys.TtsMiniMaxApiKey,
         Keys.TtsMimoBaseUrl,
         Keys.TtsMimoApiKey,
+        Keys.AsrDashScopeApiKey,
+        Keys.AsrCloudConnections,
         Keys.CleartextHosts,
         Keys.DictionaryPrompt,
         Keys.LocalLlmMirror,
@@ -439,6 +463,42 @@ class SettingsRepository internal constructor(
         return changed
     }
 
+    /**
+     * One-shot: stored legacy app defaults (0.25 / 0.5 / 1.55) become "model default" so each
+     * detector runs with its official inference.yml thresholds. Explicit user values are kept.
+     */
+    suspend fun migrateDetectionThresholdsToModelDefaultsIfNeeded(): Boolean {
+        var changed = false
+        settingsStore.edit { prefs ->
+            if (prefs[Keys.DbnetModelDefaultsMigrated] == true) return@edit
+            listOf(
+                Keys.DbnetProbThresh to PaddleDetectionThresholdMigration::probThresh,
+                Keys.DbnetBoxScoreThresh to PaddleDetectionThresholdMigration::boxScoreThresh,
+                Keys.DbnetUnclipRatio to PaddleDetectionThresholdMigration::unclipRatio,
+            ).forEach { (key, migrate) ->
+                val stored = prefs[key] ?: return@forEach
+                if (migrate(stored) == null) {
+                    prefs.remove(key)
+                    changed = true
+                }
+            }
+            val storedPresets = prefs[Keys.TranslationPresets]
+                ?.let(secretCodec::decodeStored)
+                ?.takeIf(String::isNotBlank)
+                ?.let { raw ->
+                    runCatching { json.decodeFromString<List<TranslationPreset>>(raw) }
+                        .getOrNull()
+                }
+            val normalizedPresets = storedPresets?.map(PaddleDetectionThresholdMigration::normalize)
+            if (storedPresets != null && normalizedPresets != storedPresets) {
+                prefs.putSecure(Keys.TranslationPresets, json.encodeToString(normalizedPresets))
+                changed = true
+            }
+            prefs[Keys.DbnetModelDefaultsMigrated] = true
+        }
+        return changed
+    }
+
     suspend fun migrateMangaOcrDetectorToV6SmallIfNeeded(): Boolean {
         var changed = false
         settingsStore.edit { prefs ->
@@ -549,6 +609,10 @@ class SettingsRepository internal constructor(
             wordSelectLastRegionSavedScreenW = currentW,
             wordSelectLastRegionSavedScreenH = currentH,
         ) }
+    }
+
+    private fun MutablePreferences.putOrRemove(key: Preferences.Key<Float>, value: Float?) {
+        if (value == null) remove(key) else this[key] = value
     }
 
     private fun MutablePreferences.putSecure(key: Preferences.Key<String>, value: String) {
@@ -712,6 +776,7 @@ class SettingsRepository internal constructor(
             prefs[Keys.LoopTextStableDuration] =
                 normalizeLoopTextStableDuration(next.loopTextStableDurationMs)
             prefs[Keys.LoopSkipSimilarFrames] = next.loopSkipSimilarFrames
+            prefs[Keys.LoopCaptureVibrationEnabled] = next.loopCaptureVibrationEnabled
             prefs[Keys.LoopFrameSimilarityThreshold] =
                 normalizeLoopFrameSimilarity(next.loopFrameSimilarityThreshold)
             prefs[Keys.LoopTextRegionMode] = next.loopTextRegionMode.name
@@ -885,6 +950,7 @@ class SettingsRepository internal constructor(
             )
             prefs[Keys.FloatingMenuOrder] = next.floatingMenuItemOrder.joinToString(",") { it.name }
             prefs[Keys.ArcMenuPageSize] = FloatingMenu.coercePageSize(next.arcMenuPageSize)
+            prefs[Keys.QuickPanelEnabled] = next.quickPanelEnabled
             prefs.putSecure(
                 Keys.TranslationPresets,
                 json.encodeToString(
@@ -895,6 +961,26 @@ class SettingsRepository internal constructor(
             )
             prefs[Keys.ActiveTranslationPresetId] = next.activeTranslationPresetId
             prefs[Keys.FloatingSkillKey] = next.floatingButtonSkill.name
+            prefs[Keys.AsrEngine] = next.asrEngine.name
+            prefs[Keys.AsrWhisperVariant] = next.asrWhisperVariant.name
+            prefs[Keys.AsrCloudModel] = next.asrCloudModel.name
+            prefs[Keys.AsrCloudProvider] = next.asrCloudProvider.name
+            prefs.putSecure(Keys.AsrCloudConnections, json.encodeToString(next.asrCloudConnections))
+            prefs[Keys.AsrLanguage] = next.asrLanguage.name
+            prefs[Keys.AsrMaxDisplayedRecords] = AsrDisplayPolicy.clampRecords(next.asrMaxDisplayedRecords)
+            prefs.putSecure(Keys.AsrDashScopeApiKey, next.asrDashScopeApiKey)
+            prefs[Keys.GestureBindingsKey] = json.encodeToString(
+                GestureBindings.normalize(next.gestureBindings).entries.associate { it.key.name to it.value.name }
+            )
+            prefs[Keys.GestureEdgeEnabled] = next.gestureEdgeEnabled
+            prefs[Keys.GestureEdgeRight] = next.gestureEdgeRight
+            prefs[Keys.GestureEdgeHeight] = next.gestureEdgeHeightPercent.coerceIn(10, 40)
+            prefs[Keys.GestureTwistEnabled] = next.gestureTwistEnabled
+            prefs[Keys.GestureTwistSensitivity] = next.gestureTwistSensitivity.coerceIn(1, 5)
+            prefs[Keys.GestureTiltEnabled] = next.gestureTiltEnabled
+            prefs[Keys.GestureTiltSensitivity] = next.gestureTiltSensitivity.coerceIn(1, 5)
+            prefs[Keys.GestureTwistAction] = next.gestureTwistAction?.name ?: "DRAW"
+            prefs[Keys.GestureTiltAction] = next.gestureTiltAction?.name ?: "DRAW"
             prefs[Keys.InputTranslationDoubleAction] = next.inputTranslationDoubleAction.name
             prefs[Keys.WordSelectPreciseAdjust] = next.wordSelectPreciseAdjust
             prefs[Keys.WordSelectCardMode] = next.wordSelectCardMode
@@ -908,11 +994,14 @@ class SettingsRepository internal constructor(
             prefs.putSecure(Keys.DictionaryPrompt, next.dictionaryPrompt)
             prefs[Keys.LocalLlmCtxSize] = next.localLlmContextSize
             prefs[Keys.LocalLlmMaxNewTokens] = next.localLlmMaxNewTokens
+            if (next.localModelId == null) prefs.remove(Keys.LocalModelId)
+            else prefs[Keys.LocalModelId] = next.localModelId
             prefs[Keys.LocalLlmMirrorChoice] = next.localLlmMirror.name
             prefs.putSecure(Keys.LocalLlmMirror, next.localLlmMirrorUrl)
-            prefs[Keys.DbnetProbThresh] = next.dbnetProbThresh
-            prefs[Keys.DbnetBoxScoreThresh] = next.dbnetBoxScoreThresh
-            prefs[Keys.DbnetUnclipRatio] = next.dbnetUnclipRatio
+            // Absent key = the selected detector's official value.
+            prefs.putOrRemove(Keys.DbnetProbThresh, next.dbnetProbThresh)
+            prefs.putOrRemove(Keys.DbnetBoxScoreThresh, next.dbnetBoxScoreThresh)
+            prefs.putOrRemove(Keys.DbnetUnclipRatio, next.dbnetUnclipRatio)
             prefs[Keys.MangaOcrDbnetUnclipRatio] = next.mangaOcrDbnetUnclipRatio
             prefs[Keys.BubbleClusterGap] = MangaOcrAdvancedSettingsPolicy.BUBBLE_CLUSTER_GAP
             prefs[Keys.MangaOcrCropPaddingPx] = MangaOcrAdvancedSettingsPolicy.CROP_PADDING_PX
@@ -923,6 +1012,12 @@ class SettingsRepository internal constructor(
 
     private fun Preferences.toSettings(): Settings {
         val default = Settings()
+        val asrConnectionsJson = secureString(Keys.AsrCloudConnections, "")
+        val sharedTencent = SharedTencentCredentials.resolve(
+            secureString(Keys.TencentId, default.tencentSecretId),
+            secureString(Keys.TencentKey, default.tencentSecretKey),
+            asrConnectionsJson,
+        )
         val storedTranslationOutputLayout = runCatching {
             TranslationOutputLayout.valueOf(this[Keys.TranslationOutputLayout] ?: "")
         }.getOrDefault(default.translationOutputLayout)
@@ -984,6 +1079,7 @@ class SettingsRepository internal constructor(
                 this[Keys.LoopTextStableDuration] ?: default.loopTextStableDurationMs
             ),
             loopSkipSimilarFrames = this[Keys.LoopSkipSimilarFrames] ?: default.loopSkipSimilarFrames,
+            loopCaptureVibrationEnabled = this[Keys.LoopCaptureVibrationEnabled] ?: default.loopCaptureVibrationEnabled,
             loopFrameSimilarityThreshold = normalizeLoopFrameSimilarity(
                 this[Keys.LoopFrameSimilarityThreshold] ?: default.loopFrameSimilarityThreshold
             ),
@@ -1134,8 +1230,8 @@ class SettingsRepository internal constructor(
             baiduOcrApiKey = secureString(Keys.BaiduKey, default.baiduOcrApiKey),
             baiduOcrSecretKey = secureString(Keys.BaiduSecret, default.baiduOcrSecretKey),
             a11yVolumeTrigger = this[Keys.A11yVolume] ?: default.a11yVolumeTrigger,
-            tencentSecretId = secureString(Keys.TencentId, default.tencentSecretId),
-            tencentSecretKey = secureString(Keys.TencentKey, default.tencentSecretKey),
+            tencentSecretId = sharedTencent.first,
+            tencentSecretKey = sharedTencent.second,
             tencentRegion = this[Keys.TencentRegion] ?: default.tencentRegion,
             overlayPlacement = runCatching { OverlayPlacement.valueOf(this[Keys.Placement] ?: "") }
                 .getOrDefault(default.overlayPlacement),
@@ -1276,6 +1372,7 @@ class SettingsRepository internal constructor(
             arcMenuPageSize = FloatingMenu.coercePageSize(
                 this[Keys.ArcMenuPageSize] ?: default.arcMenuPageSize
             ),
+            quickPanelEnabled = this[Keys.QuickPanelEnabled] ?: default.quickPanelEnabled,
             translationPresets = secureString(Keys.TranslationPresets, "")
                 .takeIf { it.isNotBlank() }
                 ?.let { raw ->
@@ -1288,6 +1385,39 @@ class SettingsRepository internal constructor(
                 ?: default.activeTranslationPresetId,
             floatingButtonSkill = runCatching { FloatingSkill.valueOf(this[Keys.FloatingSkillKey] ?: "") }
                 .getOrDefault(default.floatingButtonSkill),
+            asrEngine = AsrEngineKind.entries.firstOrNull { it.name == this[Keys.AsrEngine] }
+                ?: default.asrEngine,
+            asrWhisperVariant = AsrWhisperVariant.entries.firstOrNull { it.name == this[Keys.AsrWhisperVariant] }
+                ?: default.asrWhisperVariant,
+            asrCloudModel = AsrCloudModel.entries.firstOrNull { it.name == this[Keys.AsrCloudModel] }
+                ?: default.asrCloudModel,
+            asrCloudProvider = AsrCloudProvider.entries.firstOrNull { it.name == this[Keys.AsrCloudProvider] }
+                ?: default.asrCloudProvider,
+            asrCloudConnections = runCatching {
+                json.decodeFromString<AsrCloudConnections>(asrConnectionsJson)
+            }.getOrDefault(default.asrCloudConnections),
+            asrLanguage = AsrLanguage.entries.firstOrNull { it.name == this[Keys.AsrLanguage] }
+                ?: default.asrLanguage,
+            asrMaxDisplayedRecords = AsrDisplayPolicy.clampRecords(
+                this[Keys.AsrMaxDisplayedRecords] ?: default.asrMaxDisplayedRecords,
+            ),
+            asrDashScopeApiKey = secureString(Keys.AsrDashScopeApiKey, default.asrDashScopeApiKey),
+            gestureBindings = runCatching {
+                GestureBindings.fromNames(
+                    json.decodeFromString<Map<String, String>>(this[Keys.GestureBindingsKey] ?: "{}")
+                )
+            }.getOrDefault(default.gestureBindings),
+            gestureEdgeEnabled = this[Keys.GestureEdgeEnabled] ?: false,
+            gestureEdgeRight = this[Keys.GestureEdgeRight] ?: false,
+            gestureEdgeHeightPercent = (this[Keys.GestureEdgeHeight] ?: 22).coerceIn(10, 40),
+            gestureTwistEnabled = this[Keys.GestureTwistEnabled] ?: false,
+            gestureTwistSensitivity = (this[Keys.GestureTwistSensitivity] ?: 3).coerceIn(1, 5),
+            gestureTiltEnabled = this[Keys.GestureTiltEnabled] ?: false,
+            gestureTiltSensitivity = (this[Keys.GestureTiltSensitivity] ?: 3).coerceIn(1, 5),
+            gestureTwistAction = runCatching { GestureAction.valueOf(this[Keys.GestureTwistAction].orEmpty()) }
+                .getOrNull()?.let { if (it.targetSkill == null) it else GestureAction.NONE },
+            gestureTiltAction = runCatching { GestureAction.valueOf(this[Keys.GestureTiltAction].orEmpty()) }
+                .getOrNull()?.let { if (it.targetSkill == null) it else GestureAction.NONE },
             inputTranslationDoubleAction = runCatching {
                 InputTranslationDoubleAction.valueOf(
                     this[Keys.InputTranslationDoubleAction].orEmpty()
@@ -1313,12 +1443,13 @@ class SettingsRepository internal constructor(
             ),
             localLlmContextSize = this[Keys.LocalLlmCtxSize] ?: default.localLlmContextSize,
             localLlmMaxNewTokens = this[Keys.LocalLlmMaxNewTokens] ?: default.localLlmMaxNewTokens,
+            localModelId = this[Keys.LocalModelId]?.takeIf(String::isNotBlank),
             localLlmMirror = runCatching { LlmMirrorChoice.valueOf(this[Keys.LocalLlmMirrorChoice] ?: "") }
                 .getOrDefault(default.localLlmMirror),
             localLlmMirrorUrl = secureString(Keys.LocalLlmMirror, default.localLlmMirrorUrl),
-            dbnetProbThresh = this[Keys.DbnetProbThresh] ?: default.dbnetProbThresh,
-            dbnetBoxScoreThresh = this[Keys.DbnetBoxScoreThresh] ?: default.dbnetBoxScoreThresh,
-            dbnetUnclipRatio = this[Keys.DbnetUnclipRatio] ?: default.dbnetUnclipRatio,
+            dbnetProbThresh = this[Keys.DbnetProbThresh],
+            dbnetBoxScoreThresh = this[Keys.DbnetBoxScoreThresh],
+            dbnetUnclipRatio = this[Keys.DbnetUnclipRatio],
             mangaOcrDbnetUnclipRatio = this[Keys.MangaOcrDbnetUnclipRatio]
                 ?: default.mangaOcrDbnetUnclipRatio,
             bubbleClusterGap = MangaOcrAdvancedSettingsPolicy.BUBBLE_CLUSTER_GAP,

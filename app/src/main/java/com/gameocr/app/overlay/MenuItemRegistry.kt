@@ -27,15 +27,41 @@ object MenuItemRegistry {
             FloatingSkill.WORD_SELECT -> FloatingSkill.FULL_SCREEN
             FloatingSkill.LOOP -> FloatingSkill.WORD_SELECT
             FloatingSkill.INPUT_TRANSLATE -> FloatingSkill.FULL_SCREEN
+            FloatingSkill.GESTURE -> FloatingSkill.FULL_SCREEN
+            FloatingSkill.SPEECH -> FloatingSkill.FULL_SCREEN
         }
         MenuItemId.INPUT_TRANSLATE_SKILL -> when (currentSkill) {
             FloatingSkill.INPUT_TRANSLATE -> FloatingSkill.WORD_SELECT
             FloatingSkill.FULL_SCREEN,
             FloatingSkill.WORD_SELECT,
-            FloatingSkill.LOOP -> FloatingSkill.INPUT_TRANSLATE
+            FloatingSkill.LOOP,
+            FloatingSkill.GESTURE,
+            FloatingSkill.SPEECH -> FloatingSkill.INPUT_TRANSLATE
         }
+        MenuItemId.GESTURE_SKILL -> if (currentSkill == FloatingSkill.GESTURE) {
+            FloatingSkill.WORD_SELECT
+        } else FloatingSkill.GESTURE
+        MenuItemId.SPEECH_SKILL -> if (currentSkill == FloatingSkill.SPEECH) {
+            FloatingSkill.WORD_SELECT
+        } else FloatingSkill.SPEECH
         else -> null
     }
+
+    /**
+     * The speech slot is never saved in the user's order; it always follows the last mode slot
+     * (or ends the list).
+     */
+    fun withSpeechSlot(order: List<MenuItemId>): List<MenuItemId> {
+        val base = order.filterNot { it == MenuItemId.SPEECH_SKILL }
+        val anchor = base.indexOfLast { it in SKILL_SLOTS }
+        return base.toMutableList().apply { add(if (anchor >= 0) anchor + 1 else size, MenuItemId.SPEECH_SKILL) }
+    }
+
+    private val SKILL_SLOTS = setOf(
+        MenuItemId.FULL_SCREEN_SKILL,
+        MenuItemId.INPUT_TRANSLATE_SKILL,
+        MenuItemId.GESTURE_SKILL,
+    )
 
     fun buildNextPageItem(onTap: () -> Unit): MenuItem = MenuItem(
         iconRes = R.drawable.ic_menu_next_page,
@@ -52,7 +78,9 @@ object MenuItemRegistry {
         when (id) {
             MenuItemId.LOOP,
             MenuItemId.FULL_SCREEN_SKILL,
-            MenuItemId.INPUT_TRANSLATE_SKILL -> listOf(
+            MenuItemId.INPUT_TRANSLATE_SKILL,
+            MenuItemId.GESTURE_SKILL,
+            MenuItemId.SPEECH_SKILL -> listOf(
                 buildSkillItem(
                     targetSkill = checkNotNull(targetSkill(id, currentSkill)),
                     callbacks = callbacks,
@@ -91,7 +119,7 @@ object MenuItemRegistry {
         }
     }
 
-    private fun buildSkillItem(
+    internal fun buildSkillItem(
         targetSkill: FloatingSkill,
         callbacks: Callbacks,
     ): MenuItem = when (targetSkill) {
@@ -118,6 +146,18 @@ object MenuItemRegistry {
             bgRes = R.drawable.bg_arc_menu_item,
             labelRes = R.string.menu_input_translate,
             onTap = callbacks.onSwitchToInputTranslate,
+        )
+        FloatingSkill.GESTURE -> MenuItem(
+            iconRes = R.drawable.ic_gesture_ball,
+            bgRes = R.drawable.bg_arc_menu_item,
+            labelRes = R.string.gesture_mode,
+            onTap = callbacks.onSwitchToGesture,
+        )
+        FloatingSkill.SPEECH -> MenuItem(
+            iconRes = R.drawable.ic_menu_speech,
+            bgRes = R.drawable.bg_arc_menu_item,
+            labelRes = R.string.menu_speech_recognition,
+            onTap = callbacks.onSwitchToSpeech,
         )
     }
 
@@ -158,5 +198,7 @@ object MenuItemRegistry {
         val onSwitchToFullScreen: () -> Unit,
         val onSwitchToWordSelect: () -> Unit,
         val onSwitchToInputTranslate: () -> Unit,
+        val onSwitchToGesture: () -> Unit,
+        val onSwitchToSpeech: () -> Unit = {},
     )
 }

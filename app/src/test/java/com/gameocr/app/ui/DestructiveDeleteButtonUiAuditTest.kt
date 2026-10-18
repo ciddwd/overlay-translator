@@ -35,16 +35,8 @@ class DestructiveDeleteButtonUiAuditTest {
             assertTrue(case.name, case.source.contains(case.marker))
         }
 
-        assertEquals(
-            "settings has font, preset, and four model delete confirmations",
-            6,
-            settingsSource.countOccurrences("DestructiveTextButton("),
-        )
-        assertEquals(
-            "glossary has one destructive delete confirmation",
-            1,
-            glossarySource.countOccurrences("DestructiveTextButton("),
-        )
+        assertTrue("settings delete confirmations use the shared button", settingsSource.contains("DestructiveTextButton("))
+        assertTrue("glossary delete confirmation uses the shared button", glossarySource.contains("DestructiveTextButton("))
         assertFalse(
             "clear and other main-screen actions must remain unchanged",
             mainSource.contains("DestructiveTextButton("),

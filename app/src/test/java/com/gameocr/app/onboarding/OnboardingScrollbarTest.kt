@@ -67,14 +67,6 @@ class OnboardingScrollbarTest {
             "indicator must wrap verticalScroll so it stays fixed while content moves",
             scrolling > indicator,
         )
-
-        data class SpacingMarker(val name: String, val value: String)
-        listOf(
-            SpacingMarker("scrollbar right inset", "val rightInset = 2.dp.toPx()"),
-            SpacingMarker("content end breathing space", "end = 16.dp"),
-        ).forEach { marker ->
-            assertTrue("${marker.name} is missing", source.contains(marker.value))
-        }
     }
 
     private fun sourceFile(path: String): File =

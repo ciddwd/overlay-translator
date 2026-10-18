@@ -110,7 +110,10 @@ class SettingsDefaultsTest {
     fun dbnetUnclipRatio_defaultsKeepPaddleAndMangaOcrSeparate() {
         val settings = Settings()
 
-        assertEquals(1.55f, settings.dbnetUnclipRatio, 0.0001f)
+        // null = the selected detector's official inference.yml value.
+        assertEquals(null, settings.dbnetProbThresh)
+        assertEquals(null, settings.dbnetBoxScoreThresh)
+        assertEquals(null, settings.dbnetUnclipRatio)
         assertEquals(1.65f, settings.mangaOcrDbnetUnclipRatio, 0.0001f)
     }
 

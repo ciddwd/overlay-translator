@@ -16,7 +16,7 @@ Third-party runtime software
 
 The Android release runtime dependency graph and the native code built into the
 application include the principal projects below. Version numbers refer to the
-v0.4.6 build configuration. Transitive modules belonging to the same project
+v0.4.7 build configuration. Transitive modules belonging to the same project
 family are grouped together.
 
 Apache License 2.0
@@ -55,6 +55,10 @@ Apache License 2.0
   https://github.com/JakeWharton/timber
 - Vulkan-Headers 1.3.275, used by the bundled llama.cpp Vulkan backend
   https://github.com/KhronosGroup/Vulkan-Headers
+- sherpa-onnx 1.13.8 (Java API and arm64-v8a JNI library), used for on-device
+  speech recognition
+  https://github.com/k2-fsa/sherpa-onnx
+  https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.8/LICENSE
 
 The complete Apache License 2.0 text is provided with this application in
 apache_license_2_0.txt and at:
@@ -68,6 +72,12 @@ MIT License
 - ONNX Runtime Android 1.20.0 — Copyright (c) Microsoft Corporation.
   All rights reserved.
   https://github.com/microsoft/onnxruntime/blob/v1.20.0/LICENSE
+- ONNX Runtime 1.28.2 as bundled by sherpa-onnx 1.13.8 (packaged as
+  libsherpa-ort.so) — Copyright (c) Microsoft Corporation. All rights reserved.
+  https://github.com/microsoft/onnxruntime/blob/v1.28.2/LICENSE
+- Silero VAD model (silero_vad.onnx, bundled for speech segmentation) —
+  Copyright (c) 2020-present Silero Team
+  https://github.com/snakers4/silero-vad/blob/master/LICENSE
 - llama.cpp — Copyright (c) 2023-2026 The ggml authors
   https://github.com/ggml-org/llama.cpp
 - nlohmann/json — Copyright (c) 2013-2026 Niels Lohmann
@@ -150,6 +160,33 @@ The model weights below are not embedded in the APK. They are downloaded only
 after a user selects the corresponding model. Their upstream terms still apply
 to downloading, using, modifying and redistributing those weights.
 
+- Index-Translate-2B-GGUF (IndexTeam): Apache License 2.0.
+  Optional Q4_K_M weights are downloaded separately, not bundled in the APK.
+  https://huggingface.co/IndexTeam/Index-Translate-2B-GGUF
+
+- Qwen3-0.6B-GGUF (Qwen): Apache License 2.0.
+  Optional Q8_0 weights are downloaded separately, not bundled in the APK.
+  https://huggingface.co/Qwen/Qwen3-0.6B-GGUF
+
+- Liquid AI LFM2.5-1.2B-Instruct-GGUF (Q4_K_M) is provided under the
+  LFM Open License v1.0, not Apache License 2.0. Its commercial-use threshold
+  and redistribution conditions apply; see the upstream license for details.
+  https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF
+  https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF/raw/main/LICENSE
+
+- Google Gemma-4-E2B-it and Gemma-4-E4B-it QAT Q4_0 GGUF weights are
+  published by Google under Apache License 2.0.
+  https://huggingface.co/google/gemma-4-E2B-it-qat-q4_0-gguf
+  https://huggingface.co/google/gemma-4-E4B-it-qat-q4_0-gguf
+
+- Google Gemma-3-4B-it (Q4_K_M GGUF prepared by ggml-org) and
+  TranslateGemma-4B-it (Q4_K_M GGUF prepared by SandLogicTechnologies)
+  are provided under the Gemma Terms of Use, not Apache License 2.0.
+  Gemma is provided under and subject to the Gemma Terms of Use found at
+  https://ai.google.dev/gemma/terms
+  https://huggingface.co/ggml-org/gemma-3-4b-it-GGUF
+  https://huggingface.co/SandLogicTechnologies/translategemma-4b-it-GGUF
+
 - Tencent Hy-MT2-1.8B-GGUF is licensed under Apache License 2.0.
   Copyright (C) 2026 Tencent. All rights reserved.
   https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF
@@ -176,6 +213,15 @@ to downloading, using, modifying and redistributing those weights.
   on its model card as of July 21, 2026. It must not be described as open-source
   or redistributed without separate permission or an upstream license update.
   https://huggingface.co/l0wgear/manga-ocr-2025-onnx
+- Optional speech recognition models are downloaded from the sherpa-onnx
+  exports; their upstream model licenses apply:
+  SenseVoice Small: https://github.com/FunAudioLLM/SenseVoice/blob/main/LICENSE
+  https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17
+  Streaming Zipformer (bilingual zh-en):
+  https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20
+  Whisper tiny/base: https://github.com/openai/whisper/blob/main/LICENSE
+  https://huggingface.co/csukuangfj/sherpa-onnx-whisper-tiny
+  https://huggingface.co/csukuangfj/sherpa-onnx-whisper-base
 
 Users and distributors are responsible for reviewing the current upstream
 model-card terms before redistributing optional model weights. Upstream license

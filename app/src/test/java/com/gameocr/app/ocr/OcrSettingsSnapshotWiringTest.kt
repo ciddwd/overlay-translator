@@ -24,7 +24,7 @@ class OcrSettingsSnapshotWiringTest {
             Case("Manga snapshot drives inference", manga, "runFull(bitmap, settings)"),
             Case("Paddle compatibility path reads once", paddle, "return recognize(bitmap, kind, settingsRepository.get())"),
             Case("Paddle snapshot selects model", paddle, "ensureReady(settings.paddleModelVersion)"),
-            Case("word select forwards snapshot", capture, "ocrEngine.recognize(cropped, settings.ocrEngine, settings)"),
+            Case("word select forwards snapshot", capture, "ocrEngine.recognize(cropped, settings.ocrEngine,"),
             Case("loop ROI forwards snapshot", capture, "ocrEngine.recognize(preprocessed, pending.effectiveEngine, settings)"),
             Case("first pass forwards snapshot", capture, "ocrEngine.recognize(preprocessed, effectiveEngine, settings)"),
             Case("orientation rerun forwards snapshot", capture, "ocrEngine.recognize(preprocessed, rerunEngine, settings)"),

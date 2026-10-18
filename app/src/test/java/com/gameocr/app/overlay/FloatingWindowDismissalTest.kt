@@ -106,7 +106,7 @@ class FloatingWindowDismissalTest {
             MarkerCase(
                 "word translation card stops playback when dismissed",
                 cardSource,
-                "stopPlayback = onDismissed",
+                "stopPlayback = { if (!refreshingLocale) onDismissed() }",
             ),
             MarkerCase(
                 "capture service wires panel dismissal to the shared TTS engine",

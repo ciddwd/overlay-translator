@@ -415,7 +415,7 @@ fun <T : Enum<T>> EnumLanguagePicker(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun <T : Enum<T>> EnumLanguagePickerSheet(
+internal fun <T : Enum<T>> EnumLanguagePickerSheet(
     current: T,
     options: List<T>,
     labelResOf: (T) -> Int,
@@ -423,7 +423,9 @@ private fun <T : Enum<T>> EnumLanguagePickerSheet(
     pinnedBcp47: List<String>,
     onSelect: (T) -> Unit,
     onTogglePin: ((String) -> Unit)?,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    canSelect: (T) -> Boolean = { true },
+    trailingContent: (@Composable (T) -> Unit)? = null,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
@@ -495,7 +497,9 @@ private fun <T : Enum<T>> EnumLanguagePickerSheet(
                                 labelResOf = labelResOf,
                                 bcp47Of = bcp47Of,
                                 isPinned = true,
-                                isSelected = item == current,
+                                isSelected = item == current && canSelect(item),
+                                enabled = canSelect(item),
+                                trailingContent = trailingContent?.let { { it(item) } },
                                 onClick = {
                                     scope.launch {
                                         sheetState.hide()
@@ -520,7 +524,9 @@ private fun <T : Enum<T>> EnumLanguagePickerSheet(
                             labelResOf = labelResOf,
                             bcp47Of = bcp47Of,
                             isPinned = false,
-                            isSelected = item == current,
+                            isSelected = item == current && canSelect(item),
+                            enabled = canSelect(item),
+                            trailingContent = trailingContent?.let { { it(item) } },
                             onClick = {
                                 scope.launch {
                                     sheetState.hide()
@@ -546,7 +552,9 @@ private fun <T : Enum<T>> EnumLanguageRow(
     isPinned: Boolean,
     isSelected: Boolean,
     onClick: () -> Unit,
-    onTogglePin: (() -> Unit)?
+    onTogglePin: (() -> Unit)?,
+    enabled: Boolean = true,
+    trailingContent: (@Composable () -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier
@@ -555,7 +563,7 @@ private fun <T : Enum<T>> EnumLanguageRow(
                 if (isSelected) MaterialTheme.colorScheme.primaryContainer
                 else MaterialTheme.colorScheme.surface
             )
-            .clickable(onClick = onClick)
+            .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -585,6 +593,7 @@ private fun <T : Enum<T>> EnumLanguageRow(
                 modifier = Modifier.padding(end = 4.dp)
             )
         }
+        trailingContent?.invoke()
         if (onTogglePin != null) {
             IconButton(onClick = onTogglePin) {
                 Icon(

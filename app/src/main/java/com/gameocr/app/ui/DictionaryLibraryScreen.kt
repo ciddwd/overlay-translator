@@ -1,5 +1,6 @@
 package com.gameocr.app.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -83,6 +84,8 @@ fun DictionaryLibraryScreen(
             }
         }
     }
+
+    BackHandler(onBack = onBack)
 
     Scaffold(
         topBar = {

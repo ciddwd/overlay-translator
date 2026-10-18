@@ -110,32 +110,6 @@ class LlmModelInstaller @Inject constructor(
      *
      * 每个选项只返回一个 URL—失败时不自动 fallback 到另一镜像，让用户清楚是哪个源挂了。
      */
-    private fun mirrorsFor(
-        kind: LlmModelKind,
-        choice: LlmMirrorChoice,
-        customBase: String?,
-    ): List<String> = buildList {
-        when (choice) {
-            LlmMirrorChoice.HF_OFFICIAL -> when (kind) {
-                LlmModelKind.SAKURA_1_5B_Q4 ->
-                    add("https://huggingface.co/shing3232/Sakura-1.5B-Qwen2.5-v1.0-GGUF-IMX/resolve/main/${kind.fileName}")
-                LlmModelKind.HY_MT2_1_8B_Q4_K_M ->
-                    add("https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/main/${kind.fileName}")
-            }
-            LlmMirrorChoice.HF_MIRROR -> when (kind) {
-                LlmModelKind.SAKURA_1_5B_Q4 ->
-                    add("https://hf-mirror.com/shing3232/Sakura-1.5B-Qwen2.5-v1.0-GGUF-IMX/resolve/main/${kind.fileName}")
-                LlmModelKind.HY_MT2_1_8B_Q4_K_M ->
-                    add("https://hf-mirror.com/tencent/Hy-MT2-1.8B-GGUF/resolve/main/${kind.fileName}")
-            }
-            LlmMirrorChoice.CUSTOM -> {
-                if (!customBase.isNullOrBlank()) add(ensureSlash(customBase) + kind.fileName)
-            }
-        }
-    }
-
-    private fun ensureSlash(url: String): String = if (url.endsWith("/")) url else "$url/"
-
     /** 单镜像下载，含 Range 续传。 */
     private suspend fun downloadOne(
         url: String,
@@ -173,6 +147,8 @@ class LlmModelInstaller @Inject constructor(
             val name = queryDisplayName(uri) ?: continue
             val lower = name.lowercase()
             val kind = when {
+            "index-translate-2b" in lower -> LlmModelKind.INDEX_TRANSLATE_2B_Q4_K_M
+            "qwen3-0.6b" in lower -> LlmModelKind.QWEN3_0_6B_Q8_0
                 "sakura" in lower -> LlmModelKind.SAKURA_1_5B_Q4
                 "hy-mt2" in lower || "hymt2" in lower -> LlmModelKind.HY_MT2_1_8B_Q4_K_M
                 else -> defaultKind
@@ -209,6 +185,14 @@ class LlmModelInstaller @Inject constructor(
     }.getOrNull()
 
     companion object {
+        internal fun mirrorsFor(kind: LlmModelKind, choice: LlmMirrorChoice, customBase: String?): List<String> =
+            when (choice) {
+                LlmMirrorChoice.HF_OFFICIAL -> listOf(kind.downloadUrl)
+                LlmMirrorChoice.HF_MIRROR -> listOf(kind.downloadUrl.replace("https://huggingface.co/", "https://hf-mirror.com/"))
+                LlmMirrorChoice.CUSTOM -> customBase?.trim()?.takeIf(String::isNotBlank)
+                    ?.let { listOf(it.trimEnd('/') + "/" + kind.fileName) } ?: emptyList()
+            }
+
         private val GGUF_MAGIC = byteArrayOf(0x47, 0x47, 0x55, 0x46)
 
         /** 进度 emit 节流：每 1 MB 报一次。 */

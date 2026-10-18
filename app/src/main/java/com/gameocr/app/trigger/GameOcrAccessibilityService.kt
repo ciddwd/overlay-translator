@@ -61,6 +61,8 @@ class GameOcrAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             foregroundAppResolver.recordAccessibilityPackage(event.packageName)
+            // Acts only while this app's own speech consent request is armed.
+            ConsentDialogAssist.onEvent(this, event)
         }
     }
 

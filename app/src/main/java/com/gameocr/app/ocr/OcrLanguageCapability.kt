@@ -60,7 +60,7 @@ object OcrLanguageCapability {
     /** ML Kit 自动模式实际可命中的语言集合（含 latin 子集）。 */
     private val UMI_OCR_LANGS = setOf("zh", "zh-CN", "zh-TW", "en", "ja", "ko", "ru")
 
-    private val ML_KIT_AUTO_LANGS = ML_KIT_LATIN_LANGS + setOf("ja", "ko", "zh", "zh-CN", "zh-TW")
+    private val ML_KIT_AUTO_LANGS = ML_KIT_LATIN_LANGS + setOf("ja", "ko", "zh", "zh-CN", "zh-TW", "hi", "mr", "ne", "sa")
 
     /** 完整 Settings 版本：内部委托给轻量重载。 */
     fun supports(settings: Settings, sourceCode: String): Boolean {
@@ -106,6 +106,7 @@ object OcrLanguageCapability {
             OcrEngineKind.ML_KIT_LATIN -> code in ML_KIT_LATIN_LANGS
             OcrEngineKind.ML_KIT_JAPANESE -> code == "ja"
             OcrEngineKind.ML_KIT_KOREAN -> code == "ko"
+            OcrEngineKind.ML_KIT_DEVANAGARI -> code in setOf("hi", "mr", "ne", "sa")
             OcrEngineKind.ML_KIT_CHINESE -> code.startsWith("zh")
             OcrEngineKind.PADDLE_ONNX -> when (paddleModelVersion) {
                 PaddleModelVersion.V5_MOBILE -> code in PADDLE_V5_LANGS
@@ -148,6 +149,7 @@ object OcrLanguageCapability {
         OcrEngineKind.UMI_OCR -> true
         OcrEngineKind.LUNA_OCR -> true
         OcrEngineKind.ML_KIT_LATIN,
+        OcrEngineKind.ML_KIT_DEVANAGARI,
         OcrEngineKind.ML_KIT_JAPANESE,
         OcrEngineKind.ML_KIT_KOREAN,
         OcrEngineKind.ML_KIT_CHINESE,
@@ -482,6 +484,7 @@ object OcrLanguageCapability {
         OcrEngineKind.ML_KIT_CHINESE -> "zh-CN"
         OcrEngineKind.ML_KIT_AUTO,
         OcrEngineKind.ML_KIT_LATIN,
+        OcrEngineKind.ML_KIT_DEVANAGARI,
         OcrEngineKind.PADDLE_ONNX,
         OcrEngineKind.PADDLE_AI_STUDIO,
         // 有道 OCR 由 sourceLang 反向映射 langType，没有单独的"OCR 内部语种"字段

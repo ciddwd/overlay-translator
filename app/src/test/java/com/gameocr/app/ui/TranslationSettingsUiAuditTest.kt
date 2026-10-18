@@ -2,7 +2,9 @@ package com.gameocr.app.ui
 
 import com.gameocr.app.data.RenderMode
 import com.gameocr.app.data.MergeStrength
+import com.gameocr.app.data.OpenAiRequestOptions
 import com.gameocr.app.data.RemoteImageDetail
+import com.gameocr.app.data.RemoteThinkingParameterFormat
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -443,7 +445,7 @@ class TranslationSettingsUiAuditTest {
         data class Case(val name: String, val marker: String)
 
         listOf(
-            Case("cell component", "private fun SettingsLinkCell"),
+            Case("cell component", "internal fun SettingsLinkCell"),
             Case("standard list cell", "ListItem("),
             Case("section-matching transparent background", "ListItemDefaults.colors(containerColor = Color.Transparent)"),
             Case("granted status", "R.string.settings_permission_granted"),

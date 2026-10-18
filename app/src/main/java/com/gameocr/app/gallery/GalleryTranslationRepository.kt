@@ -49,6 +49,8 @@ class GalleryTranslationRepository @Inject constructor(
 
     fun observeFeaturedTask(): Flow<GalleryTranslationTaskEntity?> = dao.observeFeaturedTask()
 
+    fun observeFeaturedTasks(): Flow<List<GalleryTranslationTaskEntity>> = dao.observeFeaturedTasks()
+
     fun observeTask(taskId: String): Flow<GalleryTranslationTaskEntity?> = dao.observeTask(taskId)
 
     fun observeItems(taskId: String): Flow<List<GalleryTranslationItemEntity>> =
@@ -60,13 +62,28 @@ class GalleryTranslationRepository @Inject constructor(
 
     suspend fun getItems(taskId: String): List<GalleryTranslationItemEntity> = dao.getItems(taskId)
 
-    suspend fun createTask(uriStrings: List<String>): GalleryPreparedTask = withContext(Dispatchers.IO) {
+    suspend fun validateCreationSettings() {
+        validateCreationSettings(settingsRepository.get())
+    }
+
+    private fun validateCreationSettings(settings: Settings) {
+        GalleryTranslationWorkPolicy.creationErrorRes(settings)?.let { errorRes ->
+            throw IllegalStateException(context.getString(errorRes))
+        }
+    }
+
+    suspend fun createTask(
+        uriStrings: List<String>,
+        title: String = "",
+        sourceKind: GalleryImportKind = GalleryImportKind.PICKED,
+    ): GalleryPreparedTask = withContext(Dispatchers.IO) {
         val selected = GalleryTranslationWorkPolicy.normalizeSelection(uriStrings)
         require(selected.isNotEmpty()) { "No images selected." }
 
         val taskId = UUID.randomUUID().toString()
         val now = System.currentTimeMillis()
         val settings = settingsRepository.get()
+        validateCreationSettings(settings)
         val activePreset = galleryTaskMatchingPreset(settings)
         val snapshot = TranslationPresetCatalog.fromSettings(
             id = "gallery_$taskId",
@@ -98,6 +115,8 @@ class GalleryTranslationRepository @Inject constructor(
             lastError = items.firstOrNull { it.status == GalleryItemStatus.FAILED }
                 ?.errorMessage
                 .orEmpty(),
+            title = GalleryImportPolicy.normalizeTitle(title),
+            sourceKind = sourceKind.name,
         )
         settingsRepository.rememberSnapshotCredentials(snapshot, settings)
         try {
@@ -237,6 +256,10 @@ class GalleryTranslationRepository @Inject constructor(
     suspend fun cancelTask(taskId: String) {
         dao.cancelTaskAndItems(taskId, System.currentTimeMillis())
         refreshProgress(taskId)
+    }
+
+    suspend fun renameTask(taskId: String, title: String) {
+        dao.renameTask(taskId, GalleryImportPolicy.normalizeTitle(title))
     }
 
     suspend fun resetFailedTask(taskId: String): Int =
