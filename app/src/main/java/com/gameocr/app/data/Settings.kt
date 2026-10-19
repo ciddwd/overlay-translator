@@ -350,6 +350,7 @@ data class Settings(
     /** DashScope key for the Paraformer cloud engine (China (Beijing) region). */
     val asrDashScopeApiKey: String = "",
     val gestureBindings: Map<PresetGesture, GestureAction> = GestureBindings.defaults,
+    val gestureGlobalEnabled: Boolean = false,
     val gestureEdgeEnabled: Boolean = false,
     val gestureEdgeRight: Boolean = false,
     val gestureEdgeHeightPercent: Int = 22,

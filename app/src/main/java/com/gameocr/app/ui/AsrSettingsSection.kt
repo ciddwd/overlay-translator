@@ -514,14 +514,10 @@ private fun AsrConnectionField(value: String, label: String, secret: Boolean = f
 private fun MaxRecordsRow(settings: Settings?, save: ((Settings) -> Settings) -> Unit) {
     val saved = settings?.asrMaxDisplayedRecords ?: AsrDisplayPolicy.DEFAULT_RECORDS
     var value by remember(saved) { mutableFloatStateOf(saved.toFloat()) }
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            stringResource(R.string.settings_asr_max_records),
-            style = MaterialTheme.typography.labelLarge,
-            modifier = Modifier.weight(1f),
-        )
-        Text(value.roundToInt().toString(), style = MaterialTheme.typography.labelLarge)
-    }
+    Text(
+        stringResource(R.string.settings_asr_max_records_format, value.roundToInt()),
+        style = MaterialTheme.typography.labelLarge,
+    )
     Slider(
         value = value,
         onValueChange = { value = it },

@@ -828,6 +828,10 @@ class SettingsViewModel @Inject constructor(
         )
     }
 
+    suspend fun saveGlobalGestureEnabled(enabled: Boolean) {
+        repo.update { it.copy(gestureGlobalEnabled = enabled) }
+    }
+
     suspend fun saveGestureBinding(
         gesture: com.gameocr.app.data.PresetGesture,
         action: com.gameocr.app.data.GestureAction,

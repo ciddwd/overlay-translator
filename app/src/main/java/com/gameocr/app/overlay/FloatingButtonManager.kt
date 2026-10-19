@@ -173,6 +173,19 @@ class FloatingButtonManager(
      * API < 30 没这个 API，退回默认 wm（横竖屏切换时有 known limitation）。
      */
     private val wm: WindowManager by lazy { createDisplayBoundWm() }
+    private val displayManager by lazy {
+        context.getSystemService(Context.DISPLAY_SERVICE) as android.hardware.display.DisplayManager
+    }
+    private var lastScreenSize: Pair<Int, Int>? = null
+    private val displayListener = object : android.hardware.display.DisplayManager.DisplayListener {
+        override fun onDisplayAdded(displayId: Int) = Unit
+        override fun onDisplayRemoved(displayId: Int) = Unit
+        override fun onDisplayChanged(displayId: Int) {
+            if (displayId == android.view.Display.DEFAULT_DISPLAY && view != null && currentScreenSize() != lastScreenSize) {
+                onConfigurationChanged()
+            }
+        }
+    }
 
     private fun createDisplayBoundWm(): WindowManager {
         val defaultWm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
@@ -339,6 +352,7 @@ class FloatingButtonManager(
             containerW, containerH,
             overlayType,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply {
@@ -403,6 +417,8 @@ class FloatingButtonManager(
             }
         }
         layoutParams = params
+        lastScreenSize = currentScreenSize()
+        displayManager.registerDisplayListener(displayListener, android.os.Handler(android.os.Looper.getMainLooper()))
         if (hiddenForCapture) container.visibility = View.INVISIBLE
         updateAccessibilityDescription()
 
@@ -467,8 +483,9 @@ class FloatingButtonManager(
             return
         }
         val (screenW, screenH) = currentScreenSize()
+        lastScreenSize = screenW to screenH
         params.x = params.x.coerceIn(0, (screenW - params.width).coerceAtLeast(0))
-        params.y = params.y.coerceIn(0, screenH - params.height)
+        params.y = params.y.coerceIn(0, (screenH - params.height).coerceAtLeast(0))
         runCatching { wm.updateViewLayout(v, params) }
         // post 到下一帧再 snap：避开 onConfigurationChanged 到达时 wm 尺寸尚未切换的窗口期
         v.post {
@@ -480,11 +497,15 @@ class FloatingButtonManager(
         }
     }
 
-    /**
-     * 拿当前**实际显示方向**的屏幕尺寸。API 30+ 走 `wm.currentWindowMetrics`（wm 是 display-bound
-     * 的，跟随旋转）；老 API fallback 走 `view.display.getRealMetrics()`。
-     */
+    /** Read the live display: a service WindowManager can retain pre-rotation bounds. */
     private fun currentScreenSize(): Pair<Int, Int> {
+        val currentDisplay = displayManager.getDisplay(android.view.Display.DEFAULT_DISPLAY)
+        if (currentDisplay != null) {
+            val metrics = android.util.DisplayMetrics()
+            @Suppress("DEPRECATION")
+            currentDisplay.getRealMetrics(metrics)
+            return metrics.widthPixels to metrics.heightPixels
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             val cur = wm.currentWindowMetrics.bounds
             return cur.width() to cur.height()
@@ -532,6 +553,8 @@ class FloatingButtonManager(
     }
 
     fun hide() {
+        displayManager.unregisterDisplayListener(displayListener)
+        lastScreenSize = null
         hiddenForCapture = false
         cancelFirstUseTour(markCompleted = false, dismissMenu = false)
         // hide 时若菜单还在 + 球已腾位 → 先把球位「回滚 到 positionBeforeMenu」再保存，不然下次
@@ -1364,7 +1387,7 @@ class FloatingButtonManager(
         val right = (screenW - insets[2] - dp(8)).coerceAtLeast(left + 1)
         val bottom = (screenH - insets[3].coerceAtLeast(dp(24)) - dp(8)).coerceAtLeast(top + 1)
         val panelLayout = FloatingQuickPanelPolicy.layout(
-            right - left, bottom - top, dp(320), dp(560), dp(480),
+            right - left, bottom - top, dp(320), dp(500), dp(480),
         )
         val panel = FloatingQuickPanelView.create(
             context,
@@ -1403,7 +1426,8 @@ class FloatingButtonManager(
             })
         }
         val params = WindowManager.LayoutParams(-1, -1, overlayType,
-            WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT).apply {
             gravity = Gravity.TOP or Gravity.START
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -1606,6 +1630,7 @@ class FloatingButtonManager(
             // FLAG_NOT_FOCUSABLE 即可——不要加 FLAG_NOT_TOUCHABLE，Android 12+ 会把
             // SYSTEM_ALERT_WINDOW + NOT_TOUCHABLE 视为 untrusted touch 直接拦掉点击。
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply {

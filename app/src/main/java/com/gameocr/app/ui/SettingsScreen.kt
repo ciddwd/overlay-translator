@@ -6382,6 +6382,22 @@ fun SettingsScreen(
 
             }
 
+            item(key = SectionKeys.GESTURES) {
+                SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_GESTURES) {
+                    GestureSettingsOverview(
+                        globalGesturesEnabled = gestureUi.globalEnabled,
+                        onGlobalGesturesChange = { enabled ->
+                            scope.launch {
+                                viewModel.saveGlobalGestureEnabled(enabled)
+                                gestureUi.globalEnabled = enabled
+                                initialSettings = initialSettings?.copy(gestureGlobalEnabled = enabled)
+                            }
+                        },
+                        onOpen = { page -> floatingSettingsPage = page },
+                    )
+                }
+            }
+
             item(key = SectionKeys.FLOATING) {
                 SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_FLOATING, *SEARCH_TARGET_ARC_MENU) {
                     FloatingSettingsOverview(
@@ -6396,7 +6412,6 @@ fun SettingsScreen(
                             }
                         },
                         dockSummary = stringResource(if (floatingSnapEdge) R.string.main_status_enabled else R.string.common_close),
-                        menuSummary = stringResource(R.string.settings_arc_menu_page_size, arcMenuPageSize.toInt()),
                         quickPanelEnabled = quickPanelEnabled,
                         onOpen = { page ->
                             if (canOpenFloatingSettingsPage(page, quickPanelEnabled)) floatingSettingsPage = page
@@ -8952,6 +8967,7 @@ private object SectionKeys {
     const val ARC_MENU = "arc_menu"
     const val ASR = "asr"
     const val TRIGGER = "trigger"
+    const val GESTURES = "gestures"
     const val DEVELOPER = "developer"
     const val NETWORK = "network"
     const val GENERAL = "general"
@@ -8969,6 +8985,7 @@ internal val SETTINGS_SECTION_KEYS_IN_ORDER = listOf(
     SectionKeys.CAPTURE_REGION,
     SectionKeys.INPUT_TRANSLATION,
     SectionKeys.TRIGGER,
+    SectionKeys.GESTURES,
     SectionKeys.FLOATING,
     SectionKeys.DEVELOPER,
     SectionKeys.NETWORK,
@@ -9129,6 +9146,9 @@ private val SEARCH_TARGET_FLOATING = intArrayOf(
 private val SEARCH_TARGET_ARC_MENU = intArrayOf(
     R.string.settings_search_item_arc_menu_order,
     R.string.settings_quick_panel_enabled,
+)
+private val SEARCH_TARGET_GESTURES = intArrayOf(
+    R.string.gesture_global_enabled,
     R.string.gesture_mode,
     R.string.gesture_wake_title,
     R.string.gesture_binding_title,
@@ -9180,6 +9200,7 @@ internal val SETTINGS_SEARCH_TARGET_RES_IDS: Set<Int> = listOf(
     SEARCH_TARGET_OVERLAY_LAYOUT,
     SEARCH_TARGET_FLOATING,
     SEARCH_TARGET_ARC_MENU,
+    SEARCH_TARGET_GESTURES,
     SEARCH_TARGET_WORD_SELECT,
     SEARCH_TARGET_TRIGGER,
     SEARCH_TARGET_DEVELOPER,
@@ -9578,9 +9599,10 @@ private val SETTING_ITEMS: List<SearchEntry> = listOfNotNull(
     // —— 弧菜单按钮顺序 ——
     SearchEntry(SectionKeys.FLOATING, R.string.settings_quick_panel_title, R.string.settings_quick_panel_enabled, listOf("quick panel", "快捷面板", "模式切换", "快捷操作", "menu", "菜单")),
     SearchEntry(SectionKeys.FLOATING, R.string.settings_section_arc_menu, R.string.settings_search_item_arc_menu_order, listOf("arc menu", "弧菜单", "弧形", "顺序", "order", "reorder", "排序", "拖动", "menu", "按钮", "page", "page size", "分页", "每页", "翻页", "loop", "region", "home", "skill", "技能", "划词", "language", "语言", "源语言", "目标语言")),
-    SearchEntry(SectionKeys.FLOATING, R.string.settings_section_arc_menu, R.string.gesture_mode, listOf("gesture", "手势", "主球", "绑定", "唤起", "侧滑", "旋转", "拧动", "倾斜", "灵敏度", "twist", "tilt", "sensitivity", "S", "O")),
-    SearchEntry(SectionKeys.FLOATING, R.string.settings_section_floating, R.string.gesture_wake_title, listOf("gesture", "wake", "手势", "触发", "侧滑", "旋转", "倾斜")),
-    SearchEntry(SectionKeys.FLOATING, R.string.settings_section_floating, R.string.gesture_binding_title, listOf("gesture", "binding", "手势", "绑定")),
+    SearchEntry(SectionKeys.GESTURES, R.string.gesture_motion_title, R.string.gesture_global_enabled, listOf("global gestures", "全局手势", "手势", "体感", "全局")),
+    SearchEntry(SectionKeys.GESTURES, R.string.gesture_motion_title, R.string.gesture_mode, listOf("gesture", "手势", "体感", "主球", "绑定", "唤起", "侧滑", "旋转", "拧动", "倾斜", "灵敏度", "twist", "tilt", "sensitivity", "S", "O")),
+    SearchEntry(SectionKeys.GESTURES, R.string.gesture_motion_title, R.string.gesture_wake_title, listOf("gesture", "wake", "手势", "体感", "触发", "侧滑", "旋转", "倾斜")),
+    SearchEntry(SectionKeys.GESTURES, R.string.gesture_motion_title, R.string.gesture_binding_title, listOf("gesture", "binding", "手势", "体感", "绑定")),
 
     // —— 划词翻译 ——
     SearchEntry(SectionKeys.WORD_SELECT, R.string.settings_section_word_select, R.string.settings_search_item_word_select_precise, listOf("划词", "word select", "precise", "adjust", "松手", "精确调整", "release")),

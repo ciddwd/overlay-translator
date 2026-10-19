@@ -18,6 +18,7 @@ enum class GestureAction(val targetSkill: FloatingSkill? = null) {
     SWITCH_GESTURE(FloatingSkill.GESTURE),
     TRANSLATE_SCREEN, SELECT_WORD, TOGGLE_LOOP, TRANSLATE_INPUT,
     PICK_REGION, LANGUAGE_PAIR, PRESET_SWITCH, SETTINGS, HOME,
+    TOGGLE_SPEECH,
 }
 
 object GestureBindings {

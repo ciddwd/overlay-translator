@@ -17,7 +17,6 @@ import timber.log.Timber
  * recognition falls behind, the platform overwrites old audio and the reader jumps to live audio.
  * Late subtitles are worse than missing ones.
  */
-@RequiresApi(Build.VERSION_CODES.Q)
 internal class PlaybackAudioCapture private constructor(
     private val record: AudioRecord,
     val sourceRate: Int,
@@ -58,6 +57,7 @@ internal class PlaybackAudioCapture private constructor(
         const val READ_MS = 100
 
         /** Requires a granted RECORD_AUDIO permission; returns null when no format initializes. */
+        @RequiresApi(Build.VERSION_CODES.Q)
         @SuppressLint("MissingPermission")
         fun create(projection: MediaProjection, excludedUid: Int): PlaybackAudioCapture? {
             val config = AudioPlaybackCaptureConfiguration.Builder(projection)

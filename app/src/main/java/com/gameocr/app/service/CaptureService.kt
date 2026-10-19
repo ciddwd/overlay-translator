@@ -368,6 +368,7 @@ class CaptureService : Service() {
     private var gestureEdgeCaptureHidden = false
     private var gestureActionJob: Job? = null
     @Volatile private var gestureInputActive = false
+    private var globalGestureEnabled = false
     @Volatile private var gestureBindings = GestureBindings.defaults
     private var regionPickerJob: Job? = null
     private var languageQuickSwitch: LanguageQuickSwitchOverlay? = null
@@ -1627,7 +1628,7 @@ class CaptureService : Service() {
     }
 
     @androidx.annotation.RequiresApi(Build.VERSION_CODES.Q)
-    private fun startSpeechSession() {
+    private fun startSpeechSession(requireSpeechMode: Boolean = true) {
         val request = speechStartGuard.begin() ?: return
         floatingButton?.applySpeechState(SpeechBallState.PREPARING)
         showSpeechNotice(R.string.asr_notice_preparing)
@@ -1649,7 +1650,8 @@ class CaptureService : Service() {
                     .onFailure { Timber.w(it, "[asr] backend pre-authorization failed") }
                 handedOff = withContext(Dispatchers.Main.immediate) {
                     // The tap may have been superseded meanwhile: session stopped, mode or window changed.
-                    if (!speechStartGuard.isCurrent(request) || floatingButton?.skill != FloatingSkill.SPEECH) {
+                    if (!speechStartGuard.isCurrent(request) ||
+                        (requireSpeechMode && floatingButton?.skill != FloatingSkill.SPEECH)) {
                         return@withContext false
                     }
                     val audioGranted = speechPermissionPreparer.audioGranted()
@@ -1679,8 +1681,12 @@ class CaptureService : Service() {
     /** Ends [request]'s start guard; the ball then mirrors consent or controller state again. */
     private fun finishSpeechStart(request: Long) {
         if (!speechStartGuard.finish(request)) return
-        if (!speechConsentPending) floatingButton?.applySpeechState(speechController?.state ?: SpeechBallState.IDLE)
+        if (!speechConsentPending) floatingButton?.applySpeechState(currentSpeechBallState())
     }
+
+    private fun currentSpeechBallState(): SpeechBallState =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) speechController?.state ?: SpeechBallState.IDLE
+        else SpeechBallState.IDLE
 
     private fun requestSpeechConsent(needsProjection: Boolean, audioGranted: Boolean) {
         if (!audioGranted) {
@@ -1700,7 +1706,7 @@ class CaptureService : Service() {
             delay(SPEECH_CONSENT_TIMEOUT_MS)
             if (speechConsentPending) {
                 speechConsentPending = false
-                floatingButton?.applySpeechState(speechController?.state ?: SpeechBallState.IDLE)
+                floatingButton?.applySpeechState(currentSpeechBallState())
             }
         }
         try {
@@ -1717,7 +1723,7 @@ class CaptureService : Service() {
         speechConsentPending = false
         speechConsentTimeoutJob?.cancel()
         speechConsentTimeoutJob = null
-        floatingButton?.applySpeechState(speechController?.state ?: SpeechBallState.IDLE)
+        floatingButton?.applySpeechState(currentSpeechBallState())
     }
 
     private fun handleSpeechConsent(intent: Intent) {
@@ -1893,9 +1899,17 @@ class CaptureService : Service() {
         }
     }
 
+    private fun gestureWakeAllowed(): Boolean {
+        val ball = floatingButton ?: return false
+        return !captureStopRequested &&
+            (ball.skill == FloatingSkill.GESTURE || globalGestureEnabled)
+    }
+
     private fun configureGestureWake(settings: Settings) {
-        val enabled = settings.gestureEdgeEnabled && settings.floatingButtonSkill == FloatingSkill.GESTURE &&
-            floatingButton != null && !captureStopRequested
+        globalGestureEnabled = settings.gestureGlobalEnabled
+        val allowed = gestureWakeAllowed()
+        if (!allowed && gestureInputActive) gestureInput?.cancel()
+        val enabled = settings.gestureEdgeEnabled && allowed
         val edge = gestureEdge ?: GestureEdgeOverlay(
             this,
             onEnter = { showGestureInput() },
@@ -1908,10 +1922,10 @@ class CaptureService : Service() {
         val motion = gestureMotion ?: GestureMotionWake(
             this,
             canTrigger = { !gestureInputActive && !gestureEdgeCaptureHidden && !captureStopRequested &&
-                !captureLock.isLocked && !screenshotLock.isLocked && gestureActionJob?.isActive != true &&
+                (loopMode || (!captureLock.isLocked && !screenshotLock.isLocked)) && gestureActionJob?.isActive != true &&
                 regionPicker?.isShown() != true && wordSelect?.isShown() != true &&
                 languageQuickSwitch?.isShown() != true && presetQuickSwitch?.isShown() != true &&
-                floatingButton?.skill == FloatingSkill.GESTURE },
+                gestureWakeAllowed() },
             onTrigger = { motion ->
                 val action = if (motion == GestureWakeMotion.TWIST) gestureTwistAction else gestureTiltAction
                 if (action == null) showGestureInput()
@@ -1921,12 +1935,11 @@ class CaptureService : Service() {
             },
             onUnavailable = { overlay?.showInfoHint(getString(R.string.gesture_motion_unavailable)) },
         ).also { gestureMotion = it }
-        motion.configure(settings, settings.floatingButtonSkill == FloatingSkill.GESTURE &&
-            floatingButton != null && !captureStopRequested)
+        motion.configure(settings, allowed)
     }
 
     private fun showGestureInput(): Boolean {
-        if (captureStopRequested || captureLock.isLocked || screenshotLock.isLocked || gestureActionJob?.isActive == true) return false
+        if (!gestureWakeAllowed() || (!loopMode && (captureLock.isLocked || screenshotLock.isLocked)) || gestureActionJob?.isActive == true) return false
         val panel = gestureInput ?: GestureInputOverlay(this).also { gestureInput = it }
         if (panel.isShown()) return false
         gestureInputActive = true
@@ -1963,11 +1976,28 @@ class CaptureService : Service() {
         return opened
     }
 
-    private fun executeGestureAction(action: GestureAction) {
+    private suspend fun executeGestureAction(action: GestureAction) {
+        if (!gestureWakeAllowed() || action == GestureAction.NONE || action.targetSkill != null) return
+        if (action != GestureAction.TOGGLE_SPEECH) stopSpeechSession()
+        if (loopMode && action != GestureAction.TOGGLE_LOOP) {
+            toggleLoopMode()
+            // Let the cancelled loop release its capture before starting another action.
+            captureLock.withLock { }
+        }
+        if (captureStopRequested) return
         when (action) {
             GestureAction.TRANSLATE_SCREEN -> triggerOnce()
             GestureAction.SELECT_WORD -> triggerWordSelect()
             GestureAction.TOGGLE_LOOP -> toggleLoopMode()
+            GestureAction.TOGGLE_SPEECH -> {
+                if (speechConsentPending || speechStartGuard.isActive || currentSpeechBallState() != SpeechBallState.IDLE) {
+                    stopSpeechSession()
+                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    startSpeechSession(requireSpeechMode = false)
+                } else {
+                    showSpeechNotice(R.string.asr_error_unsupported_android)
+                }
+            }
             GestureAction.TRANSLATE_INPUT -> triggerInputTranslation()
             GestureAction.PICK_REGION -> showRegionPickerOverlay()
             GestureAction.LANGUAGE_PAIR -> showLanguageQuickSwitchOverlay()

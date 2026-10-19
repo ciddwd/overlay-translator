@@ -6,6 +6,7 @@ val GestureAction.labelRes: Int get() = when (this) {
     GestureAction.TRANSLATE_SCREEN -> R.string.gesture_action_translate_screen
     GestureAction.SELECT_WORD -> R.string.gesture_action_select_word
     GestureAction.TOGGLE_LOOP -> R.string.gesture_action_toggle_loop
+    GestureAction.TOGGLE_SPEECH -> R.string.gesture_action_toggle_speech
     GestureAction.TRANSLATE_INPUT -> R.string.gesture_action_translate_input
     GestureAction.PICK_REGION -> R.string.menu_pick_region
     GestureAction.LANGUAGE_PAIR -> R.string.menu_language_pair

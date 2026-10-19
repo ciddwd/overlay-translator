@@ -240,6 +240,7 @@ class SettingsRepository internal constructor(
         val AsrMaxDisplayedRecords = intPreferencesKey("asr_max_displayed_records")
         val AsrDashScopeApiKey = stringPreferencesKey("asr_dashscope_api_key")
         val GestureBindingsKey = stringPreferencesKey("gesture_bindings")
+        val GestureGlobalEnabled = booleanPreferencesKey("gesture_global_enabled")
         val GestureEdgeEnabled = booleanPreferencesKey("gesture_edge_enabled")
         val GestureEdgeRight = booleanPreferencesKey("gesture_edge_right")
         val GestureEdgeHeight = intPreferencesKey("gesture_edge_height")
@@ -972,6 +973,7 @@ class SettingsRepository internal constructor(
             prefs[Keys.GestureBindingsKey] = json.encodeToString(
                 GestureBindings.normalize(next.gestureBindings).entries.associate { it.key.name to it.value.name }
             )
+            prefs[Keys.GestureGlobalEnabled] = next.gestureGlobalEnabled
             prefs[Keys.GestureEdgeEnabled] = next.gestureEdgeEnabled
             prefs[Keys.GestureEdgeRight] = next.gestureEdgeRight
             prefs[Keys.GestureEdgeHeight] = next.gestureEdgeHeightPercent.coerceIn(10, 40)
@@ -1407,6 +1409,7 @@ class SettingsRepository internal constructor(
                     json.decodeFromString<Map<String, String>>(this[Keys.GestureBindingsKey] ?: "{}")
                 )
             }.getOrDefault(default.gestureBindings),
+            gestureGlobalEnabled = this[Keys.GestureGlobalEnabled] ?: false,
             gestureEdgeEnabled = this[Keys.GestureEdgeEnabled] ?: false,
             gestureEdgeRight = this[Keys.GestureEdgeRight] ?: false,
             gestureEdgeHeightPercent = (this[Keys.GestureEdgeHeight] ?: 22).coerceIn(10, 40),

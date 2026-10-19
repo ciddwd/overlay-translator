@@ -41,15 +41,30 @@ internal fun FloatingSettingsOverview(
     appearance: @Composable () -> Unit,
     menuMode: @Composable () -> Unit,
     dockSummary: String,
-    menuSummary: String,
     quickPanelEnabled: Boolean,
     onOpen: (FloatingSettingsPage) -> Unit,
 ) {
     SectionCard(title = stringResource(R.string.settings_section_floating)) {
         appearance()
-        FloatingSettingsLink(FloatingSettingsPage.DOCKING, dockSummary, onOpen)
         menuMode()
-        FloatingSettingsLink(FloatingSettingsPage.MENU, menuSummary, onOpen, enabled = !quickPanelEnabled)
+        FloatingSettingsLink(FloatingSettingsPage.DOCKING, dockSummary, onOpen)
+        FloatingSettingsLink(FloatingSettingsPage.MENU, null, onOpen, enabled = !quickPanelEnabled)
+    }
+}
+
+@Composable
+internal fun GestureSettingsOverview(
+    globalGesturesEnabled: Boolean,
+    onGlobalGesturesChange: (Boolean) -> Unit,
+    onOpen: (FloatingSettingsPage) -> Unit,
+) {
+    SectionCard(title = stringResource(R.string.gesture_motion_title)) {
+        SwitchRow(
+            label = stringResource(R.string.gesture_global_enabled),
+            checked = globalGesturesEnabled,
+            helpText = stringResource(R.string.gesture_global_hint),
+            onChange = onGlobalGesturesChange,
+        )
         FloatingSettingsLink(FloatingSettingsPage.WAKE, null, onOpen)
         FloatingSettingsLink(FloatingSettingsPage.BINDINGS, null, onOpen)
     }

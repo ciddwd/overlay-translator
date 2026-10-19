@@ -8,6 +8,7 @@ import kotlinx.coroutines.CoroutineScope
 /** Keep gesture state and callbacks out of the already-large SettingsScreen composable. */
 @Stable
 internal class GestureSettingsUiState {
+    var globalEnabled by mutableStateOf(false)
     var bindings by mutableStateOf(GestureBindings.defaults)
     var edgeEnabled by mutableStateOf(false)
     var edgeRight by mutableStateOf(false)
@@ -20,6 +21,7 @@ internal class GestureSettingsUiState {
     var tiltAction by mutableStateOf<GestureAction?>(null)
 
     fun load(settings: Settings) {
+        globalEnabled = settings.gestureGlobalEnabled
         bindings = settings.gestureBindings
         edgeEnabled = settings.gestureEdgeEnabled
         edgeRight = settings.gestureEdgeRight

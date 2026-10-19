@@ -301,6 +301,7 @@ object SettingsFieldPolicy {
         portable("asrMaxDisplayedRecords"),
         credential("asrDashScopeApiKey"),
         portable("gestureBindings", R.string.gesture_mode),
+        portable("gestureGlobalEnabled", R.string.gesture_global_enabled),
         portable("gestureEdgeEnabled", R.string.gesture_mode),
         portable("gestureEdgeRight", R.string.gesture_mode),
         portable("gestureEdgeHeightPercent", R.string.gesture_mode),

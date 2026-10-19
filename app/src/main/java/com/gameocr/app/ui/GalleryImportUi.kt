@@ -61,7 +61,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -419,8 +418,9 @@ fun GalleryAlbumPickerScreen(
     var refresh by remember { mutableStateOf(0) }
     var split by remember { mutableStateOf<GalleryImportSource?>(null) }
     var loadingAlbum by remember { mutableStateOf(false) }
-    val albums by produceState<List<GalleryAlbum>?>(initialValue = null, refresh) {
-        value = viewModel.mediaSources.albums()
+    var albums by remember { mutableStateOf<List<GalleryAlbum>?>(null) }
+    LaunchedEffect(refresh) {
+        albums = viewModel.mediaSources.albums()
     }
     val manageAccess = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         access = currentGalleryPhotoAccess(context)
@@ -512,8 +512,9 @@ fun GalleryAlbumPickerScreen(
 
 @Composable
 private fun AlbumTile(album: GalleryAlbum, decoder: GalleryImageDecoder, enabled: Boolean, onClick: () -> Unit) {
-    val cover by produceState<android.graphics.Bitmap?>(initialValue = null, album.coverUri) {
-        value = withContext(Dispatchers.IO) {
+    var cover by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    LaunchedEffect(album.coverUri) {
+        cover = withContext(Dispatchers.IO) {
             runCatching { decoder.decodeThumbnail(album.coverUri, "", maxDimension = ALBUM_COVER_DIMENSION) }.getOrNull()
         }
     }
