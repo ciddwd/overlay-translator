@@ -1,5 +1,6 @@
 package com.gameocr.app.ui
 
+import com.gameocr.app.readSourceText
 import com.gameocr.app.data.Settings as AppSettings
 import com.gameocr.app.data.TranslationPresetCatalog
 import java.io.File
@@ -37,7 +38,7 @@ class MainScreenPresetCarouselTest {
             Case("English", "src/main/res/values/strings.xml", "Presets"),
             Case("Simplified Chinese", "src/main/res/values-zh-rCN/strings.xml", "预设"),
         ).forEach { case ->
-            val resources = moduleFile(case.path).readText()
+            val resources = moduleFile(case.path).readSourceText()
             assertTrue(
                 case.name,
                 resources.contains(
@@ -249,7 +250,7 @@ class MainScreenPresetCarouselTest {
 
     @Test
     fun mainViewModel_rechecksModelsBeforePersistingAPreset() {
-        val source = moduleFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readText()
+        val source = moduleFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readSourceText()
         val applyStart = source.indexOf("suspend fun applyTranslationPreset(id: String): Boolean")
         val applyEnd = source.indexOf("private fun modelIssuesFor(", applyStart)
         assertTrue("apply function exists", applyStart >= 0)
@@ -274,7 +275,7 @@ class MainScreenPresetCarouselTest {
 
     @Test
     fun saveThenApply_validatesBeforeTheAtomicSettingsUpdate() {
-        val source = moduleFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readText()
+        val source = moduleFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readSourceText()
         val start = source.indexOf("suspend fun saveTranslationPresetAndApply(")
         val end = source.indexOf("private fun modelIssuesFor(", start)
         assertTrue("save-then-apply function exists", start >= 0)
@@ -299,7 +300,7 @@ class MainScreenPresetCarouselTest {
 
     @Test
     fun mainScreen_showsPresetsAsAStandaloneCardBelowTheCaptureCard() {
-        val source = moduleFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readText()
+        val source = moduleFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readSourceText()
         val captureCard = source.indexOf("            CaptureGalleryCarousel(")
         val presetCard = source.indexOf("            PresetCarouselCard(", captureCard)
         val compatibility = source.indexOf(
@@ -330,7 +331,7 @@ class MainScreenPresetCarouselTest {
 
     @Test
     fun horizontalPresetCards_reuseSettingsContentAndHaveNoIndicator() {
-        val source = moduleFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readText()
+        val source = moduleFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readSourceText()
         val carouselStart = source.indexOf("internal fun PresetCarousel(")
         val carouselEnd = source.indexOf("internal data class PresetCarouselPlans(", carouselStart)
         assertTrue("preset carousel exists", carouselStart >= 0)
@@ -485,7 +486,7 @@ class MainScreenPresetCarouselTest {
 
     @Test
     fun mainRouteNoLongerHoistsAStatusPresetPage() {
-        val activity = moduleFile("src/main/java/com/gameocr/app/ui/MainActivity.kt").readText()
+        val activity = moduleFile("src/main/java/com/gameocr/app/ui/MainActivity.kt").readSourceText()
         assertFalse(activity.contains("mainStatusPresetPageIndex"))
         assertFalse(activity.contains("onStatusPresetPageChanged"))
     }

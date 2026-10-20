@@ -28,6 +28,15 @@ class ScreenWakeNetworkRecovery @Inject constructor(
     private val lock = Any()
     private var registered = false
     private var state = ScreenWakeRecoveryState()
+    private val connectionCleaner = ScreenWakeConnectionCleaner(
+        evictIdleConnections = {
+            val idleConnections = httpClient.connectionPool.idleConnectionCount()
+            httpClient.connectionPool.evictAll()
+            idleConnections
+        },
+        onRecovered = ::onConnectionsCleared,
+        onFailure = { Timber.tag(NETWORK_PERF_TAG).w(it, "[network-wake] idle connection cleanup failed") },
+    )
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -56,6 +65,7 @@ class ScreenWakeNetworkRecovery @Inject constructor(
             ContextCompat.RECEIVER_NOT_EXPORTED,
         )
         registered = true
+        connectionCleaner.start()
     }
 
     fun stop() = synchronized(lock) {
@@ -63,6 +73,7 @@ class ScreenWakeNetworkRecovery @Inject constructor(
         runCatching { context.unregisterReceiver(receiver) }
             .onFailure { Timber.w(it, "Failed to unregister screen wake network recovery") }
         registered = false
+        connectionCleaner.stop()
         state = ScreenWakeRecoveryState()
         performanceDiagnostics.resetWakeContext()
     }
@@ -78,16 +89,18 @@ class ScreenWakeNetworkRecovery @Inject constructor(
         state = decision.state
         if (!decision.evictIdleConnections) return
 
-        val idleConnections = httpClient.connectionPool.idleConnectionCount()
-        httpClient.connectionPool.evictAll()
+        connectionCleaner.enqueue(decision.screenOffDurationMs)
+    }
+
+    private fun onConnectionsCleared(screenOffDurationMs: Long?, idleConnections: Int) {
         performanceDiagnostics.onScreenWake(
-            screenOffDurationMs = decision.screenOffDurationMs,
+            screenOffDurationMs = screenOffDurationMs,
             idleConnectionsCleared = idleConnections,
         )
         val message = buildString {
             append("[network-wake] cleared idle cloud connections=")
             append(idleConnections)
-            decision.screenOffDurationMs?.let {
+            screenOffDurationMs?.let {
                 append(" screenOffMs=")
                 append(it)
             }

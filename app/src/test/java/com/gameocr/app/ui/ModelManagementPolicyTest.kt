@@ -5,6 +5,7 @@ import com.gameocr.app.data.TranslatorEngine
 import com.gameocr.app.llm.LlmModelKind
 import com.gameocr.app.llm.LocalModelCatalog
 import com.gameocr.app.llm.LocalModelConfig
+import com.gameocr.app.llm.LocalModelLoadMode
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -124,7 +125,7 @@ class ModelManagementPolicyTest {
     fun `draft round trip keeps all settings and blank optional fields are defaults`() {
         val config = LocalModelConfig(4096, 1024, "Keep names {source} {target}", 0.7f, 0.8f, 20, 1.1f,
             generationThreads = 3, promptThreads = 8, batchTokens = 1024, microBatchTokens = 256,
-            useMmap = false, useMlock = true, cacheTypeK = "q8_0", cacheTypeV = "q4_0",
+            loadMode = LocalModelLoadMode.MLOCK, cacheTypeK = "q8_0", cacheTypeV = "q4_0",
             flashAttention = "on", gpuLayers = -1, idleUnloadMinutes = 0)
         val draft = ModelConfigDraft.from(config)
         assertEquals(config, draft.parse())
@@ -186,8 +187,8 @@ class ModelManagementPolicyTest {
         val base = ModelConfigDraft.from(LocalModelConfig())
         val drafts = listOf(
             base,
-            base.copy(context = "broken", generationThreads = "0", promptThreads = " ", useMmap = false,
-                useMlock = true, cacheTypeK = "q8_0", cacheTypeV = "q4_0", flashAttention = "off", gpuLayers = "", idleUnloadMinutes = "60"),
+            base.copy(context = "broken", generationThreads = "0", promptThreads = " ", loadMode = LocalModelLoadMode.NONE,
+                cacheTypeK = "q8_0", cacheTypeV = "q4_0", flashAttention = "off", gpuLayers = "", idleUnloadMinutes = "60"),
         )
         drafts.forEach { assertEquals(it.toString(), it, ModelConfigDraft.restore(it.serialize())) }
         listOf(emptyList(), base.serialize().dropLast(3), base.serialize() + "extra",
@@ -224,15 +225,21 @@ class ModelManagementPolicyTest {
                 assertFalse(draft.canSelectCacheV("unknown"))
             }
         }
-        listOf(true, false).forEach { mmap ->
-            listOf(true, false).forEach { mlock ->
-                val draft = base.copy(useMmap = mmap, useMlock = mlock)
-                val config = draft.parse()
-                assertNotNull(config)
-                assertEquals(mmap, config?.useMmap)
-                assertEquals(mlock, config?.useMlock)
-                assertEquals(draft, ModelConfigDraft.restore(draft.serialize()))
-            }
+        LocalModelLoadMode.ALL.forEach { mode ->
+            val draft = base.copy(loadMode = mode)
+            assertEquals(mode, draft.parse()?.loadMode)
+            assertEquals(draft, ModelConfigDraft.restore(draft.serialize()))
+        }
+        assertNull(base.copy(loadMode = "unknown").parse())
+        // State saved with the former mmap/mlock switches restores as the matching load mode.
+        listOf(
+            Triple("true", "false", LocalModelLoadMode.AUTO),
+            Triple("true", "true", LocalModelLoadMode.MMAP_MLOCK),
+            Triple("false", "true", LocalModelLoadMode.MLOCK),
+            Triple("false", "false", LocalModelLoadMode.NONE),
+        ).forEach { (mmap, mlock, mode) ->
+            val legacy = base.serialize().toMutableList().apply { this[11] = mmap; this[12] = mlock }
+            assertEquals(base.copy(loadMode = mode), ModelConfigDraft.restore(legacy))
         }
     }
 

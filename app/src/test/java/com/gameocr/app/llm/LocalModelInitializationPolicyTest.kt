@@ -10,21 +10,22 @@ class LocalModelInitializationPolicyTest {
         data class Case(val config: LocalModelConfig, val expected: Map<String, String>)
         val defaults = mapOf(
             "GAMEOCR_CONTEXT_TOKENS" to "2048", "GAMEOCR_BATCH_TOKENS" to "512",
-            "GAMEOCR_MICRO_BATCH_TOKENS" to "512", "GAMEOCR_USE_MMAP" to "1",
-            "GAMEOCR_USE_MLOCK" to "0", "GAMEOCR_CACHE_TYPE_K" to "f16",
+            "GAMEOCR_MICRO_BATCH_TOKENS" to "512", "GAMEOCR_LOAD_MODE" to "auto",
+            "GAMEOCR_CACHE_TYPE_K" to "f16",
             "GAMEOCR_CACHE_TYPE_V" to "f16", "GAMEOCR_FLASH_ATTENTION" to "auto",
             "GAMEOCR_GPU_LAYERS" to "0",
         )
         listOf(
             Case(LocalModelConfig(), defaults),
             Case(LocalModelConfig(contextTokens = 512, batchTokens = 9000, microBatchTokens = 0,
-                useMmap = false, useMlock = true, cacheTypeK = "Q8_0", cacheTypeV = "q4_0",
+                loadMode = " MLOCK ", cacheTypeK = "Q8_0", cacheTypeV = "q4_0",
                 flashAttention = "off", gpuLayers = -9), defaults + mapOf(
                 "GAMEOCR_CONTEXT_TOKENS" to "512", "GAMEOCR_MICRO_BATCH_TOKENS" to "32",
-                "GAMEOCR_USE_MMAP" to "0", "GAMEOCR_USE_MLOCK" to "1",
+                "GAMEOCR_LOAD_MODE" to "mlock",
                 "GAMEOCR_CACHE_TYPE_K" to "q8_0", "GAMEOCR_FLASH_ATTENTION" to "off",
                 "GAMEOCR_GPU_LAYERS" to "-1",
             )),
+            Case(LocalModelConfig(loadMode = "unknown"), defaults),
             Case(LocalModelConfig(generationThreads = 8, promptThreads = 16, temperature = 0.5f,
                 translationPrompt = "Translate", idleUnloadMinutes = 0), defaults),
         ).forEach { case ->

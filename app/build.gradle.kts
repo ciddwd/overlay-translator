@@ -113,9 +113,17 @@ val mangaOcrBatchSize = providers
     .orElse("4")
     .get()
     .toInt()
-require(mangaOcrBatchSize in setOf(1, 2, 4)) {
-    "mangaOcrBatchSize must be one of 1, 2, or 4"
+require(mangaOcrBatchSize in setOf(1, 2, 4, 8)) {
+    "mangaOcrBatchSize must be one of 1, 2, 4, or 8"
 }
+
+// Speculative manga-ocr decoding (int8 draft, FP32 verify). On in every build; output is always
+// the FP32 decoder's own. -PmangaOcrSpeculative=false builds an FP32-only variant for comparison.
+val mangaOcrSpeculative = providers
+    .gradleProperty("mangaOcrSpeculative")
+    .orElse("true")
+    .get()
+    .toBooleanStrict()
 
 android {
     namespace = "com.gameocr.app"
@@ -173,10 +181,12 @@ android {
             if (hasReleaseSigning) {
                 signingConfig = signingConfigs.getByName("release")
             }
+            buildConfigField("boolean", "MANGA_OCR_SPECULATIVE", mangaOcrSpeculative.toString())
         }
         debug {
             applicationIdSuffix = ".debug"
             isDebuggable = true
+            buildConfigField("boolean", "MANGA_OCR_SPECULATIVE", mangaOcrSpeculative.toString())
         }
     }
 

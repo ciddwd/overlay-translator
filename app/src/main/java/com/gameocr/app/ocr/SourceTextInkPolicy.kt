@@ -28,6 +28,11 @@ internal object SourceTextInkPolicy {
         val contextTotal=contextHistogram.sum()
         val contextRunnerUp=contextHistogram.indices.filter { it!=contextBin }.maxOf { contextHistogram[it] }
         val queue=IntArray(source.size)
+        // These arrays depend only on the exact background color and the fixed source region,
+        // not on which original line is being classified. Reuse consecutive identical colors.
+        var cachedBackground: Int? = null
+        var cachedFrames: BooleanArray? = null
+        var cachedCandidate: BooleanArray? = null
         for(raw in boxes) {
             val box=IntRect(raw.left.coerceIn(0,width),raw.top.coerceIn(0,height),
                 raw.right.coerceIn(0,width),raw.bottom.coerceIn(0,height))
@@ -77,11 +82,19 @@ internal object SourceTextInkPolicy {
                 (minOf(box.width,box.height)*.12f).toInt().coerceIn(3,8).toByte() else 0.toByte()
             // JPEG/antialiasing fringes can bridge a glyph to the balloon outline. Establish
             // independent ink bodies first; recover their faint rim only after ownership.
-            val observedInk=BooleanArray(source.size) { distance(source[it],background)>80 }
-            val frames=TextRegionBorderMask.detect(width,height,
-                BooleanArray(source.size) { observedInk[it] && chroma(source[it])<=24 },sourceRegion)
+            if (cachedBackground != background) {
+                cachedFrames = null
+                cachedCandidate = null
+                val observedInk=BooleanArray(source.size) { distance(source[it],background)>80 }
+                val frames=TextRegionBorderMask.detect(width,height,
+                    BooleanArray(source.size) { observedInk[it] && chroma(source[it])<=24 },sourceRegion)
+                cachedFrames = frames
+                cachedCandidate = BooleanArray(source.size) { observedInk[it] && !frames[it] }
+                cachedBackground = background
+            }
+            val frames = checkNotNull(cachedFrames)
             for(i in frames.indices)if(frames[i])protected[i]=true
-            val candidate=BooleanArray(source.size) { observedInk[it] && !frames[it] }
+            val candidate=checkNotNull(cachedCandidate)
             val seen=BooleanArray(source.size)
             val sparseLoops=mutableListOf<IntArray>()
             val glyphs=mutableListOf<Pair<IntArray,IntRect>>()

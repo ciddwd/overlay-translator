@@ -220,8 +220,9 @@ class SystemCapturePolicyTest {
         assertEquals(listOf("CaptureStartCoordinator.kt"), sources.filter {
             it.readText().contains("CaptureService.ACTION_START")
         }.map { it.name })
-        assertEquals(listOf("CaptureStartRequestActivity.kt"), sources.filter {
+        // Speech capture asks for its own projection to record app audio (AudioPlaybackCapture).
+        assertEquals(setOf("CaptureStartRequestActivity.kt", "SpeechCaptureRequestActivity.kt"), sources.filter {
             it.readText().contains("createScreenCaptureIntent()")
-        }.map { it.name })
+        }.map { it.name }.toSet())
     }
 }

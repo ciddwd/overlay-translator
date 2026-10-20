@@ -135,8 +135,7 @@
     <string name="main_compat_autostart_title">Auto-start</string>
     <string name="main_compat_battery_ok_sub">Not restricted in the background</string>
     <string name="main_compat_battery_risk_sub">Disable battery optimization to avoid translation interruptions</string>
-    <string name="main_compat_a11y_on_sub">Capture without prompts and gesture triggers</string>
-    <string name="main_compat_a11y_shizuku_sub">One tap with Shizuku</string>
+    <string name="main_compat_a11y_off_sub">Tap to enable in system settings</string>
     <string name="main_compat_a11y_busy">Turning on…</string>
     <string name="main_about_update_sub">Check for a new version</string>
     <string name="main_about_user_guide_sub">Wiki on GitHub</string>
@@ -743,7 +742,7 @@
     <string name="settings_paddle_ai_studio_description">PP-OCRv6 Online uses the PaddleOCR AI Studio asynchronous OCR service. Get an Access Token from the page below, then enter it here.</string>
     <string name="settings_paddle_ai_studio_open_page">Open PaddleOCR AI Studio in an external browser</string>
     <string name="settings_external_browser_unavailable">No browser is available to open this link.</string>
-    <string name="settings_ocr_intro">Pick the OCR engine for the text type:\n• Auto / Japanese / Korean / Chinese / Latin: Google ML Kit on-device (free; captured images and recognized text are not uploaded. The SDK may connect for updates and performance / usage metrics). \"Auto\" picks the model by detecting Hangul / kana; pinning a specific language slightly improves accuracy.\n• PaddleOCR: on-device multilingual; better on complex layouts. First use downloads ~20MB models. (Korean dict not bundled — use ML Kit or cloud for Korean.)\n• Manga-OCR (Japanese manga, on-device, ≈ 160 MB; encoder + decoder + tokenizer files)\n• Baidu / Tencent Cloud: cloud OCR with API key (pay-as-you-go); pick Korean / Japanese etc. under \"Recognition language\" as a fallback.</string>
+    <string name="settings_ocr_intro">Pick the OCR engine for the text type:\n• Auto / Japanese / Korean / Chinese / Latin: Google ML Kit on-device (free; captured images and recognized text are not uploaded. The SDK may connect for updates and performance / usage metrics). \"Auto\" picks the model by detecting Hangul / kana; pinning a specific language slightly improves accuracy.\n• PaddleOCR: on-device multilingual; better on complex layouts. First use downloads ~20MB models. (Korean dict not bundled — use ML Kit or cloud for Korean.)\n• Manga-OCR (Japanese manga, on-device, ≈ 205 MB; encoder + decoder + tokenizer files)\n• Baidu / Tencent Cloud: cloud OCR with API key (pay-as-you-go); pick Korean / Japanese etc. under \"Recognition language\" as a fallback.</string>
     <string name="settings_baidu_api_key">Baidu API Key</string>
     <string name="settings_baidu_secret_key">Baidu Secret Key</string>
     <string name="settings_baidu_endpoint_label">Endpoint type (each has its own free quota on the Baidu console)</string>
@@ -1048,16 +1047,19 @@
     <string name="settings_paddle_download_failed_format">Download failed: %1$s</string>
     <string name="settings_paddle_imported_format">Imported %1$d files → %2$s</string>
 
-    <!-- manga-ocr 端侧（l0wgear/manga-ocr-2025-onnx，日漫专用，~160MB，需开代理） -->
+    <!-- manga-ocr 端侧（l0wgear/manga-ocr-2025-onnx，日漫专用，~205MB 含 int8 加速解码，需开代理） -->
     <string name="settings_ocr_chip_manga_ocr_ja">Manga OCR (JA)</string>
     <string name="ocr_engine_manga_ocr_ja">MANGA_OCR_JA</string>
     <string name="settings_manga_ocr_model_name">manga-ocr 2025 (l0wgear)</string>
-    <string name="settings_manga_ocr_desc">On-device manga-ocr for Japanese manga (≈ 160 MB; encoder + decoder + tokenizer files). Reuses PaddleOCR DBNet for detection — please download PaddleOCR model too. Source: huggingface.co — VPN / proxy required.</string>
+    <string name="settings_manga_ocr_desc">On-device manga-ocr for Japanese manga (≈ 205 MB; encoder + decoder + tokenizer files). Reuses PaddleOCR DBNet for detection — please download PaddleOCR model too. Source: huggingface.co — VPN / proxy required.</string>
     <string name="settings_manga_ocr_btn_processing">Working…</string>
     <string name="settings_manga_ocr_btn_auto_download">Auto download</string>
     <string name="settings_manga_ocr_btn_local_import">Import locally</string>
     <string name="settings_manga_ocr_btn_delete">Delete</string>
     <string name="settings_manga_ocr_status_ready_format">Manga OCR ready ✓ (%1$d MB)</string>
+    <string name="settings_manga_ocr_status_faster_available_format">Faster decoding available: download %1$d MB more to speed up manga OCR.</string>
+    <string name="settings_manga_ocr_btn_download_faster">Download faster decoding</string>
+    <string name="settings_manga_ocr_faster_failed">Manga OCR is ready, but the faster-decoding file could not be downloaded. Try again later.</string>
     <string name="settings_manga_ocr_status_missing">Manga OCR model not downloaded</string>
     <string name="settings_manga_ocr_status_missing_hint">Manga OCR not downloaded. Use Auto download with the Network download source, or import local files.</string>
     <string name="settings_manga_ocr_status_checking">Checking…</string>
@@ -2267,7 +2269,6 @@
     <string name="model_memory_weights">Weights %1$s</string>
     <string name="model_memory_kv">KV cache %1$s</string>
     <string name="model_memory_available">About %1$s available on this device</string>
-    <string name="model_mmap_hint">Loads faster; memory is used on demand</string>
     <string name="model_idle_never">Never</string>
     <string name="model_idle_minutes">%1$d min</string>
     <string name="model_threads_auto">Auto (%1$d)</string>
@@ -2305,8 +2306,18 @@
     <string name="model_init_micro_batch">Micro-batch size</string>
     <string name="model_memory_header">Memory settings</string>
     <string name="model_memory_estimate">Estimated memory use: %1$s</string>
-    <string name="model_memory_mmap">Memory mapping</string>
-    <string name="model_memory_mlock">Lock memory</string>
+    <string name="model_load_mode">Loading mode</string>
+    <string name="model_load_mode_auto">Auto</string>
+    <string name="model_load_mode_mmap">Memory map</string>
+    <string name="model_load_mode_mmap_mlock">Memory map + lock</string>
+    <string name="model_load_mode_mlock">Load + lock</string>
+    <string name="model_load_mode_none">Load into memory</string>
+    <string name="model_load_mode_dio">Direct I/O</string>
+    <string name="model_load_mode_auto_hint">Memory-maps the model, or reads it fully when the GPU can\'t map files</string>
+    <string name="model_load_mode_mmap_hint">Loads faster; memory is used on demand</string>
+    <string name="model_load_mode_lock_hint">Keeps the model in RAM; the system may refuse the lock</string>
+    <string name="model_load_mode_none_hint">Reads the whole model into app memory</string>
+    <string name="model_load_mode_dio_hint">Reads the whole model past the file cache, or normally where unsupported</string>
     <string name="model_memory_idle">Idle unloading (minutes)</string>
     <string name="model_init_gpu">GPU acceleration (experimental)</string>
     <string name="model_init_gpu_layers">GPU layers</string>

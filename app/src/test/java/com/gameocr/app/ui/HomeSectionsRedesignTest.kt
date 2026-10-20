@@ -1,5 +1,6 @@
 package com.gameocr.app.ui
 
+import com.gameocr.app.readSourceText
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -7,7 +8,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class HomeSectionsRedesignTest {
-    private fun source(path: String) = File("src/main/java/com/gameocr/app/$path").readText()
+    private fun source(path: String) = File("src/main/java/com/gameocr/app/$path").readSourceText()
 
     @Test
     fun presetDetailLinesSplitIntoLabelAndValue() {

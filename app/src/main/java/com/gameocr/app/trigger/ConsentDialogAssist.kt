@@ -43,7 +43,7 @@ internal object ConsentDialogPolicy {
 
     /** Positive buttons by view id, most specific first (verified against AOSP layouts). */
     fun buttonIds(kind: ConsentDialogKind, packageName: String): List<String> = when (kind) {
-        // AlertDialog (Android 10-13) and screen_share_dialog.xml (14+) both use android:id/button1.
+        // The system alert dialog (Android 10-13) and screen_share_dialog.xml (14+) both use android:id/button1.
         ConsentDialogKind.PROJECTION -> listOf("android:id/button1")
         // "While using the app"; plain "Allow" on versions without a foreground-only choice.
         ConsentDialogKind.RECORD_AUDIO -> listOf(

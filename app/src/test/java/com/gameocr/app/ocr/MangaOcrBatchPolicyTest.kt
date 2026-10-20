@@ -2,6 +2,8 @@ package com.gameocr.app.ocr
 
 import java.nio.LongBuffer
 import java.nio.FloatBuffer
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Test
@@ -157,6 +159,43 @@ class MangaOcrBatchPolicyTest {
                     selectedRows = rows,
                     destination = FloatBuffer.allocate(rows.size * 3),
                 )
+            }
+        }
+    }
+
+    @Test
+    fun hiddenBulkCopy_preservesRawBitsOffsetsAndBufferState_tableDriven() {
+        val bits = intArrayOf(0, 0x80000000.toInt(), 0x7f800000, 0xff800000.toInt(),
+            0x7fc01234, 1, 0x3f800000, 0xbf000000.toInt())
+        val values = FloatArray(32) { Float.fromBits(bits[it % bits.size]) }
+        fun direct(order: ByteOrder): FloatBuffer = ByteBuffer.allocateDirect(values.size * 4)
+            .order(order).asFloatBuffer().apply { put(values); clear() }
+        val sources = listOf(
+            FloatBuffer.wrap(values.copyOf()),
+            FloatBuffer.wrap(values.copyOf()).apply { position(2) }.slice(),
+            direct(ByteOrder.nativeOrder()), direct(ByteOrder.BIG_ENDIAN),
+            direct(ByteOrder.nativeOrder()).asReadOnlyBuffer(),
+            ByteBuffer.allocate(values.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
+                .apply { put(values); clear() },
+        )
+        for (source in sources) for (rows in listOf(intArrayOf(0, 3), intArrayOf(3, 1), intArrayOf(2))) {
+            source.position(3)
+            source.limit(23)
+            val expected = rows.flatMap { row -> (0 until 5).map { source.get(3 + row * 5 + it).toRawBits() } }
+            for (directDestination in listOf(false, true)) {
+                val capacity = expected.size + 4
+                val destination = if (directDestination) ByteBuffer.allocateDirect(capacity * 4)
+                    .order(ByteOrder.nativeOrder()).asFloatBuffer() else FloatBuffer.allocate(capacity)
+                for (i in 0 until capacity) destination.put(i, 42f)
+                destination.position(2)
+                destination.limit(capacity - 1)
+                MangaHiddenRowCompactor.copyRows(source, 4, 5, rows, destination)
+                assertEquals(expected, expected.indices.map { destination.get(it + 2).toRawBits() })
+                assertEquals(3, source.position())
+                assertEquals(23, source.limit())
+                assertEquals(expected.size + 2, destination.position())
+                assertEquals(42f.toRawBits(), destination.get(0).toRawBits())
+                assertEquals(42f.toRawBits(), destination.get(expected.size + 2).toRawBits())
             }
         }
     }

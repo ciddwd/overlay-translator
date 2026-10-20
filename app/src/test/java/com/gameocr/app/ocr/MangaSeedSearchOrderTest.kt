@@ -24,6 +24,71 @@ class MangaSeedSearchOrderTest {
     }
 
     @Test
+    fun linearScan_matchesSortedReferenceAcrossTiesRoisAndCandidates() {
+        val random = kotlin.random.Random(4127)
+        repeat(300) { trial ->
+            val imageWidth = 8 + random.nextInt(40)
+            val imageHeight = 8 + random.nextInt(40)
+            val count = random.nextInt(0, 120)
+            val indices = IntArray(count) { random.nextInt(imageWidth * imageHeight) }
+            // Few distinct distances force ties, which must resolve in preparation order.
+            val distances = FloatArray(count) { random.nextInt(6).toFloat() * 0.5f }
+            val order = MangaSeedSearchOrder.prepare(imageWidth, indices, distances)
+            val left = random.nextInt(imageWidth)
+            val top = random.nextInt(imageHeight)
+            val roi = IntRect(left, top, random.nextInt(left + 1, imageWidth + 1),
+                random.nextInt(top + 1, imageHeight + 1))
+            val candidate = BooleanArray(roi.width * roi.height) { random.nextInt(3) != 0 }
+            val label = "trial=$trial"
+            assertEquals(label, referenceSpatialSeeds(imageWidth, indices, distances, candidate, roi),
+                order.spatialSeeds(candidate, roi))
+            assertEquals(label, referenceNearest(imageWidth, indices, distances, candidate, roi),
+                order.nearest(candidate, roi))
+        }
+    }
+
+    /** The original implementation: stable sort by distance, then take first hits. */
+    private fun sortedVisits(
+        imageWidth: Int,
+        indices: IntArray,
+        distances: FloatArray,
+        candidate: BooleanArray,
+        roi: IntRect,
+    ): List<Triple<Int, Int, Int>> = indices.indices
+        .sortedWith(compareBy({ distances[it] }, { it }))
+        .mapNotNull { position ->
+            val y = indices[position] / imageWidth
+            val x = indices[position] - y * imageWidth
+            if (x !in roi.left until roi.right || y !in roi.top until roi.bottom) return@mapNotNull null
+            val index = (y - roi.top) * roi.width + x - roi.left
+            if (candidate[index]) Triple(index, x, y) else null
+        }
+
+    private fun referenceSpatialSeeds(
+        imageWidth: Int,
+        indices: IntArray,
+        distances: FloatArray,
+        candidate: BooleanArray,
+        roi: IntRect,
+    ): List<Int> {
+        val visits = sortedVisits(imageWidth, indices, distances, candidate, roi)
+        if (visits.isEmpty()) return emptyList()
+        val left = visits.first { it.second == visits.minOf { v -> v.second } }.first
+        val right = visits.first { it.second == visits.maxOf { v -> v.second } }.first
+        val top = visits.first { it.third == visits.minOf { v -> v.third } }.first
+        val bottom = visits.first { it.third == visits.maxOf { v -> v.third } }.first
+        return listOf(visits.first().first, left, right, top, bottom).distinct()
+    }
+
+    private fun referenceNearest(
+        imageWidth: Int,
+        indices: IntArray,
+        distances: FloatArray,
+        candidate: BooleanArray,
+        roi: IntRect,
+    ): Int? = sortedVisits(imageWidth, indices, distances, candidate, roi).firstOrNull()?.first
+
+    @Test
     fun nearest_tableDriven_preservesDistanceAndStableTiePriority() {
         data class Case(
             val name: String,

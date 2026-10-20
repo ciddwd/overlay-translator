@@ -138,7 +138,8 @@ internal data class MangaMaskDebugArtifact(
 )
 
 internal data class MangaMaskDebugReport(
-    val analysis: MangaMaskDebugAnalyzer.Analysis,
+    /** Built on first use; recognition never reads it, only erase preparation does. */
+    val analysis: Lazy<MangaMaskDebugAnalyzer.Analysis>,
     val boxDetection: MangaBubbleDetectionDebugEngine.Output? = null,
     val detectorGuidedMasks: DetectorGuidedBubbleMaskExtractor.Result? = null,
     val detectorGuidedMemberAssociations: List<BubbleMaskAssociator.Association> =
@@ -168,13 +169,16 @@ internal suspend fun dumpMangaMaskDebugSet(
     useDetectorGuidedPatches: Boolean,
     runBoxDetector: Boolean,
     runLegacySegmentation: Boolean,
+    boxDetectionProvider: (suspend () -> MangaBubbleDetectionDebugEngine.Output?)? = null,
+    /** The bitmap's pixels when the caller already read them; never mutated here. */
+    sourceArgb: IntArray? = null,
 ): MangaMaskDebugReport? {
     if (!analyzeFrame) return null
     val frameStartedNs = System.nanoTime()
     val width = bitmap.width
     val height = bitmap.height
-    val argb = IntArray(width * height)
-    bitmap.getPixels(argb, 0, width, 0, 0, width, height)
+    val argb = sourceArgb?.also { require(it.size == width * height) }
+        ?: IntArray(width * height).also { bitmap.getPixels(it, 0, width, 0, 0, width, height) }
     val polygons = quads.map { quad ->
         MangaMaskDebugAnalyzer.Polygon(
             listOf(
@@ -185,38 +189,48 @@ internal suspend fun dumpMangaMaskDebugSet(
             )
         )
     }
-    val analysis = MangaMaskDebugAnalyzer.analyze(
-        width = width,
-        height = height,
-        argb = argb,
-        probabilityTextMask = probabilityTextMask,
-        polygons = polygons,
-        bubbles = if (
-            MangaMaskDebugDumpPolicy.shouldRunLegacyBubbleHeuristic(
-                saveCurrentDebugSet = false,
-            )
-        ) {
-            bubbles.map { bubble ->
-                MangaMaskDebugAnalyzer.BubbleInput(
-                    contentBounds = bubble.contentRect,
-                    memberIndices = bubble.memberIndices,
+    // The full-frame erase mask is only read by the delayed erase session, which runs beside
+    // translation. Building it on first use keeps it off the recognition path.
+    val analysis = lazy {
+        MangaMaskDebugAnalyzer.analyze(
+            width = width,
+            height = height,
+            argb = argb,
+            probabilityTextMask = probabilityTextMask,
+            polygons = polygons,
+            bubbles = if (
+                MangaMaskDebugDumpPolicy.shouldRunLegacyBubbleHeuristic(
+                    saveCurrentDebugSet = false,
                 )
-            }
-        } else {
-            emptyList()
-        },
-    )
+            ) {
+                bubbles.map { bubble ->
+                    MangaMaskDebugAnalyzer.BubbleInput(
+                        contentBounds = bubble.contentRect,
+                        memberIndices = bubble.memberIndices,
+                    )
+                }
+            } else {
+                emptyList()
+            },
+        )
+    }
     val shouldRunBoxDetector = runBoxDetector && useDetectorGuidedPatches
-    val textMaskAnalysisMs = (System.nanoTime() - frameStartedNs) / 1_000_000L
+    val boxWaitStartedNs = System.nanoTime()
     val boxDetection = if (shouldRunBoxDetector) {
         runCatching {
-            MangaBubbleDetectionDebugEngine.runIfInstalled(context, bitmap)
+            if (boxDetectionProvider != null) {
+                boxDetectionProvider()
+            } else {
+                MangaBubbleDetectionDebugEngine.runIfInstalled(context, bitmap)
+            }
         }.onFailure { error ->
+            if (error is kotlinx.coroutines.CancellationException) throw error
             timber.log.Timber.w(error, "Manga bubble detection inference failed")
         }.getOrNull()
     } else {
         null
     }
+    val boxWaitMs = (System.nanoTime() - boxWaitStartedNs) / 1_000_000L
     boxDetection?.let { detection ->
         timber.log.Timber.i(
             "Manga bubble detection debug bubbles=%d text=%d session=%dms preprocess=%dms inference=%dms postprocess=%dms total=%dms",
@@ -558,7 +572,7 @@ internal suspend fun dumpMangaMaskDebugSet(
             width = width,
             height = height,
             sourceArgb = argb,
-            candidateTextMask = analysis.textEraseMask,
+            candidateTextMaskSource = lazy { analysis.value.textEraseMask },
             memberBounds = polygons.map { polygon -> polygon.bounds },
             modelGroups = selectedGroups,
             modelMasks = selectedMasks,
@@ -583,8 +597,9 @@ internal suspend fun dumpMangaMaskDebugSet(
         delayedMaskInput = delayedMaskInput,
     )
     timber.log.Timber.tag("MangaFramePerf").i(
-        "prepare totalMs=%d textMaskAnalysisMs=%d boxMs=%d shapeMaskMs=%d members=%d",
-        (System.nanoTime() - frameStartedNs) / 1_000_000L, textMaskAnalysisMs,
+        "prepare totalMs=%d boxWaitMs=%d boxMs=%d shapeMaskMs=%d members=%d",
+        (System.nanoTime() - frameStartedNs) / 1_000_000L,
+        boxWaitMs,
         boxDetection?.totalMs ?: 0L, detectorGuidedMasks?.durationMs ?: 0L, polygons.size,
     )
     return report

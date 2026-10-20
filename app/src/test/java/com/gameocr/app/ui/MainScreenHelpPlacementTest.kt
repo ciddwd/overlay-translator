@@ -1,5 +1,6 @@
 package com.gameocr.app.ui
 
+import com.gameocr.app.readSourceText
 import com.gameocr.app.R
 import java.io.File
 import org.junit.Assert.assertEquals
@@ -10,14 +11,14 @@ class MainScreenHelpPlacementTest {
 
     @Test
     fun helpAction_tableDriven_isTheCaptureCardUsageRowAndAbsentFromTopBar() {
-        val source = sourceFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readText()
-        val card = sourceFile("src/main/java/com/gameocr/app/ui/CaptureServiceCard.kt").readText()
+        val source = sourceFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readSourceText()
+        val card = sourceFile("src/main/java/com/gameocr/app/ui/CaptureServiceCard.kt").readSourceText()
         val topBar = source.substring(
             source.indexOf("TopAppBar("),
             source.indexOf("snackbarHost ="),
         )
         val captureSection = source.substring(
-            source.indexOf("capturePage = { pageModifier ->"),
+            source.indexOf("capturePage = { pageModifier, onNaturalHeightChanged ->"),
             source.indexOf("galleryPage = { pageModifier ->"),
         )
         val usageRow = card.substring(card.indexOf("private fun UsageRow("))
@@ -31,7 +32,10 @@ class MainScreenHelpPlacementTest {
 
         listOf(
             Case("top bar no longer owns help", topBar, "onOpenOnboarding", false),
-            Case("capture card owns help", captureSection, "onOpenHelp = onOpenOnboarding", true),
+            // Help asks for confirmation first; the dialog then opens onboarding.
+            Case("capture card owns help", captureSection, "onOpenHelp = { showHelpConfirmDialog = true }", true),
+            Case("confirmed help opens onboarding", source,
+                "showHelpConfirmDialog = false\n                    onOpenOnboarding()", true),
             Case("usage text is permission-aware", captureSection, "mainUsageTextRes(showCaptureControls)", true),
             Case("usage row is shown in setup and ready states", card, "UsageRow(usageText = usageText, onClick = onOpenHelp)", true),
             Case("usage label remains visible", usageRow, "R.string.main_label_usage", true),
@@ -47,7 +51,8 @@ class MainScreenHelpPlacementTest {
         assertEquals(
             "onboarding help must have exactly one main-screen entry",
             1,
-            Regex("""\bonOpenOnboarding\b""").findAll(captureSection).count(),
+            // The one call is the help confirmation dialog's; the capture card only opens that dialog.
+            Regex("""\bonOpenOnboarding\(\)""").findAll(source).count(),
         )
     }
 
@@ -74,8 +79,8 @@ class MainScreenHelpPlacementTest {
             assertEquals(case.name, case.expected, mainUsageTextRes(case.canDrawOverlay))
         }
 
-        val englishStrings = sourceFile("src/main/res/values/strings.xml").readText()
-        val chineseStrings = sourceFile("src/main/res/values-zh-rCN/strings.xml").readText()
+        val englishStrings = sourceFile("src/main/res/values/strings.xml").readSourceText()
+        val chineseStrings = sourceFile("src/main/res/values-zh-rCN/strings.xml").readSourceText()
         data class CopyCase(
             val name: String,
             val content: String,
@@ -100,11 +105,11 @@ class MainScreenHelpPlacementTest {
 
     @Test
     fun homeCompatibilityRestoration_tableDriven() {
-        val main = sourceFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readText()
-        val settings = sourceFile("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
-        val englishStrings = sourceFile("src/main/res/values/strings.xml").readText()
-        val chineseStrings = sourceFile("src/main/res/values-zh-rCN/strings.xml").readText()
-        val captureCard = sourceFile("src/main/java/com/gameocr/app/ui/CaptureServiceCard.kt").readText()
+        val main = sourceFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readSourceText()
+        val settings = sourceFile("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readSourceText()
+        val englishStrings = sourceFile("src/main/res/values/strings.xml").readSourceText()
+        val chineseStrings = sourceFile("src/main/res/values-zh-rCN/strings.xml").readSourceText()
+        val captureCard = sourceFile("src/main/java/com/gameocr/app/ui/CaptureServiceCard.kt").readSourceText()
         val disabledRegion = main.substring(
             main.indexOf("BEGIN_DISABLED_SCREENSHOT_REGION"),
             main.indexOf("END_DISABLED_SCREENSHOT_REGION"),

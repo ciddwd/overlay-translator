@@ -1,7 +1,10 @@
 package com.gameocr.app.ui
 
 import com.gameocr.app.asr.AsrModelId
+import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AsrModelUiPolicyTest {
@@ -61,4 +64,37 @@ class AsrModelUiPolicyTest {
         assertEquals(228L, AsrModelUiPolicy.sizeMegabytes(AsrModelId.SENSE_VOICE))
         assertEquals(99L, AsrModelUiPolicy.sizeMegabytes(AsrModelId.WHISPER_TINY))
     }
+
+    @Test fun downloadProgressIsOnlyInTheSharedCard_otherModelStatusesRemain_tableDriven() {
+        listOf(
+            AsrModelUiState.Downloading(0) to false,
+            AsrModelUiState.Downloading(25) to false,
+            AsrModelUiState.Downloading(100) to false,
+            AsrModelUiState.Downloading(null) to false,
+            AsrModelUiState.Queued to false,
+            AsrModelUiState.Verifying to false,
+            AsrModelUiState.Checking to true,
+            AsrModelUiState.Importing to true,
+            AsrModelUiState.NotDownloaded to true,
+            AsrModelUiState.Ready to true,
+            AsrModelUiState.Failed to true,
+        ).forEach { (state, show) -> assertEquals(state.toString(), show, AsrModelUiPolicy.showInlineStatus(state)) }
+
+        val speech = source("AsrSettingsSection.kt").substringAfter("private fun OnDeviceModelSection(")
+            .substringBefore("private fun CloudEngineSection(")
+        assertTrue(speech.contains("if (AsrModelUiPolicy.showInlineStatus(modelState))"))
+        assertFalse(speech.contains("ModelDownloadProgressLine("))
+        assertFalse(speech.contains("settings_asr_cancel_download"))
+        assertFalse(speech.contains("cancelModelDownload("))
+        assertTrue(speech.contains("enabled = AsrModelUiPolicy.canDelete(modelState)"))
+        assertTrue(speech.contains("R.string.settings_paddle_btn_delete"))
+        val shared = source("SettingsScreen.kt").substringAfter("val modelDownloadFeedback:")
+            .substringBefore("LaunchedEffect(translatorEngine, localModelId,")
+        assertTrue(shared.contains("ModelDownloadProgressCard("))
+        assertTrue(shared.contains("viewModel.cancelModelDownload(download.id)"))
+    }
+
+    private fun source(name: String): String = listOf(
+        File("src/main/java/com/gameocr/app/ui/$name"), File("app/src/main/java/com/gameocr/app/ui/$name"),
+    ).first(File::isFile).readText()
 }

@@ -6,6 +6,7 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.gameocr.app.R
+import com.gameocr.app.asr.OpenAiAsrProtocol
 import com.gameocr.app.capture.CaptureRegionBorderStyle
 import com.gameocr.app.capture.normalizedCaptureRegionBorderWidthDp
 import com.gameocr.app.data.FloatingMenu
@@ -59,6 +60,8 @@ import com.gameocr.app.ocr.PaddleModelInstaller
 import com.gameocr.app.ocr.lunaOcrHttpHostOrNull
 import com.gameocr.app.ocr.umiOcrHttpHostOrNull
 import com.gameocr.app.translate.RoutingTranslator
+import com.gameocr.app.translate.OpenAiModelListClient
+import com.gameocr.app.translate.OpenAiModelListHttpException
 import com.gameocr.app.translate.TestResult
 import com.gameocr.app.tts.ttsHttpHostOrNull
 import com.gameocr.app.tts.ttsApiHttpHostOrNull
@@ -80,6 +83,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import java.io.File
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -96,6 +100,7 @@ class SettingsViewModel @Inject constructor(
     private val orientationModelInstaller: OrientationModelInstaller,
     private val routingTranslator: RoutingTranslator,
     private val connectionTester: com.gameocr.app.translate.TranslatorConnectionTester,
+    private val modelListClient: OpenAiModelListClient,
     private val llmInstaller: LlmModelInstaller,
     private val localModelCatalog: com.gameocr.app.llm.LocalModelCatalog,
     private val modelReadinessChecker: ModelReadinessChecker,
@@ -991,6 +996,8 @@ class SettingsViewModel @Inject constructor(
     data class DownloadableModelUiState(
         val status: String,
         val ready: Boolean,
+        /** Ready, and an optional file can still be downloaded; see ModelReadiness.upgradeAvailable. */
+        val upgradeAvailable: Boolean = false,
     )
 
     suspend fun paddleModelStatus(): String = paddleModelStatus(repo.get().paddleModelVersion)
@@ -1055,9 +1062,18 @@ class SettingsViewModel @Inject constructor(
         val readiness = modelReadinessChecker.mangaOcr()
         return if (readiness.installed) {
             val totalMb = readiness.totalBytes / (1024 * 1024)
+            val ready = appContext.getString(R.string.settings_manga_ocr_status_ready_format, totalMb.toInt())
             DownloadableModelUiState(
-                status = appContext.getString(R.string.settings_manga_ocr_status_ready_format, totalMb.toInt()),
+                status = if (readiness.upgradeAvailable) {
+                    ready + "\n" + appContext.getString(
+                        R.string.settings_manga_ocr_status_faster_available_format,
+                        (com.gameocr.app.ocr.MangaOcrModelInstaller.DRAFT_BYTES / (1024 * 1024)).toInt(),
+                    )
+                } else {
+                    ready
+                },
                 ready = true,
+                upgradeAvailable = readiness.upgradeAvailable,
             )
         } else {
             DownloadableModelUiState(
@@ -1213,6 +1229,28 @@ class SettingsViewModel @Inject constructor(
         uris: List<android.net.Uri>,
         defaultKind: LlmModelKind,
     ): Int = llmInstaller.importFromLocal(uris, defaultKind)
+
+    /** List models using the current speech form draft, without saving or probing chat. */
+    suspend fun fetchAsrModels(settings: Settings): TestResult {
+        val connection = settings.asrCloudConnections
+        if (connection.openAiApiKey.isBlank()) {
+            return TestResult(false, appContext.getString(R.string.err_openai_no_api_key))
+        }
+        val url = OpenAiAsrProtocol.modelsEndpoint(connection.openAiBaseUrl)
+            ?: return TestResult(false, IllegalArgumentException::class.java.simpleName)
+        return try {
+            val models = modelListClient.fetch(url, connection.openAiApiKey, settings.apiTimeoutSeconds)
+            TestResult(
+                true,
+                appContext.getString(R.string.settings_test_ok_openai_models_format, models.size),
+                models = models,
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            TestResult(false, if (error is OpenAiModelListHttpException) "HTTP ${error.status}" else error.javaClass.simpleName)
+        }
+    }
 
     /**
      * 测试当前 UI 上未保存的翻译引擎配置是否可用。基于已存档的 Settings，把用户在设置页

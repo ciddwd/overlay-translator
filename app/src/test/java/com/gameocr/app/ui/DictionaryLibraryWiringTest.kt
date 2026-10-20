@@ -138,9 +138,14 @@ class DictionaryLibraryWiringTest {
                 "app/src/main/java/com/gameocr/app/overlay/TranslationCardOverlay.kt",
                 listOf(
                     "setSourceWordLookupEnabled",
-                    "if (!sourceWordLookupEnabled)",
+                    "isEnabled = { sourceWordLookupEnabled }",
                     "settings.dictionaryTapLookupEnabled",
                 ),
+            ),
+            SourceExpectation(
+                "shared word preview honours the switch",
+                "app/src/main/java/com/gameocr/app/overlay/EnglishWordPreview.kt",
+                listOf("if (!isEnabled()) return@setOnTouchListener false"),
             ),
             SourceExpectation(
                 "service wiring",

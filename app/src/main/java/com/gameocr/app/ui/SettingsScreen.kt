@@ -725,6 +725,7 @@ fun SettingsScreen(
     var mangaOcrStatus by remember { mutableStateOf("") }
     var mangaOcrDownloading by remember { mutableStateOf(false) }
     var mangaOcrModelReady by remember { mutableStateOf(false) }
+    var mangaOcrUpgradeAvailable by remember { mutableStateOf(false) }
     var orientationModelStatus by remember { mutableStateOf("") }
     var orientationModelDownloading by remember { mutableStateOf(false) }
     var orientationModelReady by remember { mutableStateOf(false) }
@@ -921,6 +922,7 @@ fun SettingsScreen(
         val state = withContext(Dispatchers.IO) { viewModel.mangaOcrModelUiState() }
         mangaOcrStatus = state.status
         mangaOcrModelReady = state.ready
+        mangaOcrUpgradeAvailable = state.upgradeAvailable
         presetMangaOcrModelReady = state.ready
     }
     suspend fun refreshOrientationModelState() {
@@ -3155,6 +3157,7 @@ fun SettingsScreen(
             paddleModelReady = selectedPaddle.ready
             mangaOcrStatus = states.manga.status
             mangaOcrModelReady = states.manga.ready
+            mangaOcrUpgradeAvailable = states.manga.upgradeAvailable
             orientationModelStatus = states.orientation.status
             orientationModelReady = states.orientation.ready
             presetLlmModelReady = states.llm.mapValues { it.value.ready }
@@ -5318,14 +5321,21 @@ fun SettingsScreen(
                         ),
                         downloading = mangaOcrDownloading || backgroundModelDownloadActive,
                         modelReady = mangaOcrModelReady,
+                        upgradeAvailable = mangaOcrUpgradeAvailable,
                         onDownload = {
                             requestModelDownload(context.getString(R.string.settings_manga_ocr_model_name)) {
                                 scope.launch {
                                 mangaOcrDownloading = true
+                                val upgrading = mangaOcrModelReady && mangaOcrUpgradeAvailable
                                 try {
                                     viewModel.downloadMangaOcrModels { msg -> mangaOcrStatus = msg }
                                     refreshMangaOcrModelState()
                                     refreshPaddleModelState(paddleModelVersion)
+                                    // The optional file failing leaves the model usable, so the
+                                    // download succeeds; say why the offer is still there.
+                                    if (upgrading && mangaOcrUpgradeAvailable) {
+                                        mangaOcrStatus = context.getString(R.string.settings_manga_ocr_faster_failed)
+                                    }
                                 } catch (t: Throwable) {
                                     if (t is kotlinx.coroutines.CancellationException) throw t
                                     mangaOcrStatus = context.getString(
@@ -5352,6 +5362,7 @@ fun SettingsScreen(
                                         n, state.status
                                     )
                                     mangaOcrModelReady = state.ready
+                                    mangaOcrUpgradeAvailable = state.upgradeAvailable
                                 } finally {
                                     mangaOcrDownloading = false
                                 }
@@ -11994,6 +12005,8 @@ private fun MangaOcrSection(
     status: String,
     downloading: Boolean,
     modelReady: Boolean,
+    /** Ready, but the optional faster-decoding file is missing: download and import fetch only it. */
+    upgradeAvailable: Boolean,
     onDownload: () -> Unit,
     onImport: (List<android.net.Uri>) -> Unit,
     onDelete: () -> Unit
@@ -12001,6 +12014,8 @@ private fun MangaOcrSection(
     val importLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.GetMultipleContents()
     ) { uris -> if (uris.isNotEmpty()) onImport(uris) }
+    // An upgrade reuses the missing-model actions: the installer skips files already installed.
+    val actionsModelReady = modelReady && !upgradeAvailable
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         ModelVersionRow(stringResource(R.string.settings_manga_ocr_model_name))
@@ -12024,17 +12039,21 @@ private fun MangaOcrSection(
             Button(
                 enabled = downloadableModelDownloadEnabled(
                     downloading = downloading,
-                    modelReady = modelReady,
+                    modelReady = actionsModelReady,
                 ),
                 onClick = onDownload,
                 modifier = Modifier.weight(1f)
             ) {
                 Text(stringResource(
-                    if (downloading) R.string.settings_manga_ocr_btn_processing else R.string.settings_manga_ocr_btn_auto_download
+                    when {
+                        downloading -> R.string.settings_manga_ocr_btn_processing
+                        upgradeAvailable -> R.string.settings_manga_ocr_btn_download_faster
+                        else -> R.string.settings_manga_ocr_btn_auto_download
+                    }
                 ))
             }
             OutlinedButton(
-                enabled = downloadableModelImportEnabled(downloading, modelReady),
+                enabled = downloadableModelImportEnabled(downloading, actionsModelReady),
                 onClick = { importLauncher.launch("*/*") },
                 modifier = Modifier.weight(1f)
             ) { Text(stringResource(R.string.settings_manga_ocr_btn_local_import)) }

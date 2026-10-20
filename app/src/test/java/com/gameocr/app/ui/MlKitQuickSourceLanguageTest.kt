@@ -66,7 +66,7 @@ class MlKitQuickSourceLanguageTest {
         assertTrue("download status", group.contains("settings_mlkit_model_download_short"))
         // Local models (Sakura, HY-MT2, imports) share the group as catalog shortcuts.
         assertTrue("local models share the group", group.contains("quickLocalModels.forEach { entry ->"))
-        assertTrue("shortcut selects the model's engine", group.contains("localModelTranslatorEngine(entry.kind)"))
+        assertTrue("shortcut selects the model's engine", group.contains("modelManagementSelectionSettings(buildSnapshot(), entry.kind, entry.id)"))
         assertFalse("no separate local-LLM heading", source.contains("R.string.settings_translator_group_local_llm"))
         assertTrue(
             "manual model download action",

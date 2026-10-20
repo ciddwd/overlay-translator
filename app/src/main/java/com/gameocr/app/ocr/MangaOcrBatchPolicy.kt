@@ -9,7 +9,7 @@ import java.nio.FloatBuffer
  * every decoded prefix still maps back to the crop that produced it.
  */
 internal object MangaOcrBatchPolicy {
-    val benchmarkCandidates: List<Int> = listOf(1, 2, 4)
+    val benchmarkCandidates: List<Int> = listOf(1, 2, 4, 8)
     const val DEFAULT_BATCH_SIZE: Int = 4
 
     fun effectiveBatchSize(requested: Int): Int {
@@ -39,12 +39,20 @@ internal object MangaHiddenRowCompactor {
         require(destination.remaining() >= selectedRows.size * elementsPerRow)
 
         val sourceStart = source.position()
+        // ONNX exposes a heap snapshot, while the decoder input is direct. On Android,
+        // FloatBuffer.put(FloatBuffer) can fall back to copying one float at a time.
+        // Array bulk transfers preserve the same float bits and avoid that path.
+        val scratch = if (source.hasArray()) null else FloatArray(elementsPerRow)
         for (row in selectedRows) {
-            val rowValues = source.duplicate()
             val rowStart = sourceStart + row * elementsPerRow
-            rowValues.position(rowStart)
-            rowValues.limit(rowStart + elementsPerRow)
-            destination.put(rowValues)
+            if (source.hasArray()) {
+                destination.put(source.array(), source.arrayOffset() + rowStart, elementsPerRow)
+            } else {
+                val rowValues = source.duplicate()
+                rowValues.position(rowStart)
+                rowValues.get(checkNotNull(scratch), 0, elementsPerRow)
+                destination.put(scratch, 0, elementsPerRow)
+            }
         }
     }
 }

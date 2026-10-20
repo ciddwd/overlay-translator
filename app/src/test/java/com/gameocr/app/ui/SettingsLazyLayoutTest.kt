@@ -70,10 +70,11 @@ class SettingsLazyLayoutTest {
             Case("capture_region", 8),
             Case("input_translation", 9),
             Case("trigger", 10),
-            Case("floating", 11),
-            Case("arc_menu", 11),
-            Case("developer", 12),
-            Case("network", 13),
+            Case("gestures", 11),
+            Case("floating", 12),
+            Case("arc_menu", 12),
+            Case("developer", 13),
+            Case("network", 14),
         ).forEach { case ->
             assertEquals(case.key, case.expectedIndex, settingsSectionIndex(case.key))
         }
@@ -327,6 +328,7 @@ class SettingsLazyLayoutTest {
                 "asr" -> "ASR"
                 "word_select" -> "WORD_SELECT"
                 "trigger" -> "TRIGGER"
+                "gestures" -> "GESTURES"
                 "developer" -> "DEVELOPER"
                 "network" -> "NETWORK"
                 else -> error("Unhandled settings section key: $key")

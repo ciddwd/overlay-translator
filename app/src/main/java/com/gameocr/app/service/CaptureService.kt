@@ -199,6 +199,7 @@ import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -2955,6 +2956,8 @@ class CaptureService : Service() {
         var captureRegionBorderHiddenForCapture = false
         var floatingWindowPreparation = PreparedFloatingWindowCapture()
         var unclaimedPreparedFull = preparedFullScreen
+        // OCR-independent source-preservation inputs, loaded beside OCR (see sourcePreservationService.lookup).
+        var sourcePreservationLookup: Deferred<SourcePreservationService.Lookup?>? = null
         fun restoreCaptureChromeOnce(showLoading: Boolean) {
             if (captureChromeRestored) return
             captureChromeRestored = true
@@ -3348,6 +3351,12 @@ class CaptureService : Service() {
                     "renderMode=${settings.renderMode.name}"
             )
             val ocrStartedAt = System.currentTimeMillis()
+            if (!isEndToEnd && settings.sourcePreservationEnabled) {
+                // Usage history and glossary reads take ~1 s and do not depend on OCR output.
+                sourcePreservationLookup = scope.async(Dispatchers.IO) {
+                    sourcePreservationService.lookup(settings)
+                }
+            }
             if (isEndToEnd) {
                 val translatedBlocks = try {
                     translator.ocrAndTranslate(workBitmap, settings)
@@ -3814,6 +3823,7 @@ class CaptureService : Service() {
             // 把所有 box 拼成"#1 原文 / #2 原文 / ..."一条日志，避免一次 OCR 写多条。
             // 用 effectiveEngine 而非 settings.ocrEngine——方向自动分流时实际跑的可能是另一个引擎
             val ocrElapsedMs = elapsedSince(ocrStartedAt)
+            val postOcrStartedAt = SystemClock.elapsedRealtime()
 
             // 预处理 upscale 会让 boundingBox 坐标变成 2 倍，渲染前缩回
             val scaledBlocks = if (settings.preprocess.upscale2x) {
@@ -4060,7 +4070,14 @@ class CaptureService : Service() {
                 markLoopResultVisible(diagId)
                 return
             }
-            val sourcePreservationPlan = sourcePreservationService.plan(blocks, settings)
+            val preservationStartedAt = SystemClock.elapsedRealtime()
+            val prefetchedLookup = sourcePreservationLookup
+            val sourcePreservationPlan = if (prefetchedLookup != null) {
+                sourcePreservationService.plan(blocks, settings) { prefetchedLookup.await() }
+            } else {
+                sourcePreservationService.plan(blocks, settings)
+            }
+            val preservationMs = SystemClock.elapsedRealtime() - preservationStartedAt
             val retainedTranslationBlocks = sourcePreservationPlan.retainedBlocks
             val mergeAllFloating = PageTranslationGroupingPolicy.shouldMergeAll(
                 presentation = settings.renderMode,
@@ -4077,6 +4094,7 @@ class CaptureService : Service() {
             } else {
                 retainedTranslationBlocks
             }
+            val visualStartedAt = SystemClock.elapsedRealtime()
             val translationRequestSettings = prepareVisualTranslationSettings(
                 bitmap = workBitmap,
                 blocks = translationBlocks,
@@ -4084,11 +4102,20 @@ class CaptureService : Service() {
                 diagId = diagId,
                 origin = "realtime-$diagId",
             )
+            val visualMs = SystemClock.elapsedRealtime() - visualStartedAt
+            val stylesStartedAt = SystemClock.elapsedRealtime()
             val adaptiveStyles = analyzeAdaptiveOverlayStyles(
                 workBitmap,
                 translationBlocks,
                 settings,
                 diagId,
+            )
+            logVerticalDiag(
+                diagId,
+                "postOcr timing totalMs=${SystemClock.elapsedRealtime() - postOcrStartedAt} " +
+                    "beforePreservationMs=${preservationStartedAt - postOcrStartedAt} " +
+                    "preservationMs=$preservationMs visualMs=$visualMs " +
+                    "stylesMs=${SystemClock.elapsedRealtime() - stylesStartedAt}",
             )
             workBitmap.recycle()
             ensureCurrentSettledPage(settledPageRevision)
@@ -4174,6 +4201,7 @@ class CaptureService : Service() {
                 else -> renderFloatingWindow(translationBlocks, translationRequestSettings, diagId)
             }
         } finally {
+            sourcePreservationLookup?.cancel()
             unclaimedPreparedFull?.let { if (!it.isRecycled) it.recycle() }
             restoreCaptureRegionBorderAfterCapture()
             restoreFloatingButtonAfterCapture()
@@ -4653,43 +4681,54 @@ class CaptureService : Service() {
             layout = translationOutput.layout,
             direction = translationOutput.direction,
         )
-        val preparedDelayedMask = prepareDelayedMaskBeforeTranslation(
-            batch = delayedMaskRenderSession?.batch,
-            diagId = diagId,
-        )
-        val preparedDisplayPatches = preparedDelayedMask?.let {
-            requireNotNull(delayedMaskRenderSession).mapPatchesToDisplay(it.backgroundPatches)
-        }
-        val showRecognizedSource = preparedDelayedMask != null
-        diagId?.let {
-            logVerticalDiag(
-                it,
-                "renderBlocks show waiting text source=$showRecognizedSource " +
-                    "orientation=$orientation count=${blocks.size} " +
-                    "followBlockOrientations=$followBlockOrientations"
-            )
-        }
         // A prepared background already covers the captured glyphs, so the recognized source is a
         // useful pending state. Without a prepared patch, retain the ellipsis to avoid drawing the
         // OCR source on top of the still-visible captured source.
-        withContext(Dispatchers.Main) {
-            overlay?.showBlocks(
-                blocks.map { block -> block to if (showRecognizedSource) block.text else "…" },
-                orientation,
-                diagnosticId = diagId,
-                adaptiveStyles = adaptiveStyles,
-                followBlockOrientations = followBlockOrientations,
-                pixelMaskPatchPipelineEnabled = delayedMaskRenderSession != null,
-                recognizedSourcePending = showRecognizedSource,
-            )
-            if (preparedDelayedMask != null) {
-                overlay?.showShapeAwareBubblePatches(
-                    patches = requireNotNull(preparedDisplayPatches),
-                    fallbackBlockIndices = preparedDelayedMask.blockIndices,
-                    diagnosticId = diagId,
+        suspend fun showWaitingBlocks(
+            prepared: MangaDelayedMaskDebugSessionManager.Prepared?,
+            preparedDisplayPatches: List<ShapeAwareBubblePatch>?,
+        ) {
+            val showRecognizedSource = prepared != null && preparedDisplayPatches != null
+            diagId?.let {
+                logVerticalDiag(
+                    it,
+                    "renderBlocks show waiting text source=$showRecognizedSource " +
+                        "orientation=$orientation count=${blocks.size} " +
+                        "followBlockOrientations=$followBlockOrientations"
                 )
             }
+            withContext(Dispatchers.Main) {
+                if (!translationBatchGate.accepts(diagId)) return@withContext
+                overlay?.showBlocks(
+                    blocks.map { block -> block to if (showRecognizedSource) block.text else "…" },
+                    orientation,
+                    diagnosticId = diagId,
+                    adaptiveStyles = adaptiveStyles,
+                    followBlockOrientations = followBlockOrientations,
+                    pixelMaskPatchPipelineEnabled = delayedMaskRenderSession != null,
+                    recognizedSourcePending = showRecognizedSource,
+                )
+                if (showRecognizedSource) {
+                    overlay?.showShapeAwareBubblePatches(
+                        patches = requireNotNull(preparedDisplayPatches),
+                        fallbackBlockIndices = requireNotNull(prepared).blockIndices,
+                        diagnosticId = diagId,
+                    )
+                }
+            }
         }
+        // Translation is requested before the erase finishes, but blocks appear only once it has:
+        // the same source-or-ellipsis display as before, just with translation already in flight.
+        // Translation output waits here so no update reaches a block view that does not exist yet.
+        val waitingBlocksShown = kotlinx.coroutines.CompletableDeferred<Unit>()
+        if (delayedMaskRenderSession == null) {
+            showWaitingBlocks(prepared = null, preparedDisplayPatches = null)
+            waitingBlocksShown.complete(Unit)
+        }
+        // Written by the erase job once its patches are on screen; read by onFinished after join.
+        val preparedDelayedMask =
+            java.util.concurrent.atomic.AtomicReference<MangaDelayedMaskDebugSessionManager.Prepared?>()
+        var preparedDelayedMaskJob: Job? = null
         // Recognition and semantic OCR grouping stay shared. Translation-unit presentation may
         // apply a floating-only grouping policy, while this Blocks path remains one-to-one.
         val pagePlan = preparePageTranslationPlan(blocks, settings, RenderMode.BLOCKS, diagId)
@@ -4710,8 +4749,34 @@ class CaptureService : Service() {
         launchPageTranslationExecution(
             pagePlan = pagePlan,
             diagId = diagId,
+            startConcurrent = {
+                // Erasing is CPU-bound and translation is network-bound, so overlap them. The
+                // job is a child of the translation batch and is cancelled with it.
+                if (delayedMaskRenderSession != null) {
+                    preparedDelayedMaskJob = launch(Dispatchers.Default) {
+                        try {
+                            val prepared = prepareDelayedMaskBesideTranslation(
+                                batch = delayedMaskRenderSession.batch,
+                                diagId = diagId,
+                            )
+                            val displayPatches = prepared?.let {
+                                runCatching {
+                                    delayedMaskRenderSession.mapPatchesToDisplay(it.backgroundPatches)
+                                }.onFailure { error ->
+                                    Timber.w(error, "Unable to map prepared manga erase patches")
+                                }.getOrNull()
+                            }
+                            showWaitingBlocks(prepared, displayPatches)
+                            if (displayPatches != null) preparedDelayedMask.set(prepared)
+                        } finally {
+                            waitingBlocksShown.complete(Unit)
+                        }
+                    }
+                }
+            },
             prepare = {},
             render = { _, unit, translatedText, _, phase ->
+                waitingBlocksShown.await()
                 withContext(Dispatchers.Main) {
                     updateTranslationUnit(
                         unit = unit,
@@ -4722,6 +4787,7 @@ class CaptureService : Service() {
                 }
             },
             publishFailure = { pendingIndexes, error ->
+                waitingBlocksShown.await()
                 withContext(Dispatchers.Main) {
                     pendingIndexes.forEach { index ->
                         updateTranslationUnit(
@@ -4738,9 +4804,15 @@ class CaptureService : Service() {
                 recordTranslatedUnit(unit, translatedText)
             },
             onFinished = { completed ->
+                // Final patches replace the prepared ones, so preparation must land first.
+                if (completed) {
+                    preparedDelayedMaskJob?.join()
+                } else {
+                    preparedDelayedMaskJob?.cancel()
+                }
                 finishDelayedMaskDebug(
                     session = delayedMaskRenderSession,
-                    prepared = preparedDelayedMask,
+                    prepared = preparedDelayedMask.get(),
                     successfulBlockIndices = successfulMaskBlockIndices,
                     translatedBlockTexts = translatedMaskBlockTexts,
                     outputOrientation = delayedLayoutOrientation,
@@ -4755,6 +4827,7 @@ class CaptureService : Service() {
     private suspend fun launchPageTranslationExecution(
         pagePlan: PageTranslationPlan,
         diagId: Long?,
+        startConcurrent: CoroutineScope.() -> Unit = {},
         prepare: suspend (List<String>) -> Unit,
         render: suspend (
             Int,
@@ -4776,6 +4849,7 @@ class CaptureService : Service() {
         launchTranslationBatch(diagId) {
             var completed = false
             try {
+                startConcurrent()
                 prepare(translationUnits.map(PageTranslationUnit::sourceText))
                 pagePlan.reusedTranslationsByIndex.forEach { (index, translatedText) ->
                     val unit = translationUnits.getOrNull(index) ?: return@forEach
@@ -4916,7 +4990,7 @@ class CaptureService : Service() {
         successful.toMap()
     }
 
-    private suspend fun prepareDelayedMaskBeforeTranslation(
+    private suspend fun prepareDelayedMaskBesideTranslation(
         batch: MangaDelayedMaskDebugSessionManager.Batch?,
         diagId: Long?,
     ): MangaDelayedMaskDebugSessionManager.Prepared? {
@@ -4928,7 +5002,7 @@ class CaptureService : Service() {
                 blockIndices = (0 until batch.blockCount).toSet(),
             )
         }.onSuccess { prepared ->
-            val summary = "delayed mask prepared before translation " +
+            val summary = "delayed mask prepared beside translation " +
                 "blocks=${prepared.blockIndices.size}/${batch.blockCount} " +
                 "accepted=${prepared.result.acceptedBlockCount} " +
                 "modelBackgroundPatches=${prepared.modelBackgroundPatches.size} " +

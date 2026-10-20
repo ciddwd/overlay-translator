@@ -21,7 +21,7 @@ class GestureBindingsTest {
     }
 
     @Test fun modeBindingsAreNeitherOfferedNorPreserved() {
-        assertEquals(10, GestureBindings.actions.size)
+        assertEquals(11, GestureBindings.actions.size)
         GestureBindings.actions.forEach { assertNull(it.targetSkill) }
         val legacy = PresetGesture.entries.associateWith { GestureAction.SWITCH_GESTURE }
         assertEquals(setOf(GestureAction.NONE), GestureBindings.normalize(legacy).values.toSet())

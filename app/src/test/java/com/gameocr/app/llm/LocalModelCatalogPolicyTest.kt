@@ -61,7 +61,7 @@ class LocalModelCatalogPolicyTest {
             baseline.copy(topP = 0.8f), baseline.copy(topK = 20), baseline.copy(repeatPenalty = 1.1f),
             baseline.copy(generationThreads = 1), baseline.copy(promptThreads = 1),
             baseline.copy(batchTokens = 256, microBatchTokens = 256), baseline.copy(microBatchTokens = 64),
-            baseline.copy(useMmap = false), baseline.copy(useMlock = true), baseline.copy(cacheTypeK = "q8_0"),
+            baseline.copy(loadMode = LocalModelLoadMode.NONE), baseline.copy(loadMode = LocalModelLoadMode.MMAP_MLOCK), baseline.copy(cacheTypeK = "q8_0"),
             baseline.copy(cacheTypeV = "q4_0"), baseline.copy(flashAttention = "off"),
             baseline.copy(gpuLayers = -1), baseline.copy(idleUnloadMinutes = 0),
         ).forEach { assertNotEquals(baseline.fingerprint(), it.fingerprint()) }
@@ -75,7 +75,7 @@ class LocalModelCatalogPolicyTest {
         val baseline = LocalModelConfig()
         listOf(
             baseline.copy(contextTokens = 4096), baseline.copy(batchTokens = 256),
-            baseline.copy(microBatchTokens = 64), baseline.copy(useMmap = false), baseline.copy(useMlock = true),
+            baseline.copy(microBatchTokens = 64), baseline.copy(loadMode = LocalModelLoadMode.NONE), baseline.copy(loadMode = LocalModelLoadMode.MMAP_MLOCK),
             baseline.copy(cacheTypeK = "q8_0"), baseline.copy(cacheTypeV = "q4_0"),
             baseline.copy(flashAttention = "off"), baseline.copy(gpuLayers = 1),
         ).forEach { assertNotEquals(baseline.initializationFingerprint(), it.initializationFingerprint()) }
@@ -96,10 +96,26 @@ class LocalModelCatalogPolicyTest {
         assertEquals(LocalModelConfig(contextTokens = 1024, maxNewTokens = 768), previous)
         val config = LocalModelConfig(
             generationThreads = 4, promptThreads = 8, batchTokens = 256, microBatchTokens = 64,
-            useMmap = false, useMlock = true, cacheTypeK = "q8_0", cacheTypeV = "q4_0", flashAttention = "on",
+            loadMode = LocalModelLoadMode.MLOCK, cacheTypeK = "q8_0", cacheTypeV = "q4_0", flashAttention = "on",
             gpuLayers = -1, idleUnloadMinutes = 0,
         )
         assertEquals(config, json.decodeFromString<LocalModelConfig>(json.encodeToString(config)))
+    }
+
+    @Test
+    fun configSerialization_migratesFormerMmapAndMlockSwitches() {
+        val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+        listOf(
+            """{"useMmap":true,"useMlock":false}""" to LocalModelLoadMode.AUTO,
+            """{"useMmap":true,"useMlock":true}""" to LocalModelLoadMode.MMAP_MLOCK,
+            """{"useMmap":false,"useMlock":true}""" to LocalModelLoadMode.MLOCK,
+            """{"useMmap":false,"useMlock":false}""" to LocalModelLoadMode.NONE,
+            """{"loadMode":"dio","useMmap":null,"useMlock":null}""" to LocalModelLoadMode.DIRECT_IO,
+        ).forEach { (stored, mode) ->
+            val migrated = json.decodeFromString<LocalModelConfig>(stored).normalized()
+            assertEquals(stored, LocalModelConfig(loadMode = mode), migrated)
+            assertEquals(stored, migrated, json.decodeFromString<LocalModelConfig>(json.encodeToString(migrated)))
+        }
     }
 
     @Test

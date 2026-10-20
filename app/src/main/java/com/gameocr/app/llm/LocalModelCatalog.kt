@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -42,8 +43,14 @@ data class LocalModelConfig(
     val promptThreads: Int? = null,
     val batchTokens: Int = 512,
     val microBatchTokens: Int = 512,
-    val useMmap: Boolean = true,
-    val useMlock: Boolean = false,
+    /** A [LocalModelLoadMode] name. */
+    val loadMode: String = LocalModelLoadMode.AUTO,
+    /**
+     * Set only in configs saved with the former mmap/mlock switches, which always wrote both.
+     * [normalized] migrates them into [loadMode] and clears them.
+     */
+    @SerialName("useMmap") val legacyUseMmap: Boolean? = null,
+    @SerialName("useMlock") val legacyUseMlock: Boolean? = null,
     val cacheTypeK: String = "f16",
     val cacheTypeV: String = "f16",
     val flashAttention: String = "auto",
@@ -70,6 +77,13 @@ data class LocalModelConfig(
             promptThreads = promptThreads?.takeIf { it > 0 }?.coerceIn(1, 64),
             batchTokens = batch,
             microBatchTokens = microBatchTokens.coerceIn(32, batch),
+            loadMode = if (legacyUseMmap != null || legacyUseMlock != null) {
+                LocalModelLoadMode.fromLegacy(legacyUseMmap, legacyUseMlock)
+            } else {
+                loadMode.trim().lowercase().takeIf { it in LocalModelLoadMode.ALL } ?: LocalModelLoadMode.AUTO
+            },
+            legacyUseMmap = null,
+            legacyUseMlock = null,
             cacheTypeK = normalizedCacheType(cacheTypeK),
             cacheTypeV = if (flash == "off") "f16" else normalizedCacheType(cacheTypeV),
             flashAttention = flash,
@@ -86,8 +100,8 @@ data class LocalModelConfig(
             value.temperature?.toBits()?.toString().orEmpty(), value.topP?.toBits()?.toString().orEmpty(),
             value.topK?.toString().orEmpty(), value.repeatPenalty?.toBits()?.toString().orEmpty(),
             value.generationThreads?.toString().orEmpty(), value.promptThreads?.toString().orEmpty(),
-            value.batchTokens.toString(), value.microBatchTokens.toString(), value.useMmap.toString(),
-            value.useMlock.toString(), value.cacheTypeK, value.cacheTypeV, value.flashAttention,
+            value.batchTokens.toString(), value.microBatchTokens.toString(), value.loadMode,
+            value.cacheTypeK, value.cacheTypeV, value.flashAttention,
             value.gpuLayers.toString(), value.idleUnloadMinutes.toString(), value.includeContext.toString(),
             value.unlocked.toString(),
         ))
@@ -112,7 +126,7 @@ data class LocalModelConfig(
         val value = normalized()
         return hash(listOf(
             value.contextTokens.toString(), value.batchTokens.toString(), value.microBatchTokens.toString(),
-            value.useMmap.toString(), value.useMlock.toString(), value.cacheTypeK, value.cacheTypeV,
+            value.loadMode, value.cacheTypeK, value.cacheTypeV,
             value.flashAttention, value.gpuLayers.toString(),
         ))
     }

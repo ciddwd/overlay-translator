@@ -28,7 +28,7 @@ class OcrSettingsSnapshotWiringTest {
             Case("loop ROI forwards snapshot", capture, "ocrEngine.recognize(preprocessed, pending.effectiveEngine, settings)"),
             Case("first pass forwards snapshot", capture, "ocrEngine.recognize(preprocessed, effectiveEngine, settings)"),
             Case("orientation rerun forwards snapshot", capture, "ocrEngine.recognize(preprocessed, rerunEngine, settings)"),
-            Case("rotated rerun forwards snapshot", capture, "ocrEngine.recognize(rotated, engine, settings)"),
+            Case("rotated rerun forwards snapshot", capture, "ocrEngine.recognize(correctedInput, engine, settings)"),
         ).forEach { case ->
             assertTrue(case.name, case.content.contains(case.marker))
         }

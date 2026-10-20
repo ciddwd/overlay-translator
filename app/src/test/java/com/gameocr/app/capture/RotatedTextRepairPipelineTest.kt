@@ -64,7 +64,7 @@ class RotatedTextRepairPipelineTest {
         assertTrue(service.contains("imageWidth = delayedMaskOcrImageWidth"))
         assertTrue(service.contains("blocks = maskCoordinateBlocks"))
         assertTrue(service.contains("CaptureContentOrientationPolicy.mapPatchesToOriginal("))
-        assertTrue(service.contains("requireNotNull(delayedMaskRenderSession).mapPatchesToDisplay("))
+        assertTrue(service.contains("delayedMaskRenderSession.mapPatchesToDisplay(it.backgroundPatches)"))
         assertTrue(service.contains("session.mapPatchesToDisplay(patches)"))
         val overlay = source("overlay/OverlayManager.kt")
         assertTrue(overlay.contains("OverlayPresentationGeometry.captureLocalRectsToView"))

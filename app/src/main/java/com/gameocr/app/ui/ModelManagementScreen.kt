@@ -101,6 +101,7 @@ import com.gameocr.app.download.ModelDownloadWorker
 import com.gameocr.app.llm.LlmModelKind
 import com.gameocr.app.llm.LocalModelConfig
 import com.gameocr.app.llm.LocalModelEntry
+import com.gameocr.app.llm.LocalModelLoadMode
 import com.gameocr.app.llm.LocalModelMemoryPolicy
 import com.gameocr.app.llm.LocalLlmSamplingPolicy
 import java.util.UUID
@@ -954,13 +955,15 @@ private fun ModelDetailScreen(
                                     optionEnabled = { !busy }, compactRow = true,
                                     onValueChange = { draft = draft.copy(idleUnloadMinutes = it.toString()) },
                                 )
-                                SwitchRow(stringResource(R.string.model_memory_mmap), draft.useMmap, enabled = !busy,
-                                    helpText = stringResource(R.string.model_mmap_hint)) {
-                                    draft = draft.copy(useMmap = it)
-                                }
-                                SwitchRow(stringResource(R.string.model_memory_mlock), draft.useMlock, enabled = !busy) {
-                                    draft = draft.copy(useMlock = it)
-                                }
+                                SettingsOptionDropdown(
+                                    label = stringResource(R.string.model_load_mode), value = draft.loadMode,
+                                    options = LocalModelLoadMode.ALL,
+                                    optionLabel = { stringResource(loadModeLabel(it)) },
+                                    optionEnabled = { !busy }, compactRow = true,
+                                    onValueChange = { draft = draft.copy(loadMode = it) },
+                                )
+                                Text(stringResource(loadModeHint(draft.loadMode)),
+                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
                         item(key = "initialization") {
@@ -1142,8 +1145,7 @@ internal data class ModelConfigDraft(
     val promptThreads: String = "",
     val batchTokens: String = "512",
     val microBatchTokens: String = "512",
-    val useMmap: Boolean = true,
-    val useMlock: Boolean = false,
+    val loadMode: String = LocalModelLoadMode.AUTO,
     val cacheTypeK: String = "f16",
     val cacheTypeV: String = "f16",
     val flashAttention: String = "auto",
@@ -1172,7 +1174,8 @@ internal data class ModelConfigDraft(
     fun parse(): LocalModelConfig? {
         if (!validContext() || !validOutput() || !validTemperature() || !validTopP() || !validTopK() || !validRepeatPenalty() ||
             !validGenerationThreads() || !validPromptThreads() || !validBatchTokens() || !validMicroBatchTokens() ||
-            !validGpuLayers() || !validIdleUnloadMinutes() || cacheTypeK !in CACHE_TYPES || cacheTypeV !in CACHE_TYPES ||
+            !validGpuLayers() || !validIdleUnloadMinutes() || loadMode !in LocalModelLoadMode.ALL ||
+            cacheTypeK !in CACHE_TYPES || cacheTypeV !in CACHE_TYPES ||
             flashAttention !in FLASH_ATTENTION_OPTIONS || (flashAttention == "off" && cacheTypeV != "f16")) return null
         return LocalModelConfig(
             contextTokens = context.toInt(), maxNewTokens = output.toInt(), translationPrompt = prompt,
@@ -1181,14 +1184,15 @@ internal data class ModelConfigDraft(
             generationThreads = generationThreads.takeIf { it.isNotBlank() }?.toInt(),
             promptThreads = promptThreads.takeIf { it.isNotBlank() }?.toInt(),
             batchTokens = batchTokens.toInt(), microBatchTokens = microBatchTokens.toInt(),
-            useMmap = useMmap, useMlock = useMlock, cacheTypeK = cacheTypeK, cacheTypeV = cacheTypeV,
+            loadMode = loadMode, cacheTypeK = cacheTypeK, cacheTypeV = cacheTypeV,
             flashAttention = flashAttention, gpuLayers = gpuLayers.toInt(), idleUnloadMinutes = idleUnloadMinutes.toInt(),
             includeContext = includeContext, unlocked = unlocked,
         )
     }
 
     fun serialize(): List<String> = listOf(context, output, prompt, temperature, topP, topK, repeatPenalty,
-        generationThreads, promptThreads, batchTokens, microBatchTokens, useMmap.toString(), useMlock.toString(),
+        // Slot 12 held the former mlock switch; it stays so the layout keeps its positions.
+        generationThreads, promptThreads, batchTokens, microBatchTokens, loadMode, "",
         cacheTypeK, cacheTypeV, flashAttention, gpuLayers, idleUnloadMinutes, includeContext.toString(), unlocked.toString())
 
     companion object {
@@ -1203,10 +1207,17 @@ internal data class ModelConfigDraft(
             if (values.size !in 18..20) return null
             val includeContext = values.getOrNull(18)?.let { it.toBooleanStrictOrNull() ?: return null } ?: true
             val unlocked = values.getOrNull(19)?.let { it.toBooleanStrictOrNull() ?: return null } ?: false
-            val mmap = values[11].toBooleanStrictOrNull() ?: return null
-            val mlock = values[12].toBooleanStrictOrNull() ?: return null
+            // Slots 11 and 12 are the load mode and "", or the former mmap and mlock switches.
+            val loadMode = if (values[11] in LocalModelLoadMode.ALL && values[12].isEmpty()) {
+                values[11]
+            } else {
+                LocalModelLoadMode.fromLegacy(
+                    values[11].toBooleanStrictOrNull() ?: return null,
+                    values[12].toBooleanStrictOrNull() ?: return null,
+                )
+            }
             return ModelConfigDraft(values[0], values[1], values[2], values[3], values[4], values[5], values[6],
-                values[7], values[8], values[9], values[10], mmap, mlock, values[13], values[14], values[15], values[16], values[17],
+                values[7], values[8], values[9], values[10], loadMode, values[13], values[14], values[15], values[16], values[17],
                 includeContext, unlocked)
         }
         fun from(config: LocalModelConfig) = ModelConfigDraft(
@@ -1214,7 +1225,7 @@ internal data class ModelConfigDraft(
             config.temperature?.toString().orEmpty(), config.topP?.toString().orEmpty(),
             config.topK?.toString().orEmpty(), config.repeatPenalty?.toString().orEmpty(),
             config.generationThreads?.toString().orEmpty(), config.promptThreads?.toString().orEmpty(),
-            config.batchTokens.toString(), config.microBatchTokens.toString(), config.useMmap, config.useMlock,
+            config.batchTokens.toString(), config.microBatchTokens.toString(), config.normalized().loadMode,
             config.cacheTypeK, config.cacheTypeV, config.flashAttention, config.gpuLayers.toString(), config.idleUnloadMinutes.toString(),
             config.includeContext, config.unlocked,
         )
@@ -1225,6 +1236,23 @@ internal data class ModelConfigDraft(
         private fun optionalFloatValid(raw: String, range: ClosedFloatingPointRange<Float>): Boolean =
             raw.isBlank() || raw.toFloatOrNull()?.let { it.isFinite() && it in range } == true
     }
+}
+
+private fun loadModeLabel(mode: String): Int = when (mode) {
+    LocalModelLoadMode.MMAP -> R.string.model_load_mode_mmap
+    LocalModelLoadMode.MMAP_MLOCK -> R.string.model_load_mode_mmap_mlock
+    LocalModelLoadMode.MLOCK -> R.string.model_load_mode_mlock
+    LocalModelLoadMode.NONE -> R.string.model_load_mode_none
+    LocalModelLoadMode.DIRECT_IO -> R.string.model_load_mode_dio
+    else -> R.string.model_load_mode_auto
+}
+
+private fun loadModeHint(mode: String): Int = when (mode) {
+    LocalModelLoadMode.MMAP -> R.string.model_load_mode_mmap_hint
+    LocalModelLoadMode.MMAP_MLOCK, LocalModelLoadMode.MLOCK -> R.string.model_load_mode_lock_hint
+    LocalModelLoadMode.NONE -> R.string.model_load_mode_none_hint
+    LocalModelLoadMode.DIRECT_IO -> R.string.model_load_mode_dio_hint
+    else -> R.string.model_load_mode_auto_hint
 }
 
 internal fun modelParameterLabel(formatted: String): String = formatted.substringBefore(':').substringBefore('：')

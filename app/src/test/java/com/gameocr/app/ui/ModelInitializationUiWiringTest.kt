@@ -52,8 +52,8 @@ class ModelInitializationUiWiringTest {
                 "estimate.conservativeTotalBytes", "estimate.weightsBytes", "estimate.kvBytes",
                 "R.string.model_memory_available", "availableMemory")),
             Case("memory options keep the draft", loading, listOf(
-                "draft = draft.copy(idleUnloadMinutes = it.toString())", "draft = draft.copy(useMmap = it)",
-                "draft = draft.copy(useMlock = it)", "R.string.model_mmap_hint", "IDLE_MINUTE_OPTIONS")),
+                "draft = draft.copy(idleUnloadMinutes = it.toString())", "draft = draft.copy(loadMode = it)",
+                "loadModeHint(draft.loadMode)", "R.string.model_load_mode", "IDLE_MINUTE_OPTIONS")),
             Case("advanced initialization uses the shared dropdown grid", loading, listOf(
                 "R.string.model_advanced_init", "R.string.model_threads_auto", "BATCH_OPTIONS.filter { it <= contextTokens }",
                 "BATCH_OPTIONS.filter { it <= batch }", "draft.canSelectCacheV(it)", "draft = draft.withFlashAttention(it)",

@@ -135,8 +135,7 @@
     <string name="main_compat_autostart_title">自启动</string>
     <string name="main_compat_battery_ok_sub">后台运行不受限制</string>
     <string name="main_compat_battery_risk_sub">关闭电池优化，避免翻译中断</string>
-    <string name="main_compat_a11y_on_sub">免确认截屏，并支持手势触发</string>
-    <string name="main_compat_a11y_shizuku_sub">通过 Shizuku 一键开启</string>
+    <string name="main_compat_a11y_off_sub">点击前往系统设置开启</string>
     <string name="main_compat_a11y_busy">正在开启…</string>
     <string name="main_about_update_sub">查看是否有新版本</string>
     <string name="main_about_user_guide_sub">GitHub Wiki</string>
@@ -741,7 +740,7 @@
     <string name="settings_paddle_ai_studio_description">PP-OCRv6 在线使用 PaddleOCR AI Studio 的异步 OCR 服务。请先在下方页面获取 Access Token，再填入此处。</string>
     <string name="settings_paddle_ai_studio_open_page">在外部浏览器打开 PaddleOCR AI Studio</string>
     <string name="settings_external_browser_unavailable">没有可用于打开此链接的浏览器。</string>
-    <string name="settings_ocr_intro">选择 OCR 引擎，决定识别哪种文字：\n• 自动 / 日文 / 韩文 / 中文 / 拉丁：Google ML Kit 端侧（免费；截屏和识别文字不会上传，SDK 可能联网更新并发送性能 / 使用指标）。\"自动\"按谚文 / 假名命中切换识别器；如果你确定原文是某种语言，固定选对应项能略提精度\n• PaddleOCR：端侧多语种识别，复杂排版更稳，首次使用要下载 ~20MB 模型（暂不含韩文字典，韩文请用 ML Kit 或云端）\n• 日漫专用端侧 OCR（约 160 MB；含 encoder / decoder / 分词器共 7 个文件）\n• 百度云 / 腾讯云：云端 OCR，需 API Key 按量计费；展开后可在「识别语种」里切到韩 / 日等小语种作为漏检兜底</string>
+    <string name="settings_ocr_intro">选择 OCR 引擎，决定识别哪种文字：\n• 自动 / 日文 / 韩文 / 中文 / 拉丁：Google ML Kit 端侧（免费；截屏和识别文字不会上传，SDK 可能联网更新并发送性能 / 使用指标）。\"自动\"按谚文 / 假名命中切换识别器；如果你确定原文是某种语言，固定选对应项能略提精度\n• PaddleOCR：端侧多语种识别，复杂排版更稳，首次使用要下载 ~20MB 模型（暂不含韩文字典，韩文请用 ML Kit 或云端）\n• 日漫专用端侧 OCR（约 205 MB；含 encoder / decoder / 分词器共 7 个文件）\n• 百度云 / 腾讯云：云端 OCR，需 API Key 按量计费；展开后可在「识别语种」里切到韩 / 日等小语种作为漏检兜底</string>
     <string name="settings_baidu_api_key">百度 API Key</string>
     <string name="settings_baidu_secret_key">百度 Secret Key</string>
     <string name="settings_baidu_endpoint_label">接口类型（每个 endpoint 在百度控制台有独立的免费配额）</string>
@@ -1047,16 +1046,19 @@
     <string name="settings_paddle_download_failed_format">下载失败: %1$s</string>
     <string name="settings_paddle_imported_format">导入 %1$d 个文件 → %2$s</string>
 
-    <!-- manga-ocr 端侧（l0wgear/manga-ocr-2025-onnx，日漫专用，~160MB，需开代理） -->
+    <!-- manga-ocr 端侧（l0wgear/manga-ocr-2025-onnx，日漫专用，~205MB 含 int8 加速解码，需开代理） -->
     <string name="settings_ocr_chip_manga_ocr_ja">日漫 OCR</string>
     <string name="ocr_engine_manga_ocr_ja">MANGA_OCR_JA</string>
     <string name="settings_manga_ocr_model_name">manga-ocr 2025 (l0wgear)</string>
-    <string name="settings_manga_ocr_desc">日漫专用端侧 OCR（约 160 MB；含 encoder / decoder / 分词器共 7 个文件）。复用 PaddleOCR DBNet 做检测，请同时下载 PaddleOCR 模型。源 huggingface.co —— 国内必须开代理 / VPN。</string>
+    <string name="settings_manga_ocr_desc">日漫专用端侧 OCR（约 205 MB；含 encoder / decoder / 分词器共 7 个文件）。复用 PaddleOCR DBNet 做检测，请同时下载 PaddleOCR 模型。源 huggingface.co —— 国内必须开代理 / VPN。</string>
     <string name="settings_manga_ocr_btn_processing">处理中…</string>
     <string name="settings_manga_ocr_btn_auto_download">自动下载</string>
     <string name="settings_manga_ocr_btn_local_import">本地导入</string>
     <string name="settings_manga_ocr_btn_delete">删除</string>
     <string name="settings_manga_ocr_status_ready_format">日漫 OCR 模型已就绪 ✓ (%1$d MB)</string>
+    <string name="settings_manga_ocr_status_faster_available_format">可下载加速解码文件：再下载 %1$d MB 可加快日漫 OCR。</string>
+    <string name="settings_manga_ocr_btn_download_faster">下载加速解码</string>
+    <string name="settings_manga_ocr_faster_failed">日漫 OCR 已可用，但加速解码文件下载失败，请稍后重试。</string>
     <string name="settings_manga_ocr_status_missing">日漫 OCR 模型未下载</string>
     <string name="settings_manga_ocr_status_missing_hint">日漫 OCR 模型未下载。请使用网络里的下载源自动下载，或从手机文件本地导入。</string>
     <string name="settings_manga_ocr_status_checking">检查中…</string>
@@ -2265,7 +2267,6 @@
     <string name="model_memory_weights">权重 %1$s</string>
     <string name="model_memory_kv">KV 缓存 %1$s</string>
     <string name="model_memory_available">设备可用约 %1$s</string>
-    <string name="model_mmap_hint">加载更快，占用按需计算</string>
     <string name="model_idle_never">不自动释放</string>
     <string name="model_idle_minutes">%1$d 分钟</string>
     <string name="model_threads_auto">自动（%1$d）</string>
@@ -2303,8 +2304,18 @@
     <string name="model_init_micro_batch">分块大小</string>
     <string name="model_memory_header">内存设置</string>
     <string name="model_memory_estimate">预计内存占用：%1$s</string>
-    <string name="model_memory_mmap">内存映射</string>
-    <string name="model_memory_mlock">锁定内存</string>
+    <string name="model_load_mode">加载方式</string>
+    <string name="model_load_mode_auto">自动</string>
+    <string name="model_load_mode_mmap">内存映射</string>
+    <string name="model_load_mode_mmap_mlock">内存映射并锁定</string>
+    <string name="model_load_mode_mlock">载入并锁定</string>
+    <string name="model_load_mode_none">完整载入内存</string>
+    <string name="model_load_mode_dio">直接 I/O</string>
+    <string name="model_load_mode_auto_hint">默认内存映射；GPU 不支持映射时完整读取</string>
+    <string name="model_load_mode_mmap_hint">加载更快，占用按需计算</string>
+    <string name="model_load_mode_lock_hint">模型常驻内存；系统可能拒绝锁定</string>
+    <string name="model_load_mode_none_hint">将整个模型读入应用内存</string>
+    <string name="model_load_mode_dio_hint">绕过文件缓存读取整个模型；不支持时改用普通读取</string>
     <string name="model_memory_idle">空闲释放（分钟）</string>
     <string name="model_init_gpu">GPU 加速（实验性）</string>
     <string name="model_init_gpu_layers">GPU 层数</string>

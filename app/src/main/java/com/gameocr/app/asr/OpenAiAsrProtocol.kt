@@ -33,6 +33,12 @@ internal object OpenAiAsrProtocol {
         return SpeechTextPolicy.clean(text)
     }
 
+    fun modelsEndpoint(base: String): HttpUrl? = endpoint(base)?.let { transcription ->
+        transcription.newBuilder()
+            .encodedPath(transcription.encodedPath.removeSuffix("/audio/transcriptions") + "/models")
+            .build()
+    }
+
     fun request(config: AsrCloudConnections, language: AsrLanguage, pcm: ByteArray): Request = Request.Builder()
         .url(endpoint(config.openAiBaseUrl) ?: error("Invalid ASR endpoint"))
         .header("Authorization", "Bearer ${config.openAiApiKey.trim()}")

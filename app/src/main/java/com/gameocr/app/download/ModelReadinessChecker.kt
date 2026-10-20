@@ -1,5 +1,6 @@
 package com.gameocr.app.download
 
+import com.gameocr.app.BuildConfig
 import com.gameocr.app.asr.AsrModelId
 import com.gameocr.app.asr.AsrModelInstaller
 import com.gameocr.app.data.PaddleModelVersion
@@ -23,6 +24,11 @@ data class ModelReadiness(
     val installed: Boolean,
     val supported: Boolean,
     val totalBytes: Long = 0L,
+    /**
+     * Installed and usable, but an optional file added later is missing. Downloading the same
+     * spec again fetches only the missing files; nothing about [installed] or [ready] changes.
+     */
+    val upgradeAvailable: Boolean = false,
 ) {
     val state: ModelReadinessState
         get() = when {
@@ -72,11 +78,9 @@ class ModelReadinessChecker @Inject constructor(
                 spec = spec,
                 installed = files != null,
                 supported = true,
-                totalBytes = files?.let {
-                    it.encoder.length() + it.decoder.length() + it.vocab.length() +
-                        it.config.length() + it.generationConfig.length() +
-                        it.preprocessorConfig.length() + it.specialTokensMap.length()
-                } ?: 0L,
+                totalBytes = files?.totalBytes ?: 0L,
+                // Installs from before the int8 draft decoder existed lack only that file.
+                upgradeAvailable = files != null && BuildConfig.MANGA_OCR_SPECULATIVE && files.draftDecoder == null,
             )
         }
         ModelDownloadType.ORIENTATION -> {

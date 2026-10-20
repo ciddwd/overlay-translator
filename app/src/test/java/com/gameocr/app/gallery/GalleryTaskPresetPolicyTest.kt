@@ -42,7 +42,7 @@ class GalleryTaskPresetPolicyTest {
                 name = "modified active preset becomes unsaved",
                 settings = builtIn.applyTo(Settings()).copy(
                     activeTranslationPresetId = builtIn.id,
-                    model = "modified-after-applying",
+                    targetLang = "en",
                 ),
                 expectedPresetId = null,
             ),

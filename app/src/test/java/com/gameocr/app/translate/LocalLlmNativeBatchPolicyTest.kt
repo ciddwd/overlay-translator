@@ -302,7 +302,7 @@ class LocalLlmNativeBatchPolicyTest {
             Case("JNI entry point", "LlamaMultiSequence_generateNative", native),
             Case("system KV is copied", "llama_memory_seq_cp", native),
             Case("each sequence owns a sampler", "sequence.sampler = new_sampler", native),
-            Case("generation steps share llama decode", "while (resources.batch.n_tokens > 0)", native),
+            Case("generation steps share llama decode", "while (resources.batch.size() > 0)", native),
             Case("native timing is observable", "MULTI STATS", native),
             Case("native failures are recoverable", "return nullptr", native),
             Case("overlay is appended without submodule edits", "llama_multi_sequence.inc", cmake),

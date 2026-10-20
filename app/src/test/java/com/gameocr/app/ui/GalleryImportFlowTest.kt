@@ -1,5 +1,6 @@
 package com.gameocr.app.ui
 
+import com.gameocr.app.readSourceText
 import android.Manifest
 import java.io.File
 import org.junit.Assert.assertArrayEquals
@@ -9,7 +10,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class GalleryImportFlowTest {
-    private fun source(path: String) = File("src/main/java/com/gameocr/app/$path").readText()
+    private fun source(path: String) = File("src/main/java/com/gameocr/app/$path").readSourceText()
 
     @Test
     fun photoPermissionsMatchTheAndroidVersion() {

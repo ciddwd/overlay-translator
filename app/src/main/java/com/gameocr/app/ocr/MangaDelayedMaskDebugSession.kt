@@ -45,7 +45,8 @@ internal class MangaDelayedMaskDebugSessionManager {
         val width: Int,
         val height: Int,
         val sourceArgb: IntArray,
-        val candidateTextMask: BooleanArray,
+        /** Deferred so the full-frame mask is built during erase preparation, not recognition. */
+        private val candidateTextMaskSource: Lazy<BooleanArray>,
         val memberBounds: List<IntRect>,
         val modelGroups: List<BubbleModelRegrouper.Group>,
         val modelMasks: List<BubbleSegmentationPostprocessor.InstanceMask>,
@@ -53,10 +54,30 @@ internal class MangaDelayedMaskDebugSessionManager {
             List(modelMasks.size) { BubbleShapeMaskQuality.TRUSTED },
         val protectedSourceBounds: List<IntRect> = emptyList(),
     ) {
+        constructor(
+            width: Int,
+            height: Int,
+            sourceArgb: IntArray,
+            candidateTextMask: BooleanArray,
+            memberBounds: List<IntRect>,
+            modelGroups: List<BubbleModelRegrouper.Group>,
+            modelMasks: List<BubbleSegmentationPostprocessor.InstanceMask>,
+            modelMaskQualities: List<BubbleShapeMaskQuality> =
+                List(modelMasks.size) { BubbleShapeMaskQuality.TRUSTED },
+            protectedSourceBounds: List<IntRect> = emptyList(),
+        ) : this(
+            width, height, sourceArgb, lazyOf(candidateTextMask), memberBounds, modelGroups,
+            modelMasks, modelMaskQualities, protectedSourceBounds,
+        )
+
+        val candidateTextMask: BooleanArray
+            get() = candidateTextMaskSource.value.also { mask ->
+                require(mask.size == width * height)
+            }
+
         init {
             require(width > 0 && height > 0)
             require(sourceArgb.size == width * height)
-            require(candidateTextMask.size == width * height)
             require(modelMaskQualities.size == modelMasks.size)
         }
     }

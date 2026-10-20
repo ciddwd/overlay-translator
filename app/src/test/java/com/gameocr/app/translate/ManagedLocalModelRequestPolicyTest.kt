@@ -4,6 +4,7 @@ import com.gameocr.app.data.RuntimeDialogueTurn
 import com.gameocr.app.data.RuntimeTranslationPromptContext
 import com.gameocr.app.data.Settings
 import com.gameocr.app.llm.LocalModelConfig
+import com.gameocr.app.llm.LocalModelLoadMode
 import com.gameocr.app.llm.LlmModelKind
 import java.io.File
 import org.junit.Assert.assertEquals
@@ -88,7 +89,7 @@ class ManagedLocalModelRequestPolicyTest {
             runtimeLocalModelConfig = config)
         listOf(
             config.copy(generationThreads = 2), config.copy(promptThreads = 3), config.copy(batchTokens = 256),
-            config.copy(microBatchTokens = 128), config.copy(useMmap = false), config.copy(useMlock = true),
+            config.copy(microBatchTokens = 128), config.copy(loadMode = LocalModelLoadMode.NONE), config.copy(loadMode = LocalModelLoadMode.DIRECT_IO),
             config.copy(gpuLayers = 8), config.copy(idleUnloadMinutes = 0), config.copy(flashAttention = "on"),
         ).forEach { changed ->
             assertEquals(changed.toString(), cacheKey(baseline), cacheKey(baseline.copy(runtimeLocalModelConfig = changed)))

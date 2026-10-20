@@ -35,4 +35,24 @@ class ModelReadinessTest {
             assertEquals(case.name, case.expectedDownloadable, readiness.downloadable)
         }
     }
+
+    @Test
+    fun upgradeAvailable_keepsTheModelReadyButLetsTheWorkerRun() {
+        data class Case(val name: String, val installed: Boolean, val upgrade: Boolean, val complete: Boolean)
+
+        listOf(
+            Case("missing", installed = false, upgrade = false, complete = false),
+            Case("installed", installed = true, upgrade = false, complete = true),
+            Case("installed without the optional file", installed = true, upgrade = true, complete = false),
+        ).forEach { case ->
+            val readiness = ModelReadiness(
+                spec = ModelDownloadSpec.mangaOcr(),
+                installed = case.installed,
+                supported = true,
+                upgradeAvailable = case.upgrade,
+            )
+            assertEquals(case.name, case.installed, readiness.ready)
+            assertEquals(case.name, case.complete, ModelDownloadWorkPolicy.alreadyComplete(readiness))
+        }
+    }
 }

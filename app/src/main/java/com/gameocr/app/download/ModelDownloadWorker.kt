@@ -128,7 +128,7 @@ class ModelDownloadWorker @AssistedInject constructor(
         check(initialReadiness.supported) {
             applicationContext.getString(R.string.err_llm_device_unsupported)
         }
-        if (initialReadiness.installed) {
+        if (ModelDownloadWorkPolicy.alreadyComplete(initialReadiness)) {
             Timber.i("Model download skipped because shared check is ready spec=%s", spec.encode())
             return
         }

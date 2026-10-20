@@ -295,11 +295,17 @@ extern "C" llama_model * gameocr_llama_model_load_from_file(
     initialization_requested_gpu_layers = sampler_integer_from_environment(
             "GAMEOCR_GPU_LAYERS", requested ? -1 : 0, -1, 999);
     if (use_vulkan) params.n_gpu_layers = initialization_requested_gpu_layers;
-    const bool use_mmap = sampler_integer_from_environment("GAMEOCR_USE_MMAP", 1, 0, 1) != 0;
-    const bool use_mlock = sampler_integer_from_environment("GAMEOCR_USE_MLOCK", 0, 0, 1) != 0;
-    params.load_mode = use_mmap
-            ? (use_mlock ? LLAMA_LOAD_MODE_MMAP_MLOCK : LLAMA_LOAD_MODE_MMAP)
-            : (use_mlock ? LLAMA_LOAD_MODE_MLOCK : LLAMA_LOAD_MODE_NONE);
+    // llama_load_mode_from_str aborts on an unknown name, so only known names reach it.
+    const char * load_mode = std::getenv("GAMEOCR_LOAD_MODE");
+    params.load_mode = LLAMA_LOAD_MODE_AUTO;
+    if (load_mode != nullptr) {
+        for (const char * known : {"auto", "none", "mmap", "mlock", "mmap+mlock", "dio"}) {
+            if (std::strcmp(load_mode, known) == 0) {
+                params.load_mode = llama_load_mode_from_str(known);
+                break;
+            }
+        }
+    }
     initialization_model_path = path_model;
     initialization_model_params = params;
 
@@ -389,8 +395,8 @@ std::vector<std::string> gameocr_native_initialization_info(const llama_context 
         "configuredV=" + std::string(ggml_type_name(initialization_context_params.type_v)),
         "requestedFA=" + requested("GAMEOCR_FLASH_ATTENTION", "auto"),
         "configuredFA=" + std::string(llama_flash_attn_type_name(initialization_context_params.flash_attn_type)),
-        "mmapRequested=" + requested("GAMEOCR_USE_MMAP", "1"),
-        "mlockRequested=" + requested("GAMEOCR_USE_MLOCK", "0"),
+        "requestedLoadMode=" + requested("GAMEOCR_LOAD_MODE", "auto"),
+        "configuredLoadMode=" + std::string(llama_load_mode_name(initialization_model_params.load_mode)),
         "safeFallback=" + std::string(initialization_safe_fallback ? "1" : "0"),
     };
 }

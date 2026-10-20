@@ -1,5 +1,6 @@
 package com.gameocr.app.gallery
 
+import com.gameocr.app.readSourceText
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -56,8 +57,8 @@ class GalleryImportPolicyTest {
 
     @Test
     fun databaseAddsTitleWithAMigrationThatKeepsOldTasks() {
-        val db = File("src/main/java/com/gameocr/app/gallery/GalleryTranslationDatabase.kt").readText()
-        val module = File("src/main/java/com/gameocr/app/di/AppModule.kt").readText()
+        val db = File("src/main/java/com/gameocr/app/gallery/GalleryTranslationDatabase.kt").readSourceText()
+        val module = File("src/main/java/com/gameocr/app/di/AppModule.kt").readSourceText()
         assertTrue(db.contains("version = 2,"))
         assertTrue(db.contains("object : Migration(1, 2)"))
         assertTrue(db.contains("ADD COLUMN title TEXT NOT NULL DEFAULT ''"))
@@ -72,12 +73,12 @@ class GalleryImportPolicyTest {
 
     @Test
     fun foldersListOnlyDirectImagesAndAlbumsNeedThePhotosPermission() {
-        val sources = File("src/main/java/com/gameocr/app/gallery/GalleryMediaSources.kt").readText()
+        val sources = File("src/main/java/com/gameocr/app/gallery/GalleryMediaSources.kt").readSourceText()
         val folder = sources.substringAfter("suspend fun folder(")
         assertTrue(folder.contains("buildChildDocumentsUriUsingTree"))
         assertTrue("images only", folder.contains("mime.startsWith(\"image/\")"))
         assertFalse("no subfolder recursion", folder.contains("MIME_TYPE_DIR"))
-        val manifest = File("src/main/AndroidManifest.xml").readText()
+        val manifest = File("src/main/AndroidManifest.xml").readSourceText()
         assertTrue(manifest.contains("android.permission.READ_MEDIA_IMAGES"))
         assertTrue(manifest.contains("android.permission.READ_MEDIA_VISUAL_USER_SELECTED"))
         val storage = manifest.substringAfter("android.permission.READ_EXTERNAL_STORAGE\"").substringBefore("/>")

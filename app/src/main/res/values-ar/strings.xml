@@ -1088,7 +1088,7 @@
     <string name="settings_manga_ocr_btn_delete">حذف</string>
     <string name="settings_manga_ocr_btn_local_import">استيراد محليًا</string>
     <string name="settings_manga_ocr_btn_processing">جارٍ العمل…</string>
-    <string name="settings_manga_ocr_desc">Manga-ocr على الجهاز للمانجا اليابانية (≈ 160 ميجابايت؛ ملفات التشفير + فك التشفير + التشفير). يعيد استخدام PaddleOCR DBNet للكشف — يرجى تنزيل نموذج PaddleOCR أيضًا. المصدر: huggingface.co — مطلوب VPN / وكيل.</string>
+    <string name="settings_manga_ocr_desc">Manga-ocr على الجهاز للمانجا اليابانية (≈ 205 ميجابايت؛ ملفات التشفير + فك التشفير + التشفير). يعيد استخدام PaddleOCR DBNet للكشف — يرجى تنزيل نموذج PaddleOCR أيضًا. المصدر: huggingface.co — مطلوب VPN / وكيل.</string>
     <string name="settings_manga_ocr_download_failed_format">فشل التنزيل: %1$s</string>
     <string name="settings_manga_ocr_imported_format">تم استيراد %1$d ملفات ← %2$s</string>
     <string name="settings_manga_ocr_model_name">manga-ocr 2025 (l0wgear)</string>
@@ -1183,7 +1183,7 @@
     <string name="settings_ocr_group_cloud">سحابي (يتطلب مفتاح API، الدفع حسب الاستخدام)</string>
     <string name="settings_ocr_group_local">على الجهاز (لا توجد شبكة، يتم تنزيل النماذج عند الطلب)</string>
     <string name="settings_ocr_group_local_http">HTTP محلي (خدمة PC/LAN)</string>
-    <string name="settings_ocr_intro">اختر محرك OCR لنوع النص:\n• تلقائي / ياباني / كوري / صيني / لاتيني: Google ML Kit على الجهاز (مجاني؛ لا يتم تحميل الصور الملتقطة والنص المتعترف عليه. قد يتصل SDK للتحديثات ومقاييس الأداء / الاستخدام). \"تلقائي\" يختار النموذج عن طريق كشف Hangul / kana؛ تثبيت لغة محددة يحسن الدقة قليلاً.\n• PaddleOCR: متعدد اللغات على الجهاز؛ أفضل على التخطيطات المعقدة. الاستخدام الأول يقوم بتنزيل نماذج بحجم ~20 ميجابايت. (لا يتم تجميع القاموس الكوري — استخدم ML Kit أو السحابة للكورية.)\n• Manga-OCR (مانجا يابانية، على الجهاز، ≈ 160 ميجابايت؛ ملفات المشفّر + فك التشفير + التشفير)\n• Baidu / Tencent Cloud: OCR سحابي بمفتاح API (الدفع حسب الاستخدام)؛ اختر الكورية / اليابانية وما إلى ذلك ضمن \"لغة التعرف\" كحل بديل.</string>
+    <string name="settings_ocr_intro">اختر محرك OCR لنوع النص:\n• تلقائي / ياباني / كوري / صيني / لاتيني: Google ML Kit على الجهاز (مجاني؛ لا يتم تحميل الصور الملتقطة والنص المتعترف عليه. قد يتصل SDK للتحديثات ومقاييس الأداء / الاستخدام). \"تلقائي\" يختار النموذج عن طريق كشف Hangul / kana؛ تثبيت لغة محددة يحسن الدقة قليلاً.\n• PaddleOCR: متعدد اللغات على الجهاز؛ أفضل على التخطيطات المعقدة. الاستخدام الأول يقوم بتنزيل نماذج بحجم ~20 ميجابايت. (لا يتم تجميع القاموس الكوري — استخدم ML Kit أو السحابة للكورية.)\n• Manga-OCR (مانجا يابانية، على الجهاز، ≈ 205 ميجابايت؛ ملفات المشفّر + فك التشفير + التشفير)\n• Baidu / Tencent Cloud: OCR سحابي بمفتاح API (الدفع حسب الاستخدام)؛ اختر الكورية / اليابانية وما إلى ذلك ضمن \"لغة التعرف\" كحل بديل.</string>
     <string name="settings_ocr_japanese">اليابانية</string>
     <string name="settings_ocr_latin">اللاتينية (الإنجليزية وغيرها)</string>
     <string name="settings_ocr_paddle">PaddleOCR (على الجهاز)</string>

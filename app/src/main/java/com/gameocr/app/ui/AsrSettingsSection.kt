@@ -95,6 +95,12 @@ internal object AsrModelUiPolicy {
     fun canImport(state: AsrModelUiState): Boolean = canDownload(state)
 
     fun canDelete(state: AsrModelUiState): Boolean = state == AsrModelUiState.Ready
+
+    /** Background download progress is already shown in the page's shared download card. */
+    fun showInlineStatus(state: AsrModelUiState): Boolean = when (state) {
+        is AsrModelUiState.Downloading, AsrModelUiState.Queued, AsrModelUiState.Verifying -> false
+        else -> true
+    }
 }
 
 /**
@@ -209,7 +215,7 @@ internal fun AsrSettingsSection(
                 save = ::save,
             )
         } else {
-            CloudEngineSection(settings = settings, save = ::save, onCredentialsEdited = onCredentialsEdited)
+            CloudEngineSection(settings = settings, viewModel = viewModel, save = ::save, onCredentialsEdited = onCredentialsEdited)
         }
 
         val languageOptions = AsrLanguagePolicy.options(engine, cloudModel, provider, connections)
@@ -288,7 +294,6 @@ private fun OnDeviceModelSection(
         refresh(model)
         checkedWorkIds = checkedWorkIds + (model to selectedWork?.id)
     }
-    val workerStatus = active?.progress?.getString(ModelDownloadWorker.KEY_STATUS)?.takeIf { ownProgress && it.isNotBlank() }
     val failureStatus = selectedWork?.takeIf { it.state == WorkInfo.State.FAILED }
         ?.outputData?.getString(ModelDownloadWorker.KEY_STATUS)?.takeIf { it.isNotBlank() }
         ?: failures[model]?.let { stringResource(R.string.model_download_failed_format, it) }
@@ -333,24 +338,17 @@ private fun OnDeviceModelSection(
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         ModelVersionRow(model.displayName)
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            if (AsrModelUiPolicy.isBusy(modelState)) {
-                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                Box(modifier = Modifier.size(8.dp))
+        if (AsrModelUiPolicy.showInlineStatus(modelState)) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                if (AsrModelUiPolicy.isBusy(modelState)) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Box(modifier = Modifier.size(8.dp))
+                }
+                Text(when (modelState) {
+                    AsrModelUiState.Failed -> failureStatus ?: asrModelStatusText(modelState, model)
+                    else -> asrModelStatusText(modelState, model)
+                }, style = MaterialTheme.typography.bodyMedium)
             }
-            Text(when (modelState) {
-                is AsrModelUiState.Downloading, AsrModelUiState.Queued -> workerStatus ?: asrModelStatusText(modelState, model)
-                AsrModelUiState.Failed -> failureStatus ?: asrModelStatusText(modelState, model)
-                else -> asrModelStatusText(modelState, model)
-            }, style = MaterialTheme.typography.bodyMedium)
-        }
-        if (active != null && downloaded != null) {
-            ModelDownloadProgressLine(
-                downloaded = downloaded,
-                total = total ?: -1L,
-                bytesPerSecond = active.progress.getLong(ModelDownloadWorker.KEY_SPEED, 0L),
-                active = active.state == WorkInfo.State.RUNNING && active.progress.getBoolean(ModelDownloadWorker.KEY_ACTIVE, true) && modelState is AsrModelUiState.Downloading,
-            )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             Button(
@@ -391,11 +389,6 @@ private fun OnDeviceModelSection(
                 modifier = Modifier.weight(1f),
             ) { Text(stringResource(R.string.settings_paddle_btn_local_import)) }
         }
-        if (active != null) {
-            OutlinedButton(onClick = { viewModel.cancelModelDownload(active.id) }, modifier = Modifier.fillMaxWidth()) {
-                Text(stringResource(R.string.settings_asr_cancel_download))
-            }
-        }
         OutlinedButton(
             enabled = AsrModelUiPolicy.canDelete(modelState),
             onClick = { confirmDelete = true },
@@ -426,7 +419,7 @@ private fun OnDeviceModelSection(
 }
 
 @Composable
-private fun CloudEngineSection(settings: Settings?, save: ((Settings) -> Settings) -> Unit,
+private fun CloudEngineSection(settings: Settings?, viewModel: SettingsViewModel, save: ((Settings) -> Settings) -> Unit,
     onCredentialsEdited: ((Settings) -> Settings) -> Unit) {
     val provider = settings?.asrCloudProvider ?: AsrCloudProvider.ALIYUN
     if (provider != AsrCloudProvider.ALIYUN) {
@@ -482,6 +475,9 @@ private fun CloudEngineSection(settings: Settings?, save: ((Settings) -> Setting
                     AsrConnectionField(connection.openAiApiKey, stringResource(R.string.settings_api_key), secret = true) { value ->
                         onCredentialsEdited { it.copy(asrCloudConnections = it.asrCloudConnections.copy(openAiApiKey = value)) }
                     }
+                    if (settings != null) {
+                        OpenAiAsrModelList(settings, viewModel, onCredentialsEdited)
+                    }
                 }
                 else -> Unit
             }
@@ -501,6 +497,28 @@ private fun CloudEngineSection(settings: Settings?, save: ((Settings) -> Setting
         label = stringResource(R.string.settings_asr_cloud_api_key),
         modifier = Modifier.fillMaxWidth(),
     )
+}
+
+@Composable
+private fun OpenAiAsrModelList(
+    settings: Settings,
+    viewModel: SettingsViewModel,
+    onCredentialsEdited: ((Settings) -> Settings) -> Unit,
+) {
+    val connection = settings.asrCloudConnections
+    key(connection.openAiBaseUrl, connection.openAiApiKey, settings.apiTimeoutSeconds) {
+        var fetchedModels by remember { mutableStateOf<List<String>>(emptyList()) }
+        TranslatorConnectionTestPanel(
+            inputKey = Unit,
+            onTest = { viewModel.fetchAsrModels(settings) },
+            onModels = { fetchedModels = it },
+        )
+        TranslatorModelPicker(fetchedModels) { model ->
+            onCredentialsEdited {
+                it.copy(asrCloudConnections = it.asrCloudConnections.copy(openAiModel = model))
+            }
+        }
+    }
 }
 
 @Composable

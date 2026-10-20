@@ -1000,9 +1000,8 @@ fun MainScreen(
                     subtitle = stringResource(
                         when {
                             accessibilityEnabling -> R.string.main_compat_a11y_busy
-                            accessibilityServiceEnabled -> R.string.main_compat_a11y_on_sub
-                            shizukuAvail == ShizukuCapabilities.Availability.READY -> R.string.main_compat_a11y_shizuku_sub
-                            else -> R.string.settings_btn_open_a11y
+                            accessibilityServiceEnabled -> R.string.main_status_enabled
+                            else -> R.string.main_compat_a11y_off_sub
                         }
                     ),
                     highlighted = accessibilityEnabling,

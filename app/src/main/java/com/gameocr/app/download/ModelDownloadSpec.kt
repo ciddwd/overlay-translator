@@ -103,6 +103,9 @@ object ModelDownloadWorkPolicy {
     const val MAX_ATTEMPTS = 3
     private const val OWNER_TAG_PREFIX = "$WORK_TAG-owner:"
 
+    /** A download has nothing to do only when the model is installed and no optional file is missing. */
+    fun alreadyComplete(readiness: ModelReadiness): Boolean = readiness.installed && !readiness.upgradeAvailable
+
     fun uniqueWorkName(specs: List<ModelDownloadSpec>): String =
         "$WORK_TAG:${specs.joinToString(",") { it.encode() }}"
 

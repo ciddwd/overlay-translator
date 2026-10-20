@@ -53,8 +53,8 @@ class LocalLlmNativeInitializationPatchTest {
             Case("positive logical batch bounds", "\"GAMEOCR_BATCH_TOKENS\", 512, 32, 2048"),
             Case("positive physical microbatch bounds", "\"GAMEOCR_MICRO_BATCH_TOKENS\", 512, 32, 2048"),
             Case("microbatch cannot exceed logical batch", "params.n_ubatch = std::min(params.n_batch"),
-            Case("default mmap on; nonboolean rejected", "\"GAMEOCR_USE_MMAP\", 1, 0, 1"),
-            Case("default mlock off; nonboolean rejected", "\"GAMEOCR_USE_MLOCK\", 0, 0, 1"),
+            Case("load mode is read by name", "std::getenv(\"GAMEOCR_LOAD_MODE\")"),
+            Case("unknown load mode keeps auto instead of aborting", "params.load_mode = LLAMA_LOAD_MODE_AUTO;"),
             Case("GPU allows CPU, partial and all layers", "\"GAMEOCR_GPU_LAYERS\", requested ? -1 : 0, -1, 999"),
             Case("threads limited to actual CPU count", "std::min(processors, 64)"),
             Case("invalid cache type falls back to f16", "invalid cache environment %s=%s; keeping f16"),
@@ -96,7 +96,7 @@ class LocalLlmNativeInitializationPatchTest {
         assertFalse(bridge.contains("llama_init_from_model"))
         assertTrue(adapter.contains("llama_set_n_threads(context, params.n_threads, params.n_threads_batch)"))
         listOf("actualGenerationThreads", "actualPromptThreads", "actualTemperature", "actualTopP", "actualTopK",
-            "actualRepeatPenalty", "configuredGpuLayers", "mmapRequested", "mlockRequested", "safeFallback")
+            "actualRepeatPenalty", "configuredGpuLayers", "requestedLoadMode", "configuredLoadMode", "safeFallback")
             .forEach { assertTrue("runtime diagnostics $it", adapter.contains(it)) }
     }
 

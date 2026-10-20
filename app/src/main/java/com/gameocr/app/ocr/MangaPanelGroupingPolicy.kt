@@ -19,22 +19,23 @@ internal object MangaPanelGroupingPolicy {
         val output = mutableListOf<Separator>()
         val luminances = ByteArray(argb.size) { i -> (((argb[i] ushr 16 and 255) * 299 +
             (argb[i] ushr 8 and 255) * 587 + (argb[i] and 255) * 114) / 1000).toByte() }
-        fun luma(i: Int): Int = luminances[i].toInt() and 255
         for (vertical in listOf(true, false)) {
             val lanes = if (vertical) width else height
             val length = if (vertical) height else width
+            val flags = scanFlags(width, height, luminances, vertical, edgeRadius)
             fun index(lane: Int, position: Int) = if (vertical) position * width + lane else lane * width + position
             for (lane in 1 until lanes - 1) {
                 // Collapse adjacent dark lanes to the frame's leading edge.
                 var position = 0
                 while (position < length) {
-                    fun dark(position: Int) = (-1..1).any { offset -> luma(index(lane + offset, position)) < 110 }
+                    fun dark(position: Int) = flags[index(lane, position)].toInt() and 1 != 0
                     if (!dark(position)) { position++; continue }
                     val start = position
                     var lightBefore = 0; var lightAfter = 0
                     while (position < length && dark(position)) {
-                        if ((1..edgeRadius).any { lane-it >= 0 && luma(index(lane-it, position)) >= 225 }) lightBefore++
-                        if ((1..edgeRadius).any { lane+it < lanes && luma(index(lane+it, position)) >= 225 }) lightAfter++
+                        val pixelFlags = flags[index(lane, position)].toInt()
+                        if (pixelFlags and 2 != 0) lightBefore++
+                        if (pixelFlags and 4 != 0) lightAfter++
                         position++
                     }
                     val run = position - start
@@ -53,6 +54,40 @@ internal object MangaPanelGroupingPolicy {
             } else merged += line
         }
         return merged
+    }
+
+    /** Precompute the original three-lane dark test and bright-side existence tests exactly. */
+    private fun scanFlags(width: Int, height: Int, luminances: ByteArray,
+                          vertical: Boolean, radius: Int): ByteArray {
+        val flags = ByteArray(luminances.size)
+        val lanes = if (vertical) width else height
+        if (lanes < 3) return flags
+        val length = if (vertical) height else width
+        val stride = if (vertical) 1 else width
+        fun luma(index: Int) = luminances[index].toInt() and 255
+        for (position in 0 until length) {
+            val base = if (vertical) position * width else position
+            var before = if (luma(base) >= 225) 1 else 0
+            var after = 0
+            for (neighbor in 2..minOf(lanes - 1, 1 + radius)) {
+                if (luma(base + neighbor * stride) >= 225) after++
+            }
+            for (lane in 1 until lanes - 1) {
+                val index = base + lane * stride
+                var bits = if (luma(index - stride) < 110 || luma(index) < 110 ||
+                    luma(index + stride) < 110) 1 else 0
+                if (before > 0) bits = bits or 2
+                if (after > 0) bits = bits or 4
+                flags[index] = bits.toByte()
+                if (luma(index) >= 225) before++
+                val removed = lane - radius
+                if (removed >= 0 && luma(base + removed * stride) >= 225) before--
+                if (luma(index + stride) >= 225) after--
+                val added = lane + radius + 1
+                if (added < lanes && luma(base + added * stride) >= 225) after++
+            }
+        }
+        return flags
     }
 
     fun split(

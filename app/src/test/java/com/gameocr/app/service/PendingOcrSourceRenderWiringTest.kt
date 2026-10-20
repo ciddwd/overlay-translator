@@ -7,14 +7,14 @@ import org.junit.Test
 class PendingOcrSourceRenderWiringTest {
 
     @Test
-    fun `recognized source waiting flow is prepared once before translation table driven`() {
+    fun `recognized source waiting flow is prepared once beside translation table driven`() {
         val capture = source("app/src/main/java/com/gameocr/app/service/CaptureService.kt")
         val manga = source("app/src/main/java/com/gameocr/app/ocr/MangaDelayedMaskDebugSession.kt")
 
         data class Case(val name: String, val content: String, val marker: String)
         listOf(
             Case(
-                "prepare every OCR block before translation",
+                "prepare every OCR block",
                 capture,
                 "blockIndices = (0 until batch.blockCount).toSet()",
             ),
@@ -29,9 +29,14 @@ class PendingOcrSourceRenderWiringTest {
                 "recognizedSourcePending = showRecognizedSource",
             ),
             Case(
-                "prepared backgrounds publish before translation planning",
+                "prepared backgrounds map to display space",
                 capture,
                 "mapPatchesToDisplay(it.backgroundPatches)",
+            ),
+            Case(
+                "translation output waits for the waiting blocks",
+                capture,
+                "waitingBlocksShown.await()",
             ),
             Case(
                 "final layout consumes prepared repair",
@@ -57,14 +62,14 @@ class PendingOcrSourceRenderWiringTest {
             assertTrue(case.name, case.content.contains(case.marker))
         }
 
-        val prepareIndex = capture.indexOf("prepareDelayedMaskBeforeTranslation(")
-        val showIndex = capture.indexOf("overlay?.showBlocks(", startIndex = prepareIndex)
-        val translateIndex = capture.indexOf(
-            "val pagePlan = preparePageTranslationPlan",
-            startIndex = showIndex,
-        )
+        val translateIndex = capture.indexOf("val pagePlan = preparePageTranslationPlan")
+        val concurrentIndex = capture.indexOf("startConcurrent = {", startIndex = translateIndex)
+        val prepareIndex = capture.indexOf("= prepareDelayedMaskBesideTranslation(", startIndex = concurrentIndex)
+        val showIndex = capture.indexOf("showWaitingBlocks(prepared, displayPatches)", startIndex = prepareIndex)
+        val releaseIndex = capture.indexOf("waitingBlocksShown.complete(Unit)", startIndex = showIndex)
+        assertTrue("preparation should start inside the translation batch", concurrentIndex in 0 until prepareIndex)
         assertTrue("preparation should precede waiting source display", prepareIndex in 0 until showIndex)
-        assertTrue("waiting source display should precede translation", showIndex in 0 until translateIndex)
+        assertTrue("waiting display should release translation output", showIndex in 0 until releaseIndex)
     }
 
     private fun source(path: String): String = listOf(
