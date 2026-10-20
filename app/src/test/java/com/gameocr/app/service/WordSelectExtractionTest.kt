@@ -64,7 +64,7 @@ class WordSelectExtractionTest {
         listOf(
             "image preparation is bypassed" to pipeline.contains("if (extractTextOnly) settings else prepareVisualTranslationSettings("),
             "card is explicitly extraction only" to pipeline.contains("textOnly = extractTextOnly"),
-            "word lookup is off" to pipeline.contains("if (!extractTextOnly && settings.dictionaryTapLookupEnabled)"),
+            "word lookup follows the dictionary setting" to pipeline.contains("onEnglishWordTapped = if (settings.dictionaryTapLookupEnabled)"),
             "correction is off" to pipeline.contains("onCorrectTranslation = if (extractTextOnly) null else"),
             "translation speech is not created" to pipeline.contains("val translationSpeech = if (extractTextOnly) null else"),
             "dictionary speech is not created" to pipeline.contains("val dictionarySpeech = if (extractTextOnly) null else"),

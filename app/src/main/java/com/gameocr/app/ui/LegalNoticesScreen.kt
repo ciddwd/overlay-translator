@@ -36,7 +36,7 @@ import com.gameocr.app.R
 
 internal const val THIRD_PARTY_NOTICES_ASSET = "third_party_notices.txt"
 internal const val APACHE_LICENSE_ASSET = "apache_license_2_0.txt"
-internal const val ONNXRUNTIME_NOTICES_ASSET = "onnxruntime_third_party_notices_1_20_0.txt"
+internal const val ONNXRUNTIME_NOTICES_ASSET = "onnxruntime_third_party_notices_1_28_2.txt"
 internal const val HY_MT_NOTICE_ASSET = "hy_mt_license.txt"
 internal const val SAKURA_NOTICE_ASSET = "sakura_notice.txt"
 

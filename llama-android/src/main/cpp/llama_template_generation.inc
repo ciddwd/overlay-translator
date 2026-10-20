@@ -60,7 +60,8 @@ struct template_request_cleanup {
 struct template_sequence {
     common_chat_params params;
     llama_tokens prompt;
-    std::string output, finish, content;
+    common_chat_input output;
+    std::string finish, content;
     common_sampler * sampler = nullptr;
     int position = 0, logits = 0, tokens = 0;
 };
@@ -272,7 +273,7 @@ Java_com_gameocr_app_llm_LlamaTemplateGeneration_generateNative(
             inputs.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
             auto & s = sequences[i];
             s.params = gameocr_common_chat_templates_apply(g_chat_templates.get(), inputs);
-            s.prompt = common_tokenize(g_context, s.params.prompt, true, true);
+            s.prompt = common_tokenize(g_context, s.params.prompt.str(), true, true);
             s.position = s.prompt.size();
             required += s.position + max_tokens;
             if (s.prompt.empty() || s.position + max_tokens + 4 > budget) s.finish = "input_limit";
@@ -280,9 +281,7 @@ Java_com_gameocr_app_llm_LlamaTemplateGeneration_generateNative(
         if (required + 4 > llama_n_ctx(g_context)) {
             for (auto & s : sequences) s.finish = "input_limit";
         }
-        const int batch_capacity = std::max(count, (int) llama_n_batch(g_context));
-        resources.batch = llama_batch_init(batch_capacity, 0, 1);
-        resources.batch_initialized = true;
+        resources.batch = common_batch(g_context);
         for (auto & s : sequences) {
             auto sampler = std::unique_ptr<common_sampler, decltype(&common_sampler_free)>(
                     new_sampler(DEFAULT_SAMPLER_TEMP), common_sampler_free);
@@ -299,18 +298,18 @@ Java_com_gameocr_app_llm_LlamaTemplateGeneration_generateNative(
                 return;
             }
             ++s.tokens;
-            s.output += common_token_to_piece(g_context, token, true);
+            s.output.append(common_token_to_piece(g_context, token, true), token);
             for (const auto & stop : s.params.additional_stops) {
-                const auto pos = stop.empty() ? std::string::npos : s.output.find(stop);
+                const auto pos = stop.empty() ? std::string::npos : s.output.text.find(stop);
                 if (pos != std::string::npos) {
-                    s.output.resize(pos);
+                    s.output.truncate(pos);
                     s.finish = "complete";
                     return;
                 }
             }
             if (s.tokens >= max_tokens) { s.finish = "output_limit"; return; }
-            s.logits = resources.batch.n_tokens;
-            common_batch_add(resources.batch, token, s.position++, {i}, true);
+            s.logits = resources.batch.size();
+            resources.batch.add(token, s.position++, i, true);
         };
         // Each prefill owns its complete sequence. Never copy a shared prefix or partially
         // remove recurrent state. Decode still batches one token from every active sequence.
@@ -319,20 +318,20 @@ Java_com_gameocr_app_llm_LlamaTemplateGeneration_generateNative(
             auto & s = sequences[i];
             if (!s.finish.empty()) continue;
             for (size_t offset = 0; offset < s.prompt.size() && !cancelled->load();) {
-                common_batch_clear(resources.batch);
+                resources.batch.clear();
                 const size_t end = std::min(s.prompt.size(), offset + (size_t) llama_n_batch(g_context));
                 for (size_t p = offset; p < end; ++p)
-                    common_batch_add(resources.batch, s.prompt[p], p, {i}, p + 1 == s.prompt.size());
-                if (llama_decode(g_context, resources.batch) != 0) throw std::runtime_error("prefill_error");
+                    resources.batch.add(s.prompt[p], p, i, p + 1 == s.prompt.size());
+                if (llama_process(g_context, LLAMA_PROCESS_TYPE_DECODE, resources.batch.get()) != 0) throw std::runtime_error("prefill_error");
                 offset = end;
             }
             if (cancelled->load()) break;
             // Save the sampled token before the next prefill overwrites logits.
-            first_tokens[i] = common_sampler_sample(s.sampler, g_context, resources.batch.n_tokens - 1);
+            first_tokens[i] = common_sampler_sample(s.sampler, g_context, resources.batch.size() - 1);
         }
         // Sampling has no side effects until accept; restore the saved choice via the sampler
         // by processing this token directly, not by consulting overwritten model logits.
-        common_batch_clear(resources.batch);
+        resources.batch.clear();
         for (int i = 0; i < count && !cancelled->load(); ++i) {
             auto & s = sequences[i];
             if (!s.finish.empty()) continue;
@@ -340,19 +339,19 @@ Java_com_gameocr_app_llm_LlamaTemplateGeneration_generateNative(
             common_sampler_accept(s.sampler, token, true);
             if (llama_vocab_is_eog(llama_model_get_vocab(g_model), token)) { s.finish = "complete"; continue; }
             s.tokens = 1;
-            s.output = common_token_to_piece(g_context, token, true);
+            s.output.append(common_token_to_piece(g_context, token, true), token);
             for (const auto & stop : s.params.additional_stops) {
-                const auto pos = stop.empty() ? std::string::npos : s.output.find(stop);
-                if (pos != std::string::npos) { s.output.resize(pos); s.finish = "complete"; break; }
+                const auto pos = stop.empty() ? std::string::npos : s.output.text.find(stop);
+                if (pos != std::string::npos) { s.output.truncate(pos); s.finish = "complete"; break; }
             }
             if (!s.finish.empty()) continue;
             if (s.tokens >= max_tokens) { s.finish = "output_limit"; continue; }
-            s.logits = resources.batch.n_tokens;
-            common_batch_add(resources.batch, token, s.position++, {i}, true);
+            s.logits = resources.batch.size();
+            resources.batch.add(token, s.position++, i, true);
         }
-        while (resources.batch.n_tokens > 0 && !cancelled->load()) {
-            if (llama_decode(g_context, resources.batch) != 0) throw std::runtime_error("decode_error");
-            common_batch_clear(resources.batch);
+        while (resources.batch.size() > 0 && !cancelled->load()) {
+            if (llama_process(g_context, LLAMA_PROCESS_TYPE_DECODE, resources.batch.get()) != 0) throw std::runtime_error("decode_error");
+            resources.batch.clear();
             for (int i = 0; i < count; ++i)
                 if (sequences[i].finish.empty()) sample(i, sequences[i].logits);
         }
@@ -364,10 +363,9 @@ Java_com_gameocr_app_llm_LlamaTemplateGeneration_generateNative(
             if (s.finish != "complete" && !partial) continue;
             try {
                 common_chat_parser_params parser(s.params);
-                parser.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
-                parser.reasoning_in_content = false;
-                parser.parse_tool_calls = true;
-                if (!s.params.parser.empty()) parser.parser.load(s.params.parser);
+                parser.generation_prompt = common_chat_input_tokenize(
+                        llama_model_get_vocab(g_model), s.params.generation_prompt);
+                parser.parser = s.params.parser;
                 auto message = common_chat_parse(s.output, partial, parser);
                 s.content = message.content;
                 if (!message.tool_calls.empty()) { s.content.clear(); s.finish = "unexpected_tool"; }

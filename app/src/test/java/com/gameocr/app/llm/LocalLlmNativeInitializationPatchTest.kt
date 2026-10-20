@@ -35,7 +35,8 @@ class LocalLlmNativeInitializationPatchTest {
             Case("second context failure releases weights", "if (g_context == nullptr) { gameocr_release_loaded_resources(); return 1; }"),
             Case("chat template failure reaches catch cleanup", "native chat template initialization failed"),
             Case("sampler failure reaches catch cleanup", "native sampler initialization failed"),
-            Case("partial batch is tracked before validation", "gameocr_batch_initialized = true;"),
+            Case("batch uses automatic ownership", "g_batch = common_batch(g_context);"),
+            Case("batch allocation is validated", "if (!g_batch.batch)"),
             Case("double unload cannot double free sampler", "g_sampler = nullptr;"),
             Case("double unload cannot double free context", "g_context = nullptr;"),
             Case("double unload cannot double free model", "g_model = nullptr;"),
@@ -79,8 +80,8 @@ class LocalLlmNativeInitializationPatchTest {
         assertTrue(build.contains("i += (int) llama_n_batch(context)"))
         assertTrue(build.contains("tokens.size() - i, (int) llama_n_batch(context)"))
         assertTrue(build.contains("(int) llama_n_ctx(g_context) - OVERFLOW_HEADROOM"))
-        assertTrue(block(build, "GAMEOCR_PREPARE_PATCHED").contains("llama_batch_init((int) llama_n_batch(g_context)"))
-        assertFalse(block(build, "GAMEOCR_PREPARE_PATCHED").contains("llama_batch_init(BATCH_SIZE"))
+        assertTrue(block(build, "GAMEOCR_PREPARE_PATCHED").contains("common_batch(g_context)"))
+        assertFalse(block(build, "GAMEOCR_PREPARE_PATCHED").contains("llama_batch_init"))
     }
 
     @Test

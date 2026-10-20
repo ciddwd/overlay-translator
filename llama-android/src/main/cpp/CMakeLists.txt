@@ -1,6 +1,6 @@
 # 屏译 :llama-android 的 CMake 入口。本文件是 ggml-org/llama.cpp 上游
-# examples/llama.android/lib/src/main/cpp/CMakeLists.txt 的镜像，**只改了 LLAMA_SRC 路径**
-# 与源文件引用，让源码全部从 third_party/llama.cpp submodule 直读，无需拷贝。
+# examples/llama.android/lib/src/main/cpp/CMakeLists.txt 的适配入口。
+# 源码从固定版本的 third_party/llama.cpp submodule 读取，定制补丁仅生成到构建目录。
 #
 # 同步上游：git submodule update --remote third_party/llama.cpp。如果上游 CMakeLists.txt
 # 结构变了，需要手动同步本文件——保留这条说明便于排查。
@@ -37,7 +37,7 @@ endif()
 set(LLAMA_SRC ${CMAKE_CURRENT_LIST_DIR}/../../../../third_party/llama.cpp)
 set(UPSTREAM_CPP ${LLAMA_SRC}/examples/llama.android/lib/src/main/cpp)
 
-# Keep the upstream Android binding as the source of truth, while applying the two
+# Keep the upstream Android binding as the source of truth, while applying the
 # GameOCR-specific correctness fixes in the build directory. Exact-match guards make
 # an upstream change fail at configure time instead of silently dropping either fix.
 file(READ "${UPSTREAM_CPP}/ai_chat.cpp" GAMEOCR_AI_CHAT_SOURCE)
@@ -61,7 +61,6 @@ set(GAMEOCR_OWNERSHIP_ORIGINAL "static common_sampler                   * g_samp
 set(GAMEOCR_OWNERSHIP_PATCHED [=[
 #include <stdexcept>
 static common_sampler                   * g_sampler;
-static bool gameocr_batch_initialized = false;
 static void reset_long_term_states(const bool clear_kv_cache);
 static void reset_short_term_states();
 extern "C" llama_model * gameocr_retry_cpu_f16_model(llama_model * previous);
@@ -79,11 +78,7 @@ static void gameocr_release_loaded_resources() {
         g_sampler = nullptr;
     }
     g_chat_templates.reset();
-    if (gameocr_batch_initialized) {
-        llama_batch_free(g_batch);
-        gameocr_batch_initialized = false;
-    }
-    g_batch = {};
+    g_batch = common_batch();
     llama_free(g_context);
     g_context = nullptr;
     llama_model_free(g_model);
@@ -145,7 +140,7 @@ set(GAMEOCR_PREPARE_ORIGINAL [=[
     auto *context = init_context(g_model);
     if (!context) { return 1; }
     g_context = context;
-    g_batch = llama_batch_init(BATCH_SIZE, 0, 1);
+    g_batch = common_batch(context);
     g_chat_templates = common_chat_templates_init(g_model, "");
     g_sampler = new_sampler(DEFAULT_SAMPLER_TEMP);
     return 0;
@@ -161,10 +156,8 @@ set(GAMEOCR_PREPARE_PATCHED [=[
             if (g_model != nullptr) g_context = init_context(g_model);
         }
         if (g_context == nullptr) { gameocr_release_loaded_resources(); return 1; }
-        g_batch = llama_batch_init((int) llama_n_batch(g_context), 0, 1);
-        gameocr_batch_initialized = true;
-        if (g_batch.token == nullptr || g_batch.pos == nullptr || g_batch.seq_id == nullptr ||
-                g_batch.n_seq_id == nullptr || g_batch.logits == nullptr) {
+        g_batch = common_batch(g_context);
+        if (!g_batch.batch) {
             throw std::runtime_error("native batch allocation failed");
         }
         g_chat_templates = common_chat_templates_init(g_model, "");
@@ -195,7 +188,7 @@ set(GAMEOCR_UNLOAD_ORIGINAL [=[
     // Free up resources
     common_sampler_free(g_sampler);
     g_chat_templates.reset();
-    llama_batch_free(g_batch);
+    g_batch = common_batch();
     llama_free(g_context);
     llama_model_free(g_model);
 ]=])
@@ -379,13 +372,13 @@ string(REPLACE
         "${GAMEOCR_AI_CHAT_SOURCE}")
 
 set(GAMEOCR_DECODE_ERROR_PERF_ORIGINAL [=[
-    if (llama_decode(g_context, g_batch) != 0) {
+    if (llama_process(g_context, LLAMA_PROCESS_TYPE_DECODE, g_batch.get()) != 0) {
         LOGe("%s: llama_decode() failed for generated token", __func__);
         return nullptr;
     }
 ]=])
 set(GAMEOCR_DECODE_ERROR_PERF_PATCHED [=[
-    if (llama_decode(g_context, g_batch) != 0) {
+    if (llama_process(g_context, LLAMA_PROCESS_TYPE_DECODE, g_batch.get()) != 0) {
         LOGe("%s: llama_decode() failed for generated token", __func__);
         gameocr_log_request_stats("decode_error");
         return nullptr;

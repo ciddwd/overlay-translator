@@ -17,64 +17,52 @@ hilt {
 }
 
 /**
- * sherpa-onnx (on-device speech recognition) from the official v1.13.8 AAR:
- * https://github.com/k2-fsa/sherpa-onnx/releases/tag/v1.13.8
- *
- * The AAR bundles its own libonnxruntime.so (ORT 1.28.2) and imports the versioned symbol
- * `OrtGetApiBase@VERS_1.28.2`, while OCR uses the Maven ORT 1.20.0 runtime
- * (`OrtGetApiBase@VERS_1.20.0`). Neither library can replace the other, and both are named
- * libonnxruntime.so. This task keeps only arm64-v8a, renames sherpa's runtime to
- * libsherpa-ort.so (DT_SONAME in the runtime, DT_NEEDED in libsherpa-onnx-jni.so), and exposes the
- * Java classes, so both runtimes load side by side without a packaging conflict.
+ * OCR and sherpa-onnx share one arm64 ONNX Runtime, including its matching Java/JNI bindings.
+ * The runtime archive is the same pinned build used by sherpa-onnx v1.13.8:
+ * https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.8/cmake/onnxruntime-android-aarch64.cmake
  */
-abstract class PrepareSherpaOnnxTask : DefaultTask() {
-    @get:Input abstract val aarUrl: Property<String>
-    @get:Input abstract val aarSha256: Property<String>
-    @get:Internal abstract val localAar: RegularFileProperty
+abstract class PrepareOnnxRuntimeTask : DefaultTask() {
+    @get:Input abstract val sherpaUrl: Property<String>
+    @get:Input abstract val sherpaSha256: Property<String>
+    @get:Input abstract val runtimeUrl: Property<String>
+    @get:Input abstract val runtimeSha256: Property<String>
     @get:OutputDirectory abstract val outputDir: DirectoryProperty
 
     @TaskAction
     fun prepare() {
-        val out = outputDir.get().asFile
-        val expected = aarSha256.get()
-        val local = localAar.orNull?.asFile?.takeIf { it.isFile && sha256(it) == expected }
-        val aar = local ?: File(out, "sherpa-onnx.aar").also { cached ->
-            if (!cached.isFile || sha256(cached) != expected) {
-                out.mkdirs()
-                logger.lifecycle("Downloading ${aarUrl.get()}")
-                URI(aarUrl.get()).toURL().openStream().use { input ->
-                    cached.outputStream().use { input.copyTo(it) }
-                }
-                check(sha256(cached) == expected) { "sherpa-onnx AAR SHA-256 mismatch" }
-            }
-        }
+        val out = outputDir.get().asFile.apply { mkdirs() }
+        val sherpa = download(sherpaUrl.get(), sherpaSha256.get(), File(out, "sherpa-onnx.aar"))
+        val runtime = download(runtimeUrl.get(), runtimeSha256.get(), File(out, "onnxruntime.zip"))
         val jni = File(out, "jni/arm64-v8a").apply { deleteRecursively(); mkdirs() }
-        ZipFile(aar).use { zip ->
-            fun extract(entry: String): ByteArray =
-                zip.getInputStream(checkNotNull(zip.getEntry(entry)) { "missing $entry" }).use { it.readBytes() }
-            File(out, "classes.jar").writeBytes(extract("classes.jar"))
-            File(jni, "libsherpa-onnx-jni.so")
-                .writeBytes(renameRuntime(extract("jni/arm64-v8a/libsherpa-onnx-jni.so")))
-            File(jni, "libsherpa-ort.so")
-                .writeBytes(renameRuntime(extract("jni/arm64-v8a/libonnxruntime.so")))
+        ZipFile(sherpa).use { sherpaZip ->
+            ZipFile(runtime).use { runtimeZip ->
+                fun extract(zip: ZipFile, entry: String): ByteArray =
+                    zip.getInputStream(checkNotNull(zip.getEntry(entry)) { "missing $entry" }).use { it.readBytes() }
+                val runtimeEntry = "jni/arm64-v8a/libonnxruntime.so"
+                val runtimeBytes = extract(runtimeZip, runtimeEntry)
+                check(runtimeBytes.contentEquals(extract(sherpaZip, runtimeEntry))) {
+                    "OCR and sherpa-onnx must use the same ONNX Runtime build"
+                }
+                File(out, "sherpa-onnx.jar").writeBytes(extract(sherpaZip, "classes.jar"))
+                File(out, "onnxruntime.jar").writeBytes(extract(runtimeZip, "classes.jar"))
+                File(jni, "libonnxruntime.so").writeBytes(runtimeBytes)
+                File(jni, "libonnxruntime4j_jni.so")
+                    .writeBytes(extract(runtimeZip, "jni/arm64-v8a/libonnxruntime4j_jni.so"))
+                File(jni, "libsherpa-onnx-jni.so")
+                    .writeBytes(extract(sherpaZip, "jni/arm64-v8a/libsherpa-onnx-jni.so"))
+            }
         }
     }
 
-    /** Same-length-or-shorter, NUL-padded replacement keeps every ELF offset unchanged. */
-    private fun renameRuntime(bytes: ByteArray): ByteArray {
-        val from = "libonnxruntime.so\u0000".toByteArray(Charsets.US_ASCII)
-        val to = "libsherpa-ort.so\u0000".toByteArray(Charsets.US_ASCII).copyOf(from.size)
-        var replaced = 0
-        var i = 0
-        while (i <= bytes.size - from.size) {
-            if ((from.indices).all { bytes[i + it] == from[it] }) {
-                to.copyInto(bytes, i)
-                replaced++
-                i += from.size
-            } else i++
+    private fun download(url: String, expected: String, cached: File): File {
+        if (!cached.isFile || sha256(cached) != expected) {
+            logger.lifecycle("Downloading $url")
+            URI(url).toURL().openStream().use { input ->
+                cached.outputStream().use { input.copyTo(it) }
+            }
+            check(sha256(cached) == expected) { "Archive SHA-256 mismatch: $url" }
         }
-        check(replaced > 0) { "libonnxruntime.so reference not found" }
-        return bytes
+        return cached
     }
 
     private fun sha256(file: File): String {
@@ -91,14 +79,16 @@ abstract class PrepareSherpaOnnxTask : DefaultTask() {
     }
 }
 
-val prepareSherpaOnnx = tasks.register<PrepareSherpaOnnxTask>("prepareSherpaOnnx") {
-    aarUrl.set("https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-1.13.8.aar")
-    aarSha256.set("633c24321e06b1fe79feafa03ea16cbc0f8a286641e2da3559bac91bdb13bd96")
-    // A verified local research copy avoids the 50 MB download; it is optional.
-    localAar.set(rootProject.layout.projectDirectory.file("artifacts/asr-research/sherpa-onnx-1.13.8.aar"))
-    outputDir.set(layout.buildDirectory.dir("generated/sherpa-onnx"))
+val prepareOnnxRuntime = tasks.register<PrepareOnnxRuntimeTask>("prepareOnnxRuntime") {
+    sherpaUrl.set("https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-1.13.8.aar")
+    sherpaSha256.set("633c24321e06b1fe79feafa03ea16cbc0f8a286641e2da3559bac91bdb13bd96")
+    val runtimeVersion = libs.versions.onnxruntime.get()
+    runtimeUrl.set("https://github.com/csukuangfj/onnxruntime-libs/releases/download/v$runtimeVersion/onnxruntime-android-$runtimeVersion.zip")
+    runtimeSha256.set("01518867f78241138b6aa25925802e843a4fa9085af8d303d49e35bbb52aff4d")
+    outputDir.set(layout.buildDirectory.dir("generated/onnxruntime"))
 }
-tasks.named("preBuild") { dependsOn(prepareSherpaOnnx) }
+
+tasks.named("preBuild") { dependsOn(prepareOnnxRuntime) }
 
 val localLlmGenerationThreads = providers
     .gradleProperty("localLlmGenerationThreads")
@@ -211,7 +201,7 @@ android {
 
     sourceSets {
         getByName("main") {
-            jniLibs.srcDir(prepareSherpaOnnx.flatMap { it.outputDir.dir("jni") })
+            jniLibs.srcDir(prepareOnnxRuntime.flatMap { it.outputDir.dir("jni") })
         }
     }
 
@@ -295,11 +285,9 @@ dependencies {
     implementation(libs.shizuku.api)
     implementation(libs.shizuku.provider)
 
-    // ONNX Runtime (PaddleOCR PP-OCRv4)
-    implementation(libs.onnxruntime.android)
-
-    // sherpa-onnx Java API; native libraries come from prepareSherpaOnnx (see above).
-    implementation(files(prepareSherpaOnnx.flatMap { it.outputDir.file("classes.jar") }).builtBy(prepareSherpaOnnx))
+    // Matching OCR and speech Java/JNI bindings; one shared native runtime is prepared above.
+    implementation(files(prepareOnnxRuntime.flatMap { it.outputDir.file("onnxruntime.jar") }).builtBy(prepareOnnxRuntime))
+    implementation(files(prepareOnnxRuntime.flatMap { it.outputDir.file("sherpa-onnx.jar") }).builtBy(prepareOnnxRuntime))
 
     // 端侧 LLM 翻译（llama.cpp + GGUF）。运行时仅在 Build.VERSION.SDK_INT >= 33 启用，
     // 详见 :llama-android 模块说明与 LlamaEngineHolder。

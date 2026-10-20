@@ -69,17 +69,14 @@ MIT License
 
 - Shizuku API 13.1.5 — Copyright (c) 2021 RikkaW
   https://github.com/RikkaApps/Shizuku-API
-- ONNX Runtime Android 1.20.0 — Copyright (c) Microsoft Corporation.
-  All rights reserved.
-  https://github.com/microsoft/onnxruntime/blob/v1.20.0/LICENSE
-- ONNX Runtime 1.28.2 as bundled by sherpa-onnx 1.13.8 (packaged as
-  libsherpa-ort.so) — Copyright (c) Microsoft Corporation. All rights reserved.
+- ONNX Runtime Android 1.28.2 (shared by OCR and sherpa-onnx 1.13.8) —
+  Copyright (c) Microsoft Corporation. All rights reserved.
   https://github.com/microsoft/onnxruntime/blob/v1.28.2/LICENSE
 - Silero VAD model (silero_vad.onnx, bundled for speech segmentation) —
   Copyright (c) 2020-present Silero Team
   https://github.com/snakers4/silero-vad/blob/master/LICENSE
-- llama.cpp — Copyright (c) 2023-2026 The ggml authors
-  https://github.com/ggml-org/llama.cpp
+- llama.cpp v0.7.0 — Copyright (c) 2023-2026 The ggml authors
+  https://github.com/ggml-org/llama.cpp/tree/v0.7.0
 - nlohmann/json — Copyright (c) 2013-2026 Niels Lohmann
   https://github.com/nlohmann/json
 - cpp-httplib — Copyright (c) 2017 yhirose
@@ -107,11 +104,11 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ONNX Runtime third-party notices
 ================================
 
-The complete, unmodified ONNX Runtime 1.20.0 third-party notices are distributed
-with the Android application as onnxruntime_third_party_notices_1_20_0.txt.
-SHA-256 CF7342F7BA482EF715AE58F5F497A8D3564FA255164175AEA324CD293C5701A0
+The complete, unmodified ONNX Runtime 1.28.2 third-party notices are distributed
+with the Android application as onnxruntime_third_party_notices_1_28_2.txt.
+SHA-256 0E07B95F3A8D6230037707C5C4A2B554D12C4CB67369669AC255635528FFCEE2
 Official source:
-https://github.com/microsoft/onnxruntime/blob/v1.20.0/ThirdPartyNotices.txt
+https://github.com/microsoft/onnxruntime/blob/v1.28.2/ThirdPartyNotices.txt
 
 Google ML Kit
 =============

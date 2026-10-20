@@ -34,7 +34,7 @@ exifinterface = "1.4.2"
 coroutines = "1.9.0"
 timber = "5.0.1"
 shizuku = "13.1.5"
-onnxruntime = "1.20.0"
+onnxruntime = "1.28.2"
 
 junit = "4.13.2"
 androidxJunit = "1.2.1"
@@ -88,7 +88,6 @@ kotlinx-coroutines-play-services = { group = "org.jetbrains.kotlinx", name = "ko
 timber = { group = "com.jakewharton.timber", name = "timber", version.ref = "timber" }
 shizuku-api = { group = "dev.rikka.shizuku", name = "api", version.ref = "shizuku" }
 shizuku-provider = { group = "dev.rikka.shizuku", name = "provider", version.ref = "shizuku" }
-onnxruntime-android = { group = "com.microsoft.onnxruntime", name = "onnxruntime-android", version.ref = "onnxruntime" }
 
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxJunit" }

@@ -1118,11 +1118,7 @@ class OverlayManager(
         val start = hit.start.coerceIn(0, spannable.length)
         val end = hit.end.coerceIn(start, spannable.length)
         if (start == end) return
-        val accent = translationActionAccentColor(
-            theme = floatingAppearance.theme,
-            customBorderColor = customBorder,
-            customForegroundColor = customFg,
-        )
+        val accent = TRANSLATION_ACTION_ACCENT_COLOR
         val span = BackgroundColorSpan(translationActionMarkerColor(accent))
         spannable.setSpan(span, start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         floatingWordHighlight = FloatingWordHighlight(textView, spannable, span)
@@ -1166,11 +1162,7 @@ class OverlayManager(
             textSizeSp = floatingAppearance.textSizeSp.toFloat(),
             textStyle = floatingAppearance.textStyle,
             typeface = overlayTypeface,
-            accentColor = translationActionAccentColor(
-                theme = floatingAppearance.theme,
-                customBorderColor = customBorder,
-                customForegroundColor = customFg,
-            ),
+            accentColor = TRANSLATION_ACTION_ACCENT_COLOR,
             onPreviewDismissed = ::clearFloatingWordHighlight,
         )
     }

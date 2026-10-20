@@ -151,6 +151,7 @@ import com.gameocr.app.overlay.TranslationCorrectionRequest
 import com.gameocr.app.overlay.TtsPlaybackAction
 import com.gameocr.app.overlay.WordSelectOverlay
 import com.gameocr.app.overlay.floatingWordDetailsContent
+import com.gameocr.app.overlay.EnglishWordPreview
 import com.gameocr.app.overlay.floatingWordPreviewContent
 import com.gameocr.app.ui.MainActivity
 import com.gameocr.app.translate.BatchTranslationProgressState
@@ -1275,9 +1276,9 @@ class CaptureService : Service() {
                                 TranslationCorrectionRequest(source, translation)
                             )
                         },
-                        onEnglishWordTapped = if (!extractTextOnly && settings.dictionaryTapLookupEnabled) {
+                        onEnglishWordTapped = if (settings.dictionaryTapLookupEnabled) {
                             { word, anchor ->
-                                lookupEnglishWordInTranslationCard(shownCard, word, anchor, settings)
+                                lookupEnglishWordInPreview(shownCard.englishWordPreview, word, anchor, settings)
                             }
                         } else null,
                     )
@@ -2192,6 +2193,11 @@ class CaptureService : Service() {
                         role = "block_translation_selection",
                         playbackId = "translation-block:$diagId:translation",
                     ),
+                    onEnglishWordTapped = if (settings.dictionaryTapLookupEnabled) {
+                        { word, anchor ->
+                            lookupEnglishWordInPreview(copyOverlay.englishWordPreview, word, anchor, settings)
+                        }
+                    } else null,
                     onCorrectTranslation = {
                         showTranslationCorrection(
                             TranslationCorrectionRequest(source, translation)
@@ -4481,7 +4487,7 @@ class CaptureService : Service() {
                     },
                     onEnglishWordTapped = if (settings.dictionaryTapLookupEnabled) {
                         { word, anchor ->
-                            lookupEnglishWordInTranslationCard(card, word, anchor, settings)
+                            lookupEnglishWordInPreview(card.englishWordPreview, word, anchor, settings)
                         }
                     } else null,
                 )
@@ -4522,15 +4528,16 @@ class CaptureService : Service() {
         }
     }
 
-    private fun lookupEnglishWordInTranslationCard(
-        card: TranslationCardOverlay,
+    private fun lookupEnglishWordInPreview(
+        preview: EnglishWordPreview,
         word: String,
         anchorInWindow: Rect,
         settings: Settings,
     ) {
         translationCardWordLookupJob?.cancel()
         val requestId = ++translationCardWordLookupId
-        card.showEnglishWordPreview(
+        val previewRequestId = preview.requestId
+        preview.show(
             anchorInWindow = anchorInWindow,
             content = floatingWordPreviewContent(
                 word = word,
@@ -4556,8 +4563,10 @@ class CaptureService : Service() {
                 playbackId = "translation-card-word:$requestId",
             )
             withContext(Dispatchers.Main) {
-                if (requestId != translationCardWordLookupId || !card.isShown()) return@withContext
-                card.showEnglishWordPreview(
+                if (requestId != translationCardWordLookupId || !preview.isShown() ||
+                    previewRequestId != preview.requestId
+                ) return@withContext
+                preview.show(
                     anchorInWindow = anchorInWindow,
                     content = floatingWordPreviewContent(
                         word = word,

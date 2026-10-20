@@ -63,11 +63,18 @@ common_chat_params gameocr_common_chat_templates_apply(
     auto result = common_chat_templates_apply(tmpls, inputs);
     if (!requirements.empty()) {
         // Keep glossary/background and unlocked requirements outside the text to translate.
-        const auto boundary = result.prompt.find("\nProduce only the ");
-        if (boundary == std::string::npos) {
+        bool inserted = false;
+        for (auto & part : result.prompt.parts) {
+            const auto boundary = part.text.find("\nProduce only the ");
+            if (!part.is_input && boundary != std::string::npos) {
+                part.text.insert(boundary, "\n" + requirements + "\n");
+                inserted = true;
+                break;
+            }
+        }
+        if (!inserted) {
             throw std::runtime_error("TranslateGemma template has no instruction boundary");
         }
-        result.prompt.insert(boundary, "\n" + requirements + "\n");
     }
     return result;
 }
@@ -90,10 +97,10 @@ std::string gameocr_common_chat_format_single(
     inputs.chat_template_kwargs["enable_thinking"] = "false";
     inputs.add_generation_prompt = false;
     inputs.messages = past_msg;
-    const std::string prefix = past_msg.empty() ? "" : gameocr_common_chat_templates_apply(tmpls, inputs).prompt;
+    const std::string prefix = past_msg.empty() ? "" : gameocr_common_chat_templates_apply(tmpls, inputs).prompt.str();
     inputs.messages.push_back(new_msg);
     inputs.add_generation_prompt = add_ass;
-    const std::string formatted = gameocr_common_chat_templates_apply(tmpls, inputs).prompt;
+    const std::string formatted = gameocr_common_chat_templates_apply(tmpls, inputs).prompt.str();
     if (formatted.compare(0, prefix.size(), prefix) != 0) {
         throw std::runtime_error("GGUF chat template changed the conversation prefix");
     }
@@ -288,8 +295,11 @@ extern "C" llama_model * gameocr_llama_model_load_from_file(
     initialization_requested_gpu_layers = sampler_integer_from_environment(
             "GAMEOCR_GPU_LAYERS", requested ? -1 : 0, -1, 999);
     if (use_vulkan) params.n_gpu_layers = initialization_requested_gpu_layers;
-    params.use_mmap = sampler_integer_from_environment("GAMEOCR_USE_MMAP", 1, 0, 1) != 0;
-    params.use_mlock = sampler_integer_from_environment("GAMEOCR_USE_MLOCK", 0, 0, 1) != 0;
+    const bool use_mmap = sampler_integer_from_environment("GAMEOCR_USE_MMAP", 1, 0, 1) != 0;
+    const bool use_mlock = sampler_integer_from_environment("GAMEOCR_USE_MLOCK", 0, 0, 1) != 0;
+    params.load_mode = use_mmap
+            ? (use_mlock ? LLAMA_LOAD_MODE_MMAP_MLOCK : LLAMA_LOAD_MODE_MMAP)
+            : (use_mlock ? LLAMA_LOAD_MODE_MLOCK : LLAMA_LOAD_MODE_NONE);
     initialization_model_path = path_model;
     initialization_model_params = params;
 

@@ -54,7 +54,7 @@ class LegalNoticeAssetsTest {
                 "native runtime",
                 listOf(
                     "ONNX Runtime",
-                    "onnxruntime_third_party_notices_1_20_0.txt",
+                    "onnxruntime_third_party_notices_1_28_2.txt",
                     "llama.cpp",
                     "Vulkan-Headers",
                     "SPIRV-Headers",
@@ -149,15 +149,15 @@ class LegalNoticeAssetsTest {
 
     @Test
     fun onnxRuntimeNotices_matchPinnedOfficialArtifact() {
-        val asset = moduleFile("src/main/assets/onnxruntime_third_party_notices_1_20_0.txt")
+        val asset = moduleFile("src/main/assets/onnxruntime_third_party_notices_1_28_2.txt")
         val bytes = asset.readBytes()
         val digest = MessageDigest.getInstance("SHA-256")
             .digest(bytes)
             .joinToString("") { byte -> "%02X".format(byte) }
 
-        assertEquals(338_538, bytes.size)
+        assertEquals(325_054, bytes.size)
         assertEquals(
-            "CF7342F7BA482EF715AE58F5F497A8D3564FA255164175AEA324CD293C5701A0",
+            "0E07B95F3A8D6230037707C5C4A2B554D12C4CB67369669AC255635528FFCEE2",
             digest,
         )
         assertTrue(asset.readText().startsWith("THIRD PARTY SOFTWARE NOTICES AND INFORMATION"))
