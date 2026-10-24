@@ -2136,6 +2136,8 @@
     <string name="onboarding_cloud_region_international">International</string>
     <string name="onboarding_cloud_provider_modelscope">ModelScope</string>
     <string name="onboarding_cloud_provider_scnet">SCNet</string>
+    <string name="onboarding_cloud_provider_siliconflow_cn">SiliconFlow CN</string>
+    <string name="onboarding_cloud_provider_siliconflow">SiliconFlow</string>
     <string name="onboarding_cloud_url">Base URL</string>
     <string name="onboarding_cloud_api_key">API key</string>
     <string name="onboarding_cloud_model">Model name</string>

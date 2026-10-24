@@ -2134,6 +2134,8 @@
     <string name="onboarding_cloud_region_international">国际</string>
     <string name="onboarding_cloud_provider_modelscope">魔搭 ModelScope</string>
     <string name="onboarding_cloud_provider_scnet">国家超算互联网（SCNet）</string>
+    <string name="onboarding_cloud_provider_siliconflow_cn">硅基流动</string>
+    <string name="onboarding_cloud_provider_siliconflow">SiliconFlow</string>
     <string name="onboarding_cloud_url">Base URL</string>
     <string name="onboarding_cloud_api_key">API Key</string>
     <string name="onboarding_cloud_model">模型名称</string>
