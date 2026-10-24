@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="settings_storage_save_failed">Could not save settings. Your previous data has been kept. Please try again.</string>
     <string name="settings_engine_local_index_translate">Index-Translate-2B</string>
     <string name="settings_engine_local_qwen3">Qwen3-0.6B</string>
     <string name="settings_ocr_chip_devanagari">Devanagari</string>
@@ -363,7 +364,7 @@
     <string name="settings_about_share_action">Share Screen Translator</string>
     <string name="settings_about_share_chooser">Share Screen Translator</string>
     <string name="settings_about_share_subject">Screen Translator Free and open-source screen translation</string>
-    <string name="settings_about_share_text">Screen Translator is a free and open-source screen translation / OCR app.\nIt is especially useful for foreign-language forums, overseas shopping and trading platforms, manga, and games without built-in translation.\nIt supports floating screenshot translation, region and full-screen OCR, continuous translation, manga mode, offline and cloud LLM translation, word selection with inflections and synonyms, and TTS reading.\nLatest release: %1$s\nSource code: %2$s\nDownload only from official release channels.</string>
+    <string name="settings_about_share_text">Screen Translator is a free and open-source screen translation / OCR app.\nUseful for foreign-language forums, international shopping and trading platforms, manga, games, and videos.\n\nIt supports floating screenshot translation, region and full-screen OCR, continuous translation, manga mode, and offline or cloud LLM translation. It also translates dialogue from videos and games in real time, displaying the original text and translation as bilingual floating subtitles—even without existing subtitles. Other features include input translation, word lookup, word forms and synonyms, and TTS reading.\n\nWebsite: https://overlaytranslator.top/\nLatest release: %1$s\nSource code: %2$s\n\nDownload only from official channels. Beware of paid resellers.</string>
     <string name="main_share_prompt_title">Recommend Screen Translator?</string>
     <string name="main_share_prompt_message">If Screen Translator has been useful, consider recommending it to a friend who also needs translation.</string>
     <string name="main_share_prompt_confirm">Share with a friend</string>
@@ -916,6 +917,8 @@
     <string name="settings_batch_cumulative_completion_time_hint">When enabled, translation logs show elapsed time from the start of the full batch to each completed item. When disabled, they show the individual item or native group duration.</string>
     <string name="settings_ocr_screenshot_saving_label">Save OCR screenshots</string>
     <string name="settings_ocr_screenshot_saving_hint">Saves the screenshots used by OCR and attaches them to runtime logs. Manga OCR also saves OCR quadrilaterals, a text erase mask, and a bubble interior mask for prototype validation. Limited to 8 screenshots and 4 manga mask sets per app process.</string>
+    <string name="settings_hide_ocr_no_text_hint_label">Hide OCR no-valid-text hints</string>
+    <string name="settings_hide_ocr_no_text_hint_hint">Hide the red error hint for low-confidence results or when no valid text is recognized.</string>
     <string name="settings_disable_translation_cache_label">Disable translation cache</string>
     <string name="settings_disable_translation_cache_hint">Always performs a real translation request for performance testing, without reading or writing the in-memory translation cache.</string>
     <string name="settings_ocr_red_box_mode_label">OCR red-box mode</string>
@@ -938,6 +941,9 @@
     <string name="paddle_version_v5_mobile">PP-OCRv5 mobile</string>
     <string name="paddle_version_v5_mobile_desc">~20MB ~5.3M parameters 4 languages</string>
     <string name="paddle_version_v5_mobile_languages">Simplified Chinese, Traditional Chinese, English, Japanese</string>
+    <string name="paddle_version_v5_eslav">PP-OCRv5 East Slavic</string>
+    <string name="paddle_version_v5_eslav_desc">Supports Russian, Belarusian, Ukrainian, and English.</string>
+    <string name="paddle_version_v5_eslav_languages">Russian, Belarusian, Ukrainian, English</string>
     <string name="paddle_version_v5_korean">PP-OCRv5 Korean</string>
     <string name="paddle_version_v5_korean_desc">~18MB optimized for Korean 2 languages</string>
     <string name="paddle_version_v5_korean_languages">Korean, English</string>
@@ -1058,7 +1064,7 @@
     <string name="settings_manga_ocr_btn_delete">Delete</string>
     <string name="settings_manga_ocr_status_ready_format">Manga OCR ready ✓ (%1$d MB)</string>
     <string name="settings_manga_ocr_status_faster_available_format">Faster decoding available: download %1$d MB more to speed up manga OCR.</string>
-    <string name="settings_manga_ocr_btn_download_faster">Download faster decoding</string>
+    <string name="settings_manga_ocr_btn_download_faster">Download missing files</string>
     <string name="settings_manga_ocr_faster_failed">Manga OCR is ready, but the faster-decoding file could not be downloaded. Try again later.</string>
     <string name="settings_manga_ocr_status_missing">Manga OCR model not downloaded</string>
     <string name="settings_manga_ocr_status_missing_hint">Manga OCR not downloaded. Use Auto download with the Network download source, or import local files.</string>
@@ -2414,6 +2420,8 @@
     <string name="settings_asr_note_zipformer">Supports Mandarin and English.</string>
     <string name="settings_asr_note_general">Available languages depend on the model or provider.</string>
     <string name="settings_asr_max_records">Speech records shown</string>
+    <string name="settings_asr_pause_duration">Pause before splitting (s)</string>
+    <string name="settings_asr_max_segment_duration">Maximum segment duration (s)</string>
     <string name="settings_asr_max_records_format">Speech records shown: %1$d</string>
     <string name="settings_asr_import">Import model files</string>
     <string name="settings_asr_importing">Importing…</string>
@@ -2426,6 +2434,9 @@
     <string name="settings_asr_group_cloud">Cloud recognition</string>
     <string name="settings_asr_aliyun">Alibaba Cloud</string>
     <string name="settings_asr_openai">OpenAI-compatible</string>
+    <string name="settings_asr_protocol">API protocol</string>
+    <string name="settings_asr_protocol_file">Audio file transcription</string>
+    <string name="settings_asr_protocol_realtime">Realtime speech recognition</string>
     <string name="settings_asr_group_audio_api">Cloud audio API</string>
     <string name="settings_asr_tencent_app_id">Tencent Cloud AppID</string>
     <string name="asr_error_cloud_configuration_incomplete">The audio service configuration is incomplete. Check the service URL, model, and credentials.</string>
@@ -2527,4 +2538,16 @@
     <string name="gesture_motion_unavailable">Motion wake is unavailable on this device. Tap the ball or swipe inward from the edge.</string>
     <string name="gesture_trigger_function">Action after triggering</string>
     <string name="gesture_wake_executed">Trigger the bound function</string>
+    <string name="settings_asr_hint_prompt">Prompt</string>
+    <string name="settings_asr_hint_mode">Hint support</string>
+    <string name="settings_asr_hint_mode_auto">Automatic</string>
+    <string name="settings_asr_hint_mode_prompt">Prompt only</string>
+    <string name="settings_asr_hint_mode_keywords">Prompt and keywords</string>
+    <string name="settings_asr_hint_mode_prompt_hotwords">Hotwords through Prompt</string>
+    <string name="settings_asr_vocabulary_id">Vocabulary ID</string>
+    <string name="settings_asr_hotwords">Recognition hotwords</string>
+    <string name="settings_asr_hotwords_placeholder">One per line</string>
+    <string name="settings_asr_use_glossary">Use glossary for recognition</string>
+    <string name="settings_asr_use_glossary_help">Use source terms from enabled glossary entries to help recognize names, places and specialized terms. Entries are filtered by the current app and recognition language.</string>
+    <string name="settings_asr_duration_value">%1$s: %2$s</string>
 </resources>

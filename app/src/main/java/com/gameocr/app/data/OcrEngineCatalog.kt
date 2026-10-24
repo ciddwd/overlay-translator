@@ -38,11 +38,6 @@ object OcrEngineCatalog {
 
     fun quickOptions(group: OcrEngineGroup, downloaded: Set<OcrEngineKind>): List<OcrEngineOption> =
         optionsIn(group).filter { it.engine !in downloadable || it.engine in downloaded }
-            .sortedBy { when {
-                it.engine == OcrEngineKind.ML_KIT_AUTO -> 0
-                it.engine in downloadable -> 1
-                else -> 2
-            } }
 
     // Automatic routing cannot select itself. Every other outer option stays visible,
     // including missing models; language compatibility only affects selection/runtime.

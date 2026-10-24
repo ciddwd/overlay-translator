@@ -48,9 +48,22 @@ class AutoOcrRoutingPolicyTest {
             "en-US" to OcrEngineKind.ML_KIT_LATIN,
             "fr" to OcrEngineKind.ML_KIT_LATIN,
             "sq" to OcrEngineKind.PADDLE_ONNX,
+            "ru-RU" to OcrEngineKind.PADDLE_ONNX,
+            "be" to OcrEngineKind.PADDLE_ONNX,
+            "uk" to OcrEngineKind.PADDLE_ONNX,
             "auto" to null,
             "ar" to null,
         ).forEach { (code, expected) -> assertEquals(code, expected, AutoOcrSettings().routeFor(code)?.engine) }
+    }
+
+    @Test fun eastSlavicDefaultIsLocalAndDoesNotOverrideExplicitRoutes() {
+        val local = AutoOcrRoute(OcrEngineKind.PADDLE_ONNX, PaddleModelVersion.V5_ESLAV)
+        for (code in listOf("ru", "RU_ru", "be-BY", "uk")) {
+            assertEquals(code, local, AutoOcrSettings().routeFor(code))
+            assertNull(code, AutoOcrRoutingPolicy.resolve(Settings(), code) { false })
+        }
+        val explicit = AutoOcrRoute(OcrEngineKind.BAIDU)
+        assertEquals(explicit, AutoOcrSettings(mapOf("ru" to explicit)).routeFor("ru-RU"))
     }
 
     @Test fun capabilityOptions_tableDriven() {
@@ -63,6 +76,8 @@ class AutoOcrRoutingPolicyTest {
             Case("ja", AutoOcrRoute(OcrEngineKind.PADDLE_ONNX, PaddleModelVersion.V6_TINY), false),
             Case("en", AutoOcrRoute(OcrEngineKind.ML_KIT_AUTO), false),
             Case("ru", AutoOcrRoute(OcrEngineKind.ML_KIT_LATIN), false),
+            Case("ru", AutoOcrRoute(OcrEngineKind.PADDLE_ONNX, PaddleModelVersion.V5_ESLAV), true),
+            Case("ru", AutoOcrRoute(OcrEngineKind.PADDLE_ONNX, PaddleModelVersion.V6_SMALL), false),
         ).forEach { case ->
             assertEquals(case.toString(), case.included, case.route in AutoOcrRoutingPolicy.options(Settings(), case.language))
         }

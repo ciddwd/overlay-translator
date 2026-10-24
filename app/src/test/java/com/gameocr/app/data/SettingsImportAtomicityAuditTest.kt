@@ -22,7 +22,8 @@ class SettingsImportAtomicityAuditTest {
             "SettingsBundleImportTransaction(",
             "commitFont = overlayFontManager::commitTransferredFont",
             "importGlossary = { glossaryRepository.importTerms(preview.glossaryTerms) }",
-            "restoreSettings = { repo.update { beforeSettings } }",
+            "val beforeState = repo.snapshotForImport()",
+            "restoreSettings = { repo.restoreImportSnapshot(beforeState) }",
             "restoreGlossary = { glossaryRepository.restoreTerms(beforeGlossary) }",
             "rollbackFont = overlayFontManager::rollbackTransferredFont",
         ).forEach { marker ->

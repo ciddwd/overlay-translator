@@ -71,13 +71,13 @@ class GlossaryViewModel @Inject constructor(
 
     fun setGlossaryEnabled(enabled: Boolean) {
         viewModelScope.launch {
-            settingsRepository.update { it.copy(translationGlossaryEnabled = enabled) }
+            settingsRepository.tryUpdate { it.copy(translationGlossaryEnabled = enabled) }
         }
     }
 
     fun setMemoryEnabled(enabled: Boolean) {
         viewModelScope.launch {
-            settingsRepository.update { it.copy(translationMemoryEnabled = enabled) }
+            settingsRepository.tryUpdate { it.copy(translationMemoryEnabled = enabled) }
         }
     }
 
@@ -105,7 +105,7 @@ class GlossaryViewModel @Inject constructor(
 
     fun setSourcePreservationEnabled(enabled: Boolean) {
         viewModelScope.launch {
-            settingsRepository.update { settings ->
+            settingsRepository.tryUpdate { settings ->
                 settings.copy(sourcePreservationEnabled = enabled)
             }
         }

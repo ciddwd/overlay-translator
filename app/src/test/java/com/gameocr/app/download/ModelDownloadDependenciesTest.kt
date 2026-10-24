@@ -83,6 +83,40 @@ class ModelDownloadDependenciesTest {
     }
 
     @Test
+    fun optionalUpgrade_survivesDependencyReadinessAndKeepsDownloadsAvailable() {
+        data class Case(
+            val name: String,
+            val installed: Set<ModelDownloadSpec>,
+            val upgrades: Set<ModelDownloadSpec>,
+            val expectedReady: Boolean,
+            val expectedUpgrade: Boolean,
+            val expectedComplete: Boolean,
+        )
+        listOf(
+            Case("fresh install", emptySet(), emptySet(), false, false, false),
+            Case("all files installed", setOf(small, manga), emptySet(), true, false, true),
+            Case("old Manga install lacks INT8", setOf(small, manga), setOf(manga), true, true, false),
+            Case("INT8 missing and detector missing", setOf(manga), setOf(manga), false, true, false),
+            Case("Manga missing", setOf(small), emptySet(), false, false, false),
+            Case("dependency has an optional upgrade", setOf(small, manga), setOf(small), true, true, false),
+        ).forEach { case ->
+            fun artifact(spec: ModelDownloadSpec) = ModelReadiness(
+                spec = spec,
+                installed = spec in case.installed,
+                supported = true,
+                upgradeAvailable = spec in case.upgrades,
+            )
+            val readiness = modelReadinessWithDependencies(manga, ::artifact)
+            assertEquals(case.name, case.expectedReady, readiness.ready)
+            assertEquals(case.name, case.expectedUpgrade, readiness.upgradeAvailable)
+            assertEquals(case.name, case.expectedComplete, ModelDownloadWorkPolicy.alreadyComplete(readiness))
+            val downloads = ModelDownloadDependencies.expand(listOf(manga))
+                .filterNot { ModelDownloadWorkPolicy.alreadyComplete(artifact(it)) }
+            assertEquals(case.name, !case.expectedComplete, downloads.isNotEmpty())
+        }
+    }
+
+    @Test
     fun unsupportedDependency_cannotReportReadyOrDownloadable() {
         val readiness = modelReadinessWithDependencies(manga) { spec ->
             ModelReadiness(spec, installed = true, supported = spec != small)

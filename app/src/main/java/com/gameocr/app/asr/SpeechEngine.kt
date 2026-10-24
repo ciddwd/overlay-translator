@@ -2,8 +2,7 @@ package com.gameocr.app.asr
 
 import android.content.res.AssetManager
 import com.gameocr.app.data.AsrLanguage
-import com.k2fsa.sherpa.onnx.EndpointConfig
-import com.k2fsa.sherpa.onnx.EndpointRule
+import com.gameocr.app.data.AsrSegmentDurations
 import com.k2fsa.sherpa.onnx.FeatureConfig
 import com.k2fsa.sherpa.onnx.OfflineModelConfig
 import com.k2fsa.sherpa.onnx.OfflineRecognizer
@@ -15,9 +14,7 @@ import com.k2fsa.sherpa.onnx.OnlineRecognizer
 import com.k2fsa.sherpa.onnx.OnlineRecognizerConfig
 import com.k2fsa.sherpa.onnx.OnlineStream
 import com.k2fsa.sherpa.onnx.OnlineTransducerModelConfig
-import com.k2fsa.sherpa.onnx.SileroVadModelConfig
 import com.k2fsa.sherpa.onnx.Vad
-import com.k2fsa.sherpa.onnx.VadModelConfig
 import android.os.SystemClock
 import java.io.File
 
@@ -60,6 +57,7 @@ internal object SpeechEngineFactory {
         assets: AssetManager,
         sink: (SpeechEvent) -> Unit,
         metrics: SpeechMetrics?,
+        durations: AsrSegmentDurations,
     ): SpeechEngine {
         fun path(name: String) = File(dir, name).absolutePath
         val feature = FeatureConfig(sampleRate = PlaybackAudioCapture.TARGET_RATE, featureDim = 80)
@@ -81,7 +79,8 @@ internal object SpeechEngineFactory {
                         ),
                     ),
                 ),
-                vad = createVad(assets),
+                vad = Vad(assetManager = assets, config = AsrVadPolicy.config(durations)),
+                maxOpenSamples = AsrVadPolicy.openBufferSamples(durations),
                 partials = PartialDecodePolicy(PARTIAL_INTERVAL_SAMPLES, PARTIAL_MAX_BACKLOG_SAMPLES),
                 filterHallucination = false,
                 sink = sink,
@@ -107,7 +106,8 @@ internal object SpeechEngineFactory {
                             ),
                         ),
                     ),
-                    vad = createVad(assets),
+                    vad = Vad(assetManager = assets, config = AsrVadPolicy.config(durations)),
+                    maxOpenSamples = AsrVadPolicy.openBufferSamples(durations),
                     // Each Whisper pass costs a full 30 s window; decode only completed segments.
                     partials = null,
                     filterHallucination = true,
@@ -130,11 +130,7 @@ internal object SpeechEngineFactory {
                             provider = "cpu",
                             modelType = "zipformer",
                         ),
-                        endpointConfig = EndpointConfig(
-                            rule1 = EndpointRule(false, 2.4f, 0f),
-                            rule2 = EndpointRule(true, 0.6f, 0f),
-                            rule3 = EndpointRule(false, 0f, MAX_SEGMENT_SECONDS),
-                        ),
+                        endpointConfig = AsrVadPolicy.streamingConfig(durations),
                         enableEndpoint = true,
                         decodingMethod = "greedy_search",
                     ),
@@ -145,25 +141,6 @@ internal object SpeechEngineFactory {
         }
     }
 
-    private fun createVad(assets: AssetManager) = Vad(
-        assetManager = assets,
-        config = VadModelConfig(
-            sileroVadModelConfig = SileroVadModelConfig(
-                model = AsrVadModel.ASSET_PATH,
-                threshold = 0.5f,
-                minSilenceDuration = 0.35f,
-                minSpeechDuration = 0.25f,
-                windowSize = 512,
-                maxSpeechDuration = MAX_SEGMENT_SECONDS,
-            ),
-            sampleRate = PlaybackAudioCapture.TARGET_RATE,
-            numThreads = 1,
-            provider = "cpu",
-        ),
-    )
-
-    /** Shorter forced splits bound latency when background music hides pauses. */
-    internal const val MAX_SEGMENT_SECONDS = 6f
     private const val PARTIAL_INTERVAL_SAMPLES = PlaybackAudioCapture.TARGET_RATE / 2
     /** Over half a second of queued audio means recognition is behind; finals come first. */
     private const val PARTIAL_MAX_BACKLOG_SAMPLES = PlaybackAudioCapture.TARGET_RATE / 2
@@ -181,8 +158,9 @@ internal class VadOfflineEngine(
     private val filterHallucination: Boolean,
     private val sink: (SpeechEvent) -> Unit,
     private val metrics: SpeechMetrics?,
+    maxOpenSamples: Int,
 ) : SpeechEngine {
-    private val open = SampleBuffer(maxSamples = MAX_OPEN_SAMPLES)
+    private val open = SampleBuffer(maxSamples = maxOpenSamples)
     private val preRoll = SampleBuffer(maxSamples = PRE_ROLL_SAMPLES)
     private var segmentId = 0L
     private var samplesSincePartial = 0
@@ -259,9 +237,6 @@ internal class VadOfflineEngine(
 
     private companion object {
         const val PRE_ROLL_SAMPLES = PlaybackAudioCapture.TARGET_RATE / 5
-        /** VAD force-splits at the maximum segment length; the extra second absorbs its lag. */
-        val MAX_OPEN_SAMPLES =
-            ((SpeechEngineFactory.MAX_SEGMENT_SECONDS + 1f) * PlaybackAudioCapture.TARGET_RATE).toInt()
     }
 }
 

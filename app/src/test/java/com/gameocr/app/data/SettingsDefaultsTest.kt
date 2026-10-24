@@ -81,6 +81,7 @@ class SettingsDefaultsTest {
             Case("performance overlay", settings.performanceOverlayEnabled),
             Case("OCR screenshot saving", settings.ocrScreenshotSavingEnabled),
             Case("disable translation cache", settings.disableTranslationCache),
+            Case("hide OCR no-text hint", settings.hideOcrNoTextHint),
         ).forEach { case ->
             assertEquals(case.name, false, case.actual)
         }

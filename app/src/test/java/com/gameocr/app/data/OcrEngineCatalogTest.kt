@@ -10,7 +10,10 @@ class OcrEngineCatalogTest {
             val quick = OcrEngineCatalog.quickOptions(OcrEngineGroup.ON_DEVICE, downloaded).map { it.engine }
             assertEquals(OcrEngineKind.ML_KIT_AUTO, quick.first())
             assertEquals(optional in downloaded, optional in quick)
-            if (optional in downloaded) assertEquals(optional, quick[1])
+            if (optional in downloaded) {
+                assertTrue("Devanagari keeps its script position after Latin",
+                    quick.indexOf(optional) > quick.indexOf(OcrEngineKind.ML_KIT_LATIN))
+            }
             assertTrue(OcrEngineCatalog.optionsIn(OcrEngineGroup.ON_DEVICE).any { it.engine == optional })
             for (group in listOf(OcrEngineGroup.LOCAL, OcrEngineGroup.CLOUD)) {
                 assertEquals(OcrEngineCatalog.optionsIn(group), OcrEngineCatalog.quickOptions(group, downloaded))

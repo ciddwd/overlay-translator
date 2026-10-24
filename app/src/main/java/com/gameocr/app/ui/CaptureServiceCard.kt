@@ -177,6 +177,7 @@ internal fun CaptureServiceCard(
     modifier: Modifier,
     showSetup: Boolean,
     setup: CaptureSetupUiState,
+    startAvailable: Boolean,
     serviceRunning: Boolean,
     overlayGranted: Boolean,
     batteryOk: Boolean,
@@ -210,7 +211,7 @@ internal fun CaptureServiceCard(
                 .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            CaptureCardHeader(showSetup, setup.busy, serviceRunning, modeLabel)
+            CaptureCardHeader(showSetup, setup.busy, serviceRunning, startAvailable, modeLabel)
             if (showSetup) {
                 CaptureSetupSteps(setup)
                 PrimaryActionButton(
@@ -275,6 +276,10 @@ internal fun CaptureServiceCard(
                             Icon(Icons.Default.Stop, contentDescription = null)
                             Text(stringResource(R.string.main_action_stop), modifier = Modifier.padding(start = 8.dp))
                         }
+                    } else if (!startAvailable) {
+                        Button(modifier = Modifier.fillMaxWidth().height(56.dp), onClick = onFixOverlay) {
+                            Text(stringResource(R.string.main_action_grant_overlay_first))
+                        }
                     } else {
                         Button(modifier = Modifier.fillMaxWidth().height(56.dp), onClick = onStart) {
                             Icon(Icons.Default.PlayArrow, contentDescription = null)
@@ -292,7 +297,7 @@ internal fun CaptureServiceCard(
 }
 
 @Composable
-private fun CaptureCardHeader(showSetup: Boolean, busy: Boolean, running: Boolean, modeLabel: String) {
+private fun CaptureCardHeader(showSetup: Boolean, busy: Boolean, running: Boolean, startAvailable: Boolean, modeLabel: String) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f).padding(end = 12.dp)) {
             Text(
@@ -318,11 +323,12 @@ private fun CaptureCardHeader(showSetup: Boolean, busy: Boolean, running: Boolea
                     showSetup && busy -> R.string.main_capture_status_setting_up
                     showSetup -> R.string.main_capture_status_setup
                     running -> R.string.main_capture_status_running
+                    !startAvailable -> R.string.main_key_overlay_needed
                     else -> R.string.main_capture_status_ready
                 }
             ),
             tone = when {
-                showSetup -> ChipTone.WARN
+                showSetup || !startAvailable -> ChipTone.WARN
                 running -> ChipTone.OK
                 else -> ChipTone.NEUTRAL
             },

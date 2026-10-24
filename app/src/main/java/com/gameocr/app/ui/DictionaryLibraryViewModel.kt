@@ -54,7 +54,7 @@ class DictionaryLibraryViewModel @Inject constructor(
 
     fun setTapLookupEnabled(enabled: Boolean) {
         viewModelScope.launch {
-            settingsRepository.update { it.copy(dictionaryTapLookupEnabled = enabled) }
+            settingsRepository.tryUpdate { it.copy(dictionaryTapLookupEnabled = enabled) }
         }
     }
 

@@ -147,7 +147,7 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
             recentLanguageMutex.withLock {
                 withContext(Dispatchers.IO) {
-                    repo.update { current ->
+                    repo.tryUpdate { current ->
                         current.copy(mlKitRecentSourceLanguages = mlKitRecentSourceLanguages(
                             current.mlKitRecentSourceLanguages, languageTag,
                         ))
@@ -344,7 +344,8 @@ class SettingsViewModel @Inject constructor(
             }
 
             val importedSettings = requireNotNull(preview.settings)
-            val beforeSettings = repo.get()
+            val beforeState = repo.snapshotForImport()
+            val beforeSettings = beforeState.settings
             val beforeGlossary = glossaryRepository.listAll()
             val outcome = SettingsBundleImportTransaction(
                 commitFont = overlayFontManager::commitTransferredFont,
@@ -361,10 +362,11 @@ class SettingsViewModel @Inject constructor(
                 commitSettings = { merged ->
                     repo.updateAfterPresetImport(
                         (merged.presetResult.addedNames + merged.presetResult.overwrittenNames).toSet(),
+                        rollbackSnapshot = beforeState,
                     ) { merged.settings }
                 },
                 finishFont = overlayFontManager::finishTransferredFont,
-                restoreSettings = { repo.update { beforeSettings } },
+                restoreSettings = { repo.restoreImportSnapshot(beforeState) },
                 restoreGlossary = { glossaryRepository.restoreTerms(beforeGlossary) },
                 rollbackFont = overlayFontManager::rollbackTransferredFont,
             ).run(stagedFonts)
@@ -425,6 +427,7 @@ class SettingsViewModel @Inject constructor(
         performanceOverlayEnabled: Boolean,
         ocrScreenshotSavingEnabled: Boolean,
         disableTranslationCache: Boolean,
+        hideOcrNoTextHint: Boolean,
         batchCumulativeCompletionTimeEnabled: Boolean,
         shareEntireScreen: Boolean,
         ocrRedBoxModeEnabled: Boolean,
@@ -556,6 +559,7 @@ class SettingsViewModel @Inject constructor(
                 performanceOverlayEnabled = performanceOverlayEnabled,
                 ocrScreenshotSavingEnabled = ocrScreenshotSavingEnabled,
                 disableTranslationCache = disableTranslationCache,
+                hideOcrNoTextHint = hideOcrNoTextHint,
                 batchCumulativeCompletionTimeEnabled = batchCumulativeCompletionTimeEnabled,
                 shareEntireScreen = shareEntireScreen,
                 ocrRedBoxModeEnabled = ocrRedBoxModeEnabled,
@@ -776,8 +780,12 @@ class SettingsViewModel @Inject constructor(
                         asrCloudConnections = current.asrCloudConnections.copy(
                             tencentModel = next.asrCloudConnections.tencentModel,
                             volcResource = next.asrCloudConnections.volcResource,
+                            openAiTransport = next.asrCloudConnections.openAiTransport,
                         ),
                         asrLanguage = next.asrLanguage,
+                        asrSegmentation = next.asrSegmentation.normalized(),
+                        asrHints = current.asrHints.copy(useGlossary = next.asrHints.useGlossary,
+                            openAiMode = next.asrHints.openAiMode),
                         asrMaxDisplayedRecords = next.asrMaxDisplayedRecords,
                     )
                 }
@@ -1064,14 +1072,7 @@ class SettingsViewModel @Inject constructor(
             val totalMb = readiness.totalBytes / (1024 * 1024)
             val ready = appContext.getString(R.string.settings_manga_ocr_status_ready_format, totalMb.toInt())
             DownloadableModelUiState(
-                status = if (readiness.upgradeAvailable) {
-                    ready + "\n" + appContext.getString(
-                        R.string.settings_manga_ocr_status_faster_available_format,
-                        (com.gameocr.app.ocr.MangaOcrModelInstaller.DRAFT_BYTES / (1024 * 1024)).toInt(),
-                    )
-                } else {
-                    ready
-                },
+                status = ready,
                 ready = true,
                 upgradeAvailable = readiness.upgradeAvailable,
             )
@@ -1236,7 +1237,7 @@ class SettingsViewModel @Inject constructor(
         if (connection.openAiApiKey.isBlank()) {
             return TestResult(false, appContext.getString(R.string.err_openai_no_api_key))
         }
-        val url = OpenAiAsrProtocol.modelsEndpoint(connection.openAiBaseUrl)
+        val url = OpenAiAsrProtocol.modelsEndpoint(connection.openAiBaseUrl, connection.openAiTransport)
             ?: return TestResult(false, IllegalArgumentException::class.java.simpleName)
         return try {
             val models = modelListClient.fetch(url, connection.openAiApiKey, settings.apiTimeoutSeconds)

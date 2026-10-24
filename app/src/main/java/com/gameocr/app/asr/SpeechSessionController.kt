@@ -11,11 +11,14 @@ import com.gameocr.app.R
 import com.gameocr.app.data.AsrLanguagePolicy
 import com.gameocr.app.data.AsrCloudProvider
 import com.gameocr.app.data.Settings
+import com.gameocr.app.data.AsrSegmentationPolicy
 import com.gameocr.app.data.LogRepository
 import com.gameocr.app.overlay.SpeechBallState
 import java.util.concurrent.Executors
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
@@ -47,6 +50,7 @@ internal class SpeechSessionController(
     private val listener: Listener,
     private val logRepository: LogRepository,
     private val userMessage: (Int) -> String,
+    private val hintResolver: AsrHintResolver,
 ) {
     interface Listener {
         /** Called on any thread; implementations hop to the main thread. */
@@ -90,6 +94,9 @@ internal class SpeechSessionController(
     private var queue: AudioChunkQueue? = null
     private var captureJob: Job? = null
     private var inferenceJob: Job? = null
+    private var contextJob: Job? = null
+    private val hintSource = AsrHintSource()
+    private var hintSettings: Settings? = null
     @Volatile private var loopStopping = false
 
     private val modelReleaser: suspend (AsrModelId) -> Unit = { model -> releaseModel(model) }
@@ -103,9 +110,13 @@ internal class SpeechSessionController(
         setState(SpeechBallState.PREPARING)
         nextGeneration()
         val current = settings()
+        hintSettings = current
+        refreshHints(current)
         val language = AsrLanguagePolicy.effective(current.asrEngine, current.asrLanguage, current.asrCloudModel, current.asrCloudProvider, current.asrCloudConnections)
         val model = AsrModelId.forSettings(current.asrEngine, current.asrWhisperVariant)
-        needsRemoteReady = model == null && current.asrCloudProvider != AsrCloudProvider.OPENAI_COMPATIBLE
+        val durations = AsrSegmentationPolicy.durations(current)
+        needsRemoteReady = model == null && (current.asrCloudProvider != AsrCloudProvider.OPENAI_COMPATIBLE ||
+                current.asrCloudConnections.openAiTransport == com.gameocr.app.data.OpenAiAsrTransport.REALTIME_TRANSCRIPTION)
         readiness.begin(generation, needsRemoteReady)
         SpeechStartPolicy.blockReason(current, model?.let { installer.checkInstalled(it) != null })?.let { block ->
             failToIdle(block.message)
@@ -130,12 +141,16 @@ internal class SpeechSessionController(
                             } }
                         }
                         when (current.asrCloudProvider) {
-                            AsrCloudProvider.OPENAI_COMPATIBLE -> HttpTranscriptionEngine(httpClient, assets,
-                                current.asrCloudConnections, language, sink, failed, sessionMetrics)
+                            AsrCloudProvider.OPENAI_COMPATIBLE -> when (current.asrCloudConnections.openAiTransport) {
+                                com.gameocr.app.data.OpenAiAsrTransport.HTTP_TRANSCRIPTION -> HttpTranscriptionEngine(httpClient, assets,
+                                    current.asrCloudConnections, language, sink, failed, sessionMetrics, durations = checkNotNull(durations), hintSource = hintSource)
+                                com.gameocr.app.data.OpenAiAsrTransport.REALTIME_TRANSCRIPTION -> OpenAiRealtimeAsrEngine(httpClient, assets,
+                                    current.asrCloudConnections, language, sink, failed, sessionMetrics, ready, durations = checkNotNull(durations), hintSource = hintSource)
+                            }
                             AsrCloudProvider.TENCENT, AsrCloudProvider.VOLCENGINE -> NativeCloudSpeechEngine(httpClient,
                                 current.asrCloudProvider, current.asrCloudConnections, sink, failed, sessionMetrics,
                                 onReady = ready, tencentSecretId = current.tencentSecretId, tencentSecretKey = current.tencentSecretKey,
-                                language = language, targetLanguage = current.targetLang)
+                                language = language, targetLanguage = current.targetLang, hintSource = hintSource)
                             AsrCloudProvider.ALIYUN -> ParaformerRealtimeEngine(
                                 client = httpClient,
                                 apiKey = current.asrDashScopeApiKey.trim(),
@@ -146,11 +161,12 @@ internal class SpeechSessionController(
                                 onFailure = failed,
                                 metrics = sessionMetrics,
                                 onReady = ready,
+                                hintSource = hintSource,
                             )
                         }
                     } else {
                         val dir = installer.checkInstalled(model) ?: error("model disappeared")
-                        SpeechEngineFactory.create(model, dir, language, assets, sink, sessionMetrics)
+                        SpeechEngineFactory.create(model, dir, language, assets, sink, sessionMetrics, checkNotNull(durations))
                     }
                     engineKey = key
                     engineModel = model
@@ -192,6 +208,7 @@ internal class SpeechSessionController(
     fun resume() = command("resume") {
         if (state != SpeechBallState.PAUSED) return@command
         val active = capture ?: return@command
+        hintSettings?.let { refreshHints(it) }
         nextGeneration()
         readiness.begin(generation, needsRemoteReady)
         setState(SpeechBallState.PREPARING)
@@ -229,6 +246,8 @@ internal class SpeechSessionController(
         stopLoop()
         capture?.release()
         capture = null
+        hintSettings = null
+        hintSource.current = AsrRecognitionHints()
         releaseEngine()
         logMetrics("stop")
         setState(SpeechBallState.IDLE)
@@ -240,6 +259,30 @@ internal class SpeechSessionController(
         val chunks = AudioChunkQueue(MAX_QUEUED_SAMPLES).also { queue = it }
         val sessionMetrics = metrics
         emitGeneration = loopGeneration
+        val current = hintSettings
+        if (current != null && tracksHintScope(current)) contextJob = scope.launch(Dispatchers.IO) {
+            while (true) {
+                delay(2_000)
+                try {
+                    val packageName = hintResolver.scope(current)
+                    if (packageName != hintSource.current.scopePackage) {
+                        val hints = hintResolver.resolve(current, packageName)
+                        command("recognition context") {
+                            if (generation != loopGeneration || state !in setOf(SpeechBallState.PREPARING, SpeechBallState.RECOGNIZING)) return@command
+                            nextGeneration()
+                            stopLoop()
+                            hintSource.current = hints
+                            withContext(inferenceThread) { engine?.reset() }
+                            readiness.begin(generation, needsRemoteReady)
+                            setState(SpeechBallState.PREPARING)
+                            startLoop(active)
+                        }
+                        return@launch
+                    }
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (error: Exception) { Timber.w(error, "[asr] recognition context lookup failed") }
+            }
+        }
         captureJob = scope.launch(captureThread) { guarded("capture", loopGeneration) {
             // startRecording throws IllegalStateException when the recorder cannot start.
             active.start()
@@ -317,6 +360,8 @@ internal class SpeechSessionController(
 
     private suspend fun stopLoop() {
         loopStopping = true
+        contextJob?.cancel()
+        contextJob = null
         // Stopping the recorder unblocks the pending read; closing the queue wakes inference.
         capture?.stop()
         queue?.close()
@@ -325,6 +370,15 @@ internal class SpeechSessionController(
         captureJob = null
         inferenceJob = null
         queue = null
+    }
+
+    private fun tracksHintScope(s: Settings): Boolean {
+        val cap = com.gameocr.app.data.AsrHintPolicy.capabilities(s)
+        return cap.hotwords && s.asrHints.useGlossary
+    }
+
+    private suspend fun refreshHints(s: Settings) = withContext(Dispatchers.IO) {
+        hintSource.current = hintResolver.resolve(s, if (tracksHintScope(s)) hintResolver.scope(s) else null)
     }
 
     private suspend fun failFromLoop(loopGeneration: Long) = commands.withLock {

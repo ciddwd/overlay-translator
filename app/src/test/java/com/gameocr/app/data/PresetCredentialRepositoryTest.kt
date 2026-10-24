@@ -98,31 +98,29 @@ class PresetCredentialRepositoryTest {
     }
 
     @Test
-    fun encryptionFailure_clearsCredentialsButKeepsPresetAndOtherSettings() = runBlocking {
+    fun encryptionFailure_abortsTheWholePresetSaveAndKeepsOriginalCredentials() = runBlocking {
         val fixture = Fixture()
         val repo = fixture.repo()
         val source = PresetCredentialPolicyTest().withCredentials(Settings(model = "keep-model", promptTemplate = "keep-prompt"), "never-plaintext")
         val p = preset("failure", source)
         repo.saveTranslationPreset(p, source)
         fixture.cipher.fail = true
-        repo.saveTranslationPreset(p, source.copy(apiKey = "replacement-secret"))
-        val saved = repo.get()
-        assertEquals("keep-model", saved.model)
-        assertEquals("keep-prompt", saved.promptTemplate)
-        assertEquals(p.id, saved.translationPresets.single().id)
-        assertEquals("", saved.apiKey)
-        repo.update { source.copy(translationPresets = listOf(p)) }
-        val values = json.encodeToJsonElement(repo.get()).jsonObject
-        PresetCredentialPolicy.credentialFields.forEach { assertEquals(it, "", values[it]?.jsonPrimitive?.content) }
+        val before = repo.get()
+        var rejected = false
+        try { repo.saveTranslationPreset(p, source.copy(apiKey = "replacement-secret", model = "replacement-model")) }
+        catch (_: SettingsSecretStorageException) { rejected = true }
+        assertTrue(rejected)
         fixture.cipher.fail = false
-        assertEquals("", repo.applyTranslationPreset(p.id)?.apiKey)
+        val saved = repo.get()
+        assertEquals(before, saved)
+        assertEquals(source.apiKey, repo.applyTranslationPreset(p.id)?.apiKey)
         val raw = File(fixture.root, "datastore/game_ocr_settings.preferences_pb").readBytes().toString(Charsets.ISO_8859_1)
         assertFalse(raw.contains("replacement-secret"))
         assertFalse(raw.contains("never-plaintext"))
     }
 
     @Test
-    fun duplicateAndImportCollision_doNotBorrowGlobalOrSameNameCredentials() = runBlocking {
+    fun duplicateAndSameNameImport_keepTheirOwnLocalCredentials() = runBlocking {
         for (sameId in listOf(true, false)) {
             val repo = Fixture().repo()
             val source = Settings(apiKey = "original-secret")
@@ -135,7 +133,7 @@ class PresetCredentialRepositoryTest {
             repo.updateAfterPresetImport(setOf(imported.name)) { current ->
                 current.copy(translationPresets = TranslationPresetTransfer.mergeImportedPresets(current.translationPresets, listOf(imported)).presets)
             }
-            assertEquals("", repo.applyTranslationPreset(p.id)?.apiKey)
+            assertEquals("original-secret", repo.applyTranslationPreset(p.id)?.apiKey)
             assertEquals("original-secret", repo.applyTranslationPreset(duplicate.id)?.apiKey)
         }
     }

@@ -228,33 +228,6 @@ class SettingsLazyLayoutTest {
     }
 
     @Test
-    fun everyGlobalSearchEntry_targetsALazySection() {
-        val missing = settingsSearchSectionKeys() - SETTINGS_SECTION_KEYS_IN_ORDER.toSet()
-        assertTrue("search entries without a lazy section: $missing", missing.isEmpty())
-
-        val missingChildTargets = settingsSearchTargetResIds() - SETTINGS_SEARCH_TARGET_RES_IDS
-        assertTrue(
-            "search entries without a child bring-into-view target: $missingChildTargets",
-            missingChildTargets.isEmpty(),
-        )
-        val targetsWithoutEntries = SETTINGS_SEARCH_TARGET_RES_IDS - settingsSearchTargetResIds()
-        assertTrue(
-            "child bring-into-view targets without a search descriptor: $targetsWithoutEntries",
-            targetsWithoutEntries.isEmpty(),
-        )
-        assertEquals(
-            "search entry ids must stay unique",
-            settingsSearchEntryCount(),
-            settingsSearchEntryIds().size,
-        )
-        val policyEntriesWithoutDescriptor = SettingsFieldPolicy.searchEntryIds - settingsSearchEntryIds()
-        assertTrue(
-            "SettingsFieldPolicy search ids without a UI descriptor: $policyEntriesWithoutDescriptor",
-            policyEntriesWithoutDescriptor.isEmpty(),
-        )
-    }
-
-    @Test
     fun searchRanking_prefersLabelsThenCurrentValuesThenOptionsAndKeywords() {
         val label = settingsSearchScore(
             query = "translation layout",

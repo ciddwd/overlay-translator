@@ -39,6 +39,12 @@ object OcrLanguageCapability {
      * 仍应建议使用更合适的拉丁 OCR，而不是把“字典能输出英文”当成英文专用能力。
      */
     private val PADDLE_V5_KOREAN_LANGS = setOf("ko")
+    private val PADDLE_V5_ESLAV_LANGS = setOf("ru", "be", "uk", "en")
+
+    /** Language-specific local default; English keeps its existing Latin recognizer. */
+    fun preferredPaddleModelVersion(sourceCode: String): PaddleModelVersion? =
+        PaddleModelVersion.V5_ESLAV.takeIf { normalize(sourceCode) in setOf("ru", "be", "uk") }
+
 
     /** PP-OCRv6 medium/small includes these 46 Latin-script languages in one unified model. */
     private val PADDLE_V6_LATIN_LANGS = setOf(
@@ -111,6 +117,7 @@ object OcrLanguageCapability {
             OcrEngineKind.PADDLE_ONNX -> when (paddleModelVersion) {
                 PaddleModelVersion.V5_MOBILE -> code in PADDLE_V5_LANGS
                 PaddleModelVersion.V5_KOREAN -> code in PADDLE_V5_KOREAN_LANGS
+                PaddleModelVersion.V5_ESLAV -> code in PADDLE_V5_ESLAV_LANGS
                 PaddleModelVersion.V6_TINY -> code in PADDLE_V6_BASE_LANGS
                 PaddleModelVersion.V6_SMALL,
                 PaddleModelVersion.V6_MEDIUM -> code in PADDLE_V6_AI_STUDIO_LANGS
@@ -231,6 +238,7 @@ object OcrLanguageCapability {
 
     /**
      * 给定源语言，推荐"该用哪个 OCR 引擎 + 配置"。优先级：
+     *  0. 俄语 / 白俄罗斯语 / 乌克兰语优先推荐端侧东斯拉夫语模型。
      *  1. 用户已在云端 + key 已配 → 保留引擎，只切 language（避免把已经付费的用户推回端侧）
      *  2. ML Kit 端侧（免费 + 离线）—— 覆盖 ja / ko / zh + 拉丁系
      *  3. PaddleOCR —— 覆盖 zh/en/ja（如果用户已下载模型）
@@ -270,6 +278,10 @@ object OcrLanguageCapability {
         if (code == "auto") return autoModeRecommendation(
             currentEngine, currentBaiduEndpoint, currentTencentEndpoint, hasBaiduKey, hasTencentKey
         )
+
+        preferredPaddleModelVersion(code)?.let {
+            return Recommendation(OcrEngineKind.PADDLE_ONNX, paddleModelVersion = it)
+        }
 
         // 1.a) 当前已在 manga-ocr 且源语言 = ja → 保留（专家模式，避免被推回 ML Kit）
         //      与百度 / 腾讯保留已配引擎逻辑对称
@@ -498,7 +510,7 @@ object OcrLanguageCapability {
 
     /** BCP-47 规范化：去 region tag（"ja-JP" → "ja"），保留 zh 的简繁差异。 */
     private fun normalize(code: String): String {
-        val trimmed = code.trim()
+        val trimmed = code.trim().replace('_', '-')
         if (trimmed.startsWith("zh", ignoreCase = true)) {
             return when (trimmed.lowercase()) {
                 "zh", "zh-cn", "zh-hans", "zh-hans-cn" -> "zh-CN"
@@ -516,7 +528,8 @@ object OcrLanguageCapability {
         val tencentEndpoint: TencentOcrEndpoint? = null,
         val tencentLanguage: TencentOcrLanguage? = null,
         /** 推荐云端但用户尚未配 key —— UI 应当引导跳转设置而不是直接切换。 */
-        val keysMissing: Boolean = false
+        val keysMissing: Boolean = false,
+        val paddleModelVersion: PaddleModelVersion? = null,
     )
 }
 

@@ -315,6 +315,7 @@ class CaptureService : Service() {
     @Inject lateinit var mangaOcrEngine: MangaOcrEngine
     @Inject lateinit var ttsEngine: TtsEngine
     @Inject lateinit var asrModelInstaller: AsrModelInstaller
+    @Inject internal lateinit var asrHintResolver: com.gameocr.app.asr.AsrHintResolver
     @Inject lateinit var speechPermissionPreparer: com.gameocr.app.asr.SpeechPermissionPreparer
     @Inject lateinit var okHttpClient: okhttp3.OkHttpClient
     @Inject lateinit var translationMemoryService: TranslationMemoryService
@@ -324,6 +325,16 @@ class CaptureService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private fun launchSettingsWrite(write: suspend () -> Unit) = scope.launch {
+        com.gameocr.app.ui.runSettingsWrite(
+            onFailure = {
+                withContext(Dispatchers.Main.immediate) {
+                    overlay?.showInfoHint(getString(R.string.settings_storage_save_failed))
+                }
+            },
+            write = write,
+        )
+    }
     private val captureLock = Mutex()
     private val screenshotLock = Mutex()
     private val translationVisualDebugStore by lazy {
@@ -1111,7 +1122,7 @@ class CaptureService : Service() {
                             // 保存本次选框
                             if (plan.saveLastSelection) {
                                 val s = physicalDisplaySize(this@CaptureService)
-                                settingsRepository.update { it.copy(
+                                settingsRepository.tryUpdate { it.copy(
                                     wordSelectLastRegion = selectedRegion,
                                     wordSelectLastRegionSavedScreenW = s.width,
                                     wordSelectLastRegionSavedScreenH = s.height,
@@ -1531,12 +1542,14 @@ class CaptureService : Service() {
         val blocks: List<TextBlock>,
     )
 
+    /** Returns the rotated pass only when it reads clearly better than [firstBlocks]. */
     private suspend fun rerunOcrRotated180(
         originalBitmap: Bitmap,
         currentRotation: Int,
         engine: OcrEngineKind,
         settings: Settings,
         diagId: Long,
+        firstBlocks: List<TextBlock>,
     ): CorrectedOcrFrame? {
         val rotation = com.gameocr.app.ocr.OcrHalfTurnPolicy.correctedRotation(currentRotation)
         val normalized = CaptureContentOrientationPolicy.rotateForOcr(originalBitmap, rotation)
@@ -1551,7 +1564,15 @@ class CaptureService : Service() {
             logVerticalDiag(diagId, "rerun OCR rotated180 engine=${engine.name} " +
                 "normalization=$currentRotation->$rotation bitmap=${normalized.width}x${normalized.height}")
             val blocks = ocrEngine.recognize(correctedInput, engine, settings)
-            if (blocks.none { it.text.isNotBlank() }) return null
+            val accepted = com.gameocr.app.ocr.OcrHalfTurnRerunPolicy.prefersRerun(firstBlocks, blocks)
+            logOcrInfo(
+                "[orient-textline] 180deg rerun score=%.1f first=%.1f accepted=%s".format(
+                    com.gameocr.app.ocr.OcrHalfTurnRerunPolicy.score(blocks),
+                    com.gameocr.app.ocr.OcrHalfTurnRerunPolicy.score(firstBlocks),
+                    accepted,
+                )
+            )
+            if (!accepted) return null
             logVerticalBlocks(diagId, "rerunBlocks rotated180 engine=${engine.name}", blocks)
             keep = true
             CorrectedOcrFrame(normalized, correctedInput, rotation, blocks)
@@ -1573,7 +1594,7 @@ class CaptureService : Service() {
         if (newSkill != FloatingSkill.SPEECH) stopSpeechSession()
         if (newSkill != FloatingSkill.LOOP && loopMode) toggleLoopMode()
         if (newSkill != FloatingSkill.INPUT_TRANSLATE) cancelInputTranslation(silent = true)
-        scope.launch {
+        launchSettingsWrite {
             settingsRepository.update { it.copy(floatingButtonSkill = newSkill) }
         }
         floatingButton?.skill = newSkill
@@ -1807,6 +1828,7 @@ class CaptureService : Service() {
     private fun ensureSpeechController(): SpeechSessionController {
         speechController?.let { return it }
         val controller = SpeechSessionController(
+            hintResolver = asrHintResolver,
             logRepository = logRepository,
             userMessage = { getString(it) },
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
@@ -2020,18 +2042,18 @@ class CaptureService : Service() {
             mainScope.launch {
                 panel.show(settings) { source, target ->
                     if (!translationLanguageCodesConflict(source, target)) {
-                        scope.launch {
+                        launchSettingsWrite {
                             settingsRepository.update {
                                 it.copy(sourceLang = source, targetLang = target)
                             }
+                            withContext(Dispatchers.Main.immediate) {
+                                overlay?.showInfoHint(getString(
+                                    R.string.language_quick_updated_format,
+                                    Languages.nameOf(this@CaptureService, source),
+                                    Languages.nameOf(this@CaptureService, target),
+                                ))
+                            }
                         }
-                        overlay?.showInfoHint(
-                            getString(
-                                R.string.language_quick_updated_format,
-                                Languages.nameOf(this@CaptureService, source),
-                                Languages.nameOf(this@CaptureService, target)
-                            )
-                        )
                     }
                 }
             }
@@ -2047,15 +2069,14 @@ class CaptureService : Service() {
             val settings = settingsRepository.get()
             mainScope.launch {
                 panel.show(settings) { preset ->
-                    scope.launch {
+                    launchSettingsWrite {
                         settingsRepository.applyTranslationPreset(preset.id)
+                        withContext(Dispatchers.Main.immediate) {
+                            overlay?.showInfoHint(getString(
+                                R.string.preset_quick_applied_format, presetDisplayName(preset),
+                            ))
+                        }
                     }
-                    overlay?.showInfoHint(
-                        getString(
-                            R.string.preset_quick_applied_format,
-                            presetDisplayName(preset)
-                        )
-                    )
                 }
             }
         }
@@ -3636,7 +3657,17 @@ class CaptureService : Service() {
                 }
                 orientationHint = hint
                 logVerticalOrientation(diagId, "post", hint)
-                val upsideDownRerun = if (shouldRerunForTextLine180(hint)) {
+                // Paddle reports real line confidences; a confident first pass is already upright.
+                val firstPassReliable = effectiveEngine == OcrEngineKind.PADDLE_ONNX &&
+                    com.gameocr.app.ocr.OcrHalfTurnRerunPolicy.firstPassIsReliable(firstBlocks)
+                if (shouldRerunForTextLine180(hint) && firstPassReliable) {
+                    logOcrInfo(
+                        "[orient-textline] 180deg conf=%.2f src=%s ignored: first pass reads confidently".format(
+                            hint.confidence, hint.source
+                        )
+                    )
+                }
+                val upsideDownRerun = if (shouldRerunForTextLine180(hint) && !firstPassReliable) {
                     try {
                         val rerun = rerunOcrRotated180(
                             workBitmap,
@@ -3644,6 +3675,7 @@ class CaptureService : Service() {
                             effectiveEngine,
                             settings,
                             diagId,
+                            firstBlocks,
                         )
                         if (rerun != null) {
                             if (preprocessed !== ocrBitmap) preprocessed.recycle()
@@ -3873,7 +3905,11 @@ class CaptureService : Service() {
                     elapsedMs = ocrElapsedMs
                 )
                 val message = getString(R.string.toast_ocr_unreliable_result)
-                mainScope.launch { overlay?.showErrorHint(message) }
+                if (DeveloperOcrDebugPolicy.shouldShowNoTextHint(
+                        settings.developerOptionsEnabled, settings.hideOcrNoTextHint,
+                    )) {
+                    mainScope.launch { overlay?.showErrorHint(message) }
+                }
                 return
             }
             val qualityIssue = findOcrResultQualityIssue(blocks)
@@ -3890,7 +3926,11 @@ class CaptureService : Service() {
                     qualityIssue.toLogString()
                 )
                 logRepository.warn(LogRepository.Category.OCR, message, elapsedMs = ocrElapsedMs)
-                mainScope.launch { overlay?.showErrorHint(message) }
+                if (DeveloperOcrDebugPolicy.shouldShowNoTextHint(
+                        settings.developerOptionsEnabled, settings.hideOcrNoTextHint,
+                    )) {
+                    mainScope.launch { overlay?.showErrorHint(message) }
+                }
                 return
             }
             val shouldSeedLoopRoi = roiOptimizationEnabled &&

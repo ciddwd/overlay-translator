@@ -15,7 +15,8 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CloudSpeechProviderTest {
-    private val connections = AsrCloudConnections(tencentAppId = "123456", volcApiKey = "volc-key", openAiApiKey = "http-key")
+    private val connections = AsrCloudConnections(tencentAppId = "123456", volcApiKey = "volc-key", openAiApiKey = "http-key",
+        openAiBaseUrl = "https://api.siliconflow.cn/v1", openAiModel = "FunAudioLLM/SenseVoiceSmall")
 
     @Test fun prerequisitesAndCredentialIsolation_tableDriven() {
         data class Case(val provider: AsrCloudProvider, val config: AsrCloudConnections, val ready: Boolean, val secretKey: String = "test-key")

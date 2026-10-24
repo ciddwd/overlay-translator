@@ -11,6 +11,13 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
@@ -32,6 +39,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -46,11 +56,18 @@ import com.gameocr.app.data.AsrEngineKind
 import com.gameocr.app.data.AsrLanguage
 import com.gameocr.app.data.AsrLanguagePolicy
 import com.gameocr.app.data.AsrWhisperVariant
+import com.gameocr.app.data.AsrSegmentDurations
+import com.gameocr.app.data.AsrSegmentationPolicy
+import com.gameocr.app.data.AsrSegmentationProfile
+import com.gameocr.app.data.OpenAiAsrTransport
 import com.gameocr.app.data.Settings
+import com.gameocr.app.data.AsrHintPolicy
+import com.gameocr.app.data.AsrHintMode
 import com.gameocr.app.download.ModelDownloadProgressText
 import com.gameocr.app.download.ModelDownloadSpec
 import com.gameocr.app.download.ModelDownloadWorker
 import java.util.UUID
+import java.util.Locale
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -94,13 +111,6 @@ internal object AsrModelUiPolicy {
     /** Same enabled states as the OCR download/import row. */
     fun canImport(state: AsrModelUiState): Boolean = canDownload(state)
 
-    fun canDelete(state: AsrModelUiState): Boolean = state == AsrModelUiState.Ready
-
-    /** Background download progress is already shown in the page's shared download card. */
-    fun showInlineStatus(state: AsrModelUiState): Boolean = when (state) {
-        is AsrModelUiState.Downloading, AsrModelUiState.Queued, AsrModelUiState.Verifying -> false
-        else -> true
-    }
 }
 
 /**
@@ -118,8 +128,11 @@ internal fun AsrSettingsSection(
     requestModelDownload: (label: String, onConfirmed: () -> Unit) -> Unit,
     onSaved: (Settings) -> Unit,
     onCredentialsEdited: ((Settings) -> Settings) -> Unit,
+    advancedExpanded: Boolean,
+    onAdvancedExpandedChange: (Boolean) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val engine = settings?.asrEngine ?: AsrEngineKind.SENSE_VOICE
     val variant = settings?.asrWhisperVariant ?: AsrWhisperVariant.TINY
     val cloudModel = settings?.asrCloudModel ?: AsrCloudModel.PARAFORMER
@@ -139,7 +152,7 @@ internal fun AsrSettingsSection(
                 throw cancelled
             } catch (error: Exception) {
                 onSaved(current)
-                snackbarHostState.showSnackbar(error.localizedMessage ?: error.javaClass.simpleName)
+                snackbarHostState.showSnackbar(settingsWriteErrorMessage(context, error))
             }
         }
     }
@@ -231,19 +244,25 @@ internal fun AsrSettingsSection(
                 onValueChange = { picked -> save { it.copy(asrLanguage = picked) } },
             )
         }
-        Text(
-            stringResource(
-                when (engine) {
-                    AsrEngineKind.SENSE_VOICE -> R.string.settings_asr_note_sense_voice
-                    AsrEngineKind.ZIPFORMER -> R.string.settings_asr_note_zipformer
-                    AsrEngineKind.WHISPER, AsrEngineKind.PARAFORMER_CLOUD -> R.string.settings_asr_note_general
+        HorizontalDivider()
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+            .clickable(role = Role.Button) { onAdvancedExpandedChange(!advancedExpanded) }
+            .padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(stringResource(R.string.settings_niutrans_advanced), Modifier.weight(1f),
+                style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+            Icon(Icons.Default.ExpandMore, contentDescription = null,
+                modifier = Modifier.graphicsLayer { rotationZ = if (advancedExpanded) 180f else 0f },
+                tint = MaterialTheme.colorScheme.primary)
+        }
+        if (advancedExpanded) {
+            settings?.let { current ->
+                RecognitionHintRows(current, ::save, onCredentialsEdited)
+                AsrSegmentationPolicy.profile(current)?.let { profile ->
+                    key(profile) { SegmentationRows(current, profile, ::save) }
                 }
-            ),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-
-        MaxRecordsRow(settings = settings, save = ::save)
+            }
+            MaxRecordsRow(settings = settings, save = ::save)
+        }
     }
 }
 
@@ -338,17 +357,18 @@ private fun OnDeviceModelSection(
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         ModelVersionRow(model.displayName)
-        if (AsrModelUiPolicy.showInlineStatus(modelState)) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                if (AsrModelUiPolicy.isBusy(modelState)) {
-                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                    Box(modifier = Modifier.size(8.dp))
-                }
-                Text(when (modelState) {
-                    AsrModelUiState.Failed -> failureStatus ?: asrModelStatusText(modelState, model)
-                    else -> asrModelStatusText(modelState, model)
-                }, style = MaterialTheme.typography.bodyMedium)
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            if (AsrModelUiPolicy.isBusy(modelState)) {
+                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                Box(modifier = Modifier.size(8.dp))
             }
+            Text(when (modelState) {
+                is AsrModelUiState.Downloading ->
+                    "${model.displayName} ${modelDownloadAmountText(downloaded ?: 0L, total ?: -1L)}"
+                AsrModelUiState.Queued -> "${model.displayName} ${asrModelStatusText(modelState, model)}"
+                AsrModelUiState.Failed -> failureStatus ?: asrModelStatusText(modelState, model)
+                else -> asrModelStatusText(modelState, model)
+            }, style = MaterialTheme.typography.bodyMedium)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             Button(
@@ -390,7 +410,6 @@ private fun OnDeviceModelSection(
             ) { Text(stringResource(R.string.settings_paddle_btn_local_import)) }
         }
         OutlinedButton(
-            enabled = AsrModelUiPolicy.canDelete(modelState),
             onClick = { confirmDelete = true },
             modifier = Modifier.fillMaxWidth(),
         ) { Text(stringResource(R.string.settings_paddle_btn_delete)) }
@@ -466,6 +485,24 @@ private fun CloudEngineSection(settings: Settings?, viewModel: SettingsViewModel
                     }
                 }
                 AsrCloudProvider.OPENAI_COMPATIBLE -> {
+                    Text(stringResource(R.string.settings_asr_protocol), style = MaterialTheme.typography.labelLarge)
+                    SettingsChoiceRow(Modifier.fillMaxWidth()) {
+                        OpenAiAsrTransport.entries.forEach { option ->
+                            SettingsChoiceButton(
+                                selected = connection.openAiTransport == option,
+                                enabled = settings != null,
+                                onClick = {
+                                    if (connection.openAiTransport != option) save {
+                                        it.copy(asrCloudConnections = it.asrCloudConnections.copy(openAiTransport = option))
+                                    }
+                                },
+                                label = { Text(stringResource(when (option) {
+                                    OpenAiAsrTransport.HTTP_TRANSCRIPTION -> R.string.settings_asr_protocol_file
+                                    OpenAiAsrTransport.REALTIME_TRANSCRIPTION -> R.string.settings_asr_protocol_realtime
+                                })) },
+                            )
+                        }
+                    }
                     AsrConnectionField(connection.openAiBaseUrl, stringResource(R.string.settings_base_url)) { value ->
                         onCredentialsEdited { it.copy(asrCloudConnections = it.asrCloudConnections.copy(openAiBaseUrl = value)) }
                     }
@@ -506,7 +543,7 @@ private fun OpenAiAsrModelList(
     onCredentialsEdited: ((Settings) -> Settings) -> Unit,
 ) {
     val connection = settings.asrCloudConnections
-    key(connection.openAiBaseUrl, connection.openAiApiKey, settings.apiTimeoutSeconds) {
+    key(connection.openAiBaseUrl, connection.openAiApiKey, connection.openAiTransport, settings.apiTimeoutSeconds) {
         var fetchedModels by remember { mutableStateOf<List<String>>(emptyList()) }
         TranslatorConnectionTestPanel(
             inputKey = Unit,
@@ -526,6 +563,88 @@ private fun AsrConnectionField(value: String, label: String, secret: Boolean = f
     if (secret) SecretTextField(value, onValueChange, label = label, modifier = Modifier.fillMaxWidth())
     else OutlinedTextField(value = value, onValueChange = onValueChange, label = { Text(label) }, singleLine = true,
         modifier = Modifier.fillMaxWidth())
+}
+
+@Composable
+private fun RecognitionHintRows(settings: Settings, save: ((Settings) -> Settings) -> Unit,
+    onDraftEdited: ((Settings) -> Settings) -> Unit) {
+    val cap = AsrHintPolicy.capabilities(settings)
+    val hints = settings.asrHints
+    if (settings.asrEngine.isCloud && settings.asrCloudProvider == AsrCloudProvider.OPENAI_COMPATIBLE) {
+        SettingsOptionDropdown(label = stringResource(R.string.settings_asr_hint_mode), value = hints.openAiMode,
+            options = AsrHintMode.entries, optionLabel = { stringResource(when (it) {
+                AsrHintMode.AUTO -> R.string.settings_asr_hint_mode_auto
+                AsrHintMode.PROMPT -> R.string.settings_asr_hint_mode_prompt
+                AsrHintMode.KEYWORDS -> R.string.settings_asr_hint_mode_keywords
+                AsrHintMode.PROMPT_HOTWORDS -> R.string.settings_asr_hint_mode_prompt_hotwords
+            }) }, onValueChange = { value -> save { it.copy(asrHints = it.asrHints.copy(openAiMode = value)) } })
+    }
+    if (cap.prompt) OutlinedTextField(value = hints.prompt,
+        onValueChange = { value -> onDraftEdited { it.copy(asrHints = it.asrHints.copy(prompt = value)) } },
+        label = { Text(stringResource(R.string.settings_asr_hint_prompt)) },
+        modifier = Modifier.fillMaxWidth(), singleLine = false, minLines = 3, maxLines = 6)
+    if (cap.hotwords) {
+        OutlinedTextField(value = hints.hotwords,
+            onValueChange = { value -> onDraftEdited { it.copy(asrHints = it.asrHints.copy(hotwords = value)) } },
+            label = { Text(stringResource(R.string.settings_asr_hotwords)) },
+            placeholder = { Text(stringResource(R.string.settings_asr_hotwords_placeholder)) },
+            modifier = Modifier.fillMaxWidth(), singleLine = false, minLines = 3, maxLines = 6)
+        SwitchRow(label = stringResource(R.string.settings_asr_use_glossary), checked = hints.useGlossary,
+            helpText = stringResource(R.string.settings_asr_use_glossary_help)) { checked ->
+            save { it.copy(asrHints = it.asrHints.copy(useGlossary = checked)) }
+        }
+    }
+    if (cap.vocabulary) AsrConnectionField(hints.vocabularyIds[settings.asrCloudModel.modelId].orEmpty(),
+        stringResource(R.string.settings_asr_vocabulary_id)) { value ->
+        onDraftEdited { it.copy(asrHints = it.asrHints.copy(vocabularyIds = it.asrHints.vocabularyIds +
+            (settings.asrCloudModel.modelId to value))) }
+    }
+}
+
+@Composable
+private fun SegmentationRows(settings: Settings, profile: AsrSegmentationProfile, save: ((Settings) -> Settings) -> Unit) {
+    val durations = settings.asrSegmentation.forProfile(profile)
+    DurationSlider(
+        label = stringResource(R.string.settings_asr_pause_duration),
+        saved = durations.pauseMs,
+        min = AsrSegmentDurations.MIN_PAUSE_MS,
+        max = AsrSegmentDurations.MAX_PAUSE_MS,
+        step = 50,
+        decimals = 2,
+    ) { picked ->
+        save { it.copy(asrSegmentation = it.asrSegmentation.withProfile(profile,
+            it.asrSegmentation.forProfile(profile).copy(pauseMs = picked))) }
+    }
+    DurationSlider(
+        label = stringResource(R.string.settings_asr_max_segment_duration),
+        saved = durations.maxSpeechMs,
+        min = AsrSegmentDurations.MIN_SPEECH_MS,
+        max = AsrSegmentDurations.MAX_SPEECH_MS,
+        step = 1000,
+        decimals = 0,
+    ) { picked ->
+        save { it.copy(asrSegmentation = it.asrSegmentation.withProfile(profile,
+            it.asrSegmentation.forProfile(profile).copy(maxSpeechMs = picked))) }
+    }
+}
+
+/** Same label/slider/save-on-release interaction as the speech history limit below. */
+@Composable
+private fun DurationSlider(label: String, saved: Int, min: Int, max: Int, step: Int, decimals: Int, onSave: (Int) -> Unit) {
+    var value by remember(saved) { mutableFloatStateOf(saved.toFloat()) }
+    Text(stringResource(R.string.settings_asr_duration_value, label,
+        String.format(Locale.getDefault(), "%.${decimals}f", value / 1000f)),
+        style = MaterialTheme.typography.labelLarge)
+    Slider(
+        value = value,
+        onValueChange = { value = it },
+        onValueChangeFinished = {
+            val picked = ((value / step).roundToInt() * step).coerceIn(min, max)
+            if (picked != saved) onSave(picked)
+        },
+        valueRange = min.toFloat()..max.toFloat(),
+        steps = (max - min) / step - 1,
+    )
 }
 
 @Composable

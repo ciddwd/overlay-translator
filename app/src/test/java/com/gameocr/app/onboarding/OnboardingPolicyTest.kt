@@ -215,6 +215,9 @@ class OnboardingPolicyTest {
             Case("en-US", OcrEngineKind.PADDLE_ONNX, PaddleModelVersion.V6_SMALL),
             Case("fr", OcrEngineKind.PADDLE_ONNX, PaddleModelVersion.V6_SMALL),
             Case("ko-KR", OcrEngineKind.PADDLE_ONNX, PaddleModelVersion.V5_KOREAN),
+            Case("ru-RU", OcrEngineKind.PADDLE_ONNX, PaddleModelVersion.V5_ESLAV),
+            Case("be-BY", OcrEngineKind.PADDLE_ONNX, PaddleModelVersion.V5_ESLAV),
+            Case("uk", OcrEngineKind.PADDLE_ONNX, PaddleModelVersion.V5_ESLAV),
         )
 
         cases.forEach { case ->
@@ -228,6 +231,18 @@ class OnboardingPolicyTest {
                 case.expectedPaddleVersion,
                 OnboardingPolicy.recommendedPaddleModelVersion(draft),
             )
+        }
+    }
+
+    @Test
+    fun eastSlavicQuickSetupUsesTheDownloadableLanguageModel_tableDriven() {
+        for (language in listOf("ru", "RU_ru", "be", "uk-UA")) {
+            for (usage in OnboardingUsage.entries) {
+                val draft = OnboardingDraft(sourceLang = language, usage = usage)
+                assertEquals(OcrEngineKind.PADDLE_ONNX, OnboardingPolicy.recommendedOcrEngine(draft))
+                assertEquals(PaddleModelVersion.V5_ESLAV, OnboardingPolicy.recommendedPaddleModelVersion(draft))
+                assertTrue(OnboardingPolicy.needsRecommendedModelsDownload(draft))
+            }
         }
     }
 

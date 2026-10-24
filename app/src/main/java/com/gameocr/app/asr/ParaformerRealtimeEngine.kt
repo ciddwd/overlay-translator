@@ -54,6 +54,7 @@ internal class ParaformerRealtimeEngine(
     private val cloudModel: AsrCloudModel = AsrCloudModel.PARAFORMER,
     private val targetLanguage: String = "zh-CN",
     private val onReady: () -> Unit = {},
+    private val hintSource: AsrHintSource = AsrHintSource(),
 ) : SpeechEngine {
     private val client = client.newBuilder()
         .readTimeout(0, TimeUnit.MILLISECONDS)
@@ -187,7 +188,7 @@ internal class ParaformerRealtimeEngine(
                 val message = when {
                     cloudModel.translatesSpeech -> LiveTranslateProtocol.session(cloudModel, language, targetLanguage)
                     cloudModel.usesRealtimeProtocol -> QwenRealtimeProtocol.session(language)
-                    else -> runTask(id, language, cloudModel)
+                    else -> runTask(id, language, cloudModel, hintSource.current)
                 }
                 if (!webSocket.send(message)) failLocked(myEpoch, "configuration send rejected", false)
             }
@@ -303,7 +304,8 @@ internal class ParaformerRealtimeEngine(
         private const val MAX_CONSECUTIVE_FAILURES = 3
         private const val RETRY_BASE_MS = 1_000L
 
-        internal fun runTask(taskId: String, language: AsrLanguage, model: AsrCloudModel = AsrCloudModel.PARAFORMER): String = buildJsonObject {
+        internal fun runTask(taskId: String, language: AsrLanguage, model: AsrCloudModel = AsrCloudModel.PARAFORMER,
+            hints: AsrRecognitionHints = AsrRecognitionHints()): String = buildJsonObject {
             require(!model.usesRealtimeProtocol)
             putJsonObject("header") {
                 put("action", "run-task")
@@ -327,6 +329,11 @@ internal class ParaformerRealtimeEngine(
                         put("max_sentence_silence", 1300)
                     }
                     if (language != AsrLanguage.AUTO) putJsonArray("language_hints") { add(language.code) }
+                    if (model in setOf(AsrCloudModel.PARAFORMER, AsrCloudModel.FUN_ASR, AsrCloudModel.QWEN_AUDIO_STREAMING) && hints.vocabularyId.isNotBlank())
+                        put("vocabulary_id", hints.vocabularyId)
+                    if (model == AsrCloudModel.QWEN_AUDIO_STREAMING && hints.hotwords.isNotEmpty()) putJsonObject("vocabulary") {
+                        hints.hotwords.forEach { put(it, 4) }
+                    }
                 }
             }
         }.toString()

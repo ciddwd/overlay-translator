@@ -37,7 +37,7 @@ class OpenAiAsrModelsTest {
             val screen = draft.applyTo(saved)
             assertEquals(picked, screen.asrCloudConnections.openAiModel)
             assertEquals(saved, screen.copy(asrCloudConnections = saved.asrCloudConnections))
-            assertEquals("FunAudioLLM/SenseVoiceSmall", saved.asrCloudConnections.openAiModel)
+            assertEquals("", saved.asrCloudConnections.openAiModel)
             assertEquals("speech-key", screen.asrCloudConnections.openAiApiKey)
             assertEquals(saved.model, screen.model)
         }
@@ -54,8 +54,8 @@ class OpenAiAsrModelsTest {
                 .substringBefore("else -> Unit").contains("OpenAiAsrModelList(settings, viewModel, onCredentialsEdited)"),
             "current unsaved speech inputs" to source("ui/SettingsScreen.kt").substringAfter("AsrSettingsSection(")
                 .substringBefore("// —— 译文显示").contains("settings = initialSettings?.let { buildSnapshot() }"),
-            "changing URL, key or timeout clears state and cancels the request" to selector.contains(
-                "key(connection.openAiBaseUrl, connection.openAiApiKey, settings.apiTimeoutSeconds)"),
+            "changing URL, key, protocol or timeout clears state and cancels the request" to selector.contains(
+                "key(connection.openAiBaseUrl, connection.openAiApiKey, connection.openAiTransport, settings.apiTimeoutSeconds)"),
             "shared request panel" to selector.contains("TranslatorConnectionTestPanel("),
             "shared model picker" to selector.contains("TranslatorModelPicker(fetchedModels)"),
             "selected model only changes the speech credential draft" to selector.contains(

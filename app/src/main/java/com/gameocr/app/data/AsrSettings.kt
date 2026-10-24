@@ -21,6 +21,10 @@ enum class AsrWhisperVariant {
 @Serializable
 enum class AsrCloudProvider { ALIYUN, TENCENT, VOLCENGINE, OPENAI_COMPATIBLE }
 
+/** Explicit wire protocol; model-list membership never implies realtime support. */
+@Serializable
+enum class OpenAiAsrTransport { HTTP_TRANSCRIPTION, REALTIME_TRANSCRIPTION }
+
 @Serializable
 enum class TencentAsrModel(val modelId: String, val translatesSpeech: Boolean = false) {
     STANDARD("16k_zh"),
@@ -56,9 +60,15 @@ object VolcAsrResourceSerializer : kotlinx.serialization.KSerializer<VolcAsrReso
 data class AsrCloudConnections(
     val tencentAppId: String = "",
     val volcApiKey: String = "",
-    val openAiBaseUrl: String = "https://api.siliconflow.cn/v1",
+    val openAiBaseUrl: String = "",
     val openAiApiKey: String = "",
-    val openAiModel: String = "FunAudioLLM/SenseVoiceSmall",
+    val openAiModel: String = "",
+    val openAiTransport: OpenAiAsrTransport = OpenAiAsrTransport.HTTP_TRANSCRIPTION,
+    // Retain data from the withdrawn debug-only adapter inside this encrypted record.
+    // These compatibility fields have no UI or request path.
+    val glmBaseUrl: String = "",
+    val glmApiKey: String = "",
+    val glmModel: String = "",
     val tencentModel: TencentAsrModel = TencentAsrModel.GENERAL,
     val volcResource: VolcAsrResource = VolcAsrResource.V2_DURATION,
 ) {

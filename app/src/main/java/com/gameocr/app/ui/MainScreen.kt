@@ -189,6 +189,8 @@ import kotlin.math.abs
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
+    initialCaptureSetupPending: Boolean,
+    onInitialCaptureSetupFinished: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenPresetSettings: () -> Unit,
     onOpenLogs: () -> Unit,
@@ -273,6 +275,12 @@ fun MainScreen(
     var pendingSaveBeforePresetSwitch by remember { mutableStateOf<TranslationPreset?>(null) }
     var pendingPresetSaveName by rememberSaveable { mutableStateOf("") }
     val snackbarHostState = remember { SnackbarHostState() }
+    fun launchSettingsWrite(write: suspend () -> Unit) = scope.launch {
+        runSettingsWrite(
+            onFailure = { snackbarHostState.showSnackbar(context.getString(R.string.settings_storage_save_failed)) },
+            write = write,
+        )
+    }
     val presetNotReadyMessage = stringResource(R.string.main_preset_models_not_ready_message)
     val shareSubject = stringResource(R.string.settings_about_share_subject)
     val shareText = stringResource(
@@ -440,7 +448,7 @@ fun MainScreen(
             confirmButton = {
                 TextButton(onClick = {
                     showClearRegionDialog = false
-                    scope.launch {
+                    launchSettingsWrite {
                         viewModel.clearRegion()
                         region = null
                     }
@@ -493,7 +501,7 @@ fun MainScreen(
 
     // 一键设置的推进逻辑。每一步只在需要时离开应用；回到前台由 ON_RESUME 再次调用。
     fun continueCaptureSetup() {
-        if (captureSetup.busy) return
+        if (!initialCaptureSetupPending || captureSetup.busy) return
         captureSetupActive = true
         scope.launch {
             captureSetup = captureSetup.copy(busy = true)
@@ -590,18 +598,26 @@ fun MainScreen(
             }
         }
     }
-    LaunchedEffect(serviceRunning) {
-        if (serviceRunning && captureSetupActive) {
+    LaunchedEffect(initialCaptureSetupPending) {
+        if (!initialCaptureSetupPending) {
+            captureSetupActive = false
+            captureSetupAwaiting = null
+            captureSetup = CaptureSetupUiState()
+        }
+    }
+    LaunchedEffect(serviceRunning, initialCaptureSetupPending) {
+        if (serviceRunning && initialCaptureSetupPending) {
             captureSetupAwaiting = null
             captureSetup = captureSetup.copy(start = CaptureSetupStepState.DONE)
-            delay(CAPTURE_SETUP_FINISH_HOLD_MS)
+            if (captureSetupActive) delay(CAPTURE_SETUP_FINISH_HOLD_MS)
             captureSetupActive = false
             captureSetup = CaptureSetupUiState()
+            onInitialCaptureSetupFinished()
         }
     }
 
     val applyPresetNow: (TranslationPreset) -> Unit = { preset ->
-        scope.launch {
+        launchSettingsWrite {
             if (!viewModel.applyTranslationPreset(preset.id)) {
                 presetModelIssues = viewModel.presetModelIssues(presets)
                 snackbarHostState.showSnackbar(presetNotReadyMessage)
@@ -708,7 +724,7 @@ fun MainScreen(
                         } ?: return@TextButton
                         pendingSaveBeforePresetSwitch = null
                         pendingPresetSaveName = ""
-                        scope.launch {
+                        launchSettingsWrite {
                             if (!viewModel.saveTranslationPresetAndApply(
                                     presetToSave = presetToSave,
                                     targetId = target.id,
@@ -777,7 +793,7 @@ fun MainScreen(
                 onPageChanged = onCarouselPageChanged,
                 showDiscoveryHint =
                     captureGallerySeen == false &&
-                        !(!showCaptureControls || captureSetupActive) &&
+                        !initialCaptureSetupPending &&
                         mainGestureGuidesEnabled,
                 onCarouselSeen = {
                     if (captureGallerySeen != true) {
@@ -786,13 +802,14 @@ fun MainScreen(
                     }
                 },
                 capturePage = { pageModifier, onNaturalHeightChanged ->
-                    // 主操作：截屏服务。未授权悬浮窗且 Shizuku 不可直接授权时进入一键设置。
+                    // 三步引导只由首次设置记录控制，权限缺失保留正常卡片的授权入口。
                     val modeLabel = captureStartModeLabel(startMode)
                     CaptureServiceCard(
                         modifier = pageModifier,
                         onNaturalHeightChanged = onNaturalHeightChanged,
-                        showSetup = !showCaptureControls || captureSetupActive,
+                        showSetup = initialCaptureSetupPending,
                         setup = captureSetup,
+                        startAvailable = showCaptureControls,
                         serviceRunning = serviceRunning,
                         overlayGranted = canDrawOverlay,
                         batteryOk = batteryOk,

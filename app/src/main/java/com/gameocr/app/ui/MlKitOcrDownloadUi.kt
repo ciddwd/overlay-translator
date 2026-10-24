@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -25,6 +26,12 @@ internal fun rememberMlKitOcrDownloadSession(download: suspend () -> Unit): MlKi
     val session = remember(scope) { MlKitOcrDownloadSession(scope) { currentDownload() } }
     DisposableEffect(session) { onDispose { session.reset() } }
     return session
+}
+
+@Composable
+internal fun MlKitOcrDownloadControl(session: MlKitOcrDownloadSession) {
+    val state by session.state.collectAsState()
+    MlKitOcrDownloadFeedback(state) { session.cancel(state.requestId) }
 }
 
 @Composable

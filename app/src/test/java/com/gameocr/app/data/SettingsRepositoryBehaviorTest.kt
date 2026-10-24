@@ -15,6 +15,50 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Test
 
 class SettingsRepositoryBehaviorTest {
+    @Test fun speechHintsAndCredentialsSurviveReopeningWithoutChangingOtherSettings() = runBlocking {
+        val root = Files.createTempDirectory("speech-hints-settings").toFile()
+        val repository = fileBackedRepository(root)
+        assertEquals(AsrHintSettings(), repository.get().asrHints)
+        val hints = AsrHintSettings("medical course", "Winterfell\nStark", true, AsrHintMode.KEYWORDS,
+            mapOf(AsrCloudModel.PARAFORMER.modelId to "vocab-id"))
+        repository.update { it.copy(asrHints = hints, asrCloudProvider = AsrCloudProvider.OPENAI_COMPATIBLE,
+            asrCloudConnections = it.asrCloudConnections.copy(openAiApiKey = "asr-key",
+                openAiBaseUrl = "https://speech.example/v1", openAiModel = "test-model"), apiTimeoutSeconds = 43) }
+        val restored = fileBackedRepository(root).get()
+        assertEquals(hints, restored.asrHints)
+        assertEquals(AsrCloudProvider.OPENAI_COMPATIBLE, restored.asrCloudProvider)
+        assertEquals("asr-key", restored.asrCloudConnections.openAiApiKey)
+        assertEquals(43, restored.apiTimeoutSeconds)
+    }
+
+    @Test fun speechSegmentationDefaultsAndIndependentProfilesSurviveReopening() = runBlocking {
+        val root = Files.createTempDirectory("speech-segmentation-settings").toFile()
+        val repository = fileBackedRepository(root)
+        assertEquals(AsrSegmentationSettings(), repository.get().asrSegmentation)
+        val profiles = AsrSegmentationSettings(
+            onDevice = AsrSegmentDurations(450, 9000), zipformer = AsrSegmentDurations(800, 12000),
+            http = AsrSegmentDurations(250, 3000), realtime = AsrSegmentDurations(500, 7000))
+        repository.update { it.copy(asrSegmentation = profiles, apiTimeoutSeconds = 43) }
+        val restored = fileBackedRepository(root).get()
+        assertEquals(profiles, restored.asrSegmentation)
+        assertEquals(43, restored.apiTimeoutSeconds)
+        repository.update { it.copy(asrSegmentation = profiles.copy(http = AsrSegmentDurations(-1, Int.MAX_VALUE))) }
+        assertEquals(profiles.copy(http = AsrSegmentDurations(200, 15000)), fileBackedRepository(root).get().asrSegmentation)
+    }
+
+    @Test fun ocrNoTextHintDefaultsVisibleAndPreferenceSurvivesReopening() = runBlocking {
+        val root = Files.createTempDirectory("ocr-no-text-hint-settings-test").toFile()
+        val repository = fileBackedRepository(root)
+        assertEquals(false, repository.get().hideOcrNoTextHint)
+        for (enabled in listOf(true, false, true)) {
+            repository.update { it.copy(hideOcrNoTextHint = enabled) }
+            repository.update { it.copy(apiTimeoutSeconds = 43) }
+            val restored = fileBackedRepository(root).get()
+            assertEquals(enabled, restored.hideOcrNoTextHint)
+            assertEquals(43, restored.apiTimeoutSeconds)
+        }
+    }
+
     @Test fun manualCredentialsCommitTogetherAndSurviveReopeningWithoutWaitingForDebounce() = runBlocking {
         val root = Files.createTempDirectory("manual-credentials-save-test").toFile()
         val repository = fileBackedRepository(root)
@@ -43,11 +87,14 @@ class SettingsRepositoryBehaviorTest {
             openAiBaseUrl = "https://asr.example/v1", openAiModel = "asr-model",
             tencentModel = TencentAsrModel.SPEAKER, volcResource = VolcAsrResource.V2_CONCURRENT)
         AsrCloudProvider.entries.forEach { provider ->
-            repository.update { it.copy(asrCloudProvider = provider, asrCloudConnections = connections) }
-            repository.update { it.copy(apiTimeoutSeconds = 43) }
-            val restored = fileBackedRepository(root).get()
-            assertEquals(provider, restored.asrCloudProvider)
-            assertEquals(connections, restored.asrCloudConnections)
+            OpenAiAsrTransport.entries.forEach { transport ->
+                val selected = connections.copy(openAiTransport = transport)
+                repository.update { it.copy(asrCloudProvider = provider, asrCloudConnections = selected) }
+                repository.update { it.copy(apiTimeoutSeconds = 43) }
+                val restored = fileBackedRepository(root).get()
+                assertEquals(provider, restored.asrCloudProvider)
+                assertEquals(selected, restored.asrCloudConnections)
+            }
         }
     }
     @Test fun quickPanelPreferenceSurvivesReopeningAndUnrelatedSaves_tableDriven() = runBlocking {

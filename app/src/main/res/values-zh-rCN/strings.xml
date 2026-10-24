@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="settings_storage_save_failed">设置保存失败，原数据已保留。请重试。</string>
     <string name="settings_engine_local_index_translate">Index-Translate-2B</string>
     <string name="settings_engine_local_qwen3">Qwen3-0.6B</string>
     <string name="settings_ocr_chip_devanagari">天城文</string>
@@ -363,7 +364,7 @@
     <string name="settings_about_share_action">分享屏译</string>
     <string name="settings_about_share_chooser">分享屏译</string>
     <string name="settings_about_share_subject">屏译 Screen Translator｜开源免费的屏幕翻译工具</string>
-    <string name="settings_about_share_text">屏译 Screen Translator 是一款开源免费的屏幕翻译 / OCR 工具。\n特别适合外文论坛、跨境购物与交易平台、漫画和游戏等缺少内置翻译的场景。\n支持悬浮窗截图翻译、区域与全屏识别、循环翻译、漫画模式，以及离线和云端 LLM 翻译；还可划词翻译、查看词形与同义词，并使用 TTS 朗读。\n最新版下载：%1$s\n开源项目：%2$s\n请从官方发布渠道下载，谨防付费倒卖。</string>
+    <string name="settings_about_share_text">屏译 Screen Translator 是一款开源免费的屏幕翻译 / OCR 工具。\n适合外文论坛、跨境购物与交易平台、漫画、游戏和视频等场景。\n\n支持悬浮窗截图翻译、区域与全屏识别、循环翻译、漫画模式，以及离线和云端 LLM 翻译；支持视频与游戏对白实时翻译，以双语对照悬浮字幕显示原文和译文，没有原字幕也能使用。还支持输入翻译、划词查词、查看词形与同义词，以及 TTS 朗读。\n\n官网：https://overlaytranslator.top/\n最新版下载：%1$s\n开源项目：%2$s\n\n请从官方发布渠道下载，谨防付费倒卖。</string>
     <string name="main_share_prompt_title">愿意把屏译推荐给朋友吗？</string>
     <string name="main_share_prompt_message">如果屏译对你有帮助，欢迎推荐给同样有翻译需求的朋友。</string>
     <string name="main_share_prompt_confirm">分享给朋友</string>
@@ -915,6 +916,8 @@
     <string name="settings_batch_cumulative_completion_time_hint">开启后，翻译日志显示从整批开始到当前条完成的累计时间；关闭时显示单条或单个原生批组耗时。</string>
     <string name="settings_ocr_screenshot_saving_label">保存 OCR 截图</string>
     <string name="settings_ocr_screenshot_saving_hint">保存 OCR 使用的截图并关联到运行日志；使用日漫 OCR 时还会保存 OCR 四边形、文字擦除蒙版和气泡内部蒙版，供原型验证。每个应用进程最多保存 8 张截图和 4 组三层蒙版。</string>
+    <string name="settings_hide_ocr_no_text_hint_label">隐藏 OCR 无有效文字提示</string>
+    <string name="settings_hide_ocr_no_text_hint_hint">不显示低置信度或未识别到有效文字时的红色错误提示。</string>
     <string name="settings_disable_translation_cache_label">禁用翻译缓存</string>
     <string name="settings_disable_translation_cache_hint">性能测试时始终执行真实翻译请求，不读取或写入内存译文缓存。</string>
     <string name="settings_ocr_red_box_mode_label">OCR 红框模式</string>
@@ -937,6 +940,9 @@
     <string name="paddle_version_v5_mobile">PP-OCRv5 mobile</string>
     <string name="paddle_version_v5_mobile_desc">约 20MB 约 530 万参数 4 种语言</string>
     <string name="paddle_version_v5_mobile_languages">简体中文、繁体中文、英文、日文</string>
+    <string name="paddle_version_v5_eslav">PP-OCRv5 东斯拉夫语</string>
+    <string name="paddle_version_v5_eslav_desc">支持俄语、白俄罗斯语、乌克兰语和英语。</string>
+    <string name="paddle_version_v5_eslav_languages">俄语、白俄罗斯语、乌克兰语、英语</string>
     <string name="paddle_version_v5_korean">PP-OCRv5 韩文</string>
     <string name="paddle_version_v5_korean_desc">约 18MB 针对韩文优化 2 种语言</string>
     <string name="paddle_version_v5_korean_languages">韩文、英文</string>
@@ -1057,7 +1063,7 @@
     <string name="settings_manga_ocr_btn_delete">删除</string>
     <string name="settings_manga_ocr_status_ready_format">日漫 OCR 模型已就绪 ✓ (%1$d MB)</string>
     <string name="settings_manga_ocr_status_faster_available_format">可下载加速解码文件：再下载 %1$d MB 可加快日漫 OCR。</string>
-    <string name="settings_manga_ocr_btn_download_faster">下载加速解码</string>
+    <string name="settings_manga_ocr_btn_download_faster">补充下载</string>
     <string name="settings_manga_ocr_faster_failed">日漫 OCR 已可用，但加速解码文件下载失败，请稍后重试。</string>
     <string name="settings_manga_ocr_status_missing">日漫 OCR 模型未下载</string>
     <string name="settings_manga_ocr_status_missing_hint">日漫 OCR 模型未下载。请使用网络里的下载源自动下载，或从手机文件本地导入。</string>
@@ -2411,6 +2417,8 @@
     <string name="settings_asr_note_zipformer">支持普通话和英语。</string>
     <string name="settings_asr_note_general">可用语言取决于模型或服务商。</string>
     <string name="settings_asr_max_records">语音记录显示条数</string>
+    <string name="settings_asr_pause_duration">断句停顿（秒）</string>
+    <string name="settings_asr_max_segment_duration">单段最长时长（秒）</string>
     <string name="settings_asr_max_records_format">语音记录显示条数：%1$d</string>
     <string name="settings_asr_import">导入模型文件</string>
     <string name="settings_asr_importing">正在导入…</string>
@@ -2423,6 +2431,9 @@
     <string name="settings_asr_group_cloud">云端识别</string>
     <string name="settings_asr_aliyun">阿里云</string>
     <string name="settings_asr_openai">OpenAI 兼容</string>
+    <string name="settings_asr_protocol">接口协议</string>
+    <string name="settings_asr_protocol_file">音频文件转写</string>
+    <string name="settings_asr_protocol_realtime">实时语音识别</string>
     <string name="settings_asr_group_audio_api">云端音频接口</string>
     <string name="settings_asr_tencent_app_id">腾讯云 AppID</string>
     <string name="asr_error_cloud_configuration_incomplete">音频接口尚未配置完整，请检查服务地址、模型和密钥。</string>
@@ -2524,4 +2535,16 @@
     <string name="gesture_motion_unavailable">当前设备无法使用动作唤起，请点击主球或从侧边滑入</string>
     <string name="gesture_trigger_function">触发后执行</string>
     <string name="gesture_wake_executed">触发对应功能</string>
+    <string name="settings_asr_hint_prompt">Prompt</string>
+    <string name="settings_asr_hint_mode">提示支持方式</string>
+    <string name="settings_asr_hint_mode_auto">自动</string>
+    <string name="settings_asr_hint_mode_prompt">仅 Prompt</string>
+    <string name="settings_asr_hint_mode_keywords">Prompt 与关键词</string>
+    <string name="settings_asr_hint_mode_prompt_hotwords">通过 Prompt 传递热词</string>
+    <string name="settings_asr_vocabulary_id">热词表 ID</string>
+    <string name="settings_asr_hotwords">识别热词</string>
+    <string name="settings_asr_hotwords_placeholder">一行一个</string>
+    <string name="settings_asr_use_glossary">使用术语表辅助识别</string>
+    <string name="settings_asr_use_glossary_help">使用已启用词条的原文词，辅助识别人名、地名和专有名词。按当前应用和识别语言筛选，译文仍由翻译设置处理。</string>
+    <string name="settings_asr_duration_value">%1$s：%2$s</string>
 </resources>

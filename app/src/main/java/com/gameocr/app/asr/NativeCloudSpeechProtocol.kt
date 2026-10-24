@@ -27,7 +27,8 @@ internal data class NativeSpeechPacket(
  */
 internal object TencentSpeechProtocol {
     const val MODEL = "16k_zh_en_2.0"
-    fun request(config: AsrCloudConnections, voice: String, now: Long, nonce: Int, secretId: String, secretKey: String, language: com.gameocr.app.data.AsrLanguage = com.gameocr.app.data.AsrLanguage.ZH): Request {
+    fun request(config: AsrCloudConnections, voice: String, now: Long, nonce: Int, secretId: String, secretKey: String, language: com.gameocr.app.data.AsrLanguage = com.gameocr.app.data.AsrLanguage.ZH,
+        hints: AsrRecognitionHints = AsrRecognitionHints()): Request {
         require(!config.tencentModel.translatesSpeech)
         require(config.tencentAppId.trim().matches(Regex("[0-9]+")))
         val params = sortedMapOf(
@@ -40,6 +41,7 @@ internal object TencentSpeechProtocol {
             if (language in listOf(com.gameocr.app.data.AsrLanguage.ZH, com.gameocr.app.data.AsrLanguage.EN)) params["vad_silence_time"] = "1300"
             if (language == com.gameocr.app.data.AsrLanguage.ZH) params["max_speak_time"] = "10000"
         }
+        if (hints.hotwords.isNotEmpty()) params["hotword_list"] = hints.hotwords.joinToString(",") { "$it|5" }
         return signedRequest("asr.cloud.tencent.com/asr/v2/${config.tencentAppId.trim()}", params, secretKey)
     }
 
@@ -93,7 +95,7 @@ internal object VolcSpeechProtocol {
         .header("X-Api-Key", apiKey.trim()).header("X-Api-Resource-Id", resource)
         .header("X-Api-Request-Id", id).build()
 
-    fun configuration(sequence: Int = 1): ByteString = frame(0x11, 0x11, buildJsonObject {
+    fun configuration(sequence: Int = 1, hints: AsrRecognitionHints = AsrRecognitionHints()): ByteString = frame(0x11, 0x11, buildJsonObject {
         putJsonObject("user") { put("uid", "overlay-translator") }
         putJsonObject("audio") {
             put("format", "pcm"); put("codec", "raw"); put("rate", 16000); put("bits", 16); put("channel", 1)
@@ -103,6 +105,17 @@ internal object VolcSpeechProtocol {
             put("show_utterances", true); put("enable_nonstream", true)
             // Allow sentence-internal pauses, matching the restored Paraformer setting.
             put("end_window_size", 1300)
+            if (hints.prompt.isNotBlank() || hints.hotwords.isNotEmpty()) putJsonObject("corpus") {
+                put("context", buildJsonObject {
+                    if (hints.hotwords.isNotEmpty()) putJsonArray("hotwords") {
+                        hints.hotwords.forEach { word -> add(buildJsonObject { put("word", word) }) }
+                    }
+                    if (hints.prompt.isNotBlank()) {
+                        put("context_type", "dialog_ctx")
+                        putJsonArray("context_data") { add(buildJsonObject { put("text", hints.prompt) }) }
+                    }
+                }.toString())
+            }
         }
     }.toString().toByteArray(), sequence)
 

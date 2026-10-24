@@ -5,6 +5,7 @@ import com.gameocr.app.R
 import com.gameocr.app.data.AsrLanguagePolicy
 import com.gameocr.app.data.Settings
 import com.gameocr.app.data.AsrCloudProvider
+import com.gameocr.app.data.AsrSegmentationPolicy
 
 internal enum class SpeechStartBlock(@StringRes val message: Int) {
     CLOUD_LANGUAGE_UNSUPPORTED(R.string.asr_error_cloud_parameters),
@@ -40,7 +41,8 @@ internal object SpeechStartPolicy {
                 settings.tencentSecretId.isNotBlank() && settings.tencentSecretKey.isNotBlank()
             AsrCloudProvider.VOLCENGINE -> it.volcApiKey.isNotBlank()
             AsrCloudProvider.OPENAI_COMPATIBLE -> it.openAiApiKey.isNotBlank() && it.openAiModel.isNotBlank() &&
-                OpenAiAsrProtocol.endpoint(it.openAiBaseUrl) != null
+                (if (it.openAiTransport == com.gameocr.app.data.OpenAiAsrTransport.REALTIME_TRANSCRIPTION)
+                    OpenAiRealtimeAsrProtocol.endpoint(it.openAiBaseUrl) else OpenAiAsrProtocol.endpoint(it.openAiBaseUrl)) != null
         }
     }
 
@@ -48,22 +50,25 @@ internal object SpeechStartPolicy {
     fun engineKey(settings: Settings): String {
         val model = AsrModelId.forSettings(settings.asrEngine, settings.asrWhisperVariant)
         val language = AsrLanguagePolicy.effective(settings.asrEngine, settings.asrLanguage, settings.asrCloudModel, settings.asrCloudProvider, settings.asrCloudConnections).code
+        val hintKey = if (com.gameocr.app.data.AsrHintPolicy.capabilities(settings).available)
+            ":${settings.asrHints.hashCode()}:${settings.foregroundAppDetectionMode}" else ""
+        val segmentation = AsrSegmentationPolicy.durations(settings)?.let { ":${it.pauseMs}:${it.maxSpeechMs}" }.orEmpty() + hintKey
         if (settings.asrEngine.isCloud && settings.asrCloudProvider != AsrCloudProvider.ALIYUN) {
             val connection = settings.asrCloudConnections
             val selected = when (settings.asrCloudProvider) {
                 AsrCloudProvider.TENCENT -> listOf(connection.tencentAppId.trim(), settings.tencentSecretId.trim(), settings.tencentSecretKey.trim(), connection.tencentModel.modelId,
                     if (connection.tencentModel.translatesSpeech) com.gameocr.app.data.TencentSpeechLanguagePolicy.target(settings.targetLang) else "")
                 AsrCloudProvider.VOLCENGINE -> listOf(connection.volcApiKey.trim(), connection.volcResource.resourceId)
-                AsrCloudProvider.OPENAI_COMPATIBLE -> listOf(connection.openAiBaseUrl.trim(), connection.openAiApiKey.trim(), connection.openAiModel.trim())
+                AsrCloudProvider.OPENAI_COMPATIBLE -> listOf(connection.openAiBaseUrl.trim(), connection.openAiApiKey.trim(), connection.openAiModel.trim(), connection.openAiTransport.name)
                 else -> emptyList()
             }
-            return "${settings.asrCloudProvider.name}:$language:${selected.hashCode()}"
+            return "${settings.asrCloudProvider.name}:$language:${selected.hashCode()}$segmentation"
         }
         // The key is only compared, never logged with its value; a hash marks a changed key.
         val credential = if (settings.asrEngine.isCloud) ":" + settings.asrDashScopeApiKey.trim().hashCode() else ""
         val cloudModel = if (settings.asrEngine.isCloud) ":${settings.asrCloudModel.modelId}" else ""
         val target = if (settings.asrEngine.isCloud && settings.asrCloudModel.translatesSpeech)
             ":${settings.targetLang.trim()}" else ""
-        return "${model?.name ?: settings.asrEngine.name}$cloudModel:$language$credential$target"
+        return "${model?.name ?: settings.asrEngine.name}$cloudModel:$language$credential$target$segmentation"
     }
 }

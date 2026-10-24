@@ -42,6 +42,8 @@ For games, manga, and visual novels, tap the floating ball to recognize on-scree
 
 ### 🎬 Live video translation
 
+This is an initial implementation. Recognition accuracy, segmentation, subtitle latency, and service compatibility are still being improved; see the roadmap below.
+
 - **Bilingual subtitles from playback audio**: recognize dialogue playing in a video or game and display the source text and translation together as floating subtitles, even when the video has no subtitles
 - **Use the same floating ball**: switch to **Speech recognition** mode, tap to start, and tap again to pause or resume. Long-press still opens the existing menu
 - **On-device or online recognition**: choose SenseVoice, Zipformer, or Whisper after downloading the corresponding model, or configure Alibaba Cloud, Tencent, Volcengine, or an OpenAI-compatible transcription service. Recognized text uses your selected translation configuration
@@ -60,12 +62,12 @@ For games, manga, and visual novels, tap the floating ball to recognize on-scree
 
 ### 🔍 OCR (read the text on screen)
 
-- **On-device**: ML Kit (CJK + Latin) / PaddleOCR / manga OCR — your screenshots never leave the phone; works offline; PaddleOCR supports multiple v5/v6 tiers, with PP-OCRv5 Korean available as a separate choice
+- **On-device**: ML Kit (CJK + Latin) / PaddleOCR / manga OCR — your screenshots never leave the phone; works offline; PaddleOCR supports multiple v5/v6 tiers, with separate PP-OCRv5 Korean and East Slavic models (Russian, Belarusian, Ukrainian, and English)
 - **Automatic OCR settings**: manage recognition methods by language, add languages, choose their models, and check download status
 - **Local HTTP OCR**: connect to Umi-OCR / LunaTranslator services on your LAN or PC
 - **Cloud**: PP-OCRv6 Online (PaddleOCR AI Studio) / Baidu / Tencent / Youdao — fall back to these when on-device OCR misreads; PP-OCRv6 Online requires an AI Studio Access Token
 - When you switch source language, the app checks whether the current OCR engine can read it; if not, it suggests a better one
-- First-run setup matches Japanese, Korean, Chinese, and English with the corresponding OCR; other source languages default to recommending PaddleOCR v5 mobile
+- First-run setup matches Japanese, Korean, Russian, Belarusian, Ukrainian, Chinese, and English with the corresponding OCR; other source languages default to recommending PaddleOCR v5 mobile
 - Optional orientation detection can route horizontal / vertical / rotated text to a better OCR path, or you can lock the direction manually
 - PaddleOCR, manga OCR, and orientation models select 1 / 2 / 4 / 6 CPU inference threads from the device's available cores, capped at 6
 
@@ -257,9 +259,13 @@ Optional:
 
 ### Live video translation
 
-1. In **Speech recognition** settings, choose the recognition method and language, download an on-device model or configure an online service, and set the translation target language
+1. In **Speech recognition** settings, choose the recognition method and language, download an on-device model or enter the configuration required by your online service, and set the translation target language
 2. Start the capture service and switch to **Speech recognition** through the arc menu or Quick panel
 3. Play a video, tap the floating ball, and grant the requested permissions to see bilingual subtitles. Tap again to pause or resume
+
+If your online service supports it, choose **Realtime speech recognition**.
+
+In **Advanced**, adjust pauses, segment length, and subtitle history, or use Prompt, hotwords, or your glossary to help recognition.
 
 If no text appears, check that the video is playing audio and that the selected model or service supports its language. Some players restrict audio capture.
 
@@ -289,7 +295,8 @@ Open the app and tap **Settings**. The top of the settings page lets you switch 
 | **On-device** ML Kit (auto / latin / ja / zh / ko) | Default; Japanese / Chinese / Korean / Latin | Offline, on-device |
 | **On-device** PaddleOCR PP-OCRv5 / v6 | Multilingual dense text, UI buttons, horizontal Chinese / English | Supports v5 mobile and v6 tiny / small / medium; models must be ready — see below |
 | **On-device** PP-OCRv5 Korean | Korean text | A separate Korean recognition model selectable in Settings; download the model before first use |
-| **On-device** manga OCR | Japanese manga, vertical bubbles, hand-drawn fonts | Uses manga-ocr ONNX and reuses DBNet detection; ~140 MB, downloadable or importable |
+| **On-device** PP-OCRv5 East Slavic | Russian, Belarusian, Ukrainian, and English text | A separate recognition model, prioritized for the corresponding source languages; download the model before first use |
+| **On-device** manga OCR | Japanese manga, vertical bubbles, hand-drawn fonts | Uses manga-ocr ONNX and reuses DBNet detection; ~205 MB including an INT8 draft decoder, downloadable or importable |
 | **Local HTTP** Umi-OCR | You already run [Umi-OCR](https://github.com/hiroi-sora/Umi-OCR) on a PC / LAN server | Point the app at `http://<host>:<port>/api/ocr`; screenshots stay on your LAN |
 | **Local HTTP** LunaTranslator | You already run [LunaTranslator](https://github.com/HIllya51/LunaTranslator) OCR on a PC / LAN server | Fill in the LunaTranslator OCR HTTP endpoint |
 | **Cloud** PP-OCRv6 Online | Chinese, Japanese, and Latin-script languages | Uses the PaddleOCR AI Studio asynchronous `PP-OCRv6` jobs API; requires an AI Studio Access Token |
@@ -372,6 +379,8 @@ On this sample, ML Kit produced the first real translation about 1.74 s sooner a
 **PaddleOCR models**: the first use requires a download or local import. The default is **PP-OCRv5 mobile**. You can switch versions to suit the screen and language:
 
 - **v5 mobile**: the default, supporting Simplified Chinese, Traditional Chinese, English, and Japanese
+- **v5 Korean**: a separate Korean recognition model
+- **v5 East Slavic**: supports Russian, Belarusian, Ukrainian, and English
 - **v6 tiny**: the smallest and fastest, with many Latin-script languages but no Japanese support
 - **v6 small**: a balance of speed and accuracy, with Japanese support
 - **v6 medium**: larger and slower, for faster devices where a longer wait is acceptable
@@ -572,7 +581,7 @@ Manage lookup options in **Translation library → Dictionary library**:
 | Feature | What users can do |
 |---|---|
 | **Floating translation** | Tap the floating ball over a game, manga, or visual novel and show translations beside the source or in a separate floating window |
-| **Live video translation** | Recognize dialogue playing in videos or games and show the source text and translation together as bilingual floating subtitles; choose on-device or online recognition and pause / resume as needed |
+| **Live video translation (initial implementation)** | Recognize dialogue playing in videos or games and show the source text and translation together as bilingual floating subtitles; choose on-device or online recognition and pause / resume as needed, with recognition and subtitle usability still being improved |
 | **Input translation** | Single-tap the floating ball to translate input-field text into the preset's source language; double-tap for your choice of full-screen or word-pick translation |
 | **Quick panel and gestures** | Six modes, four shortcuts, language controls, and eight independently configurable gesture bindings |
 | **Local model management** | Download or import GGUF files, configure each model, and compare translations using the same source text |
@@ -580,7 +589,7 @@ Manage lookup options in **Translation library → Dictionary library**:
 | **Batch image translation** | Select multiple saved images and let the task continue after leaving the page; review progress, source text, and translations, then save translated images with the task's text style |
 | **Adapt to screen** | Choose colors, background, and text size automatically; comic scenes use bundled bubble detection, source-text erasure, local repair, and shape-aware layout with a safe fallback |
 | **Automatic loop** | Translate when the screen settles by default, or at fixed intervals or after text completion; skip unchanged scenes and configure the dialogue region |
-| **Multiple OCR choices** | Use on-device ML Kit / PaddleOCR / manga OCR, including a separate PP-OCRv5 Korean option; connect to OCR on your LAN, or use Baidu, Tencent, Youdao, and PP-OCRv6 Online |
+| **Multiple OCR choices** | Use on-device ML Kit / PaddleOCR / manga OCR, including separate PP-OCRv5 Korean and East Slavic options; connect to OCR on your LAN, or use Baidu, Tencent, Youdao, and PP-OCRv6 Online |
 | **Horizontal and vertical text** | Detect rotated, horizontal, and vertical manga text; follow the recognized layout or manually choose layout and reading direction |
 | **Screen orientation correction** | For situations where the picture's orientation differs from the device's orientation |
 | **Multiple translators** | Google ML Kit, local GGUF models, OpenAI / Anthropic-compatible services, DeepL, NiuTrans, Google, Volcengine, Baidu, Tencent, and Youdao PicTrans |
@@ -602,13 +611,14 @@ These are user-facing improvements we want to continue working on, not a fixed r
 
 | Direction | Intended experience |
 |---|---|
+| **Ongoing speech recognition and video translation improvements** | Build on the initial implementation to improve recognition accuracy, natural segmentation, subtitle latency and display, on-device models, online services, and realtime protocol compatibility, along with stability, battery use, and heat during long sessions |
 | **Floating translation history** | Revisit screens and dialogue translated with the floating ball instead of losing the last line after switching scenes |
 | **Character and speaker recognition** | Better identify who is speaking, reduce mistakes in names, relationships, and pronouns, and make ongoing dialogue sound more natural |
 | **Long-term on-device model improvements** | Keep improving downloads, startup time, memory use, heat, battery life, and device compatibility across all on-device models, while exploring speech and more features that can run locally on phones |
 | **System assistant and agent integration** | Track [Android AppFunctions](https://developer.android.com/ai/appfunctions) and [A2A](https://a2a-protocol.org/latest/), then explore starting translation, speech, and common actions through system assistants or other agents as platform support matures |
 | **Deeper accessibility** | Make full-screen OCR text and dynamic translations individually navigable with a screen reader |
 
-On-device model improvements are an ongoing plan that will progress over time as models and phones change, rather than a one-release task.
+Speech recognition, video translation, and on-device model improvements are ongoing plans that will progress as models, services, and phones change, rather than one-release tasks.
 
 ## 🤝 Contributing
 
@@ -702,9 +712,9 @@ Write the subject in either English or Chinese — **don't mix in one line**. Ke
 
 ### Translation Contributors
 
-| Language | Coverage at contribution | Contributor | Source |
+| Language | Current coverage | Contributor | Source |
 | --- | --- | --- | --- |
-| Arabic (العربية) | **81.9% (1,985 / 2,425)** | [Maxaseel](https://github.com/Maxaseel) | [Issue #31](https://github.com/ciddwd/overlay-translator/issues/31) |
+| Arabic (العربية) | **80.6% (1,985 / 2,463)** | [Maxaseel](https://github.com/Maxaseel) | [Issue #31](https://github.com/ciddwd/overlay-translator/issues/31) |
 
 ### Contributors
 

@@ -26,6 +26,7 @@ internal class NativeCloudSpeechEngine(
     private val tencentSecretKey: String = "",
     private val language: com.gameocr.app.data.AsrLanguage = com.gameocr.app.data.AsrLanguage.ZH,
     private val targetLanguage: String = "zh",
+    private val hintSource: AsrHintSource = AsrHintSource(),
 ) : SpeechEngine {
     private val client = client.newBuilder().readTimeout(0, TimeUnit.MILLISECONDS)
         .pingInterval(20, TimeUnit.SECONDS).followRedirects(false).build()
@@ -119,7 +120,7 @@ internal class NativeCloudSpeechEngine(
             val nonce = Random.nextInt(1, Int.MAX_VALUE)
             if (config.tencentModel.translatesSpeech) TencentSpeechTranslationProtocol.request(config, id, now, nonce,
                 tencentSecretId, tencentSecretKey, language, targetLanguage)
-            else TencentSpeechProtocol.request(config, id, now, nonce, tencentSecretId, tencentSecretKey, language)
+            else TencentSpeechProtocol.request(config, id, now, nonce, tencentSecretId, tencentSecretKey, language, hintSource.current)
         } else VolcSpeechProtocol.request(config.volcApiKey, id, config.volcResource.resourceId)
         connectedAt = SystemClock.elapsedRealtime()
         readinessAnnounced = false
@@ -130,7 +131,7 @@ internal class NativeCloudSpeechEngine(
             override fun onOpen(webSocket: WebSocket, response: Response) = synchronized(lock) {
                 if (ownEpoch != epoch || closed) return@synchronized
                 if (provider == AsrCloudProvider.VOLCENGINE) {
-                    if (!webSocket.send(VolcSpeechProtocol.configuration(sequence++))) failLocked(ownEpoch, null, false)
+                    if (!webSocket.send(VolcSpeechProtocol.configuration(sequence++, hintSource.current))) failLocked(ownEpoch, null, false)
                     else ready = true
                 }
                 Timber.i("[asr-native] connected provider=%s epoch=%d", provider, ownEpoch)

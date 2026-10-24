@@ -2,6 +2,8 @@ package com.gameocr.app.asr
 
 import com.gameocr.app.data.AsrCloudConnections
 import com.gameocr.app.data.AsrLanguage
+import com.gameocr.app.data.OpenAiAsrTransport
+import com.gameocr.app.data.AsrHintMode
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlinx.serialization.json.*
@@ -33,19 +35,27 @@ internal object OpenAiAsrProtocol {
         return SpeechTextPolicy.clean(text)
     }
 
-    fun modelsEndpoint(base: String): HttpUrl? = endpoint(base)?.let { transcription ->
-        transcription.newBuilder()
-            .encodedPath(transcription.encodedPath.removeSuffix("/audio/transcriptions") + "/models")
-            .build()
+    fun modelsEndpoint(base: String, transport: OpenAiAsrTransport = OpenAiAsrTransport.HTTP_TRANSCRIPTION): HttpUrl? {
+        val realtime = transport == OpenAiAsrTransport.REALTIME_TRANSCRIPTION
+        val transcription = (if (realtime) OpenAiRealtimeAsrProtocol.endpoint(base) else endpoint(base)) ?: return null
+        return transcription.newBuilder()
+            .encodedPath(transcription.encodedPath.removeSuffix(if (realtime) "/realtime" else "/audio/transcriptions") + "/models")
+            .query(null).build()
     }
 
-    fun request(config: AsrCloudConnections, language: AsrLanguage, pcm: ByteArray): Request = Request.Builder()
+    fun request(config: AsrCloudConnections, language: AsrLanguage, pcm: ByteArray,
+        hints: AsrRecognitionHints = AsrRecognitionHints()): Request = Request.Builder()
         .url(endpoint(config.openAiBaseUrl) ?: error("Invalid ASR endpoint"))
         .header("Authorization", "Bearer ${config.openAiApiKey.trim()}")
         .post(MultipartBody.Builder().setType(MultipartBody.FORM).apply {
             addFormDataPart("model", config.openAiModel.trim())
             addFormDataPart("file", "speech.wav", wav(pcm).toRequestBody("audio/wav".toMediaType()))
-            if (language != AsrLanguage.AUTO) addFormDataPart("language", language.code)
+            if (language != AsrLanguage.AUTO) addFormDataPart(
+                if (config.openAiModel.trim() == "gpt-transcribe" || config.openAiModel.trim().startsWith("gpt-transcribe-")) "languages[]" else "language", language.code)
+            // A 200 UTF-8 byte budget is conservative even for Whisper's 224-token limit.
+            hints.promptWith(if (hints.mode == AsrHintMode.PROMPT_HOTWORDS) 200 else 2000)
+                .takeIf(String::isNotBlank)?.let { addFormDataPart("prompt", it) }
+            if (hints.mode == AsrHintMode.KEYWORDS) hints.hotwords.forEach { addFormDataPart("keywords[]", it) }
         }.build()).build()
 
     fun wav(pcm: ByteArray): ByteArray {

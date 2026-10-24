@@ -785,7 +785,7 @@ class FloatingButtonManager(
         val params = layoutParams ?: run { positionPersistPending = false; return }
         ioScope.launch {
             try {
-                settingsRepository.update { it.copy(floatingButtonX = params.x, floatingButtonY = params.y) }
+                settingsRepository.tryUpdate { it.copy(floatingButtonX = params.x, floatingButtonY = params.y) }
             } finally {
                 positionPersistPending = false
             }

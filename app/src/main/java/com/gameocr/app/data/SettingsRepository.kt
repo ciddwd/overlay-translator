@@ -22,6 +22,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.retryWhen
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
@@ -48,6 +50,7 @@ class SettingsRepository internal constructor(
     private object Keys {
         val BaseUrl = stringPreferencesKey("base_url")
         val ApiKey = stringPreferencesKey("api_key")
+        val PresetCredentialsMigrated = booleanPreferencesKey("local_preset_credentials_migrated_v1")
         val Model = stringPreferencesKey("model")
         val AnthropicBaseUrl = stringPreferencesKey("anthropic_base_url")
         val AnthropicApiKey = stringPreferencesKey("anthropic_api_key")
@@ -71,6 +74,7 @@ class SettingsRepository internal constructor(
         val PerformanceOverlayEnabled = booleanPreferencesKey("performance_overlay_enabled")
         val OcrScreenshotSavingEnabled = booleanPreferencesKey("ocr_screenshot_saving_enabled")
         val DisableTranslationCache = booleanPreferencesKey("disable_translation_cache")
+        val HideOcrNoTextHint = booleanPreferencesKey("hide_ocr_no_text_hint")
         val BatchCumulativeCompletionTimeEnabled =
             booleanPreferencesKey("batch_cumulative_completion_time_enabled")
         val TranslationContextMode = stringPreferencesKey("translation_context_mode")
@@ -236,7 +240,10 @@ class SettingsRepository internal constructor(
         val AsrCloudModel = stringPreferencesKey("asr_cloud_model")
         val AsrCloudProvider = stringPreferencesKey("asr_cloud_provider")
         val AsrCloudConnections = stringPreferencesKey("asr_cloud_connections")
+        val AsrEmptyConnectionDefaultsMigrated = booleanPreferencesKey("asr_empty_connection_defaults_migrated")
         val AsrLanguage = stringPreferencesKey("asr_language")
+        val AsrSegmentation = stringPreferencesKey("asr_segmentation")
+        val AsrHints = stringPreferencesKey("asr_hints")
         val AsrMaxDisplayedRecords = intPreferencesKey("asr_max_displayed_records")
         val AsrDashScopeApiKey = stringPreferencesKey("asr_dashscope_api_key")
         val GestureBindingsKey = stringPreferencesKey("gesture_bindings")
@@ -345,6 +352,10 @@ class SettingsRepository internal constructor(
 
     val settings: Flow<Settings> = settingsStore.data
         .map { prefs -> prefs.toSettings() }
+        .retryWhen { error, _ ->
+            if (error !is SettingsSecretStorageException) false
+            else { delay(1_000); true }
+        }
         .flowOn(Dispatchers.IO)
 
     suspend fun get(): Settings = settings.first()
@@ -406,6 +417,7 @@ class SettingsRepository internal constructor(
     suspend fun migratePlaintextSecretsIfNeeded(): Int {
         var migrated = 0
         settingsStore.edit { prefs ->
+            prefs.requireReadableSecrets()
             secureStringKeys.forEach { key ->
                 val raw = prefs[key]
                 if (secretCodec.needsMigration(raw)) {
@@ -413,6 +425,7 @@ class SettingsRepository internal constructor(
                     migrated++
                 }
             }
+            prefs.migrateLegacyPresetCredentials(prefs.toSettings())
         }
         return migrated
     }
@@ -617,6 +630,8 @@ class SettingsRepository internal constructor(
     }
 
     private fun MutablePreferences.putSecure(key: Preferences.Key<String>, value: String) {
+        val raw = this[key]
+        if (raw != null && secretCodec.isEncrypted(raw) && secretCodec.decodeForWrite(raw) == value) return
         this[key] = if (key in credentialStringKeys) secretCodec.encryptCredential(value)
             else secretCodec.encryptPlainText(value)
     }
@@ -624,11 +639,71 @@ class SettingsRepository internal constructor(
     // Kept outside both Settings and TranslationPreset: no export/diagnostic serializer sees these records.
     private fun presetCredentialKey(id: String) = stringPreferencesKey("local_preset_credentials_v1_$id")
 
-    private fun Preferences.presetCredentials(id: String): PresetCredentialRecord? =
-        this[presetCredentialKey(id)]?.takeIf(secretCodec::isEncrypted)
-            ?.let(secretCodec::decodeStored)?.let { raw ->
-                runCatching { json.decodeFromString<PresetCredentialRecord>(raw) }.getOrNull()
-            }?.takeIf { it.ownerId == id }
+    private fun Preferences.requireReadableSecrets() {
+        asMap().forEach { (key, value) ->
+            if ((key in secureStringKeys || key.name.startsWith("local_preset_credentials_v1_")) &&
+                value is String && secretCodec.isEncrypted(value)
+            ) secretCodec.decodeForWrite(value)
+        }
+    }
+
+    private fun Preferences.presetCredentials(id: String): PresetCredentialRecord? {
+        val stored = this[presetCredentialKey(id)]?.takeIf(String::isNotEmpty) ?: return null
+        if (!secretCodec.isEncrypted(stored)) throw SettingsSecretStorageException()
+        val raw = secretCodec.decodeForWrite(stored)
+        return runCatching { json.decodeFromString<PresetCredentialRecord>(raw) }.getOrNull()
+            ?.takeIf { it.ownerId == id } ?: throw SettingsSecretStorageException()
+    }
+
+    private fun MutablePreferences.migrateLegacyPresetCredentials(current: Settings) {
+        if (this[Keys.PresetCredentialsMigrated] == true) return
+        val candidates = current.translationPresets.mapNotNull { preset ->
+            if (!this[presetCredentialKey(preset.id)].isNullOrEmpty()) return@mapNotNull null
+            val target = preset.applyTo(current)
+            val record = PresetCredentialPolicy.legacyRecord(preset.id, current, target)
+                ?: return@mapNotNull null
+            preset to record
+        }
+        val selected = if (current.activeTranslationPresetId.isNotBlank()) {
+            candidates.firstOrNull { it.first.id == current.activeTranslationPresetId }
+        } else candidates.singleOrNull()
+        selected?.let { (preset, record) ->
+            this[presetCredentialKey(preset.id)] = secretCodec.encryptCredential(json.encodeToString(record))
+        }
+        this[Keys.PresetCredentialsMigrated] = true
+    }
+
+    /** Process-local rollback only. Never part of a settings/preset export. */
+    internal class ImportSnapshot internal constructor(
+        val settings: Settings,
+    ) {
+        internal var mutation: Pair<Preferences, Preferences>? = null
+        override fun toString(): String = "ImportSnapshot(<redacted>)"
+    }
+
+    internal suspend fun snapshotForImport(): ImportSnapshot = withContext(Dispatchers.IO) {
+        val prefs = settingsStore.data.first()
+        prefs.requireReadableSecrets()
+        ImportSnapshot(prefs.toSettings())
+    }
+
+    internal suspend fun restoreImportSnapshot(snapshot: ImportSnapshot) = withContext(Dispatchers.IO) {
+        val (before, after) = snapshot.mutation ?: return@withContext
+        val oldValues = before.asMap()
+        val importedValues = after.asMap()
+        settingsStore.edit { prefs ->
+            val currentValues = prefs.asMap()
+            (oldValues.keys + importedValues.keys).forEach { key ->
+                if (oldValues[key] != importedValues[key] && currentValues[key] == importedValues[key]) {
+                    @Suppress("UNCHECKED_CAST")
+                    val typedKey = key as Preferences.Key<Any>
+                    val old = oldValues[key]
+                    if (old == null) prefs.remove(typedKey) else prefs[typedKey] = old
+                }
+            }
+        }
+        Unit
+    }
 
     private fun MutablePreferences.rememberCredentials(id: String, source: Settings) {
         this[presetCredentialKey(id)] = secretCodec.encryptCredential(
@@ -692,15 +767,32 @@ class SettingsRepository internal constructor(
     }
 
     suspend fun updateAfterPresetImport(importedNames: Set<String>, transform: (Settings) -> Settings): Settings =
-        updateWithPreferences(readBack = true) { current, prefs ->
+        updateAfterPresetImport(importedNames, null, transform)
+
+    internal suspend fun updateAfterPresetImport(
+        importedNames: Set<String>, rollbackSnapshot: ImportSnapshot?, transform: (Settings) -> Settings,
+    ): Settings =
+        updateWithPreferences(readBack = true, rollbackSnapshot = rollbackSnapshot) { current, prefs ->
             val next = transform(current)
             val normalizedNames = importedNames.mapTo(mutableSetOf()) { it.trim().lowercase(java.util.Locale.ROOT) }
             val importedIds = next.translationPresets.filter {
                 it.name.trim().lowercase(java.util.Locale.ROOT) in normalizedNames
             }.mapTo(mutableSetOf()) { it.id }
-            importedIds.forEach { prefs.remove(presetCredentialKey(it)) }
+            importedIds.forEach { id ->
+                val imported = next.translationPresets.first { it.id == id }
+                val original = current.translationPresets.firstOrNull {
+                    it.id == id && it.name.trim().equals(imported.name.trim(), ignoreCase = true)
+                }
+                val retained = original?.let { prefs.presetCredentials(id) }
+                    ?.let { PresetCredentialPolicy.retainMatchingGroups(it, imported.applyTo(next)) }
+                    ?.takeIf { it.groups.isNotEmpty() }
+                if (retained == null) prefs.remove(presetCredentialKey(id))
+                else prefs[presetCredentialKey(id)] = secretCodec.encryptCredential(json.encodeToString(retained))
+            }
             if (next.activeTranslationPresetId in importedIds) {
-                PresetCredentialPolicy.apply(next.activeTranslationPresetId, next, null)
+                PresetCredentialPolicy.apply(
+                    next.activeTranslationPresetId, next, prefs.presetCredentials(next.activeTranslationPresetId),
+                )
             } else next
         }
 
@@ -721,27 +813,45 @@ class SettingsRepository internal constructor(
 
     suspend fun matchingCredentialPresetIds(source: Settings): Set<String> = withContext(Dispatchers.IO) {
         val prefs = settingsStore.data.first()
-        TranslationPresetCatalog.all(prefs.toSettings().translationPresets).filter {
-            PresetCredentialPolicy.matches(it.id, source, prefs.presetCredentials(it.id))
+        val settings = try { prefs.toSettings() }
+        catch (_: SettingsSecretStorageException) { return@withContext emptySet() }
+        TranslationPresetCatalog.all(settings.translationPresets).filter {
+            val record = try { prefs.presetCredentials(it.id) }
+            catch (_: SettingsSecretStorageException) { return@filter false }
+            PresetCredentialPolicy.matches(it.id, source, record)
         }.mapTo(mutableSetOf()) { it.id }
     }
 
     private fun Preferences.secureString(
         key: Preferences.Key<String>,
         defaultValue: String
-    ): String = this[key]?.let { secretCodec.decodeStored(it) } ?: defaultValue
+    ): String = this[key]?.let { secretCodec.decodeForWrite(it) } ?: defaultValue
 
     suspend fun update(transform: (Settings) -> Settings) {
         updateWithPreferences { current, _ -> transform(current) }
     }
 
+    /** Best-effort background persistence; callers must check success before confirming a save. */
+    internal suspend fun tryUpdate(transform: (Settings) -> Settings): Boolean = try {
+        update(transform)
+        true
+    } catch (_: SettingsSecretStorageException) {
+        timber.log.Timber.w("Settings write rejected; previous stored data retained")
+        false
+    }
+
     private suspend fun updateWithPreferences(
         readBack: Boolean = false,
+        rollbackSnapshot: ImportSnapshot? = null,
         transform: (Settings, MutablePreferences) -> Settings,
     ): Settings = withContext(Dispatchers.IO) {
         var committed: Settings? = null
-        settingsStore.edit { prefs ->
+        var beforeCommit: Preferences? = null
+        val afterCommit = settingsStore.edit { prefs ->
+            if (rollbackSnapshot != null) beforeCommit = prefs.toPreferences()
+            prefs.requireReadableSecrets()
             val current = prefs.toSettings()
+            prefs.migrateLegacyPresetCredentials(current)
             val requested = transform(current, prefs)
             val languageSafe = if (
                 translationLanguageCodesConflict(requested.sourceLang, requested.targetLang)
@@ -787,6 +897,7 @@ class SettingsRepository internal constructor(
             prefs[Keys.PerformanceOverlayEnabled] = next.performanceOverlayEnabled
             prefs[Keys.OcrScreenshotSavingEnabled] = next.ocrScreenshotSavingEnabled
             prefs[Keys.DisableTranslationCache] = next.disableTranslationCache
+            prefs[Keys.HideOcrNoTextHint] = next.hideOcrNoTextHint
             prefs[Keys.BatchCumulativeCompletionTimeEnabled] =
                 next.batchCumulativeCompletionTimeEnabled
             prefs[Keys.TranslationContextMode] = next.translationContextMode.name
@@ -967,7 +1078,10 @@ class SettingsRepository internal constructor(
             prefs[Keys.AsrCloudModel] = next.asrCloudModel.name
             prefs[Keys.AsrCloudProvider] = next.asrCloudProvider.name
             prefs.putSecure(Keys.AsrCloudConnections, json.encodeToString(next.asrCloudConnections))
+            prefs[Keys.AsrEmptyConnectionDefaultsMigrated] = true
             prefs[Keys.AsrLanguage] = next.asrLanguage.name
+            prefs[Keys.AsrSegmentation] = json.encodeToString(next.asrSegmentation.normalized())
+            prefs[Keys.AsrHints] = json.encodeToString(next.asrHints)
             prefs[Keys.AsrMaxDisplayedRecords] = AsrDisplayPolicy.clampRecords(next.asrMaxDisplayedRecords)
             prefs.putSecure(Keys.AsrDashScopeApiKey, next.asrDashScopeApiKey)
             prefs[Keys.GestureBindingsKey] = json.encodeToString(
@@ -1009,6 +1123,7 @@ class SettingsRepository internal constructor(
             prefs[Keys.MangaOcrCropPaddingPx] = MangaOcrAdvancedSettingsPolicy.CROP_PADDING_PX
             committed = if (readBack) prefs.toSettings() else next
         }
+        if (rollbackSnapshot != null) rollbackSnapshot.mutation = requireNotNull(beforeCommit) to afterCommit
         requireNotNull(committed)
     }
 
@@ -1098,6 +1213,8 @@ class SettingsRepository internal constructor(
                 ?: default.ocrScreenshotSavingEnabled,
             disableTranslationCache = this[Keys.DisableTranslationCache]
                 ?: default.disableTranslationCache,
+            hideOcrNoTextHint = this[Keys.HideOcrNoTextHint]
+                ?: default.hideOcrNoTextHint,
             batchCumulativeCompletionTimeEnabled =
                 this[Keys.BatchCumulativeCompletionTimeEnabled]
                     ?: default.batchCumulativeCompletionTimeEnabled,
@@ -1393,13 +1510,21 @@ class SettingsRepository internal constructor(
                 ?: default.asrWhisperVariant,
             asrCloudModel = AsrCloudModel.entries.firstOrNull { it.name == this[Keys.AsrCloudModel] }
                 ?: default.asrCloudModel,
-            asrCloudProvider = AsrCloudProvider.entries.firstOrNull { it.name == this[Keys.AsrCloudProvider] }
-                ?: default.asrCloudProvider,
+            asrCloudProvider = if (this[Keys.AsrCloudProvider] == "GLM") AsrCloudProvider.OPENAI_COMPATIBLE
+                else AsrCloudProvider.entries.firstOrNull { it.name == this[Keys.AsrCloudProvider] } ?: default.asrCloudProvider,
             asrCloudConnections = runCatching {
                 json.decodeFromString<AsrCloudConnections>(asrConnectionsJson)
-            }.getOrDefault(default.asrCloudConnections),
+            }.getOrDefault(default.asrCloudConnections).let { connection ->
+                if (this[Keys.AsrEmptyConnectionDefaultsMigrated] == true) connection
+                else AsrConnectionDefaultsPolicy.clearUnconfiguredLegacyDefaults(connection)
+            },
             asrLanguage = AsrLanguage.entries.firstOrNull { it.name == this[Keys.AsrLanguage] }
                 ?: default.asrLanguage,
+            asrSegmentation = runCatching {
+                json.decodeFromString<AsrSegmentationSettings>(this[Keys.AsrSegmentation] ?: "{}").normalized()
+            }.getOrDefault(default.asrSegmentation),
+            asrHints = runCatching { json.decodeFromString<AsrHintSettings>(this[Keys.AsrHints] ?: "{}") }
+                .getOrDefault(default.asrHints),
             asrMaxDisplayedRecords = AsrDisplayPolicy.clampRecords(
                 this[Keys.AsrMaxDisplayedRecords] ?: default.asrMaxDisplayedRecords,
             ),

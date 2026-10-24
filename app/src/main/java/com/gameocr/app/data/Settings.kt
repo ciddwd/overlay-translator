@@ -56,6 +56,7 @@ data class Settings(
     val performanceOverlayEnabled: Boolean = false,
     val ocrScreenshotSavingEnabled: Boolean = false,
     val disableTranslationCache: Boolean = false,
+    val hideOcrNoTextHint: Boolean = false,
     val batchCumulativeCompletionTimeEnabled: Boolean = false,
     val shareEntireScreen: Boolean = false,
     val translationContextMode: TranslationContextMode = TranslationContextMode.FAST_PER_SEGMENT,
@@ -345,6 +346,8 @@ data class Settings(
     val asrCloudProvider: AsrCloudProvider = AsrCloudProvider.ALIYUN,
     val asrCloudConnections: AsrCloudConnections = AsrCloudConnections(),
     val asrLanguage: AsrLanguage = AsrLanguage.AUTO,
+    val asrSegmentation: AsrSegmentationSettings = AsrSegmentationSettings(),
+    val asrHints: AsrHintSettings = AsrHintSettings(),
     /** Speech records kept in the floating window; see [AsrDisplayPolicy]. */
     val asrMaxDisplayedRecords: Int = AsrDisplayPolicy.DEFAULT_RECORDS,
     /** DashScope key for the Paraformer cloud engine (China (Beijing) region). */
@@ -1303,6 +1306,15 @@ enum class PaddleModelVersion(
         false,
         "v5ko"
     ),
+    /** Official East Slavic recognizer paired with the v5 mobile detector. */
+    V5_ESLAV(
+        R.string.paddle_version_v5_eslav,
+        R.string.paddle_version_v5_eslav_desc,
+        4,
+        R.string.paddle_version_v5_eslav_languages,
+        false,
+        "v5eslav"
+    ),
     /** PP-OCRv6 tiny（det ~1.5M params + rec ~1.5M params，极轻量极快） */
     V6_TINY(
         R.string.paddle_version_v6_tiny,
@@ -1777,7 +1789,8 @@ data class PaddleDetectionThresholds(
 val PaddleModelVersion.officialDetectionThresholds: PaddleDetectionThresholds
     get() = when (this) {
         PaddleModelVersion.V5_MOBILE,
-        PaddleModelVersion.V5_KOREAN -> PaddleDetectionThresholds(0.3f, 0.6f, 1.5f)
+        PaddleModelVersion.V5_KOREAN,
+        PaddleModelVersion.V5_ESLAV -> PaddleDetectionThresholds(0.3f, 0.6f, 1.5f)
         PaddleModelVersion.V6_TINY -> PaddleDetectionThresholds(0.2f, 0.4f, 1.4f)
         PaddleModelVersion.V6_SMALL,
         PaddleModelVersion.V6_MEDIUM -> PaddleDetectionThresholds(0.2f, 0.45f, 1.4f)

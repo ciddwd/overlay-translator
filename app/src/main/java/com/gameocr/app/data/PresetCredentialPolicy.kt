@@ -94,6 +94,27 @@ internal object PresetCredentialPolicy {
         })
     }
 
+    /** Only the current account's matching connection may seed a legacy local preset. */
+    fun legacyRecord(id: String, current: Settings, target: Settings): PresetCredentialRecord? {
+        val source = capture(id, current)
+        val expected = capture(id, target)
+        val groups = source.groups.filter { (name, group) ->
+            group.binding == expected.groups[name]?.binding && when (name) {
+                Group.OPENAI.name -> current.openAiProvider == target.openAiProvider && current.model == target.model
+                Group.ANTHROPIC.name -> current.anthropicModel == target.anthropicModel
+                else -> true
+            }
+        }
+        return source.copy(groups = groups).takeIf { groups.isNotEmpty() }
+    }
+
+    fun retainMatchingGroups(record: PresetCredentialRecord, target: Settings): PresetCredentialRecord {
+        val expected = capture(record.ownerId, target)
+        return record.copy(groups = record.groups.filter { (name, group) ->
+            group.binding == expected.groups[name]?.binding
+        })
+    }
+
     fun matches(id: String, settings: Settings, record: PresetCredentialRecord?): Boolean {
         val expected = capture(id, settings)
         if (record == null) return expected.groups.values.all { group -> group.values.values.all(String::isEmpty) }

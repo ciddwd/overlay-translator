@@ -411,6 +411,12 @@ fun SettingsScreen(
     val defaultTtsTestText = stringResource(R.string.settings_tts_test_text_default)
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
+    fun launchSettingsWrite(write: suspend () -> Unit) = scope.launch {
+        runSettingsWrite(
+            onFailure = { snackbarHostState.showSnackbar(context.getString(R.string.settings_storage_save_failed)) },
+            write = write,
+        )
+    }
     val modelDownloadWorkInfos by viewModel.modelDownloadWorkInfos.collectAsState(initial = emptyList())
     val unfinishedModelDownloads = modelDownloadWorkInfos.filterNot { it.state.isFinished }
     val activeModelDownloads = unfinishedModelDownloads
@@ -518,6 +524,7 @@ fun SettingsScreen(
     var prompt by remember { mutableStateOf("") }
     var openAiRequestOptions by remember { mutableStateOf(OpenAiRequestOptions()) }
     var promptAdvancedExpanded by remember { mutableStateOf(false) }
+    var asrAdvancedExpanded by rememberSaveable { mutableStateOf(false) }
     var targetLang by remember { mutableStateOf("zh-CN") }
     var sourceLang by remember { mutableStateOf("auto") }
     var translatorEngine by remember { mutableStateOf(TranslatorEngine.OPENAI) }
@@ -599,6 +606,7 @@ fun SettingsScreen(
     var performanceOverlayEnabled by remember { mutableStateOf(false) }
     var ocrScreenshotSavingEnabled by remember { mutableStateOf(false) }
     var disableTranslationCache by remember { mutableStateOf(false) }
+    var hideOcrNoTextHint by remember { mutableStateOf(false) }
     var batchCumulativeCompletionTimeEnabled by remember { mutableStateOf(false) }
     var shareEntireScreen by remember { mutableStateOf(false) }
     var ocrRedBoxModeEnabled by remember { mutableStateOf(false) }
@@ -880,7 +888,7 @@ fun SettingsScreen(
                 throw cancelled
             } catch (error: Exception) {
                 Timber.e(error, "Failed to auto-save floating button settings")
-                snackbarHostState.showSnackbar(error.localizedMessage ?: error.javaClass.simpleName)
+                snackbarHostState.showSnackbar(settingsWriteErrorMessage(context, error))
             }
         }
     }
@@ -1051,7 +1059,7 @@ fun SettingsScreen(
             } catch (error: Exception) {
                 Timber.e(error, "ML Kit source model deletion failed: source=%s", confirmedPair.first)
                 scope.launch {
-                    snackbarHostState.showSnackbar(error.localizedMessage ?: error.javaClass.simpleName)
+                    snackbarHostState.showSnackbar(settingsWriteErrorMessage(context, error))
                 }
             } finally {
                 // Re-query the actual SDK inventory on success AND failure. Never infer that both
@@ -1146,6 +1154,7 @@ fun SettingsScreen(
         performanceOverlayEnabled = s.performanceOverlayEnabled
         ocrScreenshotSavingEnabled = s.ocrScreenshotSavingEnabled
         disableTranslationCache = s.disableTranslationCache
+        hideOcrNoTextHint = s.hideOcrNoTextHint
         batchCumulativeCompletionTimeEnabled = s.batchCumulativeCompletionTimeEnabled
         shareEntireScreen = s.shareEntireScreen
         ocrRedBoxModeEnabled = s.ocrRedBoxModeEnabled
@@ -1401,9 +1410,14 @@ fun SettingsScreen(
                                 )
                             }
                             .onFailure { error ->
+                                if (error is com.gameocr.app.data.SettingsSecretStorageException) {
+                                    snackbarHostState.showSnackbar(context.getString(R.string.settings_storage_save_failed))
+                                }
                                 presetMessage = context.getString(
                                     R.string.settings_bundle_import_failed_format,
-                                    error.message ?: error.javaClass.simpleName
+                                    if (error is com.gameocr.app.data.SettingsSecretStorageException)
+                                        context.getString(R.string.settings_storage_save_failed)
+                                    else error.message ?: error.javaClass.simpleName
                                 )
                             }
                     }
@@ -1453,6 +1467,8 @@ fun SettingsScreen(
         asrCloudConnections = asrCredentialDraft?.applyTo(initialSettings ?: Settings())?.asrCloudConnections
             ?: initialSettings?.asrCloudConnections ?: com.gameocr.app.data.AsrCloudConnections(),
         asrDashScopeApiKey = asrCredentialDraft?.dashScopeApiKey ?: initialSettings?.asrDashScopeApiKey.orEmpty(),
+        asrHints = asrCredentialDraft?.applyTo(initialSettings ?: Settings())?.asrHints
+            ?: initialSettings?.asrHints ?: com.gameocr.app.data.AsrHintSettings(),
         localModelId = localModelId.takeIf { translatorEngine == TranslatorEngine.LOCAL_QWEN3 },
         captureRegionHideOnCapture = captureRegionHideOnCapture,
         wordSelectExtractOnly = wordSelectExtractOnly,
@@ -1480,6 +1496,7 @@ fun SettingsScreen(
         performanceOverlayEnabled = performanceOverlayEnabled,
         ocrScreenshotSavingEnabled = ocrScreenshotSavingEnabled,
         disableTranslationCache = disableTranslationCache,
+        hideOcrNoTextHint = hideOcrNoTextHint,
         batchCumulativeCompletionTimeEnabled = batchCumulativeCompletionTimeEnabled,
         shareEntireScreen = shareEntireScreen,
         ocrRedBoxModeEnabled = ocrRedBoxModeEnabled,
@@ -1713,7 +1730,7 @@ fun SettingsScreen(
                 if (revision == autoOcrSaveRevision) {
                     autoOcr = initialSettings?.autoOcr ?: com.gameocr.app.data.AutoOcrSettings()
                 }
-                snackbarHostState.showSnackbar(error.localizedMessage ?: error.javaClass.simpleName)
+                snackbarHostState.showSnackbar(settingsWriteErrorMessage(context, error))
             }
         }
     }
@@ -1742,6 +1759,7 @@ fun SettingsScreen(
             performanceOverlayEnabled = performanceOverlayEnabled,
             ocrScreenshotSavingEnabled = ocrScreenshotSavingEnabled,
             disableTranslationCache = disableTranslationCache,
+            hideOcrNoTextHint = hideOcrNoTextHint,
             batchCumulativeCompletionTimeEnabled = batchCumulativeCompletionTimeEnabled,
             shareEntireScreen = shareEntireScreen,
             ocrRedBoxModeEnabled = ocrRedBoxModeEnabled,
@@ -1889,7 +1907,7 @@ fun SettingsScreen(
                 },
                 onSaveUnsaved = saveUnsaved@ { preset ->
                     if (initialSettings == null || !cleartextHostsValidation.isValid) return@saveUnsaved
-                    scope.launch {
+                    launchSettingsWrite {
                         doSave()
                         val saved = viewModel.saveTranslationPreset(preset, buildTranslationPresetSnapshot())
                         translationPresets = TranslationPresetCatalog.upsertCustom(translationPresets, saved)
@@ -1902,8 +1920,8 @@ fun SettingsScreen(
                     }
                 },
                 onApply = { preset ->
-                    scope.launch {
-                        val applied = viewModel.applyTranslationPreset(preset.id) ?: return@launch
+                    launchSettingsWrite {
+                        val applied = viewModel.applyTranslationPreset(preset.id) ?: return@launchSettingsWrite
                         applyPresetSettingsToUi(applied)
                         activeTranslationPresetId = preset.id
                         initialSettings = buildSnapshot()
@@ -1948,7 +1966,7 @@ fun SettingsScreen(
                     }
                 },
                 onDelete = { preset ->
-                    scope.launch {
+                    launchSettingsWrite {
                         viewModel.deleteTranslationPreset(preset.id)
                         translationPresets = translationPresets.filterNot { it.id == preset.id }
                         if (activeTranslationPresetId == preset.id) activeTranslationPresetId = ""
@@ -1983,7 +2001,7 @@ fun SettingsScreen(
                     ) { selected ->
                         if (captureContentOrientation != selected) {
                             captureContentOrientation = selected
-                            scope.launch { viewModel.saveCaptureContentOrientation(selected) }
+                            launchSettingsWrite { viewModel.saveCaptureContentOrientation(selected) }
                         }
                     }
                 }
@@ -2000,7 +2018,7 @@ fun SettingsScreen(
                 helpText = stringResource(R.string.settings_orient_auto_detect_summary)
             ) { enabled ->
                 textOrientAutoDetect = enabled
-                scope.launch { viewModel.saveTextOrientationAutoDetect(enabled) }
+                launchSettingsWrite { viewModel.saveTextOrientationAutoDetect(enabled) }
             }
             if (textOrientAutoDetect) {
                 Text(
@@ -2011,22 +2029,22 @@ fun SettingsScreen(
                     EngineChip(manualTextOrient, null,
                         stringResource(R.string.settings_orient_manual_auto)) {
                         manualTextOrient = it
-                        scope.launch { viewModel.saveManualTextOrientation(it) }
+                        launchSettingsWrite { viewModel.saveManualTextOrientation(it) }
                     }
                     EngineChip(manualTextOrient, com.gameocr.app.ocr.TextOrientation.HORIZONTAL_LTR,
                         stringResource(R.string.settings_orient_horizontal_ltr)) {
                         manualTextOrient = it
-                        scope.launch { viewModel.saveManualTextOrientation(it) }
+                        launchSettingsWrite { viewModel.saveManualTextOrientation(it) }
                     }
                     EngineChip(manualTextOrient, com.gameocr.app.ocr.TextOrientation.VERTICAL_RTL,
                         stringResource(R.string.settings_orient_vertical_rtl)) {
                         manualTextOrient = it
-                        scope.launch { viewModel.saveManualTextOrientation(it) }
+                        launchSettingsWrite { viewModel.saveManualTextOrientation(it) }
                     }
                     EngineChip(manualTextOrient, com.gameocr.app.ocr.TextOrientation.STACKED,
                         stringResource(R.string.settings_orient_stacked)) {
                         manualTextOrient = it
-                        scope.launch { viewModel.saveManualTextOrientation(it) }
+                        launchSettingsWrite { viewModel.saveManualTextOrientation(it) }
                     }
                 }
                 if (manualTextOrient != null) {
@@ -2104,7 +2122,7 @@ fun SettingsScreen(
                 helpText = stringResource(R.string.settings_translation_output_follow_summary),
             ) { enabled ->
                 translationOutputFollowRecognition = enabled
-                scope.launch { viewModel.saveTranslationOutputFollowRecognition(enabled) }
+                launchSettingsWrite { viewModel.saveTranslationOutputFollowRecognition(enabled) }
             }
             if (!translationOutputFollowRecognition) {
             SettingsSearchTarget(searchTargetRegistry, R.string.settings_translation_output_layout_label) {
@@ -2128,7 +2146,7 @@ fun SettingsScreen(
                     }
                     EngineChip(translationOutputLayout, layout, label) {
                         translationOutputLayout = it
-                        scope.launch { viewModel.saveTranslationOutputLayout(it) }
+                        launchSettingsWrite { viewModel.saveTranslationOutputLayout(it) }
                     }
                 }
             }
@@ -2152,7 +2170,7 @@ fun SettingsScreen(
                     }
                     EngineChip(translationOutputDirection, direction, label) {
                         translationOutputDirection = it
-                        scope.launch { viewModel.saveTranslationOutputDirection(it) }
+                        launchSettingsWrite { viewModel.saveTranslationOutputDirection(it) }
                     }
                 }
             }
@@ -2195,7 +2213,9 @@ fun SettingsScreen(
         if (credentialMatchSnapshot != credentialFormSnapshot) return@LaunchedEffect
         if (activeTranslationPresetId != matchingTranslationPresetId) {
             activeTranslationPresetId = matchingTranslationPresetId
-            viewModel.setActiveTranslationPreset(matchingTranslationPresetId)
+            runSettingsWrite(
+                onFailure = { snackbarHostState.showSnackbar(context.getString(R.string.settings_storage_save_failed)) },
+            ) { viewModel.setActiveTranslationPreset(matchingTranslationPresetId) }
         }
     }
 
@@ -2209,7 +2229,7 @@ fun SettingsScreen(
                     enabled = cleartextHostsValidation.isValid,
                     onClick = {
                         showUnsavedDialog = false
-                        scope.launch { doSave(); onBack() }
+                        launchSettingsWrite { doSave(); onBack() }
                     }
                 ) { Text(stringResource(R.string.settings_unsaved_save)) }
             },
@@ -2647,6 +2667,16 @@ fun SettingsScreen(
         timber.log.Timber.tag("OcrLangLink").i(
             "[supports] engine=%s lang=%s -> %s", ocrEngine, sourceLang, supported
         )
+        val preferredPaddle = com.gameocr.app.ocr.OcrLanguageCapability
+            .preferredPaddleModelVersion(sourceLang)
+        if (sourceChanged && preferredPaddle != null && ocrEngine != OcrEngineKind.ML_KIT_AUTO &&
+            !(ocrEngine == OcrEngineKind.PADDLE_ONNX && paddleModelVersion == preferredPaddle)) {
+            ocrLangIssue = OcrLangIssue.FixOcr(
+                sourceLang,
+                com.gameocr.app.ocr.OcrLanguageCapability.recommendFor(sourceLang, buildSnapshot())!!,
+            )
+            return@LaunchedEffect
+        }
         if (supported) {
             // supports=true 仍可能不是"最优"：云端 AUTO_DETECT / CHN_ENG / MIX 等通用模式
             // 对小语种识别准确率明显低于精确指定 language。如果用户刚改了 sourceLang 或
@@ -2728,7 +2758,9 @@ fun SettingsScreen(
                     is OcrLangIssue.FixOcr -> {
                         // 三段式文案：keysMissing > tune（同引擎，仅改内部语种参数）> 默认（换引擎）
                         val rec = issue.recommendation
-                        val recEngineLabel = stringResource(ocrEngineLabelRes(rec.engine))
+                        val recEngineLabel = stringResource(
+                            rec.paddleModelVersion?.displayNameRes ?: ocrEngineLabelRes(rec.engine)
+                        )
                         val tuneNewLabel: String = when {
                             rec.engine == OcrEngineKind.BAIDU && rec.baiduLanguage != null ->
                                 stringResource(rec.baiduLanguage.displayNameRes)
@@ -2797,6 +2829,7 @@ fun SettingsScreen(
                                 ocrEngine = rec.engine
                                 rec.baiduEndpoint?.let { baiduEndpoint = it }
                                 rec.baiduLanguage?.let { baiduLanguage = it }
+                                rec.paddleModelVersion?.let { paddleModelVersion = it }
                                 rec.tencentEndpoint?.let { tencentEndpoint = it }
                                 rec.tencentLanguage?.let { tencentLanguage = it }
                             }
@@ -2831,7 +2864,11 @@ fun SettingsScreen(
     }
 
     LaunchedEffect(Unit) {
-        val s = viewModel.loadForScreen(context)
+        val s = try { viewModel.loadForScreen(context) }
+        catch (_: com.gameocr.app.data.SettingsSecretStorageException) {
+            snackbarHostState.showSnackbar(context.getString(R.string.settings_storage_save_failed))
+            return@LaunchedEffect
+        }
         // suspend 操作必须在 Snapshot 块外做完
         val migratedPrompt = s.promptTemplate
         val paddleStatusPlaceholder = context.getString(R.string.settings_paddle_status_checking)
@@ -2901,6 +2938,7 @@ fun SettingsScreen(
             performanceOverlayEnabled = s.performanceOverlayEnabled
             ocrScreenshotSavingEnabled = s.ocrScreenshotSavingEnabled
             disableTranslationCache = s.disableTranslationCache
+            hideOcrNoTextHint = s.hideOcrNoTextHint
             batchCumulativeCompletionTimeEnabled = s.batchCumulativeCompletionTimeEnabled
             shareEntireScreen = s.shareEntireScreen
             ocrRedBoxModeEnabled = s.ocrRedBoxModeEnabled
@@ -3257,7 +3295,7 @@ fun SettingsScreen(
                                 selected = customBorderStyle == style,
                                 onClick = {
                                     customBorderStyle = style
-                                    scope.launch { viewModel.saveCustomBorderStyle(style) }
+                                    launchSettingsWrite { viewModel.saveCustomBorderStyle(style) }
                                 },
                                 label = { Text(stringResource(labelRes)) },
                             )
@@ -3447,7 +3485,7 @@ fun SettingsScreen(
             throw cancelled
         } catch (error: Exception) {
             Timber.e(error, "Failed to refresh local model shortcuts")
-            snackbarHostState.showSnackbar(error.localizedMessage ?: error.javaClass.simpleName)
+            snackbarHostState.showSnackbar(settingsWriteErrorMessage(context, error))
         }
     }
     if (showModelManagement) {
@@ -3646,7 +3684,7 @@ fun SettingsScreen(
                     ).toFloat() },
                     onValueChangeFinished = {
                         val size = arcMenuPageSize.toInt()
-                        scope.launch {
+                        launchSettingsWrite {
                             viewModel.saveArcMenuPageSize(size)
                             initialSettings = initialSettings?.copy(arcMenuPageSize = size)
                         }
@@ -3672,7 +3710,7 @@ fun SettingsScreen(
                     currentSkill = currentSkill,
                     onReorder = { next ->
                         menuOrder = next
-                        scope.launch {
+                        launchSettingsWrite {
                             viewModel.saveArcMenuOrder(next)
                             initialSettings = initialSettings?.copy(floatingMenuItemOrder = next)
                         }
@@ -3796,7 +3834,7 @@ fun SettingsScreen(
                     if (initialSettings == null || !cleartextHostsValidation.isValid) {
                         return@ExtendedFloatingActionButton
                     }
-                    scope.launch {
+                    launchSettingsWrite {
                         doSave()
                         if (overlayRenderingOpen) overlayRenderingOpen = false else onBack()
                     }
@@ -3943,7 +3981,7 @@ fun SettingsScreen(
                                             throw cancelled
                                         } catch (error: Exception) {
                                             Timber.e(error, "Failed to remember local model shortcut")
-                                            snackbarHostState.showSnackbar(error.localizedMessage ?: error.javaClass.simpleName)
+                                            snackbarHostState.showSnackbar(settingsWriteErrorMessage(context, error))
                                         }
                                     }
                                 } else showModelManagement = true
@@ -4556,7 +4594,7 @@ fun SettingsScreen(
                     } else {
                         pinnedLanguages + code
                     }
-                    scope.launch { viewModel.togglePinLanguage(code) }
+                    launchSettingsWrite { viewModel.togglePinLanguage(code) }
                 }
                 SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_SOURCE_LANGUAGE) {
                 LanguagePicker(
@@ -4656,7 +4694,7 @@ fun SettingsScreen(
                     glossaryEnabled = translationGlossaryEnabled,
                     onGlossaryEnabledChange = { enabled ->
                         translationGlossaryEnabled = enabled
-                        scope.launch {
+                        launchSettingsWrite {
                             viewModel.saveGlossarySettings(
                                 enabled,
                                 foregroundAppDetectionMode,
@@ -4667,7 +4705,7 @@ fun SettingsScreen(
                     foregroundAppDetectionMode = foregroundAppDetectionMode,
                     onForegroundAppDetectionModeChange = { mode ->
                         foregroundAppDetectionMode = mode
-                        scope.launch {
+                        launchSettingsWrite {
                             viewModel.saveGlossarySettings(
                                 translationGlossaryEnabled,
                                 mode,
@@ -4678,7 +4716,7 @@ fun SettingsScreen(
                     sendAppName = sendAppNameToTranslator,
                     onSendAppNameChange = { enabled ->
                         sendAppNameToTranslator = enabled
-                        scope.launch {
+                        launchSettingsWrite {
                             viewModel.saveGlossarySettings(
                                 translationGlossaryEnabled,
                                 foregroundAppDetectionMode,
@@ -5055,7 +5093,7 @@ fun SettingsScreen(
                         }
                     }
                     if (group == OcrEngineGroup.ON_DEVICE) {
-                        MlKitOcrDownloadFeedback(mlKitOcrDownloadState) { mlKitOcrDownload.cancel(mlKitOcrDownloadState.requestId) }
+                        MlKitOcrDownloadControl(mlKitOcrDownload)
                     }
                 }
                 if (ocrEngine == OcrEngineKind.BAIDU) {
@@ -5095,7 +5133,7 @@ fun SettingsScreen(
                             labelResOf = { it.displayNameRes },
                             bcp47Of = { it.bcp47 },
                             pinnedBcp47 = pinnedLanguages,
-                            onTogglePin = { code -> scope.launch { viewModel.togglePinLanguage(code) } },
+                            onTogglePin = { code -> launchSettingsWrite { viewModel.togglePinLanguage(code) } },
                             onSelect = { baiduLanguage = it }
                         )
                     } else {
@@ -5191,7 +5229,7 @@ fun SettingsScreen(
                             labelResOf = { it.displayNameRes },
                             bcp47Of = { it.bcp47 },
                             pinnedBcp47 = pinnedLanguages,
-                            onTogglePin = { code -> scope.launch { viewModel.togglePinLanguage(code) } },
+                            onTogglePin = { code -> launchSettingsWrite { viewModel.togglePinLanguage(code) } },
                             onSelect = { tencentLanguage = it }
                         )
                     } else if (tencentEndpoint == com.gameocr.app.data.TencentOcrEndpoint.GENERAL_ACCURATE) {
@@ -5263,7 +5301,7 @@ fun SettingsScreen(
                         onModelVersionChange = { newVer ->
                             paddleModelVersion = newVer
                             paddleModelReady = false
-                            scope.launch { viewModel.savePaddleModelVersion(newVer) }
+                            launchSettingsWrite { viewModel.savePaddleModelVersion(newVer) }
                         },
                         onDownload = {
                             requestModelDownload(context.getString(paddleModelVersion.displayNameRes)) {
@@ -5398,7 +5436,7 @@ fun SettingsScreen(
                         defaultSettings.dbnetUnclipRatio
                     }
                     val saveDbnetNow: () -> Unit = {
-                        scope.launch {
+                        launchSettingsWrite {
                             val unclipToSave = if (ocrEngine == OcrEngineKind.MANGA_OCR_JA) {
                                 mangaOcrDbnetUnclip
                             } else {
@@ -5420,7 +5458,7 @@ fun SettingsScreen(
                         } else {
                             dbnetUnclip = defaultSettings.dbnetUnclipRatio
                         }
-                        scope.launch {
+                        launchSettingsWrite {
                             viewModel.saveDbnetThresholds(
                                 ocrEngine,
                                 defaultSettings.dbnetProbThresh,
@@ -5446,7 +5484,7 @@ fun SettingsScreen(
                                 onClick = {
                                     if (paddleDetectionProfile != profile) {
                                         paddleDetectionProfile = profile
-                                        scope.launch {
+                                        launchSettingsWrite {
                                             viewModel.savePaddleDetectionProfile(profile)
                                         }
                                     }
@@ -5613,7 +5651,10 @@ fun SettingsScreen(
             }
 
             item(key = SectionKeys.ASR) {
+                SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_ASR) {
                 AsrSettingsSection(
+                    advancedExpanded = asrAdvancedExpanded,
+                    onAdvancedExpandedChange = { asrAdvancedExpanded = it },
                     settings = initialSettings?.let { buildSnapshot() },
                     viewModel = viewModel,
                     snackbarHostState = snackbarHostState,
@@ -5636,12 +5677,17 @@ fun SettingsScreen(
                             asrCloudConnections = initialSettings?.asrCloudConnections?.copy(
                                 tencentModel = next.asrCloudConnections.tencentModel,
                                 volcResource = next.asrCloudConnections.volcResource,
+                                openAiTransport = next.asrCloudConnections.openAiTransport,
                             ) ?: next.asrCloudConnections,
                             asrLanguage = next.asrLanguage,
+                            asrSegmentation = next.asrSegmentation.normalized(),
+                            asrHints = initialSettings!!.asrHints.copy(useGlossary = next.asrHints.useGlossary,
+                                openAiMode = next.asrHints.openAiMode),
                             asrMaxDisplayedRecords = next.asrMaxDisplayedRecords,
                         )
                     },
                 )
+                }
             }
 
             // —— 译文显示 ——
@@ -5700,7 +5746,7 @@ fun SettingsScreen(
                                 stringResource(R.string.settings_floating_window_content_src_and_dst),
                             ) {
                                 floatingWindowContentMode = it
-                                scope.launch { viewModel.saveFloatingWindowContentMode(it) }
+                                launchSettingsWrite { viewModel.saveFloatingWindowContentMode(it) }
                             }
                             EngineChip(
                                 floatingWindowContentMode,
@@ -5708,7 +5754,7 @@ fun SettingsScreen(
                                 stringResource(R.string.settings_floating_window_content_dst_only),
                             ) {
                                 floatingWindowContentMode = it
-                                scope.launch { viewModel.saveFloatingWindowContentMode(it) }
+                                launchSettingsWrite { viewModel.saveFloatingWindowContentMode(it) }
                             }
                         }
                     }
@@ -5745,7 +5791,7 @@ fun SettingsScreen(
                 if (renderMode == RenderMode.FLOATING_WINDOW) {
                     SwitchRow(stringResource(R.string.settings_floating_window_locked), floatingWindowLocked) {
                         floatingWindowLocked = it
-                        scope.launch { viewModel.saveFloatingWindowLocked(it) }
+                        launchSettingsWrite { viewModel.saveFloatingWindowLocked(it) }
                     }
                     Text(
                         stringResource(R.string.settings_floating_window_locked_hint),
@@ -5753,7 +5799,7 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     androidx.compose.material3.OutlinedButton(onClick = {
-                        scope.launch { viewModel.resetFloatingWindowGeometry() }
+                        launchSettingsWrite { viewModel.resetFloatingWindowGeometry() }
                     }) {
                         Text(stringResource(R.string.settings_floating_window_reset_geometry))
                     }
@@ -5955,7 +6001,7 @@ fun SettingsScreen(
                             if (wordSelectExtractOnly == enabled) {
                                 wordSelectExtractOnly = initialSettings?.wordSelectExtractOnly ?: false
                             }
-                            snackbarHostState.showSnackbar(error.localizedMessage ?: error.javaClass.simpleName)
+                            snackbarHostState.showSnackbar(settingsWriteErrorMessage(context, error))
                         }
                     }
                 }
@@ -5965,7 +6011,7 @@ fun SettingsScreen(
                     helpText = stringResource(R.string.settings_word_select_precise_adjust_help)
                 ) {
                     wordSelectPreciseAdjust = it
-                    scope.launch { viewModel.saveWordSelectPreciseAdjust(it) }
+                    launchSettingsWrite { viewModel.saveWordSelectPreciseAdjust(it) }
                 }
                 SwitchRow(
                     stringResource(R.string.settings_word_select_card_mode),
@@ -5974,7 +6020,7 @@ fun SettingsScreen(
                     helpText = stringResource(R.string.settings_word_select_card_mode_help)
                 ) {
                     wordSelectCardMode = it
-                    scope.launch { viewModel.saveWordSelectCardMode(it) }
+                    launchSettingsWrite { viewModel.saveWordSelectCardMode(it) }
                 }
                 SwitchRow(
                     stringResource(R.string.settings_word_select_remember_region),
@@ -5982,7 +6028,7 @@ fun SettingsScreen(
                     helpText = stringResource(R.string.settings_word_select_remember_region_help)
                 ) {
                     wordSelectRememberRegion = it
-                    scope.launch { viewModel.saveWordSelectRememberRegion(it) }
+                    launchSettingsWrite { viewModel.saveWordSelectRememberRegion(it) }
                 }
                 SwitchRow(
                     stringResource(R.string.settings_floating_window_auto_hide),
@@ -5990,7 +6036,7 @@ fun SettingsScreen(
                     helpText = stringResource(R.string.settings_floating_window_auto_hide_help)
                 ) {
                     floatingWindowAutoHideWhenObstructing = it
-                    scope.launch { viewModel.saveFloatingWindowAutoHideWhenObstructing(it) }
+                    launchSettingsWrite { viewModel.saveFloatingWindowAutoHideWhenObstructing(it) }
                 }
             }
             }
@@ -6004,14 +6050,14 @@ fun SettingsScreen(
                     captureRegionBorderEnabled,
                 ) { enabled ->
                     captureRegionBorderEnabled = enabled
-                    scope.launch { viewModel.saveCaptureRegionBorderEnabled(enabled) }
+                    launchSettingsWrite { viewModel.saveCaptureRegionBorderEnabled(enabled) }
                 }
                 SwitchRow(
                     stringResource(R.string.settings_capture_region_hide_on_capture),
                     captureRegionHideOnCapture,
                 ) { enabled ->
                     captureRegionHideOnCapture = enabled
-                    scope.launch { viewModel.saveCaptureRegionHideOnCapture(enabled) }
+                    launchSettingsWrite { viewModel.saveCaptureRegionHideOnCapture(enabled) }
                 }
                 SwitchRow(
                     stringResource(R.string.settings_capture_region_move_enabled),
@@ -6019,7 +6065,7 @@ fun SettingsScreen(
                     helpText = stringResource(R.string.settings_capture_region_move_help),
                 ) { enabled ->
                     captureRegionAdjustmentEnabled = enabled
-                    scope.launch { viewModel.saveCaptureRegionAdjustmentEnabled(enabled) }
+                    launchSettingsWrite { viewModel.saveCaptureRegionAdjustmentEnabled(enabled) }
                 }
                 Row(
                     modifier = Modifier
@@ -6054,7 +6100,7 @@ fun SettingsScreen(
                         captureRegionBorderColor,
                     ) { color ->
                         captureRegionBorderColor = color
-                        scope.launch { viewModel.saveCaptureRegionBorderColor(color) }
+                        launchSettingsWrite { viewModel.saveCaptureRegionBorderColor(color) }
                     }
                     Text(
                         stringResource(
@@ -6067,7 +6113,7 @@ fun SettingsScreen(
                         value = captureRegionBorderWidth,
                         onValueChange = { captureRegionBorderWidth = it },
                         onValueChangeFinished = {
-                            scope.launch {
+                            launchSettingsWrite {
                                 viewModel.saveCaptureRegionBorderWidth(
                                     captureRegionBorderWidth.roundToInt()
                                 )
@@ -6093,7 +6139,7 @@ fun SettingsScreen(
                                 selected = captureRegionBorderStyle == style,
                                 onClick = {
                                     captureRegionBorderStyle = style
-                                    scope.launch { viewModel.saveCaptureRegionBorderStyle(style) }
+                                    launchSettingsWrite { viewModel.saveCaptureRegionBorderStyle(style) }
                                 },
                                 label = { Text(stringResource(labelRes)) },
                             )
@@ -6126,7 +6172,7 @@ fun SettingsScreen(
                             selected = inputTranslationDoubleAction == action,
                             onClick = {
                                 inputTranslationDoubleAction = action
-                                scope.launch {
+                                launchSettingsWrite {
                                     viewModel.saveInputTranslationDoubleAction(action)
                                 }
                             },
@@ -6398,7 +6444,7 @@ fun SettingsScreen(
                     GestureSettingsOverview(
                         globalGesturesEnabled = gestureUi.globalEnabled,
                         onGlobalGesturesChange = { enabled ->
-                            scope.launch {
+                            launchSettingsWrite {
                                 viewModel.saveGlobalGestureEnabled(enabled)
                                 gestureUi.globalEnabled = enabled
                                 initialSettings = initialSettings?.copy(gestureGlobalEnabled = enabled)
@@ -6469,6 +6515,11 @@ fun SettingsScreen(
                             checked = disableTranslationCache,
                             helpText = stringResource(R.string.settings_disable_translation_cache_hint),
                         ) { disableTranslationCache = it }
+                        SwitchRow(
+                            label = stringResource(R.string.settings_hide_ocr_no_text_hint_label),
+                            checked = hideOcrNoTextHint,
+                            helpText = stringResource(R.string.settings_hide_ocr_no_text_hint_hint),
+                        ) { hideOcrNoTextHint = it }
                         SwitchRow(
                             label = stringResource(R.string.settings_ocr_red_box_mode_label),
                             checked = ocrRedBoxModeEnabled,
@@ -6577,7 +6628,7 @@ fun SettingsScreen(
                 )
                 val saveLlmMirrorNow: (com.gameocr.app.data.LlmMirrorChoice) -> Unit = { c ->
                     llmMirrorChoice = c
-                    scope.launch { viewModel.saveLlmMirror(c, llmMirror) }
+                    launchSettingsWrite { viewModel.saveLlmMirror(c, llmMirror) }
                 }
                 LlmMirrorRadioRow(
                     label = stringResource(R.string.llm_mirror_hf_official),
@@ -6762,6 +6813,7 @@ fun SettingsScreen(
                                         if (entry.targetId == R.string.settings_openai_request_options_title) {
                                             promptAdvancedExpanded = true
                                         }
+                                        if (entry.targetId in ASR_ADVANCED_SEARCH_TARGETS) asrAdvancedExpanded = true
                                         if (entry.targetId in CAPTURE_REGION_STYLE_SEARCH_TARGET_RES_IDS) {
                                             captureRegionStyleExpanded = true
                                         }
@@ -9072,6 +9124,27 @@ private val SEARCH_TARGET_TTS = intArrayOf(
     R.string.settings_search_item_tts_provider,
     R.string.settings_search_item_tts_http,
 )
+private val SEARCH_TARGET_ASR = intArrayOf(
+    R.string.settings_asr_hint_mode,
+    R.string.settings_asr_vocabulary_id,
+    R.string.settings_asr_hint_prompt,
+    R.string.settings_asr_hotwords,
+    R.string.settings_asr_use_glossary,
+    R.string.settings_asr_title,
+    R.string.settings_asr_current_model,
+    R.string.settings_asr_whisper_variant,
+    R.string.settings_asr_group_cloud,
+    R.string.settings_asr_cloud_model,
+    R.string.settings_asr_protocol,
+    R.string.settings_asr_language,
+    R.string.settings_asr_max_records,
+    R.string.settings_asr_pause_duration,
+    R.string.settings_asr_max_segment_duration,
+)
+private val ASR_ADVANCED_SEARCH_TARGETS = setOf(R.string.settings_asr_hint_prompt, R.string.settings_asr_hotwords,
+    R.string.settings_asr_hint_mode, R.string.settings_asr_vocabulary_id,
+    R.string.settings_asr_use_glossary,
+    R.string.settings_asr_pause_duration, R.string.settings_asr_max_segment_duration, R.string.settings_asr_max_records)
 private val SEARCH_TARGET_PROMPTS = intArrayOf(
     R.string.settings_search_item_prompt,
     R.string.settings_openai_request_options_title,
@@ -9172,6 +9245,7 @@ private val SEARCH_TARGET_WORD_SELECT = intArrayOf(
     R.string.settings_search_item_floating_window_auto_hide,
 )
 private val SEARCH_TARGET_TRIGGER = intArrayOf(
+    R.string.settings_loop_capture_vibration,
     R.string.settings_search_item_loop_interval,
     R.string.settings_search_item_loop_trigger_mode,
     R.string.settings_search_item_loop_similarity,
@@ -9179,6 +9253,9 @@ private val SEARCH_TARGET_TRIGGER = intArrayOf(
     R.string.settings_search_item_a11y_volume,
 )
 private val SEARCH_TARGET_DEVELOPER = intArrayOf(
+    R.string.settings_hide_ocr_no_text_hint_label,
+    R.string.settings_batch_cumulative_completion_time_label,
+    R.string.settings_share_entire_screen,
     R.string.settings_search_item_developer_ocr,
     R.string.settings_performance_overlay_label,
 )
@@ -9198,6 +9275,7 @@ internal val SETTINGS_SEARCH_TARGET_RES_IDS: Set<Int> = listOf(
     SEARCH_TARGET_TARGET_LANGUAGE,
     SEARCH_TARGET_TRANSLATION_ASSISTANCE,
     SEARCH_TARGET_TTS,
+    SEARCH_TARGET_ASR,
     SEARCH_TARGET_PROMPTS,
     SEARCH_TARGET_OCR_ENGINE,
     SEARCH_TARGET_ORIENTATION_DETECTION,
@@ -9369,6 +9447,44 @@ internal val SETTINGS_SEARCH_DEVELOPER_OCR_KEYWORDS = listOf(
 )
 
 private val SETTING_ITEMS: List<SearchEntry> = listOfNotNull(
+    SearchEntry(SectionKeys.ASR, R.string.settings_asr_title, R.string.settings_asr_hint_mode,
+        listOf("ASR", "prompt", "keywords", "提示支持方式", "兼容接口")),
+    SearchEntry(SectionKeys.ASR, R.string.settings_asr_title, R.string.settings_asr_vocabulary_id,
+        listOf("ASR", "vocabulary_id", "词表", "热词表 ID", "阿里云")),
+    SearchEntry(SectionKeys.ASR, R.string.settings_asr_title, R.string.settings_asr_hint_prompt,
+        listOf("ASR", "recognition prompt", "识别提示", "识别背景", "高级设置")),
+    SearchEntry(SectionKeys.ASR, R.string.settings_asr_title, R.string.settings_asr_hotwords,
+        listOf("ASR", "hotwords", "keywords", "识别热词", "专有名词")),
+    SearchEntry(SectionKeys.ASR, R.string.settings_asr_title, R.string.settings_asr_use_glossary,
+        listOf("ASR", "glossary", "术语表", "辅助识别")),
+    SearchEntry(SectionKeys.ASR, R.string.settings_asr_title, R.string.settings_asr_title,
+        listOf("ASR", "speech recognition", "video translation", "live subtitles", "语音识别", "视频翻译", "视频实时翻译", "游戏对白", "双语字幕")),
+    SearchEntry(SectionKeys.ASR, R.string.settings_asr_title, R.string.settings_asr_current_model,
+        listOf("ASR", "SenseVoice", "Zipformer", "Whisper", "offline", "download", "import", "离线", "端侧", "模型下载", "模型导入")),
+    SearchEntry(SectionKeys.ASR, R.string.settings_asr_title, R.string.settings_asr_whisper_variant,
+        listOf("Whisper", "tiny", "base", "small", "模型规格")),
+    SearchEntry(SectionKeys.ASR, R.string.settings_asr_title, R.string.settings_asr_group_cloud,
+        listOf("ASR", "OpenAI", "SiliconFlow", "DashScope", "Alibaba", "Tencent", "Volcengine", "在线识别", "云端服务", "硅基流动", "阿里", "腾讯", "火山", "API Key", "密钥", "Base URL", "接口地址")),
+    SearchEntry(SectionKeys.ASR, R.string.settings_asr_title, R.string.settings_asr_cloud_model,
+        listOf("ASR", "Paraformer", "Qwen", "FunASR", "云端模型", "在线模型")),
+    SearchEntry(SectionKeys.ASR, R.string.settings_asr_title, R.string.settings_asr_protocol,
+        listOf("Realtime", "WebSocket", "HTTP", "ASR", "protocol", "接口协议", "音频文件转写", "实时语音识别")),
+    SearchEntry(SectionKeys.ASR, R.string.settings_asr_title, R.string.settings_asr_language,
+        listOf("ASR", "speech language", "识别语言", "语音语言")),
+    SearchEntry(SectionKeys.ASR, R.string.settings_asr_title, R.string.settings_asr_max_records,
+        listOf("ASR", "subtitle records", "history limit", "字幕记录", "语音记录", "显示条数", "记录数量")),
+    SearchEntry(SectionKeys.ASR, R.string.settings_asr_title, R.string.settings_asr_pause_duration,
+        listOf("ASR", "VAD", "pause", "silence", "endpoint", "断句", "停顿", "静音", "切段")),
+    SearchEntry(SectionKeys.ASR, R.string.settings_asr_title, R.string.settings_asr_max_segment_duration,
+        listOf("ASR", "segment duration", "audio length", "分段", "最长时长", "音频时长", "切段")),
+    SearchEntry(SectionKeys.DEVELOPER, R.string.settings_section_developer, R.string.settings_hide_ocr_no_text_hint_label,
+        listOf("OCR", "low confidence", "error hint", "低置信度", "无有效文字", "红色提示", "隐藏提示")),
+    SearchEntry(SectionKeys.DEVELOPER, R.string.settings_section_developer, R.string.settings_batch_cumulative_completion_time_label,
+        listOf("batch", "cumulative time", "批次", "累计", "完成时间", "日志耗时")),
+    SearchEntry(SectionKeys.DEVELOPER, R.string.settings_section_developer, R.string.settings_share_entire_screen,
+        listOf("share entire screen", "共享整个屏幕", "屏幕共享")),
+    SearchEntry(SectionKeys.TRIGGER, R.string.settings_section_trigger, R.string.settings_loop_capture_vibration,
+        listOf("vibration", "vibrate", "haptic", "震动", "振动", "轻震动", "触觉反馈")),
     SearchEntry(
         SectionKeys.TRANSLATE,
         R.string.settings_section_translator,
@@ -9510,7 +9626,7 @@ private val SETTING_ITEMS: List<SearchEntry> = listOfNotNull(
         ),
     ),
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_paddle_ai_studio, listOf("PP-OCRv6 Online", "Paddle AI Studio", "Access Token", "在线 OCR", "云端 OCR")),
-    SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_paddle_download, listOf("ONNX", "v5", "v6", "PP-OCRv6", "模型", "model", "镜像", "mirror", "本地导入", "local import", "import", "导入", "delete", "删除")),
+    SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_paddle_download, listOf("ONNX", "v5", "v6", "PP-OCRv6", "V5_ESLAV", "eslav", "East Slavic", "Russian", "Korean", "东斯拉夫语", "俄语", "白俄罗斯语", "乌克兰语", "韩语", "模型", "model", "镜像", "mirror", "本地导入", "local import", "import", "导入", "delete", "删除")),
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_manga_ocr_download, listOf("manga", "manga-ocr", "日漫", "漫画", "竖排", "vertical", "ONNX", "模型", "model", "download", "下载", "本地导入", "local import", "import", "导入", "delete", "删除")),
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_umi_ocr, listOf("umi", "Umi-OCR", "local http", "局域网", "本机", "PC", "1224", "api/ocr")),
     SearchEntry(SectionKeys.OCR, R.string.settings_section_ocr, R.string.settings_search_item_luna_ocr, listOf("luna", "LunaTranslator", "露娜", "local http", "局域网", "本机", "PC", "api/ocr")),

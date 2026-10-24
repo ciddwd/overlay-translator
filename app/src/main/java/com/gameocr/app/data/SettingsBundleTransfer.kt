@@ -182,10 +182,23 @@ object SettingsBundleTransfer {
         availableFonts: List<OverlayFontEntry>,
     ): SettingsBundleMergeResult {
         val portable = portableSettings(imported)
-        val presetResult = TranslationPresetTransfer.mergeImportedPresets(
+        val mergedPresets = TranslationPresetTransfer.mergeImportedPresets(
             existing = current.translationPresets,
             imported = portable.translationPresets,
         )
+        // Bundle exports omit private endpoints. Re-importing a local preset must not replace
+        // its connection with the export placeholder and invalidate its local credential binding.
+        val presetResult = mergedPresets.copy(presets = mergedPresets.presets.map { preset ->
+            val original = current.translationPresets.firstOrNull { it.id == preset.id } ?: return@map preset
+            val local = preset.copy(
+                baseUrl = original.baseUrl,
+                anthropicBaseUrl = original.anthropicBaseUrl,
+                deeplBaseUrl = original.deeplBaseUrl,
+                umiOcrBaseUrl = original.umiOcrBaseUrl,
+                lunaOcrBaseUrl = original.lunaOcrBaseUrl,
+            )
+            TranslationPresetCatalog.fromSettings(local.id, local.name, local.shortName, local.applyTo(Settings()))
+        })
         val normalizedAvailable = OverlayFontPolicy.normalizeImportedFonts(availableFonts)
         val availableByName = normalizedAvailable.associateBy { it.fileName }
         val mergedFonts = OverlayFontPolicy.normalizeImportedFonts(
@@ -355,6 +368,7 @@ object SettingsBundleTransfer {
         val defaults = Settings()
         return preset.copy(
             baseUrl = defaults.baseUrl,
+            anthropicBaseUrl = defaults.anthropicBaseUrl,
             deeplBaseUrl = defaults.deeplBaseUrl,
             umiOcrBaseUrl = defaults.umiOcrBaseUrl,
             lunaOcrBaseUrl = defaults.lunaOcrBaseUrl,

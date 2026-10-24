@@ -115,10 +115,14 @@ fun DictionaryLibraryScreen(
                     onTapLookupEnabledChange = viewModel::setTapLookupEnabled,
                     onSelect = { mode ->
                         scope.launch {
-                            if (!viewModel.selectMode(mode)) {
-                                snackbar.showSnackbar(
-                                    context.getString(R.string.dictionary_online_unavailable)
-                                )
+                            runSettingsWrite(onFailure = {
+                                snackbar.showSnackbar(context.getString(R.string.settings_storage_save_failed))
+                            }) {
+                                if (!viewModel.selectMode(mode)) {
+                                    snackbar.showSnackbar(
+                                        context.getString(R.string.dictionary_online_unavailable)
+                                    )
+                                }
                             }
                         }
                     },

@@ -76,6 +76,11 @@ internal class SpeechTranscript {
         records += SpeechRecord(nextId++, generation, segmentId, text, "", SpeechRecordState.LISTENING)
     }
 
+    /** Removes only the matching unconfirmed row when the server retracts an empty result. */
+    fun discardPartial(generation: Long, segmentId: Long) {
+        records.removeAll { it.generation == generation && it.segmentId == segmentId && it.state == SpeechRecordState.LISTENING }
+    }
+
     /** Finalizes the matching utterance (or appends a new one) and returns it for translation. */
     fun onFinal(generation: Long, segmentId: Long, text: String): SpeechRecord {
         val open = records.lastOrNull()?.takeIf { it.state == SpeechRecordState.LISTENING }

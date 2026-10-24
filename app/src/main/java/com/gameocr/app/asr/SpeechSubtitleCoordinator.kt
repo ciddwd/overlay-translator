@@ -5,6 +5,7 @@ import com.gameocr.app.R
 import com.gameocr.app.data.AsrDisplayPolicy
 import com.gameocr.app.data.Settings
 import com.gameocr.app.data.LogRepository
+import com.gameocr.app.translate.DialogueTranslationContextPolicy
 import com.gameocr.app.translate.Translator
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -21,7 +22,8 @@ import timber.log.Timber
 
 /**
  * Turns speech events into records for the existing floating window and translates each
- * finished record independently.
+ * finished record as its own request. When the context mode allows it, the request also carries
+ * the previous segments as read-only context ([SpeechTranslationContextPolicy]).
  *
  * Events are applied strictly in arrival order through one inbox. Every final segment gets its
  * own translation task; tasks start in arrival order on [MAX_CONCURRENT_TRANSLATIONS] workers,
@@ -49,6 +51,8 @@ internal class SpeechSubtitleCoordinator(
 
     private val lock = Mutex()
     private val transcript = SpeechTranscript()
+    /** Survives pause and resume, which continue the same conversation; cleared by [reset]. */
+    private val history = SpeechTranslationHistory()
     /** Pending and running translations by record id; independent of what is displayed. */
     private val tasks = LinkedHashMap<Long, Task>()
     private val inbox = Channel<suspend () -> Unit>(Channel.UNLIMITED)
@@ -87,6 +91,11 @@ internal class SpeechSubtitleCoordinator(
                 }
             }
         } else if (event.isFinal) {
+            if (event.text.isBlank()) {
+                transcript.discardPartial(generation, event.segmentId)
+                scheduleRender()
+                return@post
+            }
             logRepository?.info(LogRepository.Category.SPEECH, userMessage(R.string.asr_log_result) + event.text)
             enqueue(transcript.onFinal(generation, event.segmentId, event.text))
         } else {
@@ -111,6 +120,7 @@ internal class SpeechSubtitleCoordinator(
         cancelTasks()
         loggedProviderResults.clear()
         transcript.clear()
+        history.clear()
         renderJob?.cancel()
         renderJob = null
         dirty = false
@@ -135,6 +145,7 @@ internal class SpeechSubtitleCoordinator(
     private fun enqueue(record: SpeechRecord) {
         val task = Task(record, clock())
         tasks[record.id] = task
+        history.add(record.id, record.source)
         queue.trySend(task)
         metrics()?.onTranslationQueued(tasks.size)
     }
@@ -155,8 +166,16 @@ internal class SpeechSubtitleCoordinator(
         try {
             if (!update(record, "", SpeechRecordState.TRANSLATING)) return
             val snapshot = settings()
+            val request = if (SpeechTranslationContextPolicy.enabled(snapshot)) {
+                val turns = lock.withLock {
+                    history.before(record.id, DialogueTranslationContextPolicy.contextKey(snapshot))
+                }
+                SpeechTranslationContextPolicy.contextualize(snapshot, record.source, turns)
+            } else {
+                snapshot
+            }
             var latest = ""
-            translator.translateStream(record.source, snapshot).collect { partial ->
+            translator.translateStream(record.source, request).collect { partial ->
                 latest = partial
                 update(record, partial, SpeechRecordState.TRANSLATING)
             }
@@ -191,6 +210,7 @@ internal class SpeechSubtitleCoordinator(
     private suspend fun update(record: SpeechRecord, translation: String, state: SpeechRecordState): Boolean =
         lock.withLock {
             if (record.generation != currentGeneration()) return@withLock false
+            if (state == SpeechRecordState.DONE) history.complete(record.id, translation)
             // The record may have scrolled out of the display limit; its task still completes.
             if (transcript.applyTranslation(record.id, translation, state)) scheduleRender()
             true

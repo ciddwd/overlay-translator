@@ -30,6 +30,20 @@ internal object PaddleRotateCrop {
     }
 
     /**
+     * [cropSize], or null when the crop is dropped: empty (as in the official pipeline), wider or
+     * taller than [MAX_CROP_SIDE], or entirely outside the image.
+     */
+    fun keptCropSize(points: FloatArray, imageWidth: Int, imageHeight: Int): IntArray? {
+        val size = cropSize(points)
+        if (size[0] <= 0 || size[1] <= 0 || size[0] > MAX_CROP_SIDE || size[1] > MAX_CROP_SIDE) return null
+        val bounds = sourceBounds(points, imageWidth, imageHeight)
+        if (bounds[2] <= bounds[0] || bounds[3] <= bounds[1]) return null
+        return size
+    }
+
+    const val MAX_CROP_SIDE = 4096
+
+    /**
      * @param source ARGB pixels of the image region starting at ([originX], [originY]). The region
      *   must contain the quad bounds plus [SOURCE_MARGIN] wherever the image extends that far, so
      *   clamping to the region edge is exactly BORDER_REPLICATE at the image edge.

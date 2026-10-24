@@ -14,8 +14,9 @@ internal data class MangaSequenceConfidence(
 )
 
 /**
- * Selects the greedy decoder token and, for Debug diagnostics, calculates its stable softmax
- * probability. The probability is meaningful inside manga-ocr only; it must not be compared to a
+ * Selects the greedy decoder token and calculates its stable softmax probability for production
+ * quality checks in both build variants. The probability is meaningful inside manga-ocr only;
+ * it must not be compared to a
  * Paddle CTC confidence until real-device samples have been calibrated.
  */
 internal fun mangaTokenPrediction(

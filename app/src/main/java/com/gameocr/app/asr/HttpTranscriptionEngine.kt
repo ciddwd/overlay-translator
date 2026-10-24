@@ -4,52 +4,87 @@ import android.content.res.AssetManager
 import android.os.SystemClock
 import com.gameocr.app.data.AsrCloudConnections
 import com.gameocr.app.data.AsrLanguage
-import com.k2fsa.sherpa.onnx.SileroVadModelConfig
+import com.gameocr.app.data.AsrSegmentDurations
+import com.gameocr.app.data.AsrSegmentationSettings
 import com.k2fsa.sherpa.onnx.Vad
-import com.k2fsa.sherpa.onnx.VadModelConfig
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import okhttp3.*
 import timber.log.Timber
 
-/** VAD produces complete audio files; bounded FIFO work preserves the ordering of subtitles. */
+internal interface HttpAsrSegmenter : AutoCloseable {
+    fun accept(samples: FloatArray): List<ByteArray>
+    fun reset()
+}
+
+internal object HttpAsrPolicy {
+    const val CONCURRENT_REQUESTS = 2
+    const val MAX_PENDING_SEGMENTS = 6
+
+    fun vadConfig(durations: AsrSegmentDurations = AsrSegmentationSettings().http) =
+        AsrVadPolicy.config(durations)
+}
+
+private class HttpSileroSegmenter(assets: AssetManager, durations: AsrSegmentDurations) : HttpAsrSegmenter {
+    private val vad = Vad(assetManager = assets, config = HttpAsrPolicy.vadConfig(durations))
+    override fun accept(samples: FloatArray): List<ByteArray> {
+        vad.acceptWaveform(samples)
+        return buildList {
+            while (!vad.empty()) {
+                add(ParaformerRealtimeEngine.pcm16(vad.front().samples).toByteArray())
+                vad.pop()
+            }
+        }
+    }
+    override fun reset() = vad.reset()
+    override fun close() = vad.release()
+}
+
+/** Short VAD files overlap their network requests; results publish strictly in audio order. */
 internal class HttpTranscriptionEngine(
     client: OkHttpClient,
-    assets: AssetManager,
+    assets: AssetManager?,
     private val config: AsrCloudConnections,
     private val language: AsrLanguage,
     private val sink: (SpeechEvent) -> Unit,
     private val onFailure: (CloudAsrFailure) -> Unit,
     private val metrics: SpeechMetrics?,
+    segmenter: HttpAsrSegmenter? = null,
+    callFactory: Call.Factory? = null,
+    private val clock: () -> Long = SystemClock::elapsedRealtime,
+    durations: AsrSegmentDurations = AsrSegmentationSettings().http,
+    private val hintSource: AsrHintSource = AsrHintSource(),
 ) : SpeechEngine {
     private data class Segment(val epoch: Long, val id: Long, val pcm: ByteArray)
     private val client = client.newBuilder().callTimeout(30, TimeUnit.SECONDS).followRedirects(false).build()
-    private val vad = Vad(assetManager = assets, config = VadModelConfig(
-        sileroVadModelConfig = SileroVadModelConfig(model = AsrVadModel.ASSET_PATH,
-            minSilenceDuration = 1.3f, minSpeechDuration = 0.25f, maxSpeechDuration = 12f),
-        sampleRate = 16000, numThreads = 1, provider = "cpu",
-    ))
+    private val segmenter = segmenter ?: HttpSileroSegmenter(checkNotNull(assets), durations)
+    private val callFactory = callFactory ?: this.client
     private val lock = Any()
     private var epoch = 0L
     private var nextId = 0L
-    private var call: Call? = null
+    private var nextResultId = 0L
+    private val calls = mutableSetOf<Call>()
+    private val results = mutableMapOf<Long, String>()
     private var closed = false
     private var failed = false
-    private val queue = Channel<Segment>(4)
+    private val queue = Channel<Segment>(HttpAsrPolicy.MAX_PENDING_SEGMENTS)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    init { scope.launch { for (segment in queue) transcribe(segment) } }
+    init {
+        repeat(HttpAsrPolicy.CONCURRENT_REQUESTS) {
+            scope.launch { for (segment in queue) transcribe(segment) }
+        }
+    }
 
     override fun accept(samples: FloatArray, backlogSamples: Int) {
-        synchronized(lock) { if (closed || failed) return }
-        vad.acceptWaveform(samples)
-        while (!vad.empty()) {
-            val segment = vad.front()
-            val pcm = ParaformerRealtimeEngine.pcm16(segment.samples).toByteArray()
-            vad.pop()
-            synchronized(lock) {
-                if (!queue.trySend(Segment(epoch, nextId++, pcm)).isSuccess) {
+        synchronized(lock) {
+            if (closed || failed || samples.isEmpty()) return
+            for (pcm in segmenter.accept(samples)) {
+                // Count completed-but-waiting results too, so a slow first request cannot
+                // turn the reorder buffer into an unbounded backlog of stale subtitles.
+                if (nextId - nextResultId >= HttpAsrPolicy.MAX_PENDING_SEGMENTS ||
+                    !queue.trySend(Segment(epoch, nextId++, pcm)).isSuccess) {
                     // Stop visibly instead of silently dropping or overwriting older utterances.
                     failLocked(CloudAsrFailure.CONNECTION)
                     return
@@ -59,18 +94,24 @@ internal class HttpTranscriptionEngine(
     }
 
     private fun transcribe(segment: Segment) {
-        val request = runCatching { OpenAiAsrProtocol.request(config, language, segment.pcm) }.getOrElse {
-                synchronized(lock) {
-                    if (!closed && !failed && segment.epoch == epoch) failLocked(CloudAsrFailure.CONNECTION)
-                }
-                return
+        synchronized(lock) { if (closed || failed || segment.epoch != epoch) return }
+        val active = runCatching {
+            val request = synchronized(lock) {
+                if (closed || failed || segment.epoch != epoch) return
+                OpenAiAsrProtocol.request(config, language, segment.pcm, hintSource.current)
             }
-        val active = client.newCall(request)
-        synchronized(lock) {
-            if (closed || failed || segment.epoch != epoch) return
-            call = active
+            callFactory.newCall(request)
+        }.getOrElse {
+            synchronized(lock) {
+                if (!closed && !failed && segment.epoch == epoch) failLocked(CloudAsrFailure.CONNECTION)
+            }
+            return
         }
-        val startedAt = SystemClock.elapsedRealtime()
+        synchronized(lock) {
+            if (closed || failed || segment.epoch != epoch) { active.cancel(); return }
+            calls.add(active)
+        }
+        val startedAt = clock()
         try {
             active.execute().use { response ->
                 synchronized(lock) {
@@ -84,8 +125,13 @@ internal class HttpTranscriptionEngine(
                 val text = OpenAiAsrProtocol.transcript(response.body?.string().orEmpty())
                 synchronized(lock) {
                     if (closed || failed || segment.epoch != epoch) return
-                    metrics?.onCloudSentence(SystemClock.elapsedRealtime() - startedAt)
-                    if (text.isNotEmpty()) sink(SpeechEvent(segment.id, text, true))
+                    metrics?.onCloudSentence(clock() - startedAt)
+                    results[segment.id] = text
+                    while (results.containsKey(nextResultId)) {
+                        val id = nextResultId++
+                        val ordered = results.remove(id)!!
+                        if (ordered.isNotEmpty()) sink(SpeechEvent(id, ordered, true))
+                    }
                 }
             }
         } catch (error: Exception) {
@@ -95,30 +141,37 @@ internal class HttpTranscriptionEngine(
                     failLocked(CloudAsrFailure.CONNECTION)
                 }
             }
-        } finally { synchronized(lock) { if (call === active) call = null } }
+        } finally { synchronized(lock) { calls.remove(active) } }
     }
 
     private fun failLocked(reason: CloudAsrFailure) {
         if (closed || failed) return
         failed = true
-        epoch++
-        call?.cancel()
-        while (queue.tryReceive().isSuccess) { /* Drop abandoned work on a failure boundary. */ }
+        resetLocked()
         onFailure(reason)
     }
 
-    override fun reset() {
-        synchronized(lock) {
-            epoch++
-            call?.cancel(); call = null
-            while (queue.tryReceive().isSuccess) { }
-        }
-        vad.reset()
+    private fun resetLocked() {
+        epoch++
+        calls.forEach { it.cancel() }
+        calls.clear()
+        while (queue.tryReceive().isSuccess) { }
+        results.clear()
+        nextResultId = nextId
+        segmenter.reset()
     }
 
-    override fun close() {
-        synchronized(lock) { closed = true }
-        reset()
-        queue.close(); scope.cancel(); vad.release()
+    override fun reset() = synchronized(lock) {
+        if (!closed) resetLocked()
+    }
+
+    override fun close() = synchronized(lock) {
+        if (!closed) {
+            closed = true
+            resetLocked()
+            queue.close()
+            scope.cancel()
+            segmenter.close()
+        }
     }
 }

@@ -38,3 +38,40 @@ internal object OcrHalfTurnPolicy {
             winner.confidence - other.confidence >= MIN_CONFIDENCE_GAIN - 0.000001f &&
             winner.text.count(Char::isLetter) >= 3
 }
+
+/**
+ * Guards the full-page OCR rerun after a 180-degree hint. A hint can be wrong; the two OCR passes
+ * themselves are the evidence, so the rotated result replaces the first only when it reads
+ * clearly better, and a first pass that already reads confidently is not rerun at all.
+ */
+internal object OcrHalfTurnRerunPolicy {
+    /** The rotated pass must carry this much more confident text than the first pass. */
+    const val MIN_SCORE_GAIN = 1.2f
+    private const val RELIABLE_MIN_BLOCKS = 3
+    private const val RELIABLE_MIN_CHARS = 20
+    private const val RELIABLE_MIN_AVERAGE_CONFIDENCE = 0.85f
+
+    /**
+     * Confidence-weighted non-whitespace characters. Engines that report no confidence (always
+     * 1.0, such as Baidu) reduce to a plain character count.
+     */
+    fun score(blocks: List<TextBlock>): Float = blocks.sumOf { block ->
+        block.confidence.coerceIn(0f, 1f).toDouble() * block.text.count { !it.isWhitespace() }
+    }.toFloat()
+
+    fun prefersRerun(first: List<TextBlock>, rerun: List<TextBlock>): Boolean {
+        val rerunScore = score(rerun)
+        return rerunScore > 0f && rerunScore >= score(first) * MIN_SCORE_GAIN
+    }
+
+    /**
+     * Upside-down lines decode to few, low-confidence characters, so several confident lines mean
+     * the page is already upright. Only meaningful for engines that report real confidences.
+     */
+    fun firstPassIsReliable(blocks: List<TextBlock>): Boolean {
+        val read = blocks.filter { block -> block.text.any { !it.isWhitespace() } }
+        if (read.size < RELIABLE_MIN_BLOCKS) return false
+        if (read.sumOf { block -> block.text.count { !it.isWhitespace() } } < RELIABLE_MIN_CHARS) return false
+        return read.map { it.confidence.coerceIn(0f, 1f) }.average() >= RELIABLE_MIN_AVERAGE_CONFIDENCE
+    }
+}

@@ -349,6 +349,9 @@ object OnboardingPolicy {
             recommendedOcrEngine(draft) == OcrEngineKind.MANGA_OCR_JA ->
                 PaddleModelVersion.V6_SMALL
             recommendedOcrEngine(draft) == OcrEngineKind.PADDLE_ONNX &&
+                OcrLanguageCapability.preferredPaddleModelVersion(draft.sourceLang) != null ->
+                OcrLanguageCapability.preferredPaddleModelVersion(draft.sourceLang)
+            recommendedOcrEngine(draft) == OcrEngineKind.PADDLE_ONNX &&
                 supportsPaddleV5Korean(draft.sourceLang) ->
                 PaddleModelVersion.V5_KOREAN
             recommendedOcrEngine(draft) == OcrEngineKind.PADDLE_ONNX ->

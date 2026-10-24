@@ -871,7 +871,7 @@ class DraggableOverlayWindow(
         locked = newLocked
         applyLocked()
         ioScope.launch {
-            settingsRepository.update { it.copy(floatingWindowLocked = newLocked) }
+            settingsRepository.tryUpdate { it.copy(floatingWindowLocked = newLocked) }
         }
     }
 
@@ -979,7 +979,7 @@ class DraggableOverlayWindow(
         val w = widthDp
         val h = heightDp
         ioScope.launch {
-            settingsRepository.update {
+            settingsRepository.tryUpdate {
                 it.copy(
                     floatingWindowX = x,
                     floatingWindowY = y,

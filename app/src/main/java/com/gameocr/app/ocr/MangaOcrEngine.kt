@@ -2005,7 +2005,7 @@ class MangaOcrEngine @Inject constructor(
                         maxTokens = MAX_TOKENS,
                         startTokenId = CLS_ID,
                         endTokenId = SEP_ID,
-                        calculateConfidence = BuildConfig.DEBUG,
+                        calculateConfidence = true,
                     ).decode(
                         rowCount = rowCount,
                         draft = speculativeDecoder(e, draft, hidden, stats, isDraft = true),
@@ -2373,7 +2373,7 @@ class MangaOcrEngine @Inject constructor(
                     val argmaxStartedAtNs = SystemClock.elapsedRealtimeNanos()
                     val next = mangaTokenPrediction(
                         logitsByStep = logits[0],
-                        calculateConfidence = BuildConfig.DEBUG,
+                        calculateConfidence = true,
                     )
                     argmaxUs = InferenceTiming.elapsedUs(
                         argmaxStartedAtNs,
@@ -2515,7 +2515,7 @@ class MangaOcrEngine @Inject constructor(
                     val values = Array(activeRows.size) { row ->
                         mangaTokenPrediction(
                             logitsByStep = logits[row],
-                            calculateConfidence = BuildConfig.DEBUG,
+                            calculateConfidence = true,
                         )
                     }
                     argmaxUs = InferenceTiming.elapsedUs(

@@ -154,6 +154,9 @@ private fun AppRoot(
     var onboardingFirstRun by rememberSaveable {
         mutableStateOf(!OnboardingPrefs.isCompleted(context))
     }
+    var initialCaptureSetupPending by rememberSaveable {
+        mutableStateOf(OnboardingPrefs.isCaptureSetupPending(context))
+    }
     var onboardingOpenedFromHelp by rememberSaveable {
         mutableStateOf(false)
     }
@@ -205,6 +208,11 @@ private fun AppRoot(
     ) {
         when (route) {
             Route.Main -> MainScreen(
+                initialCaptureSetupPending = initialCaptureSetupPending,
+                onInitialCaptureSetupFinished = {
+                    OnboardingPrefs.markCaptureSetupCompleted(context)
+                    initialCaptureSetupPending = false
+                },
                 onOpenSettings = { routeName = Route.Settings.name },
                 onOpenPresetSettings = {
                     settingsInitialSection = SETTINGS_SECTION_PRESETS

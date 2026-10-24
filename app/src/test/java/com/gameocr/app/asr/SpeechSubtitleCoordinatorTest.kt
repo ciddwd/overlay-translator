@@ -2,6 +2,9 @@ package com.gameocr.app.asr
 
 import com.gameocr.app.data.Settings
 import com.gameocr.app.data.LogRepository
+import com.gameocr.app.data.RuntimeDialogueTurn
+import com.gameocr.app.data.TranslationContextMode
+import com.gameocr.app.data.TranslatorEngine
 import com.gameocr.app.R
 import com.gameocr.app.translate.Translator
 import java.util.concurrent.CopyOnWriteArrayList
@@ -20,6 +23,22 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SpeechSubtitleCoordinatorTest {
+    @Test fun emptyFinalRetractsPartialWithoutTranslationOrAnEmptyLogEntry() = runBlocking {
+        val translator = FakeTranslator()
+        val h = Harness(translator)
+        try {
+            h.coordinator.onEvent(1, SpeechEvent(0, "temporary", false))
+            h.awaitPairs(listOf("temporary" to "…"))
+            h.coordinator.onEvent(1, SpeechEvent(0, "", true))
+            h.awaitPairs(emptyList())
+            assertTrue(translator.requests.isEmpty())
+            assertTrue(h.logs.entries.value.isEmpty())
+            h.coordinator.onEvent(1, SpeechEvent(1, "next", true))
+            h.awaitPairs(listOf("next" to "T:next"))
+            assertEquals(listOf("next"), translator.requests.toList())
+        } finally { h.scope.cancel() }
+    }
+
     @Test fun speechTranslationBypassesTextTranslatorAndRejectsResultsAfterPause() = runBlocking {
         val translator = FakeTranslator()
         val h = Harness(translator)
@@ -39,9 +58,11 @@ class SpeechSubtitleCoordinatorTest {
     private class FakeTranslator(private val gates: Map<String, CompletableDeferred<Unit>> = emptyMap()) : Translator {
         val requests = CopyOnWriteArrayList<String>()
         val completed = CopyOnWriteArrayList<String>()
+        val contexts = java.util.concurrent.ConcurrentHashMap<String, List<RuntimeDialogueTurn>>()
         override suspend fun translate(source: String, settings: Settings): String = "T:$source"
         override fun translateStream(source: String, settings: Settings): Flow<String> = flow {
             requests += source
+            contexts[source] = settings.runtimeTranslationPromptContext.previousFrame
             gates[source]?.await()
             if (source == "boom") error("network")
             emit("T:$source")
@@ -49,7 +70,7 @@ class SpeechSubtitleCoordinatorTest {
         }
     }
 
-    private class Harness(translator: Translator) {
+    private class Harness(translator: Translator, settings: Settings = Settings()) {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         @Volatile var generation = 1L
         val metrics = SpeechMetrics()
@@ -58,7 +79,7 @@ class SpeechSubtitleCoordinatorTest {
         val coordinator = SpeechSubtitleCoordinator(
             scope = scope,
             translator = translator,
-            settings = { Settings() },
+            settings = { settings },
             currentGeneration = { generation },
             metrics = { metrics },
             render = { renders += it },
@@ -215,6 +236,34 @@ class SpeechSubtitleCoordinatorTest {
         delay(200)
         assertEquals((2..4).map { "s$it" to "T:s$it" }, h.lastPairs())
         h.scope.cancel()
+    }
+
+    @Test fun contextModeSendsEarlierSegmentsAndResetForgetsThem_tableDriven() = runBlocking {
+        listOf(TranslationContextMode.FAST_PER_SEGMENT, TranslationContextMode.CONTINUOUS_CONTEXT).forEach { mode ->
+            val gate = CompletableDeferred<Unit>()
+            val translator = FakeTranslator(mapOf("b" to gate))
+            val h = Harness(translator, Settings(translatorEngine = TranslatorEngine.OPENAI, translationContextMode = mode))
+            try {
+                h.coordinator.onEvent(1, SpeechEvent(0, "a", isFinal = true))
+                h.awaitPairs(listOf("a" to "T:a"))
+                h.coordinator.onEvent(1, SpeechEvent(1, "b", isFinal = true))
+                h.coordinator.onEvent(1, SpeechEvent(2, "c", isFinal = true))
+                // "c" starts while "b" is still translating, so "b" is context without a translation.
+                h.awaitPairs(listOf("a" to "T:a", "b" to "…", "c" to "T:c"))
+                gate.complete(Unit)
+                h.awaitPairs(listOf("a" to "T:a", "b" to "T:b", "c" to "T:c"))
+                h.coordinator.reset()
+                h.coordinator.onEvent(1, SpeechEvent(3, "d", isFinal = true))
+                h.awaitPairs(listOf("d" to "T:d"))
+                val expectedC = if (mode == TranslationContextMode.FAST_PER_SEGMENT) emptyList() else listOf(
+                    RuntimeDialogueTurn("a", "T:a"),
+                    RuntimeDialogueTurn("b"),
+                )
+                assertEquals(mode.name, expectedC, translator.contexts.getValue("c"))
+                assertEquals(mode.name, emptyList<RuntimeDialogueTurn>(), translator.contexts.getValue("a"))
+                assertEquals(mode.name, emptyList<RuntimeDialogueTurn>(), translator.contexts.getValue("d"))
+            } finally { h.scope.cancel() }
+        }
     }
 
     @Test fun failedTranslationLeavesSourceWithoutPlaceholderAndCountsInMetrics() = runBlocking {

@@ -25,24 +25,23 @@ class AsrModelUiPolicyTest {
         }
     }
 
-    @Test fun importAndDeleteFollowModelState_tableDriven() {
-        data class Case(val state: AsrModelUiState, val import: Boolean, val delete: Boolean)
+    @Test fun importAndDownloadFollowModelState_tableDriven() {
+        data class Case(val state: AsrModelUiState, val import: Boolean, val busy: Boolean)
         listOf(
-            Case(AsrModelUiState.NotDownloaded, import = true, delete = false),
-            Case(AsrModelUiState.Failed, import = true, delete = false),
+            Case(AsrModelUiState.NotDownloaded, import = true, busy = false),
+            Case(AsrModelUiState.Failed, import = true, busy = false),
             // Ready models use the same disabled download/import actions as OCR.
-            Case(AsrModelUiState.Ready, import = false, delete = true),
-            Case(AsrModelUiState.Downloading(40), import = false, delete = false),
-            Case(AsrModelUiState.Downloading(null), import = false, delete = false),
-            Case(AsrModelUiState.Verifying, import = false, delete = false),
-            Case(AsrModelUiState.Checking, import = false, delete = false),
-            Case(AsrModelUiState.Queued, import = false, delete = false),
-            Case(AsrModelUiState.Importing, import = false, delete = false),
+            Case(AsrModelUiState.Ready, import = false, busy = false),
+            Case(AsrModelUiState.Downloading(40), import = false, busy = true),
+            Case(AsrModelUiState.Downloading(null), import = false, busy = true),
+            Case(AsrModelUiState.Verifying, import = false, busy = true),
+            Case(AsrModelUiState.Checking, import = false, busy = true),
+            Case(AsrModelUiState.Queued, import = false, busy = true),
+            Case(AsrModelUiState.Importing, import = false, busy = true),
         ).forEach { case ->
             assertEquals(case.toString(), case.import, AsrModelUiPolicy.canImport(case.state))
             assertEquals(case.toString(), case.import, AsrModelUiPolicy.canDownload(case.state))
-            assertEquals(case.toString(), !case.import && !case.delete, AsrModelUiPolicy.isBusy(case.state))
-            assertEquals(case.toString(), case.delete, AsrModelUiPolicy.canDelete(case.state))
+            assertEquals(case.toString(), case.busy, AsrModelUiPolicy.isBusy(case.state))
         }
     }
 
@@ -65,28 +64,20 @@ class AsrModelUiPolicyTest {
         assertEquals(99L, AsrModelUiPolicy.sizeMegabytes(AsrModelId.WHISPER_TINY))
     }
 
-    @Test fun downloadProgressIsOnlyInTheSharedCard_otherModelStatusesRemain_tableDriven() {
-        listOf(
-            AsrModelUiState.Downloading(0) to false,
-            AsrModelUiState.Downloading(25) to false,
-            AsrModelUiState.Downloading(100) to false,
-            AsrModelUiState.Downloading(null) to false,
-            AsrModelUiState.Queued to false,
-            AsrModelUiState.Verifying to false,
-            AsrModelUiState.Checking to true,
-            AsrModelUiState.Importing to true,
-            AsrModelUiState.NotDownloaded to true,
-            AsrModelUiState.Ready to true,
-            AsrModelUiState.Failed to true,
-        ).forEach { (state, show) -> assertEquals(state.toString(), show, AsrModelUiPolicy.showInlineStatus(state)) }
-
+    @Test fun inlineProgressAndDeleteMatchOcr_sharedCardKeepsCancellation() {
         val speech = source("AsrSettingsSection.kt").substringAfter("private fun OnDeviceModelSection(")
             .substringBefore("private fun CloudEngineSection(")
-        assertTrue(speech.contains("if (AsrModelUiPolicy.showInlineStatus(modelState))"))
+        assertFalse(speech.contains("showInlineStatus"))
+        assertTrue(speech.contains("CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)"))
+        assertTrue(speech.contains("modelDownloadAmountText(downloaded ?: 0L, total ?: -1L)"))
         assertFalse(speech.contains("ModelDownloadProgressLine("))
         assertFalse(speech.contains("settings_asr_cancel_download"))
         assertFalse(speech.contains("cancelModelDownload("))
-        assertTrue(speech.contains("enabled = AsrModelUiPolicy.canDelete(modelState)"))
+        val deleteButton = speech.substringBefore(") { Text(stringResource(R.string.settings_paddle_btn_delete)) }")
+            .substringAfterLast("OutlinedButton(")
+        assertFalse(deleteButton.contains("enabled ="))
+        assertTrue(deleteButton.contains("confirmDelete = true"))
+        assertTrue(speech.contains("R.string.settings_model_delete_confirm_message"))
         assertTrue(speech.contains("R.string.settings_paddle_btn_delete"))
         val shared = source("SettingsScreen.kt").substringAfter("val modelDownloadFeedback:")
             .substringBefore("LaunchedEffect(translatorEngine, localModelId,")
