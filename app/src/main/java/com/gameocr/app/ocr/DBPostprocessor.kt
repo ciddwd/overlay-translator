@@ -67,7 +67,6 @@ object DBPostprocessor {
         val visited = Array(h) { BooleanArray(w) }
         val result = mutableListOf<Quad>()
         val splitIndices = mutableSetOf<Int>()
-        val maxUnclip = (minOf(w, h) * 0.05f).coerceAtLeast(4f)
 
         for (y0 in 0 until h) {
             for (x0 in 0 until w) {
@@ -111,15 +110,15 @@ object DBPostprocessor {
                 }?.takeIf { children -> children.all { it != null && minOf(it.width, it.height) >= minSide && boxScore(probMap, it) >= scoreThresh } }
                 val supports = childSupports?.filterNotNull() ?: listOf(quad)
                 supports.forEachIndexed { childIndex, support ->
-                    var unclipped = unclip(support, unclipRatio, maxUnclip)
+                    var unclipped = unclip(support, unclipRatio)
                     if (supports.size > 1) {
                         // Splitting changes only the cross-column axis. Keep the parent's longitudinal
                         // extent: detached punctuation may lie beyond a short child's probability core.
-                        val parentCrop = unclip(quad, unclipRatio, maxUnclip)
+                        val parentCrop = unclip(quad, unclipRatio)
                         val xs = listOf(unclipped.p0.x, unclipped.p1.x, unclipped.p2.x, unclipped.p3.x)
                         unclipped = Quad(
-                            PointF(xs.min(), parentCrop.p0.y), PointF(xs.max(), parentCrop.p1.y),
-                            PointF(xs.max(), parentCrop.p2.y), PointF(xs.min(), parentCrop.p3.y),
+                            paddlePointF(xs.min(), parentCrop.p0.y), paddlePointF(xs.max(), parentCrop.p1.y),
+                            paddlePointF(xs.max(), parentCrop.p2.y), paddlePointF(xs.min(), parentCrop.p3.y),
                         )
                         val l = partition!!.cuts.getOrNull(childIndex - 1) ?: Float.NEGATIVE_INFINITY
                         val r = partition.cuts.getOrNull(childIndex) ?: Float.POSITIVE_INFINITY
@@ -127,15 +126,15 @@ object DBPostprocessor {
                         splitIndices += result.size
                     }
                     val mapped = Quad(
-                        PointF(unclipped.p0.x * scaleX, unclipped.p0.y * scaleY),
-                        PointF(unclipped.p1.x * scaleX, unclipped.p1.y * scaleY),
-                        PointF(unclipped.p2.x * scaleX, unclipped.p2.y * scaleY),
-                        PointF(unclipped.p3.x * scaleX, unclipped.p3.y * scaleY),
+                        paddlePointF(unclipped.p0.x * scaleX, unclipped.p0.y * scaleY),
+                        paddlePointF(unclipped.p1.x * scaleX, unclipped.p1.y * scaleY),
+                        paddlePointF(unclipped.p2.x * scaleX, unclipped.p2.y * scaleY),
+                        paddlePointF(unclipped.p3.x * scaleX, unclipped.p3.y * scaleY),
                         support = if (retainSupport || columnCutValidator != null) Quad(
-                            PointF(support.p0.x * scaleX, support.p0.y * scaleY),
-                            PointF(support.p1.x * scaleX, support.p1.y * scaleY),
-                            PointF(support.p2.x * scaleX, support.p2.y * scaleY),
-                            PointF(support.p3.x * scaleX, support.p3.y * scaleY),
+                            paddlePointF(support.p0.x * scaleX, support.p0.y * scaleY),
+                            paddlePointF(support.p1.x * scaleX, support.p1.y * scaleY),
+                            paddlePointF(support.p2.x * scaleX, support.p2.y * scaleY),
+                            paddlePointF(support.p3.x * scaleX, support.p3.y * scaleY),
                         ) else null,
                     )
                     result.add(mapped)
@@ -161,9 +160,24 @@ object DBPostprocessor {
         }
     }
 
+    /**
+     * PaddleX recognition-crop geometry: DBPostProcess rounds every corner and clamps it to
+     * [0, width] x [0, height]; CropByPolys then refits `cv2.minAreaRect` on the integer corners
+     * and orders them LT, RT, RB, LB. Returns null when the clamped box is degenerate.
+     */
+    internal fun fitRecognitionCropQuad(quad: Quad, imageWidth: Int, imageHeight: Int): Quad? {
+        val corners = listOf(quad.p0, quad.p1, quad.p2, quad.p3).map { point ->
+            IntPoint(
+                Math.round(point.x).coerceIn(0, imageWidth),
+                Math.round(point.y).coerceIn(0, imageHeight),
+            )
+        }
+        return minAreaRect(convexHull(corners))?.copy(support = quad.support)
+    }
+
     private fun clipHorizontal(q: Quad, left: Float, right: Float) = Quad(
-        PointF(q.p0.x.coerceIn(left, right), q.p0.y), PointF(q.p1.x.coerceIn(left, right), q.p1.y),
-        PointF(q.p2.x.coerceIn(left, right), q.p2.y), PointF(q.p3.x.coerceIn(left, right), q.p3.y),
+        paddlePointF(q.p0.x.coerceIn(left, right), q.p0.y), paddlePointF(q.p1.x.coerceIn(left, right), q.p1.y),
+        paddlePointF(q.p2.x.coerceIn(left, right), q.p2.y), paddlePointF(q.p3.x.coerceIn(left, right), q.p3.y),
     )
 
     /** Andrew monotone chain 凸包，返回逆时针顺序点集。 */
@@ -229,7 +243,7 @@ object DBPostprocessor {
             val area = w * h
             if (area < bestArea && w > 1 && h > 1) {
                 bestArea = area
-                fun toXY(u: Double, v: Double) = PointF(
+                fun toXY(u: Double, v: Double) = paddlePointF(
                     (u * ux + v * vx).toFloat(),
                     (u * uy + v * vy).toFloat()
                 )
@@ -292,24 +306,24 @@ object DBPostprocessor {
     }
 
     /**
-     * 旋转矩形向外扩展：dist = area * ratio / perim（pyclipper 默认行为对矩形等价）。
+     * 旋转矩形向外扩展：dist = area * ratio / perim，与官方 pyclipper JT_ROUND 偏移后再取
+     * get_mini_boxes 的结果等价（圆角偏移的最小外接矩形即各边外推 dist）。官方没有上限。
      * 实现：沿矩形 u (=p0p1) / v (=p0p3) 方向各扩展 dist。
      */
-    private fun unclip(quad: Quad, ratio: Float, maxDistance: Float): Quad {
+    internal fun unclip(quad: Quad, ratio: Float): Quad {
         val w = quad.width
         val h = quad.height
         if (w <= 1f || h <= 1f) return quad
         val area = w * h
         val perim = 2 * (w + h)
-        var dist = (area * ratio / perim)
-        if (dist > maxDistance) dist = maxDistance
+        val dist = area * ratio / perim
         // u 方向（沿 p0->p1）
         val ux = (quad.p1.x - quad.p0.x) / w
         val uy = (quad.p1.y - quad.p0.y) / w
         // v 方向（沿 p0->p3）
         val vx = (quad.p3.x - quad.p0.x) / h
         val vy = (quad.p3.y - quad.p0.y) / h
-        fun shift(p: PointF, du: Float, dv: Float) = PointF(
+        fun shift(p: PointF, du: Float, dv: Float) = paddlePointF(
             p.x + du * ux + dv * vx,
             p.y + du * uy + dv * vy
         )

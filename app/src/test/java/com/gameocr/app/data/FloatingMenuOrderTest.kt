@@ -13,7 +13,8 @@ class FloatingMenuOrderTest {
     fun allOrder_containsEveryKnownMenuItemOnce() {
         val all = FloatingMenu.ALL_ORDER
 
-        assertEquals(MenuItemId.entries.toSet(), all.toSet())
+        // The speech slot is runtime-only (inserted while speech recognition is enabled), never saved.
+        assertEquals(MenuItemId.entries.toSet() - MenuItemId.SPEECH_SKILL, all.toSet())
         assertEquals(all.toSet().size, all.size)
     }
 
@@ -25,9 +26,10 @@ class FloatingMenuOrderTest {
                 MenuItemId.REGION,
                 MenuItemId.FULL_SCREEN_SKILL,
                 MenuItemId.INPUT_TRANSLATE_SKILL,
+                MenuItemId.GESTURE_SKILL,
                 MenuItemId.LANGUAGE_PAIR,
             ),
-            FloatingMenu.DEFAULT_ORDER.take(5)
+            FloatingMenu.DEFAULT_ORDER.take(6)
         )
     }
 
@@ -55,7 +57,7 @@ class FloatingMenuOrderTest {
             normalized.indexOf(MenuItemId.FULL_SCREEN_SKILL) + 1,
             normalized.indexOf(MenuItemId.INPUT_TRANSLATE_SKILL),
         )
-        assertEquals(MenuItemId.entries.toSet(), normalized.toSet())
+        assertEquals(MenuItemId.entries.toSet() - MenuItemId.SPEECH_SKILL, normalized.toSet())
     }
 
     @Test
@@ -133,6 +135,7 @@ class FloatingMenuOrderTest {
             onSwitchToFullScreen = {},
             onSwitchToWordSelect = {},
             onSwitchToInputTranslate = {},
+            onSwitchToGesture = {},
         )
         listOf(
             Case(
@@ -141,6 +144,7 @@ class FloatingMenuOrderTest {
                     R.string.menu_loop_translate,
                     R.string.menu_word_select,
                     R.string.menu_input_translate,
+                    R.string.gesture_mode,
                 ),
             ),
             Case(
@@ -149,6 +153,7 @@ class FloatingMenuOrderTest {
                     R.string.menu_loop_translate,
                     R.string.menu_full_screen_skill,
                     R.string.menu_input_translate,
+                    R.string.gesture_mode,
                 ),
             ),
             Case(
@@ -157,6 +162,7 @@ class FloatingMenuOrderTest {
                     R.string.menu_full_screen_skill,
                     R.string.menu_word_select,
                     R.string.menu_input_translate,
+                    R.string.gesture_mode,
                 ),
             ),
             Case(
@@ -165,7 +171,13 @@ class FloatingMenuOrderTest {
                     R.string.menu_loop_translate,
                     R.string.menu_full_screen_skill,
                     R.string.menu_word_select,
+                    R.string.gesture_mode,
                 ),
+            ),
+            Case(
+                FloatingSkill.GESTURE,
+                listOf(R.string.menu_loop_translate, R.string.menu_full_screen_skill,
+                    R.string.menu_input_translate, R.string.menu_word_select),
             ),
         ).forEach { case ->
             val items = MenuItemRegistry.build(
@@ -173,6 +185,7 @@ class FloatingMenuOrderTest {
                     MenuItemId.LOOP,
                     MenuItemId.FULL_SCREEN_SKILL,
                     MenuItemId.INPUT_TRANSLATE_SKILL,
+                    MenuItemId.GESTURE_SKILL,
                 ),
                 currentSkill = case.current,
                 callbacks = callbacks,
@@ -218,7 +231,8 @@ class FloatingMenuOrderTest {
             .filterNot {
                 it == MenuItemId.LOOP ||
                     it == MenuItemId.FULL_SCREEN_SKILL ||
-                    it == MenuItemId.INPUT_TRANSLATE_SKILL
+                    it == MenuItemId.INPUT_TRANSLATE_SKILL || it == MenuItemId.GESTURE_SKILL ||
+                    it == MenuItemId.SPEECH_SKILL
             }
             .forEach { id ->
                 FloatingSkill.entries.forEach { current ->
@@ -228,11 +242,40 @@ class FloatingMenuOrderTest {
     }
 
     @Test
+    fun modeMenuCallbacksCanReachEveryOtherBallIncludingGesture() {
+        val selected = mutableListOf<FloatingSkill>()
+        val callbacks = MenuItemRegistry.Callbacks(
+            onSwitchToLoop = { selected += FloatingSkill.LOOP },
+            onSwitchToFullScreen = { selected += FloatingSkill.FULL_SCREEN },
+            onSwitchToWordSelect = { selected += FloatingSkill.WORD_SELECT },
+            onSwitchToInputTranslate = { selected += FloatingSkill.INPUT_TRANSLATE },
+            onSwitchToGesture = { selected += FloatingSkill.GESTURE },
+            onSwitchToSpeech = { selected += FloatingSkill.SPEECH },
+            onRegion = {}, onLanguagePair = {}, onOpenMain = {}, onOpenSettings = {}, onPresetSwitch = {},
+        )
+        val savedSlots = listOf(MenuItemId.LOOP, MenuItemId.FULL_SCREEN_SKILL, MenuItemId.INPUT_TRANSLATE_SKILL, MenuItemId.GESTURE_SKILL)
+        // The four saved slots reach every other non-speech ball; with the runtime speech slot,
+        // which is always added, every other ball including speech is reachable.
+        data class Case(val slots: List<MenuItemId>, val reachable: Set<FloatingSkill>)
+        listOf(
+            Case(savedSlots, FloatingSkill.entries.toSet() - FloatingSkill.SPEECH),
+            Case(MenuItemRegistry.withSpeechSlot(savedSlots), FloatingSkill.entries.toSet()),
+        ).forEach { case ->
+            FloatingSkill.entries.filter { it in case.reachable }.forEach { current ->
+                selected.clear()
+                MenuItemRegistry.build(case.slots, current, callbacks).forEach { it.onTap() }
+                assertEquals("${case.slots.size} slots from $current", case.reachable - current, selected.toSet())
+                assertEquals(case.slots.size, selected.size)
+            }
+        }
+    }
+
+    @Test
     fun loopMode_keepsEachConfiguredModeSlotUsableOnItsOwn() {
         val callbacks = MenuItemRegistry.Callbacks(
             onSwitchToLoop = {}, onRegion = {}, onLanguagePair = {}, onOpenMain = {},
             onOpenSettings = {}, onPresetSwitch = {}, onSwitchToFullScreen = {},
-            onSwitchToWordSelect = {}, onSwitchToInputTranslate = {},
+            onSwitchToWordSelect = {}, onSwitchToInputTranslate = {}, onSwitchToGesture = {},
         )
         data class Case(val id: MenuItemId, val expectedLabel: Int)
         listOf(

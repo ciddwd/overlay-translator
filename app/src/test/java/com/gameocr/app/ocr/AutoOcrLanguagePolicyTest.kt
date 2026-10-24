@@ -4,6 +4,34 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class AutoOcrLanguagePolicyTest {
+    @Test fun languageRefinementCannotRestoreTheSameLowQualityMisread_tableDriven() {
+        data class Case(val original: AutoOcrEvidence, val refined: AutoOcrEvidence, val language: String, val expected: Boolean)
+        listOf(
+            Case(AutoOcrEvidence("自启动", null, .7265625f), AutoOcrEvidence("m까관", "ko", .13541667f), "ko", false),
+            Case(AutoOcrEvidence("自启动", null, .7265625f), AutoOcrEvidence("自启动", "zh", .90f), "zh", true),
+            Case(AutoOcrEvidence("설정", null, .65f), AutoOcrEvidence("설정", "ko", .90f), "ko", true),
+            Case(AutoOcrEvidence("설정", null, .90f), AutoOcrEvidence("设官", "zh", .30f), "zh", false),
+            // The established same-language Korean refinement path is unchanged.
+            Case(AutoOcrEvidence("설정 확인", "ko", .95f), AutoOcrEvidence("설정 확인", "ko", .90f), "ko", true),
+        ).forEach { case ->
+            assertEquals(case.toString(), case.expected,
+                AutoOcrLanguagePolicy.canRefine(listOf(case.original), case.refined, case.language))
+        }
+    }
+    @Test fun languageIdentificationDoesNotChangeOcrQuality_tableDriven() {
+        listOf("自启动", "설정", "K팝", "Shizuku", "12345", "", "！ ？").forEach { text ->
+            val scores = listOf(null, "zh", "ko", "ja", "en").map { language ->
+                AutoOcrLanguagePolicy.score(listOf(AutoOcrEvidence(text, language, .8f)))
+            }
+            assertEquals(text, 1, scores.toSet().size)
+        }
+        val correct = AutoOcrEvidence("自启动", null, .7265625f)
+        val incorrect = AutoOcrEvidence("m까관", "ko", .13541667f)
+        assertTrue(AutoOcrLanguagePolicy.score(listOf(correct)) > AutoOcrLanguagePolicy.score(listOf(incorrect)))
+        listOf(Float.NaN, Float.POSITIVE_INFINITY, -1f, 0f).forEach { confidence ->
+            assertEquals(0f, AutoOcrLanguagePolicy.score(listOf(correct.copy(confidence = confidence))), 0f)
+        }
+    }
     @Test fun koreanSampleAndFailedRefinements_tableDriven() {
         val sample = "안녕하세요! 특별한 요청이 있으신가요?"
         assertEquals("ko", AutoOcrLanguagePolicy.choose(sample, listOf(LanguageScore("ko", .99f))))

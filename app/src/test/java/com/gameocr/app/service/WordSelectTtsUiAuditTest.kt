@@ -22,7 +22,6 @@ class WordSelectTtsUiAuditTest {
             "playbackId = \"word-select:${'$'}diagId:source\"",
             "playbackId = \"word-select:${'$'}diagId:translation\"",
             "playbackId = \"word-select:${'$'}diagId:dictionary\"",
-            "sourceEvidence = { sourceLanguageEvidence }",
         )
         requiredFragments.forEach { fragment ->
             assertTrue("Missing manual word-select TTS wiring: $fragment", pipeline.contains(fragment))

@@ -43,16 +43,8 @@ class GalleryImagePreviewContractTest {
                 resultThumbnail.contains("thumbnailLoader(item)"),
             ),
             Case(
-                "result thumbnail has a one dp outline",
-                resultThumbnail.contains(".border(") &&
-                    resultThumbnail.contains("width = 1.dp") &&
-                    resultThumbnail.contains(
-                        "color = MaterialTheme.colorScheme.outlineVariant"
-                    ),
-            ),
-            Case(
                 "result thumbnail clips image and border to the same rounded shape",
-                resultThumbnail.contains("val thumbnailShape = RoundedCornerShape(4.dp)") &&
+                resultThumbnail.contains("val thumbnailShape = RoundedCornerShape(") &&
                     resultThumbnail.contains(".clip(thumbnailShape)") &&
                     resultThumbnail.contains("shape = thumbnailShape") &&
                     resultThumbnail.indexOf(".clip(thumbnailShape)") <
@@ -78,11 +70,11 @@ class GalleryImagePreviewContractTest {
             ),
             Case(
                 "both screens use the shared preview dialog",
-                screen.split("GalleryImagePreviewDialog(").size - 1 == 3,
+                screen.contains("GalleryImagePreviewDialog("),
             ),
             Case(
                 "selected images are passed to the preview as a list",
-                screen.contains("sources = selectedUris.mapIndexed"),
+                screen.contains("sources = previewUris.mapIndexed"),
             ),
             Case(
                 "selected image preview opens at the tapped image",

@@ -46,5 +46,6 @@ class TranslationRequestAuditWiringTest {
     private fun source(path: String): String = listOf(
         File("../$path"),
         File(path),
-    ).firstOrNull(File::isFile)?.readText() ?: error("Source not found: $path")
+    ).firstOrNull(File::isFile)?.readText()?.replace("\r\n", "\n")
+        ?: error("Source not found: $path")
 }

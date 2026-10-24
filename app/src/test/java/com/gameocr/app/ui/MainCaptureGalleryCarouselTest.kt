@@ -87,28 +87,25 @@ class MainCaptureGalleryCarouselTest {
     }
 
     @Test
-    fun `carousel uses the taller natural page height`() {
+    fun `carousel follows the capture page natural height`() {
         data class Case(
             val name: String,
             val captureHeightPx: Int,
-            val galleryHeightPx: Int,
             val expectedHeightPx: Int?,
         )
 
         listOf(
-            Case("waits for capture measurement", 0, 196, null),
-            Case("waits for gallery measurement", 360, 0, null),
-            Case("rejects invalid measurements", -1, -1, null),
-            Case("capture page is taller", 360, 196, 360),
-            Case("gallery page is taller", 180, 240, 240),
-            Case("equal pages keep their height", 220, 220, 220),
+            Case("waits for capture measurement", 0, null),
+            Case("rejects invalid measurements", -1, null),
+            Case("compact capture page", 180, 180),
+            Case("expanded capture page", 360, 360),
+            Case("small positive height", 1, 1),
         ).forEach { case ->
             assertEquals(
                 case.name,
                 case.expectedHeightPx,
                 captureGalleryCarouselCommonHeightPx(
                     captureHeightPx = case.captureHeightPx,
-                    galleryHeightPx = case.galleryHeightPx,
                 ),
             )
         }
@@ -139,14 +136,14 @@ class MainCaptureGalleryCarouselTest {
             ),
             Case("reports the logical page index", "currentOnPageChanged(", true),
             Case("rotates around the Y axis", "rotationY =", true),
-            Case("measures both cards", ".onSizeChanged", true),
-            Case("remeasures capture content changes", "LaunchedEffect(captureMeasurementKey)", true),
-            Case("uses the larger measured height", "captureGalleryCarouselCommonHeightPx(", true),
+            Case("receives natural content heights", "(Modifier, (Int) -> Unit)", true),
+            Case("does not reset measurements using outer card sizes", "LaunchedEffect(captureMeasurementKey)", false),
+            Case("uses capture content height", "captureGalleryCarouselCommonHeightPx(", true),
+            Case("gallery content cannot resize the carousel", "galleryHeightPx", false),
             Case("stretches the shorter card", "Modifier.fillMaxHeight()", true),
             Case("does not use vertical pager", "VerticalPager(", false),
             Case("draws one marker for each page", "repeat(CAPTURE_GALLERY_PAGE_COUNT)", true),
             Case("uses a pill and dot indicator shape", "shape = CircleShape", true),
-            Case("places the indicator below the cards", ".padding(top = 8.dp)", true),
             Case("does not keep a fixed carousel height", "CAPTURE_GALLERY_CAROUSEL_HEIGHT", false),
         ).forEach { case ->
             assertEquals(case.name, case.expectedPresent, case.marker in carousel)

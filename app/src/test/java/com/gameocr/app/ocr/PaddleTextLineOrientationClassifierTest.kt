@@ -14,6 +14,51 @@ class PaddleTextLineOrientationClassifierTest {
         assertEquals(0, PaddleTextLineOrientationClassifier.angleForClass(99))
     }
 
+    /** Official input is one detected line per crop, exactly at the detector box (no padding). */
+    @Test
+    fun selectLineCrops_usesIndividualLinesUnpaddedAndClamped_tableDriven() {
+        fun box(l: Int, t: Int, r: Int, b: Int) = TextLineCropBounds(l, t, r, b)
+        data class Case(
+            val name: String,
+            val boxes: List<TextLineCropBounds>,
+            val expected: List<TextLineCropBounds>,
+        )
+        listOf(
+            Case(
+                "members of a merged paragraph are separate crops, largest first",
+                listOf(box(10, 10, 210, 40), box(10, 50, 310, 80)),
+                listOf(box(10, 50, 310, 80), box(10, 10, 210, 40)),
+            ),
+            Case(
+                "box is not padded",
+                listOf(box(100, 100, 200, 120)),
+                listOf(box(100, 100, 200, 120)),
+            ),
+            Case(
+                "clamped to the bitmap",
+                listOf(box(-20, -5, 120, 30)),
+                listOf(box(0, 0, 120, 30)),
+            ),
+            Case(
+                "vertical and tiny boxes are skipped, duplicates collapse",
+                listOf(box(0, 0, 20, 200), box(0, 0, 7, 3), box(50, 50, 150, 70), box(50, 50, 150, 70)),
+                listOf(box(50, 50, 150, 70)),
+            ),
+        ).forEach { case ->
+            assertEquals(
+                case.name,
+                case.expected,
+                PaddleTextLineOrientationClassifier.selectLineCrops(case.boxes, imageWidth = 1000, imageHeight = 800),
+            )
+        }
+
+        val many = (0 until 20).map { box(0, it * 40, 100 + it, it * 40 + 20) }
+        assertEquals(
+            PaddleTextLineOrientationClassifier.MAX_LINES,
+            PaddleTextLineOrientationClassifier.selectLineCrops(many, 1000, 1000).size,
+        )
+    }
+
     @Test
     fun combineLineVotes_isConservativeAndTableDriven() {
         data class Case(
@@ -62,6 +107,16 @@ class PaddleTextLineOrientationClassifierTest {
                 expectedAngle = null,
                 expectedOrientation = null,
             ),
+            Case("empty votes", emptyList(), null, null),
+            Case("one upside down line cannot flip the frame", listOf(TextLineOrientationVote(180, 0.99f)), null, null),
+            Case("two strong upside down lines", listOf(TextLineOrientationVote(180, 0.99f),
+                TextLineOrientationVote(180, 0.95f)), 180, TextOrientation.HORIZONTAL_LTR),
+            Case("exact confidence and majority boundary", listOf(TextLineOrientationVote(180, 0.85f),
+                TextLineOrientationVote(180, 0.85f), TextLineOrientationVote(180, 0.85f),
+                TextLineOrientationVote(0, 0.85f), TextLineOrientationVote(0, 0.85f)),
+                180, TextOrientation.HORIZONTAL_LTR),
+            Case("invalid votes cannot flip the frame", listOf(TextLineOrientationVote(180, Float.NaN),
+                TextLineOrientationVote(180, 1.01f), TextLineOrientationVote(90, 0.99f)), null, null),
         )
 
         cases.forEach { case ->
@@ -75,5 +130,18 @@ class PaddleTextLineOrientationClassifierTest {
                 assertEquals(case.name, PaddleTextLineOrientationClassifier.SOURCE, result.source)
             }
         }
+    }
+
+    @Test
+    fun bundledModelProbabilities_canActuallyTriggerTheUpsideDownCorrection() {
+        val votes = listOf(floatArrayOf(0.02f, 0.98f), floatArrayOf(0.06f, 0.94f),
+            floatArrayOf(0.97f, 0.03f)).map { scores ->
+            val probabilities = PaddleDocOriClassifier.probabilitiesFromScores(scores)
+            val best = probabilities.indices.maxBy { probabilities[it] }
+            TextLineOrientationVote(PaddleTextLineOrientationClassifier.angleForClass(best), probabilities[best])
+        }
+        val result = requireNotNull(PaddleTextLineOrientationClassifier.combineLineVotes(votes))
+        assertEquals(180, result.rawAngle)
+        assertEquals(0.96f, result.confidence, 0.0001f)
     }
 }

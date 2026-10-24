@@ -7,6 +7,110 @@ import org.junit.Test
 
 class MangaOcrTextEvidencePolicyTest {
     @Test
+    fun filter_absorbsOverlappingColumnsAndPreservesErasureOwnership() {
+        // Geometry from the color-page log: complete sentence plus two fallback columns.
+        for (scale in listOf(1, 2)) for (transpose in listOf(false, true)) {
+            fun rect(l: Int, t: Int, r: Int, b: Int): IntRect = if (transpose) {
+                IntRect(t * scale, l * scale, b * scale, r * scale)
+            } else IntRect(l * scale, t * scale, r * scale, b * scale)
+            val owner = entry(BubbleModelRegrouper.Source.MODEL,
+                rect(467, 1287, 631, 1483), members = listOf(0))
+            val first = entry(BubbleModelRegrouper.Source.LEGACY_FALLBACK,
+                rect(570, 1288, 639, 1392), members = listOf(1))
+            val second = entry(BubbleModelRegrouper.Source.LEGACY_FALLBACK,
+                rect(458, 1289, 528, 1485), members = listOf(2))
+            val evidence = rect(467, 1290, 631, 1478)
+            val result = MangaOcrTextEvidencePolicy.filter(
+                entries = listOf(first, owner, second),
+                textDetections = listOf(textDetection(
+                    MangaBubbleDetectionPostprocessor.Kind.TEXT_BUBBLE,
+                    evidence.left.toFloat(), evidence.top.toFloat(),
+                    evidence.right.toFloat(), evidence.bottom.toFloat(),
+                )), evidenceAvailable = true,
+            )
+            val label = "scale=$scale transpose=$transpose"
+            assertEquals(label, listOf(0, 2), result.droppedIndices)
+            assertEquals(label, listOf(0, 1, 2), result.entries.single().bubble.memberIndices)
+            assertEquals(label, rect(458, 1287, 639, 1485), result.entries.single().bubble.contentRect)
+            assertEquals(label, setOf(0), result.textSupportedEntryIndices)
+            assertEquals(label, 0, result.assignments.single().entryIndex)
+            assertEquals(label, listOf(0, 1, 2), result.toModelGroups().single().memberIndices)
+        }
+    }
+
+    @Test
+    fun filter_fragmentTablePreservesSeparateDialogueFreeTextAndAmbiguity() {
+        data class FragmentCase(
+            val name: String, val bounds: IntRect, val free: Boolean = false,
+            val twoOwners: Boolean = false, val evidenceAvailable: Boolean = true,
+            val absorbed: Boolean,
+        )
+        listOf(
+            FragmentCase("contained", IntRect(20, 20, 40, 80), absorbed = true),
+            FragmentCase("eighty percent overlap", IntRect(84, 20, 104, 80), absorbed = true),
+            FragmentCase("less than eighty percent", IntRect(85, 20, 105, 80), absorbed = false),
+            FragmentCase("neighbor", IntRect(95, 20, 115, 80), absorbed = false),
+            FragmentCase("disjoint", IntRect(110, 20, 130, 80), absorbed = false),
+            FragmentCase("free text", IntRect(20, 20, 40, 80), free = true, absorbed = false),
+            FragmentCase("ambiguous owners", IntRect(20, 20, 40, 80), twoOwners = true, absorbed = false),
+            FragmentCase("no detector", IntRect(20, 20, 40, 80), evidenceAvailable = false, absorbed = false),
+        ).forEach { case ->
+            val owner = entry(BubbleModelRegrouper.Source.MODEL, IntRect(0, 0, 100, 100), members = listOf(0))
+            val fragment = entry(BubbleModelRegrouper.Source.LEGACY_FALLBACK,
+                case.bounds, members = listOf(1)).copy(
+                regionGranularity = if (case.free) TextRegionGranularity.FREE_TEXT else TextRegionGranularity.BUBBLE,
+            )
+            val owners = if (case.twoOwners) listOf(owner,
+                owner.copy(bubble = owner.bubble.copy(rect = IntRect(1, 0, 101, 100),
+                    contentRect = IntRect(1, 0, 101, 100), memberIndices = listOf(2)), modelBubbleIndex = 1),
+            ) else listOf(owner)
+            val result = MangaOcrTextEvidencePolicy.filter(
+                entries = owners + fragment,
+                textDetections = listOf(
+                    textDetection(MangaBubbleDetectionPostprocessor.Kind.TEXT_BUBBLE, 0f, 0f, 100f, 100f),
+                ) + if (case.twoOwners) listOf(
+                    textDetection(MangaBubbleDetectionPostprocessor.Kind.TEXT_BUBBLE, 1f, 0f, 101f, 100f),
+                ) else emptyList(),
+                evidenceAvailable = case.evidenceAvailable,
+            )
+            assertEquals(case.name, owners.size + if (case.absorbed) 0 else 1, result.entries.size)
+            assertEquals(case.name, listOf(0, 1) + if (case.twoOwners) listOf(2) else emptyList(),
+                result.entries.flatMap { it.bubble.memberIndices }.sorted())
+        }
+    }
+
+    @Test
+    fun filter_absorbedMemberIsStillErasableInTheAssignedBubble() {
+        val width = 60
+        val height = 60
+        val first = IntRect(10, 10, 20, 40)
+        val second = IntRect(30, 10, 40, 40)
+        val result = MangaOcrTextEvidencePolicy.filter(
+            entries = listOf(
+                entry(BubbleModelRegrouper.Source.MODEL, first, members = listOf(0)),
+                entry(BubbleModelRegrouper.Source.LEGACY_FALLBACK, second, members = listOf(1)),
+            ), textDetections = listOf(
+                textDetection(MangaBubbleDetectionPostprocessor.Kind.TEXT_BUBBLE, 10f, 10f, 40f, 40f),
+            ), evidenceAvailable = true,
+        )
+        val erase = DelayedTextEraseMaskBuilder.build(
+            width, height,
+            candidateTextMask = BooleanArray(width * height) { index ->
+                index / width in 15..20 && (index % width in 13..16 || index % width in 33..36)
+            },
+            memberBounds = listOf(first, second),
+            modelGroups = result.toModelGroups(),
+            modelMasks = listOf(BubbleSegmentationPostprocessor.InstanceMask(0, 0, width, height,
+                BooleanArray(width * height) { true })),
+            confirmedBlocks = listOf(DelayedTextEraseMaskBuilder.ConfirmedBlock(0, listOf(first, second))),
+        )
+        assertEquals(1, erase.acceptedBlockCount)
+        assertEquals(listOf(0, 1), erase.decisions.single().memberIndices)
+        org.junit.Assert.assertTrue(erase.mask[16 * width + 14])
+        org.junit.Assert.assertTrue(erase.mask[16 * width + 34])
+    }
+
+    @Test
     fun filter_tableDriven_recognizedTextExtentSurvivesScaleAndAxisChanges() {
         // A text detector can see columns that DBNet missed. The recognition crop and the
         // geometry used by erasure/rendering must describe that same text, not just the members.

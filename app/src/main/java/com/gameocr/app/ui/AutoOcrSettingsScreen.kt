@@ -1,26 +1,19 @@
 package com.gameocr.app.ui
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -38,11 +31,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -62,6 +52,7 @@ internal fun AutoOcrSettingsScreen(
     loadAvailable: suspend (Settings) -> Set<AutoOcrRoute>,
     availabilityRevision: Any,
     activeModels: Set<ModelDownloadSpec>,
+    activeModules: Set<com.gameocr.app.data.OcrEngineKind> = emptySet(),
     downloadBusy: Boolean,
     onDownload: (AutoOcrRoute) -> Unit,
     downloadStatus: @Composable () -> Unit,
@@ -74,7 +65,7 @@ internal fun AutoOcrSettingsScreen(
     var selectedLanguage by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingDeleteLanguage by rememberSaveable { mutableStateOf<String?>(null) }
     var scrollToLanguage by remember { mutableStateOf<String?>(null) }
-    val listState = rememberLazyListState()
+    val gridState = rememberLazyGridState()
     var available by remember { mutableStateOf<Set<AutoOcrRoute>?>(null) }
     var resumeRevision by remember { mutableStateOf(0) }
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -103,8 +94,8 @@ internal fun AutoOcrSettingsScreen(
         val code = scrollToLanguage
         if (code != null && !showLanguagePicker) {
             val index = languages.indexOfFirst { AutoOcrSettings.languageKey(it.code) == code }
-            // The description occupies the first list item.
-            if (index >= 0) listState.animateScrollToItem(index + 1)
+            // The full-width description occupies the first grid item.
+            if (index >= 0) gridState.animateScrollToItem(index + 1)
             scrollToLanguage = null
         }
     }
@@ -121,58 +112,41 @@ internal fun AutoOcrSettingsScreen(
             )
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
-        floatingActionButton = {
-            if (addableCodes.isNotEmpty()) {
-                FloatingActionButton(onClick = { showLanguagePicker = true }) {
-                    Icon(Icons.Default.Add, stringResource(R.string.settings_auto_ocr_add_language))
-                }
-            }
-        },
     ) { padding ->
-        LazyColumn(
-            state = listState,
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(2),
+            state = gridState,
             modifier = Modifier.fillMaxSize().padding(padding),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 96.dp),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 24.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            item(key = "description") {
-                Text(
-                    stringResource(R.string.settings_auto_ocr_description),
-                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 12.dp),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                downloadStatus()
+            item(key = "description", span = { GridItemSpan(maxLineSpan) }) {
+                Column {
+                    Text(
+                        stringResource(R.string.settings_auto_ocr_description),
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 12.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    downloadStatus()
+                }
             }
             items(languages, key = { it.code }) { language ->
                 val current = config.routeFor(language.code)
-                SectionCard(title = null) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Row(
-                            modifier = Modifier.weight(1f).heightIn(min = 52.dp)
-                                .clickable(role = Role.Button) { selectedLanguage = language.code },
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text(stringResource(if (AutoOcrSettings.languageKey(language.code) == "zh")
-                                    R.string.settings_ocr_chip_chinese else language.nameRes),
-                                    style = MaterialTheme.typography.titleMedium)
-                                Text(autoOcrRouteLabel(current), style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            }
-                            Spacer(Modifier.width(12.dp))
-                            Icon(Icons.Default.ExpandMore, contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        if (!AutoOcrLanguageListPolicy.isDefault(language.code)) {
-                            IconButton(onClick = {
-                                pendingDeleteLanguage = language.code
-                            }) {
-                                Icon(Icons.Default.Close, stringResource(R.string.settings_paddle_btn_delete))
-                            }
-                        }
-                    }
+                AutoOcrLanguageTile(
+                    language = language,
+                    route = current,
+                    removable = !AutoOcrLanguageListPolicy.isDefault(language.code),
+                    downloading = autoOcrOptionState(settings, language.code, current, available,
+                        activeModels, activeModules) == AutoOcrOptionState.DOWNLOADING,
+                    onClick = { selectedLanguage = language.code },
+                    onRemove = { pendingDeleteLanguage = language.code },
+                )
+            }
+            if (addableCodes.isNotEmpty()) {
+                item(key = "add-language") {
+                    AutoOcrAddLanguageTile(onClick = { showLanguagePicker = true })
                 }
             }
         }
@@ -208,12 +182,12 @@ internal fun AutoOcrSettingsScreen(
                 R.string.settings_ocr_chip_chinese else language.nameRes),
             current = config.routeFor(code),
             options = if (AutoOcrSettings.defaultRoute(code) == null) listOf(null) + options else options,
-            state = { route -> autoOcrOptionState(settings, code, route, available, activeModels) },
+            state = { route -> autoOcrOptionState(settings, code, route, available, activeModels, activeModules) },
             canSelect = { route, state -> autoOcrCanSelect(settings, code, route, state) },
             downloadBusy = downloadBusy,
             onSelect = select@ { selected ->
                 if (!autoOcrCanSelect(settings, code, selected,
-                        autoOcrOptionState(settings, code, selected, available, activeModels))) return@select
+                        autoOcrOptionState(settings, code, selected, available, activeModels, activeModules))) return@select
                 val key = AutoOcrSettings.languageKey(code)
                 onChange { latest ->
                     latest.copy(routes = if (selected == null) latest.routes - key else latest.routes + (key to selected))
@@ -221,7 +195,7 @@ internal fun AutoOcrSettingsScreen(
                 selectedLanguage = null
             },
             onDownload = { route ->
-                if (!downloadBusy && autoOcrOptionState(settings, code, route, available, activeModels) == AutoOcrOptionState.DOWNLOAD) {
+                if (!downloadBusy && autoOcrOptionState(settings, code, route, available, activeModels, activeModules) == AutoOcrOptionState.DOWNLOAD) {
                     selectedLanguage = null
                     onDownload(route)
                 }

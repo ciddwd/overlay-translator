@@ -47,6 +47,7 @@ data class Settings(
     val captureLoopIntervalMs: Long = 2000L,
     val loopTriggerMode: LoopTriggerMode = LoopTriggerMode.SETTLED_PAGE,
     val loopTextStableDurationMs: Long = DEFAULT_LOOP_TEXT_STABLE_DURATION_MS,
+    val loopCaptureVibrationEnabled: Boolean = true,
     val loopSkipSimilarFrames: Boolean = true,
     val loopFrameSimilarityThreshold: Float = 0.95f,
     val loopTextRegionMode: LoopTextRegionMode = LoopTextRegionMode.AUTO,
@@ -55,6 +56,7 @@ data class Settings(
     val performanceOverlayEnabled: Boolean = false,
     val ocrScreenshotSavingEnabled: Boolean = false,
     val disableTranslationCache: Boolean = false,
+    val hideOcrNoTextHint: Boolean = false,
     val batchCumulativeCompletionTimeEnabled: Boolean = false,
     val shareEntireScreen: Boolean = false,
     val translationContextMode: TranslationContextMode = TranslationContextMode.FAST_PER_SEGMENT,
@@ -196,6 +198,7 @@ data class Settings(
     val orientationModelMirrorUrl: String = "",
     val a11yVolumeTrigger: Boolean = false,
     val translatorEngine: TranslatorEngine = TranslatorEngine.OPENAI,
+    val openAiProvider: OpenAiProvider = OpenAiProvider.CUSTOM,
     val translationGlossaryEnabled: Boolean = true,
     /** Master gate for source-preservation matching; individual entry states remain untouched. */
     val sourcePreservationEnabled: Boolean = true,
@@ -326,17 +329,40 @@ data class Settings(
      * 自动在每页末位插入「下一组」翻页项，最后一页循环回第一页。新装用户 / 未自定义的旧默认顺序迁移到
      * [FloatingMenu.DEFAULT_ORDER]。
      *
-     * `LOOP`、`FULL_SCREEN_SKILL` 与 `INPUT_TRANSLATE_SKILL` 构成三个稳定的模式切换槽；
-     * 展开菜单时分别显示当前模式之外的三个模式。旧配置读取时会自动补齐新增槽位。
+     * 四个稳定模式槽位在展开时显示当前模式之外的四种主球；旧配置读取时自动补齐新增槽位。
      */
     val floatingMenuItemOrder: List<MenuItemId> = FloatingMenu.DEFAULT_ORDER,
     val arcMenuPageSize: Int = FloatingMenu.DEFAULT_PAGE_SIZE,
+    val quickPanelEnabled: Boolean = false,
     /**
      * 主球单击触发的「技能」。FULL_SCREEN 走全屏 OCR+翻译；WORD_SELECT 进入划词框选；
-     * LOOP 切换循环任务的启动/停止；INPUT_TRANSLATE 翻译当前获得焦点的输入框。
+     * LOOP 切换循环任务的启动/停止；INPUT_TRANSLATE 翻译当前获得焦点的输入框；GESTURE 打开手势输入。
      * 模式会持久化，循环运行状态不会跨 Service 重启恢复。
      */
     val floatingButtonSkill: FloatingSkill = FloatingSkill.FULL_SCREEN,
+    val asrEngine: AsrEngineKind = AsrEngineKind.SENSE_VOICE,
+    val asrWhisperVariant: AsrWhisperVariant = AsrWhisperVariant.TINY,
+    val asrCloudModel: AsrCloudModel = AsrCloudModel.PARAFORMER,
+    val asrCloudProvider: AsrCloudProvider = AsrCloudProvider.ALIYUN,
+    val asrCloudConnections: AsrCloudConnections = AsrCloudConnections(),
+    val asrLanguage: AsrLanguage = AsrLanguage.AUTO,
+    val asrSegmentation: AsrSegmentationSettings = AsrSegmentationSettings(),
+    val asrHints: AsrHintSettings = AsrHintSettings(),
+    /** Speech records kept in the floating window; see [AsrDisplayPolicy]. */
+    val asrMaxDisplayedRecords: Int = AsrDisplayPolicy.DEFAULT_RECORDS,
+    /** DashScope key for the Paraformer cloud engine (China (Beijing) region). */
+    val asrDashScopeApiKey: String = "",
+    val gestureBindings: Map<PresetGesture, GestureAction> = GestureBindings.defaults,
+    val gestureGlobalEnabled: Boolean = false,
+    val gestureEdgeEnabled: Boolean = false,
+    val gestureEdgeRight: Boolean = false,
+    val gestureEdgeHeightPercent: Int = 22,
+    val gestureTwistEnabled: Boolean = false,
+    val gestureTwistSensitivity: Int = 3,
+    val gestureTwistAction: GestureAction? = null,
+    val gestureTiltEnabled: Boolean = false,
+    val gestureTiltSensitivity: Int = 3,
+    val gestureTiltAction: GestureAction? = null,
     /** 输入翻译模式下，双击操作球执行的屏幕翻译动作。 */
     val inputTranslationDoubleAction: InputTranslationDoubleAction =
         InputTranslationDoubleAction.FULL_SCREEN,
@@ -365,22 +391,30 @@ data class Settings(
     val localLlmContextSize: Int = 2048,
     /** 端侧 LLM 单次最长生成 token 数。屏译场景译文很少超过 256 token。 */
     val localLlmMaxNewTokens: Int = 256,
+    /** Device-local imported GGUF selection; never included in settings exports. */
+    @kotlinx.serialization.Transient
+    val localModelId: String? = null,
+    /** Immutable per-model inference configuration captured for one translation request. */
+    @kotlinx.serialization.Transient
+    val runtimeLocalModelConfig: com.gameocr.app.llm.LocalModelConfig? = null,
+    @kotlinx.serialization.Transient
+    val runtimeLocalModelName: String? = null,
     /**
-     * PaddleOCR / MangaOCR 共用 DBNet 检测的二值化阈值。prob map > 此值视为前景。
-     * 主线 PaddleOCR 默认 0.3；屏译降到 0.25 让漫画小气泡、淡色字、长竖排能稳定捕获。
-     * 用户可在设置→OCR→"检测高级阈值"调到 0.15–0.4，过低引入噪声 box / 过高漏小字。
+     * PaddleOCR / MangaOCR 共用 DBNet 检测的二值化阈值（官方 `thresh`）。prob map 高于此值视为前景。
+     * null = 使用所选检测模型 inference.yml 的官方值，见 [paddleDetectionThresholds]。
+     * 用户在设置→OCR→"检测高级阈值"拖动滑块后写入显式值。
      */
-    val dbnetProbThresh: Float = 0.25f,
+    val dbnetProbThresh: Float? = null,
     /**
-     * DBNet 连通域平均概率阈值。连通域内像素的 prob 均值低于此值视为噪声丢弃。
-     * 主线默认 0.6；屏译降到 0.5 配合 [dbnetProbThresh] 一起放宽，捕获概率响应在边界的小字。
+     * DBNet box 平均概率阈值（官方 `box_thresh`）。box 内像素 prob 均值低于此值视为噪声丢弃。
+     * null = 所选检测模型的官方值。
      */
-    val dbnetBoxScoreThresh: Float = 0.5f,
+    val dbnetBoxScoreThresh: Float? = null,
     /**
-     * PaddleOCR DBNet 旋转矩形外扩比例。从二值连通域到最终 box 的 unclip 操作，
-     * 越大 box 包得越宽。普通 PaddleOCR 保持 1.55，避免为了日漫 crop 需求改变通用 OCR 行为。
+     * PaddleOCR DBNet 外扩比例（官方 `unclip_ratio`），越大 box 包得越宽。
+     * null = 所选检测模型的官方值；MangaOCR 使用独立的 [mangaOcrDbnetUnclipRatio]。
      */
-    val dbnetUnclipRatio: Float = 1.55f,
+    val dbnetUnclipRatio: Float? = null,
     /**
      * manga-ocr 专用 DBNet 外扩比例。manga-ocr 识别整气泡 crop，竖排/手绘字体更怕首尾字被裁；
      * 1.65 比 PaddleOCR 常见 1.5 默认值多一点裁剪余量，同时仍避免过度吞邻泡。
@@ -624,6 +658,7 @@ data class TranslationPreset(
     val ttsEnabled: Boolean = false,
     val ttsProvider: TtsProvider = TtsProvider.SYSTEM,
     val translatorEngine: TranslatorEngine = TranslatorEngine.OPENAI,
+    val openAiProvider: OpenAiProvider = OpenAiProvider.CUSTOM,
     val deeplPro: Boolean = false,
     val deeplProtocol: DeeplProtocol = DeeplProtocol.OFFICIAL,
     val deeplBaseUrl: String = "",
@@ -653,9 +688,9 @@ data class TranslationPreset(
     val sendAppNameToTranslator: Boolean = false,
     val localLlmContextSize: Int = 2048,
     val localLlmMaxNewTokens: Int = 256,
-    val dbnetProbThresh: Float = 0.25f,
-    val dbnetBoxScoreThresh: Float = 0.5f,
-    val dbnetUnclipRatio: Float = 1.55f,
+    val dbnetProbThresh: Float? = null,
+    val dbnetBoxScoreThresh: Float? = null,
+    val dbnetUnclipRatio: Float? = null,
     val mangaOcrDbnetUnclipRatio: Float = 1.65f,
     val bubbleClusterGap: Int = MangaOcrAdvancedSettingsPolicy.BUBBLE_CLUSTER_GAP,
     val mangaOcrCropPaddingPx: Int = MangaOcrAdvancedSettingsPolicy.CROP_PADDING_PX,
@@ -667,15 +702,16 @@ data class TranslationPreset(
             translationOutputLayout,
             translationOutputDirection,
         )
+        val connections = PresetConnectionPolicy.activeConnections(this, settings)
         return settings.copy(
-        baseUrl = baseUrl,
-        model = model,
-        anthropicBaseUrl = anthropicBaseUrl,
-        anthropicModel = anthropicModel,
+        baseUrl = connections.baseUrl,
+        model = connections.model,
+        anthropicBaseUrl = connections.anthropicBaseUrl,
+        anthropicModel = connections.anthropicModel,
         sourceLang = sourceLang,
         targetLang = targetLang,
         promptTemplate = promptTemplate,
-        openAiRequestOptions = openAiRequestOptions.normalized(),
+        openAiRequestOptions = connections.openAiRequestOptions.normalized(),
         dictionaryPrompt = dictionaryPrompt,
         ocrEngine = ocrEngine,
         preprocess = preprocess,
@@ -702,24 +738,25 @@ data class TranslationPreset(
             retryFailedTranslation = retryFailedTranslation,
             translationContextMode = translationContextMode,
         ttsEnabled = ttsEnabled,
-        ttsProvider = ttsProvider,
+        ttsProvider = connections.ttsProvider,
         translatorEngine = translatorEngine,
-        deeplPro = deeplPro,
-        deeplProtocol = deeplProtocol,
-        deeplBaseUrl = deeplBaseUrl,
-        deeplBearerAuth = deeplBearerAuth,
-        niuTransMode = niuTransMode,
-        niuTransTermLibraryId = niuTransTermLibraryId,
-        niuTransMemoryLibraryId = niuTransMemoryLibraryId,
-        baiduOcrEndpoint = baiduOcrEndpoint,
-        baiduOcrLanguage = baiduOcrLanguage,
-        umiOcrBaseUrl = umiOcrBaseUrl,
-        lunaOcrBaseUrl = lunaOcrBaseUrl,
-        tencentRegion = tencentRegion,
-        tencentOcrEndpoint = tencentOcrEndpoint,
-        tencentOcrLanguage = tencentOcrLanguage,
-        paddleModelVersion = paddleModelVersion,
-        paddleDetectionProfile = paddleDetectionProfile,
+        openAiProvider = connections.openAiProvider,
+        deeplPro = connections.deeplPro,
+        deeplProtocol = connections.deeplProtocol,
+        deeplBaseUrl = connections.deeplBaseUrl,
+        deeplBearerAuth = connections.deeplBearerAuth,
+        niuTransMode = connections.niuTransMode,
+        niuTransTermLibraryId = connections.niuTransTermLibraryId,
+        niuTransMemoryLibraryId = connections.niuTransMemoryLibraryId,
+        baiduOcrEndpoint = connections.baiduOcrEndpoint,
+        baiduOcrLanguage = connections.baiduOcrLanguage,
+        umiOcrBaseUrl = connections.umiOcrBaseUrl,
+        lunaOcrBaseUrl = connections.lunaOcrBaseUrl,
+        tencentRegion = connections.tencentRegion,
+        tencentOcrEndpoint = connections.tencentOcrEndpoint,
+        tencentOcrLanguage = connections.tencentOcrLanguage,
+        paddleModelVersion = connections.paddleModelVersion,
+        paddleDetectionProfile = connections.paddleDetectionProfile,
         apiTimeoutSeconds = apiTimeoutSeconds,
         mergeAdjacentBlocks = mergeAdjacentBlocks,
         mergeStrength = mergeStrength,
@@ -824,6 +861,7 @@ object TranslationPresetCatalog {
             ttsEnabled = settings.ttsEnabled,
             ttsProvider = settings.ttsProvider,
             translatorEngine = settings.translatorEngine,
+            openAiProvider = settings.openAiProvider,
             deeplPro = settings.deeplPro,
             deeplProtocol = settings.deeplProtocol,
             deeplBaseUrl = settings.deeplBaseUrl,
@@ -877,7 +915,8 @@ object TranslationPresetCatalog {
     fun matchesHash(preset: TranslationPreset, settingsHash: String): Boolean =
         preset.settingsHash == settingsHash || settingsHash(preset) == settingsHash
 
-    private fun settingsHash(preset: TranslationPreset): String {
+    private fun settingsHash(source: TranslationPreset): String {
+        val preset = PresetConnectionPolicy.activeConnections(source, Settings())
         val textStyle = preset.overlayTextStyle.normalized()
         val output = resolveTranslationOutputSettings(
             preset.translationOutputFollowRecognition,
@@ -942,6 +981,7 @@ object TranslationPresetCatalog {
             preset.ttsEnabled,
             preset.ttsProvider.name,
             preset.translatorEngine.name,
+            preset.openAiProvider.name,
             preset.deeplPro,
             preset.deeplProtocol.name,
             preset.deeplBaseUrl,
@@ -971,9 +1011,9 @@ object TranslationPresetCatalog {
             preset.sendAppNameToTranslator,
             preset.localLlmContextSize,
             preset.localLlmMaxNewTokens,
-            preset.dbnetProbThresh.toBits(),
-            preset.dbnetBoxScoreThresh.toBits(),
-            preset.dbnetUnclipRatio.toBits(),
+            preset.dbnetProbThresh?.toBits(),
+            preset.dbnetBoxScoreThresh?.toBits(),
+            preset.dbnetUnclipRatio?.toBits(),
             preset.mangaOcrDbnetUnclipRatio.toBits(),
             bubbleClusterGap,
             mangaOcrCropPaddingPx
@@ -1025,6 +1065,9 @@ enum class FloatingSkill {
     WORD_SELECT,
     LOOP,
     INPUT_TRANSLATE,
+    GESTURE,
+    /** Playback speech recognition: tap starts, pauses and resumes. */
+    SPEECH,
 }
 
 @Serializable
@@ -1036,8 +1079,7 @@ enum class InputTranslationDoubleAction {
 /**
  * 悬浮球弧菜单按钮 ID。在 `overlay/MenuItemRegistry.kt` 集中绑定到图标 / 文案 / 回调。
  *
- * `LOOP`、`FULL_SCREEN_SKILL` 与 `INPUT_TRANSLATE_SKILL` 是三个稳定的模式槽位。
- * registry 根据当前 [FloatingSkill] 将它们映射为另外三种模式；旧配置读取时会自动补齐新槽位。
+ * 四个模式槽位由 registry 根据当前 [FloatingSkill] 映射为其他四种模式；旧配置自动补齐新槽位。
  */
 @Serializable
 enum class MenuItemId {
@@ -1049,6 +1091,12 @@ enum class MenuItemId {
     HOME,
     FULL_SCREEN_SKILL,
     INPUT_TRANSLATE_SKILL,
+    GESTURE_SKILL,
+    /**
+     * Runtime-only slot inserted beside the mode slots while speech recognition is enabled.
+     * It is never part of [FloatingMenu.ALL_ORDER], so saved orders are unaffected.
+     */
+    SPEECH_SKILL,
 }
 
 /** 弧菜单分页 / 默认顺序常量。 */
@@ -1075,10 +1123,11 @@ object FloatingMenu {
         MenuItemId.HOME,
         MenuItemId.FULL_SCREEN_SKILL,
         MenuItemId.INPUT_TRANSLATE_SKILL,
+        MenuItemId.GESTURE_SKILL,
     )
 
     /**
-     * 首次安装默认顺序：循环、选区、两个技能槽、语言、预设、设置、返回主应用。
+     * 首次安装默认顺序：循环、选区、三个技能槽、语言、预设、设置、返回主应用。
      * 把「技能槽」放在「返回主应用」之前——拖球到菜单时手指先经过的位置留给「常用动作」，
      * HOME 作为"离场"动作放最后符合直觉。
      */
@@ -1087,6 +1136,7 @@ object FloatingMenu {
         MenuItemId.REGION,
         MenuItemId.FULL_SCREEN_SKILL,
         MenuItemId.INPUT_TRANSLATE_SKILL,
+        MenuItemId.GESTURE_SKILL,
         MenuItemId.LANGUAGE_PAIR,
         MenuItemId.PRESET_SWITCH,
         MenuItemId.SETTINGS,
@@ -1103,8 +1153,11 @@ object FloatingMenu {
 
         val normalized = known.toMutableList()
         ALL_ORDER.filterNot(normalized::contains).forEach { missing ->
-            if (missing == MenuItemId.INPUT_TRANSLATE_SKILL) {
-                val skillIndex = normalized.indexOf(MenuItemId.FULL_SCREEN_SKILL)
+            if (missing == MenuItemId.INPUT_TRANSLATE_SKILL || missing == MenuItemId.GESTURE_SKILL) {
+                val previous = if (missing == MenuItemId.GESTURE_SKILL) {
+                    MenuItemId.INPUT_TRANSLATE_SKILL
+                } else MenuItemId.FULL_SCREEN_SKILL
+                val skillIndex = normalized.indexOf(previous)
                 normalized.add(
                     index = if (skillIndex >= 0) skillIndex + 1 else normalized.size,
                     element = missing,
@@ -1114,7 +1167,7 @@ object FloatingMenu {
             }
         }
         val beforeInputTranslation = normalized.filterNot {
-            it == MenuItemId.INPUT_TRANSLATE_SKILL
+            it == MenuItemId.INPUT_TRANSLATE_SKILL || it == MenuItemId.GESTURE_SKILL
         }
         return if (
             beforeInputTranslation == LEGACY_DEFAULT_ORDER_BEFORE_SKILL_SWAP ||
@@ -1252,6 +1305,15 @@ enum class PaddleModelVersion(
         R.string.paddle_version_v5_korean_languages,
         false,
         "v5ko"
+    ),
+    /** Official East Slavic recognizer paired with the v5 mobile detector. */
+    V5_ESLAV(
+        R.string.paddle_version_v5_eslav,
+        R.string.paddle_version_v5_eslav_desc,
+        4,
+        R.string.paddle_version_v5_eslav_languages,
+        false,
+        "v5eslav"
     ),
     /** PP-OCRv6 tiny（det ~1.5M params + rec ~1.5M params，极轻量极快） */
     V6_TINY(
@@ -1415,7 +1477,9 @@ enum class TranslatorEngine {
      * 走 [com.gameocr.app.llm.LlamaEngineHolder] + llama.cpp（com.arm.aichat binding）。
      * 仅 Android 13+ 可用；语言方向跟随 [sourceLang] / [targetLang]。
      */
-    LOCAL_HY_MT2
+    LOCAL_HY_MT2,
+    LOCAL_INDEX_TRANSLATE,
+    LOCAL_QWEN3
 }
 
 @Serializable(with = TtsProviderSerializer::class)
@@ -1672,7 +1736,8 @@ enum class OcrEngineKind {
     YOUDAO,           // 有道智云通用文字识别 ocrapi（云端，需要 AppKey + AppSecret）
     PADDLE_AI_STUDIO, // PaddleOCR AI Studio async jobs API (cloud, requires bearer token)
     PADDLE_ONNX,      // PaddleOCR PP-OCRv5 mobile (ONNX Runtime 端侧，按需下载模型)
-    MANGA_OCR_JA      // l0wgear/manga-ocr-2025-onnx 日漫专用（端侧；复用 PaddleOCR DBNet 检测；~140MB 按需下载，需开代理）
+    MANGA_OCR_JA,     // l0wgear/manga-ocr-2025-onnx 日漫专用（端侧；复用 PaddleOCR DBNet 检测；~140MB 按需下载，需开代理）
+    ML_KIT_DEVANAGARI, // Optional Google Play services OCR module.
 }
 
 @Serializable
@@ -1693,6 +1758,8 @@ enum class LoopTextRegionMode {
  * 此引擎是否要求 [CaptureService] 跳过 [PreprocessOptions.invert] / [PreprocessOptions.binarize]
  * 预处理，保留原图的颜色、灰阶和抗锯齿边缘。MANGA_OCR_JA 依赖漫画原图细节；ML Kit
  * Japanese 的字符识别也会被全屏 Otsu 二值化破坏细笔画和描边，因此两者走保真输入路径。
+ * ML_KIT_AUTO 在 OCR 开始后才选定引擎，所以调用方同样传原图，由
+ * [com.gameocr.app.ocr.AutoOcrPreprocessPolicy] 只对能接受反色 / 二值化的候选引擎再做一次。
  *
  * 注：[PreprocessOptions.upscale2x] 仍会应用——DBNet 对小字检测有帮助，对 manga-ocr 224×224
  * squash resize 后无副作用。
@@ -1702,7 +1769,62 @@ val OcrEngineKind.needsRawBitmap: Boolean
         this == OcrEngineKind.ML_KIT_AUTO
 
 fun Settings.dbnetUnclipRatioFor(engine: OcrEngineKind): Float =
-    if (engine == OcrEngineKind.MANGA_OCR_JA) mangaOcrDbnetUnclipRatio else dbnetUnclipRatio
+    if (engine == OcrEngineKind.MANGA_OCR_JA) {
+        mangaOcrDbnetUnclipRatio
+    } else {
+        paddleDetectionThresholds(paddleModelVersion).unclipRatio
+    }
+
+/** DBNet post-process values (`thresh`, `box_thresh`, `unclip_ratio`). */
+data class PaddleDetectionThresholds(
+    val binThresh: Float,
+    val boxThresh: Float,
+    val unclipRatio: Float,
+)
+
+/**
+ * `PostProcess` of the detector's official inference.yml. V5_KOREAN pairs the Korean recognizer
+ * with the PP-OCRv5 mobile detector.
+ */
+val PaddleModelVersion.officialDetectionThresholds: PaddleDetectionThresholds
+    get() = when (this) {
+        PaddleModelVersion.V5_MOBILE,
+        PaddleModelVersion.V5_KOREAN,
+        PaddleModelVersion.V5_ESLAV -> PaddleDetectionThresholds(0.3f, 0.6f, 1.5f)
+        PaddleModelVersion.V6_TINY -> PaddleDetectionThresholds(0.2f, 0.4f, 1.4f)
+        PaddleModelVersion.V6_SMALL,
+        PaddleModelVersion.V6_MEDIUM -> PaddleDetectionThresholds(0.2f, 0.45f, 1.4f)
+    }
+
+/** User overrides where set, otherwise the official values of [detectorVersion]. */
+fun Settings.paddleDetectionThresholds(detectorVersion: PaddleModelVersion): PaddleDetectionThresholds {
+    val official = detectorVersion.officialDetectionThresholds
+    return PaddleDetectionThresholds(
+        binThresh = dbnetProbThresh ?: official.binThresh,
+        boxThresh = dbnetBoxScoreThresh ?: official.boxThresh,
+        unclipRatio = dbnetUnclipRatio ?: official.unclipRatio,
+    )
+}
+
+/**
+ * Before model defaults existed, every save persisted the fixed app defaults 0.25 / 0.5 / 1.55.
+ * Those exact values are not a user choice and migrate to null (= model default).
+ */
+object PaddleDetectionThresholdMigration {
+    const val LEGACY_PROB_THRESH = 0.25f
+    const val LEGACY_BOX_SCORE_THRESH = 0.5f
+    const val LEGACY_UNCLIP_RATIO = 1.55f
+
+    fun probThresh(stored: Float?): Float? = stored?.takeUnless { it == LEGACY_PROB_THRESH }
+    fun boxScoreThresh(stored: Float?): Float? = stored?.takeUnless { it == LEGACY_BOX_SCORE_THRESH }
+    fun unclipRatio(stored: Float?): Float? = stored?.takeUnless { it == LEGACY_UNCLIP_RATIO }
+
+    fun normalize(preset: TranslationPreset): TranslationPreset = preset.copy(
+        dbnetProbThresh = probThresh(preset.dbnetProbThresh),
+        dbnetBoxScoreThresh = boxScoreThresh(preset.dbnetBoxScoreThresh),
+        dbnetUnclipRatio = unclipRatio(preset.dbnetUnclipRatio),
+    )
+}
 
 @Serializable
 data class PreprocessOptions(
@@ -1804,6 +1926,14 @@ internal fun manualOverlayLayoutControlsEnabled(
     renderMode: RenderMode,
 ): Boolean =
     !adaptiveOverlayActive(mode, renderMode)
+
+/**
+ * Settings the floating window renders with. Adaptive styling exists only for in-place blocks, so
+ * the window always uses the user's own appearance, even when OCR results use adaptive blocks and
+ * speech recognition shares the window.
+ */
+internal fun Settings.floatingWindowRenderSettings(): Settings =
+    copy(renderMode = RenderMode.FLOATING_WINDOW).effectiveOverlayRenderSettings()
 
 internal fun Settings.effectiveOverlayRenderSettings(): Settings =
     if (adaptiveOverlayActive(overlayStyleMode, renderMode)) {

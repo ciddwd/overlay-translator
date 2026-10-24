@@ -8,7 +8,7 @@ import org.junit.Test
 class GalleryTranslationConfirmStyleTest {
 
     @Test
-    fun `task settings and add images use the requested order and outlined style`() {
+    fun `task settings and add images use the requested order and preset drawer behavior`() {
         val source = sourceFile(
             "src/main/java/com/gameocr/app/ui/GalleryTranslationScreens.kt"
         ).readText()
@@ -36,7 +36,7 @@ class GalleryTranslationConfirmStyleTest {
             ),
             OrderCase(
                 "add image tile follows selected thumbnails",
-                "selectedUris.forEachIndexed",
+                "previewUris.forEachIndexed",
                 "GalleryAddImageTile(",
             ),
         ).forEach { case ->
@@ -45,47 +45,20 @@ class GalleryTranslationConfirmStyleTest {
             assertTrue(case.name, earlierIndex >= 0 && laterIndex > earlierIndex)
         }
 
-        data class StyleCase(
-            val name: String,
-            val marker: String,
-            val expectedCount: Int,
-        )
-
-        listOf(
-            StyleCase(
-                "settings card uses the neutral 1dp border",
-                "MaterialTheme.colorScheme.outlineVariant",
-                1,
-            ),
-            StyleCase(
-                "settings card uses the surface background",
-                "containerColor = MaterialTheme.colorScheme.surface",
-                1,
-            ),
-            StyleCase(
-                "old separate add images button is removed",
-                "OutlinedButton(",
-                0,
-            ),
-            StyleCase(
-                "add images no longer uses a filled tonal button",
-                "FilledTonalButton(",
-                0,
-            ),
-        ).forEach { case ->
-            assertEquals(
-                case.name,
-                case.expectedCount,
-                Regex(Regex.escape(case.marker)).findAll(screen).count(),
-            )
-        }
-
         data class RemovedCase(
             val name: String,
             val marker: String,
         )
 
         listOf(
+            RemovedCase(
+                "image ordering toggle is removed",
+                "GalleryImportOrderToggle(",
+            ),
+            RemovedCase(
+                "image selection is never reordered",
+                "sortEntries(",
+            ),
             RemovedCase(
                 "obsolete export-only translated image hint is removed",
                 "R.string.gallery_confirm_output",
@@ -125,22 +98,6 @@ class GalleryTranslationConfirmStyleTest {
                 "R.string.gallery_confirm_hide_presets",
             ),
             PresetToggleCase(
-                "preset drawer handle is geometrically centered",
-                "horizontalArrangement = Arrangement.Center",
-            ),
-            PresetToggleCase(
-                "preset expander uses a compact visual padding",
-                ".padding(vertical = 2.dp)",
-            ),
-            PresetToggleCase(
-                "preset drawer handle suppresses ripple indication",
-                "indication = null",
-            ),
-            PresetToggleCase(
-                "preset drawer handle keeps click interaction semantics",
-                "MutableInteractionSource()",
-            ),
-            PresetToggleCase(
                 "expanded carousel sits above the drawer handle",
                 "GalleryPresetSwitcher(",
             ),
@@ -151,26 +108,6 @@ class GalleryTranslationConfirmStyleTest {
             PresetToggleCase(
                 "collapsed state points downward before the label",
                 "Icons.Default.KeyboardArrowDown",
-            ),
-            PresetToggleCase(
-                "drawer expands downward from its top edge",
-                "expandFrom = Alignment.Top",
-            ),
-            PresetToggleCase(
-                "drawer collapses upward toward its top edge",
-                "shrinkTowards = Alignment.Top",
-            ),
-            PresetToggleCase(
-                "drawer uses a bounded tween instead of a trailing spring",
-                "durationMillis = 220",
-            ),
-            PresetToggleCase(
-                "drawer uses material fast out slow in easing",
-                "easing = FastOutSlowInEasing",
-            ),
-            PresetToggleCase(
-                "drawer owns stable spacing outside animated visibility",
-                "Spacer(modifier = Modifier.height(10.dp))",
             ),
         ).forEach { case ->
             assertTrue(case.name, screen.contains(case.marker))
@@ -240,11 +177,10 @@ class GalleryTranslationConfirmStyleTest {
         }
 
         assertTrue("single-line horizontal list is removed", !screen.contains("LazyRow("))
-        assertTrue("fixed one-row height is removed", !screen.contains(".height(96.dp)"))
     }
 
     @Test
-    fun `add image tile is a white wrapping grid cell with dashed outline and centered plus`() {
+    fun `add image tile shows a plus with an accessible label`() {
         val source = sourceFile(
             "src/main/java/com/gameocr/app/ui/GalleryTranslationScreens.kt"
         ).readText()
@@ -258,11 +194,6 @@ class GalleryTranslationConfirmStyleTest {
         )
 
         listOf(
-            Case("uses the same square size as thumbnails", "modifier.aspectRatio(1f)"),
-            Case("uses the white surface background", "color = MaterialTheme.colorScheme.surface"),
-            Case("uses a one dp outline", "val strokeWidth = 1.dp.toPx()"),
-            Case("uses a dashed path effect", "PathEffect.dashPathEffect("),
-            Case("centers its content", "contentAlignment = Alignment.Center"),
             Case("shows a plus icon", "imageVector = Icons.Default.Add"),
             Case("preserves the add images accessibility label", "gallery_confirm_add_photos"),
         ).forEach { case ->
@@ -270,40 +201,6 @@ class GalleryTranslationConfirmStyleTest {
         }
     }
 
-    @Test
-    fun `selected image thumbnails use a neutral solid border`() {
-        val source = sourceFile(
-            "src/main/java/com/gameocr/app/ui/GalleryTranslationScreens.kt"
-        ).readText()
-        val start = source.indexOf("private fun GallerySelectedThumbnail(")
-        val end = source.indexOf("private fun GalleryAddImageTile(", start)
-        assertTrue("selected thumbnail exists", start >= 0 && end > start)
-        val thumbnail = source.substring(start, end)
-
-        data class Case(
-            val name: String,
-            val actual: Boolean,
-        )
-
-        listOf(
-            Case(
-                "uses a one dp neutral outline",
-                thumbnail.contains(
-                    "border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)"
-                ),
-            ),
-            Case(
-                "keeps the rounded thumbnail shape",
-                thumbnail.contains("shape = RoundedCornerShape(8.dp)"),
-            ),
-            Case(
-                "thumbnail border remains solid",
-                !thumbnail.contains("PathEffect.dashPathEffect("),
-            ),
-        ).forEach { case ->
-            assertTrue(case.name, case.actual)
-        }
-    }
 
     private fun sourceFile(path: String): File =
         listOf(File(path), File("app", path)).firstOrNull(File::isFile)

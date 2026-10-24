@@ -246,7 +246,7 @@ class OnboardingContentContractTest {
             "private fun RecommendedModelsDownloadPage(",
             "R.string.onboarding_recommended_models_download",
             "onDownloadRecommendedModels = ::requestRecommendedModelsDownload",
-            "viewModel.downloadMissingRecommendedModels(currentDraft)",
+            "viewModel.downloadMissingRecommendedModels(currentDraft, onWorkInfo =",
         )
 
         markers.forEach { marker ->
@@ -267,7 +267,7 @@ class OnboardingContentContractTest {
                 viewModelSource.contains(
                     "modelReadinessChecker.llm(LlmModelKind.HY_MT2_1_8B_Q4_K_M)"
                 ) &&
-                viewModelSource.contains("enqueueIndependentlyAndAwait(specs, onProgress)"),
+                viewModelSource.contains("enqueueIndependentlyAndAwait(specs, onProgress, onWorkInfo = onWorkInfo)"),
         )
     }
 
@@ -381,8 +381,6 @@ class OnboardingContentContractTest {
                 source = choiceChip,
                 requiredMarkers = listOf(
                     "if (selected)",
-                    "modifier = Modifier.size(18.dp)",
-                    "Spacer(Modifier.width(6.dp))",
                 ),
             ),
             Case(

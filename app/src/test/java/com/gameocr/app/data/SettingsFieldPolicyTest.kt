@@ -10,6 +10,15 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SettingsFieldPolicyTest {
+    @Test fun captureVibrationPortableRoundTripAndLegacyDefault_tableDriven() {
+        assertTrue(SettingsFieldPolicy.decodePortable(JsonObject(emptyMap())).settings.loopCaptureVibrationEnabled)
+        for (enabled in listOf(false, true)) {
+            val encoded = SettingsFieldPolicy.encodePortable(Settings(loopCaptureVibrationEnabled = enabled))
+            val imported = SettingsFieldPolicy.decodePortable(encoded).settings
+            assertEquals(enabled, imported.loopCaptureVibrationEnabled)
+            assertEquals(enabled, SettingsFieldPolicy.applyPortable(Settings(), imported).loopCaptureVibrationEnabled)
+        }
+    }
 
     @Test
     fun regionAutoHidePortableRoundTripAndLegacyDefault_tableDriven() {

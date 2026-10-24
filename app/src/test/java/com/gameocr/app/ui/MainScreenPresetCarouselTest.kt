@@ -1,5 +1,6 @@
 package com.gameocr.app.ui
 
+import com.gameocr.app.readSourceText
 import com.gameocr.app.data.Settings as AppSettings
 import com.gameocr.app.data.TranslationPresetCatalog
 import java.io.File
@@ -37,7 +38,7 @@ class MainScreenPresetCarouselTest {
             Case("English", "src/main/res/values/strings.xml", "Presets"),
             Case("Simplified Chinese", "src/main/res/values-zh-rCN/strings.xml", "预设"),
         ).forEach { case ->
-            val resources = moduleFile(case.path).readText()
+            val resources = moduleFile(case.path).readSourceText()
             assertTrue(
                 case.name,
                 resources.contains(
@@ -249,7 +250,7 @@ class MainScreenPresetCarouselTest {
 
     @Test
     fun mainViewModel_rechecksModelsBeforePersistingAPreset() {
-        val source = moduleFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readText()
+        val source = moduleFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readSourceText()
         val applyStart = source.indexOf("suspend fun applyTranslationPreset(id: String): Boolean")
         val applyEnd = source.indexOf("private fun modelIssuesFor(", applyStart)
         assertTrue("apply function exists", applyStart >= 0)
@@ -274,7 +275,7 @@ class MainScreenPresetCarouselTest {
 
     @Test
     fun saveThenApply_validatesBeforeTheAtomicSettingsUpdate() {
-        val source = moduleFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readText()
+        val source = moduleFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readSourceText()
         val start = source.indexOf("suspend fun saveTranslationPresetAndApply(")
         val end = source.indexOf("private fun modelIssuesFor(", start)
         assertTrue("save-then-apply function exists", start >= 0)
@@ -298,240 +299,39 @@ class MainScreenPresetCarouselTest {
     }
 
     @Test
-    fun mainScreen_showsStatusAndPresetAsTwoPagesInOneVerticalCarousel() {
-        val source = moduleFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readText()
-        val carouselCall = source.indexOf("            StatusPresetCarousel(")
-        val captureCard = source.indexOf(
-            "            CaptureGalleryCarousel(",
-            carouselCall,
-        )
-        val carouselFunction = source.indexOf("private fun StatusPresetCarousel(")
-        val carouselFunctionEnd = source.indexOf(
-            "private const val STATUS_PRESET_PAGE_COUNT",
-            carouselFunction,
+    fun mainScreen_showsPresetsAsAStandaloneCardBelowTheCaptureCard() {
+        val source = moduleFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readSourceText()
+        val captureCard = source.indexOf("            CaptureGalleryCarousel(")
+        val presetCard = source.indexOf("            PresetCarouselCard(", captureCard)
+        val compatibility = source.indexOf(
+            "ActionCard(title = stringResource(R.string.main_section_rom_guide), listStyle = true)",
+            presetCard,
         )
 
         data class Case(val name: String, val expected: Boolean)
 
         listOf(
-            Case("combined carousel exists", carouselCall >= 0),
-            Case("capture actions follow carousel", captureCard > carouselCall),
-            Case("combined carousel function exists", carouselFunction >= 0),
-            Case("combined carousel function has an end", carouselFunctionEnd > carouselFunction),
+            Case("capture card exists", captureCard >= 0),
+            Case("presets follow the capture card", presetCard > captureCard),
+            Case("system compatibility follows the presets", compatibility > presetCard),
+            Case("no vertical status pager remains", !source.contains("VerticalPager(")),
+            Case("no status card remains", !source.contains("StatusCard(")),
         ).forEach { case -> assertTrue(case.name, case.expected) }
 
-        val mainLayout = source.substring(carouselCall, captureCard)
-        assertFalse("status must not be a second visible card", mainLayout.contains("StatusCard("))
-        assertFalse("preset must not be a second visible card", mainLayout.contains("PresetCarouselCard("))
+        val presetCall = source.substring(presetCard, source.indexOf("\n            )\n", presetCard))
         assertFalse(
             "preset carousel must not depend on capture service state",
-            mainLayout.contains("if (serviceRunning)"),
+            presetCall.contains("serviceRunning"),
         )
-
-        val carousel = source.substring(carouselFunction, carouselFunctionEnd)
-        listOf(
-            Case("uses a vertical pager", carousel.contains("VerticalPager(")),
-            Case("indicator overlays instead of taking width", carousel.contains("Box(")),
-            Case(
-                "pager keeps the cards inset from the edge-to-edge container",
-                carousel.contains(".padding(horizontal = MainScreenHorizontalPadding)"),
-            ),
-            Case("layout has no width-taking weight", !carousel.contains(".weight(1f)")),
-            Case("status is the first page", carousel.contains("STATUS_PAGE -> StatusCard(")),
-            Case("preset is the second page", carousel.contains("PRESET_PAGE -> PresetCarouselCard(")),
-            Case(
-                "pager and both pages fill one viewport",
-                carousel.split(".fillMaxSize()").size - 1 == 3,
-            ),
-            Case("has a two-page indicator", carousel.contains("repeat(STATUS_PRESET_PAGE_COUNT)")),
-        ).forEach { case -> assertTrue(case.name, case.expected) }
-    }
-
-    @Test
-    fun mainScreen_placesTheVerticalIndicatorOutsideTheCards() {
-        val source = moduleFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readText()
-        val carouselCall = source.indexOf("            StatusPresetCarousel(")
-        val captureCard = source.indexOf(
-            "            CaptureGalleryCarousel(",
-            carouselCall,
+        assertTrue(
+            "preset hint waits until the capture card swipe was discovered",
+            presetCall.contains("captureGallerySeen == true"),
         )
-        val mainColumn = source.substring(
-            source.lastIndexOf("        Column(", carouselCall),
-            captureCard,
-        )
-        val carouselFunction = source.indexOf("private fun StatusPresetCarousel(")
-        val carouselFunctionEnd = source.indexOf(
-            "private const val STATUS_PRESET_PAGE_COUNT",
-            carouselFunction,
-        )
-        val carousel = source.substring(carouselFunction, carouselFunctionEnd)
-        val actionCardFunction = source.substring(
-            source.indexOf("private fun ActionCard("),
-            source.indexOf("@HiltViewModel", source.indexOf("private fun ActionCard(")),
-        )
-
-        data class Case(val name: String, val expected: Boolean)
-
-        listOf(
-            Case(
-                "main content has no horizontal outer padding",
-                mainColumn.contains(".padding(vertical = 8.dp)") &&
-                    !mainColumn.contains(".padding(horizontal = 16.dp, vertical = 8.dp)"),
-            ),
-            Case(
-                "carousel cards keep the original 16dp horizontal position",
-                carousel.contains(".padding(horizontal = MainScreenHorizontalPadding)"),
-            ),
-            Case(
-                "indicator remains aligned to the edge-to-edge carousel container",
-                carousel.contains(".align(Alignment.CenterEnd)") &&
-                    carousel.contains(".padding(end = 8.dp)"),
-            ),
-            Case(
-                "cards below the carousel own the same horizontal padding",
-                actionCardFunction.contains(
-                    ".padding(horizontal = MainScreenHorizontalPadding)"
-                ),
-            ),
-            Case(
-                "shared horizontal padding remains 16dp",
-                source.contains("private val MainScreenHorizontalPadding = 16.dp"),
-            ),
-        ).forEach { case -> assertTrue(case.name, case.expected) }
-    }
-
-    @Test
-    fun statusPresetDiscoveryHintEligibility_isTableDriven() {
-        data class Case(
-            val name: String,
-            val presetPageSeen: Boolean,
-            val hintAlreadyPlayed: Boolean,
-            val settledPage: Int,
-            val isScrollInProgress: Boolean,
-            val pageCount: Int,
-            val expected: Boolean,
-        )
-
-        listOf(
-            Case("unseen idle status page", false, false, 0, false, 2, true),
-            Case("preset was seen in an earlier session", true, false, 0, false, 2, false),
-            Case("hint already played this session", false, true, 0, false, 2, false),
-            Case("already settled on presets", false, false, 1, false, 2, false),
-            Case("user is actively scrolling", false, false, 0, true, 2, false),
-            Case("preset page is unavailable", false, false, 0, false, 1, false),
-            Case("empty corrupted page count", false, false, 0, false, 0, false),
-            Case("unexpected settled page", false, false, 3, false, 4, false),
-        ).forEach { case ->
-            assertEquals(
-                case.name,
-                case.expected,
-                shouldRunMainStatusPresetHint(
-                    presetPageSeen = case.presetPageSeen,
-                    hintAlreadyPlayed = case.hintAlreadyPlayed,
-                    settledPage = case.settledPage,
-                    isScrollInProgress = case.isScrollInProgress,
-                    pageCount = case.pageCount,
-                ),
-            )
-        }
-    }
-
-    @Test
-    fun statusPresetDiscoverySeenDecision_isTableDriven() {
-        data class Case(
-            val name: String,
-            val settledPage: Int,
-            val pageCount: Int,
-            val expectedSeen: Boolean,
-        )
-
-        listOf(
-            Case("status page is not discovery", 0, 2, false),
-            Case("preset page is discovery", 1, 2, true),
-            Case("preset index without a preset page", 1, 1, false),
-            Case("negative page is ignored", -1, 2, false),
-            Case("later unexpected page is ignored", 2, 3, false),
-        ).forEach { case ->
-            assertEquals(
-                case.name,
-                case.expectedSeen,
-                mainStatusPresetPageWasSeen(
-                    settledPage = case.settledPage,
-                    pageCount = case.pageCount,
-                ),
-            )
-        }
-    }
-
-    @Test
-    fun statusPresetInitialPage_clampsRestoredValues() {
-        data class Case(val name: String, val savedPage: Int, val expected: Int)
-
-        listOf(
-            Case("negative value", -1, 0),
-            Case("status page", 0, 0),
-            Case("preset page", 1, 1),
-            Case("page past the end", 2, 1),
-            Case("corrupt large value", Int.MAX_VALUE, 1),
-        ).forEach { case ->
-            assertEquals(
-                case.name,
-                case.expected,
-                mainStatusPresetInitialPage(case.savedPage),
-            )
-        }
-    }
-
-    @Test
-    fun statusPresetDiscoveryHint_isPartiallyRevealedBouncyAndPersistent() {
-        val main = moduleFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readText()
-        val repository =
-            moduleFile("src/main/java/com/gameocr/app/data/SettingsRepository.kt").readText()
-        val carouselStart = main.indexOf("private fun StatusPresetCarousel(")
-        val carouselEnd = main.indexOf(
-            "private const val STATUS_PRESET_PAGE_COUNT",
-            carouselStart,
-        )
-        val carousel = main.substring(carouselStart, carouselEnd)
-
-        data class Case(val name: String, val content: String, val marker: String)
-
-        listOf(
-            Case("waits before nudging", carousel, "STATUS_PRESET_DISCOVERY_HINT_DELAY_MS"),
-            Case("observes the settled page", carousel, "snapshotFlow { pagerState.settledPage }"),
-            Case("reveals only part of presets", carousel, "pageOffsetFraction ="),
-            Case("returns with a spring", carousel, "animationSpec = spring("),
-            Case("uses a bouncy damping ratio", carousel, "Spring.DampingRatioMediumBouncy"),
-            Case("uses a slow spring", carousel, "Spring.StiffnessVeryLow"),
-            Case("shows the swipe guide during discovery", carousel, "SwipeUpGuide("),
-            Case("starts the guide with the carousel nudge", carousel, "discoveryGuideVisible = true"),
-            Case("always hides the guide after discovery", carousel, "finally {"),
-            Case("clears the guide visibility", carousel, "discoveryGuideVisible = false"),
-            Case("loads persisted discovery", main, "viewModel.hasSeenMainStatusPreset()"),
-            Case("persists preset discovery", main, "viewModel.markMainStatusPresetSeen()"),
-            Case(
-                "repository owns a discovery preference",
-                repository,
-                "booleanPreferencesKey(\"main_status_preset_seen\")",
-            ),
-        ).forEach { case ->
-            assertTrue("${case.name}: missing ${case.marker}", case.content.contains(case.marker))
-        }
-        listOf(
-            "hint waits one second before moving" to
-                "STATUS_PRESET_DISCOVERY_HINT_DELAY_MS = 1_000L",
-            "reveal motion is deliberately slow" to
-                "STATUS_PRESET_DISCOVERY_HINT_REVEAL_MS = 650",
-            "partial reveal remains visible before returning" to
-                "STATUS_PRESET_DISCOVERY_HINT_HOLD_MS = 1_500L",
-        ).forEach { (name, marker) ->
-            assertTrue("$name: missing $marker", main.contains(marker))
-        }
     }
 
     @Test
     fun horizontalPresetCards_reuseSettingsContentAndHaveNoIndicator() {
-        val source = moduleFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readText()
+        val source = moduleFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readSourceText()
         val carouselStart = source.indexOf("internal fun PresetCarousel(")
         val carouselEnd = source.indexOf("internal data class PresetCarouselPlans(", carouselStart)
         assertTrue("preset carousel exists", carouselStart >= 0)
@@ -555,18 +355,6 @@ class MainScreenPresetCarouselTest {
                 "renders each of the four details on its own line",
                 source.contains("MAIN_PRESET_DETAIL_COUNT = 4") &&
                     carousel.contains("maxLines = 1"),
-            ),
-            Case(
-                "keeps a visible four dp gap between all preset lines",
-                carousel.contains("verticalArrangement = Arrangement.spacedBy(4.dp)"),
-            ),
-            Case(
-                "restores the compact pager after accessibility leaves current status",
-                source.contains(".height(196.dp)") &&
-                    !source.contains(".height(220.dp)") &&
-                    carousel.contains(".height(140.dp)") &&
-                    carousel.contains(".height(132.dp)") &&
-                    !carousel.contains(".height(172.dp)"),
             ),
             Case("keeps the horizontal pager", carousel.contains("HorizontalPager(")),
             Case(
@@ -592,15 +380,6 @@ class MainScreenPresetCarouselTest {
                     carousel.contains("color = MaterialTheme.colorScheme.primary"),
             ),
             Case(
-                "the progress line is one dp and fully outside the card",
-                source.contains("val strokeWidth = 1.dp.toPx()") &&
-                    source.contains("left = -outset") &&
-                    source.contains("top = -outset") &&
-                    source.contains("right = size.width + outset") &&
-                    source.contains("bottom = size.height + outset") &&
-                    !source.contains("Stroke(width = 5.dp.toPx()"),
-            ),
-            Case(
                 "side cards only animate into the center",
                 carousel.contains(".clickable(enabled = !centered)") &&
                     carousel.contains("pagerState.animateScrollToPage(page)"),
@@ -613,21 +392,6 @@ class MainScreenPresetCarouselTest {
                 "unsaved current settings are intercepted by the confirmation path",
                 source.contains("shouldConfirmUnsavedPresetSwitch(") &&
                     source.contains("pendingPresetSwitch = preset"),
-            ),
-            Case(
-                "preset cards have transparent backgrounds",
-                carousel.contains("containerColor = Color.Transparent"),
-            ),
-            Case(
-                "preset cards keep a one dp stateful outline",
-                carousel.contains("width = 1.dp") &&
-                    carousel.contains("MaterialTheme.colorScheme.primary") &&
-                    carousel.contains("MaterialTheme.colorScheme.outlineVariant"),
-            ),
-            Case(
-                "preset cards do not retain filled container colors",
-                !carousel.contains("MaterialTheme.colorScheme.primaryContainer") &&
-                    !carousel.contains("MaterialTheme.colorScheme.surfaceVariant"),
             ),
             Case("removes horizontal dots", !carousel.contains("repeat(presets.size)")),
             Case("removes horizontal indicator state", !carousel.contains("indicatorIndex")),
@@ -721,41 +485,10 @@ class MainScreenPresetCarouselTest {
     }
 
     @Test
-    fun mainRouteHoistsStatusPresetPageAcrossNavigation() {
-        val activity = moduleFile("src/main/java/com/gameocr/app/ui/MainActivity.kt").readText()
-        val main = moduleFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readText()
-
-        data class Case(val name: String, val content: String, val marker: String)
-
-        listOf(
-            Case(
-                "route container saves the status/preset page",
-                activity,
-                "mainStatusPresetPageIndex by rememberSaveable",
-            ),
-            Case(
-                "main screen restores the saved page",
-                activity,
-                "initialStatusPresetPageIndex = mainStatusPresetPageIndex",
-            ),
-            Case(
-                "settled page changes update the saved page",
-                activity,
-                "onStatusPresetPageChanged = { mainStatusPresetPageIndex = it }",
-            ),
-            Case(
-                "vertical pager starts from the restored page",
-                main,
-                "mainStatusPresetInitialPage(initialPageIndex)",
-            ),
-            Case(
-                "vertical pager reports settled page changes",
-                main,
-                "currentOnPageChanged(settledPage)",
-            ),
-        ).forEach { case ->
-            assertTrue("${case.name}: missing ${case.marker}", case.content.contains(case.marker))
-        }
+    fun mainRouteNoLongerHoistsAStatusPresetPage() {
+        val activity = moduleFile("src/main/java/com/gameocr/app/ui/MainActivity.kt").readSourceText()
+        assertFalse(activity.contains("mainStatusPresetPageIndex"))
+        assertFalse(activity.contains("onStatusPresetPageChanged"))
     }
 
     @Test

@@ -22,6 +22,7 @@ internal data class AdaptiveVerticalTextFitSnapshot(
     val maxTextSizePx: Int,
     val probes: Int,
     val requiredWidthPx: Int,
+    val targetRequiredWidthPx: Int = requiredWidthPx,
     val contentWidthPx: Int,
     val contentHeightPx: Int,
     val nextSizeFits: Boolean?,
@@ -52,7 +53,10 @@ class VerticalTextView(context: Context) : View(context) {
     internal var minimumReadableTextSizeSp: Float = 12f
     internal var minimumReadableTextSizeRatio: Float = 0.86f
     internal var adaptiveTextFitEnabled: Boolean = false
+    internal var adaptiveBoundsConstrained: Boolean = false
     internal var adaptiveMaximumTextSizeSp: Float = ADAPTIVE_MAX_TEXT_SIZE_SP.toFloat()
+    internal var adaptiveSourceGlyphHeightPx: Float = 0f
+    internal var adaptiveBackgroundOffsetXPx: Int = 0
     internal var adaptiveTextLayoutPhase: AdaptiveTextLayoutPhase = AdaptiveTextLayoutPhase.FINAL
         set(value) {
             if (field == value) return
@@ -160,6 +164,11 @@ class VerticalTextView(context: Context) : View(context) {
         setMeasuredDimension(finalW.coerceAtLeast(1), finalH.coerceAtLeast(1))
     }
 
+    override fun draw(canvas: Canvas) {
+        (background as? AdaptiveEraseDrawable)?.renderOffsetXPx = adaptiveBackgroundOffsetXPx
+        super.draw(canvas)
+    }
+
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)  // 让 background drawable 画完
         val contentW = (width - padL - padR).toFloat()
@@ -168,7 +177,8 @@ class VerticalTextView(context: Context) : View(context) {
         val originalTextSize = paint.textSize
         val layoutText = normalizeVerticalOverlayText(text)
         val fitSnapshot = if (
-            adaptiveTextFitEnabled && shouldFitAdaptiveFinalBounds(adaptiveTextLayoutPhase)
+            adaptiveTextFitEnabled &&
+            (adaptiveBoundsConstrained || shouldFitAdaptiveFinalBounds(adaptiveTextLayoutPhase))
         ) {
             fitAdaptiveTextToBounds(layoutText, contentW, contentH, originalTextSize)
         } else {
@@ -210,7 +220,8 @@ class VerticalTextView(context: Context) : View(context) {
             leftToRight = leftToRight,
             letterSpacingEm = textStyle.letterSpacingEm,
             lineSpacingMultiplier = textStyle.lineSpacingMultiplier,
-            alignment = textStyle.alignment
+            alignment = textStyle.alignment,
+            centerInBounds = adaptiveTextFitEnabled && adaptiveBoundsConstrained,
         )
     }
 
@@ -317,8 +328,12 @@ class VerticalTextView(context: Context) : View(context) {
         contentH: Float,
         originalTextSize: Float,
     ): AdaptiveVerticalTextFitSnapshot {
-        val minTextSizePx = sp2px(minimumReadableTextSizeSp).roundToInt().coerceAtLeast(1)
-        val maxTextSizePx = sp2px(adaptiveMaximumTextSizeSp)
+        val glyphRange = measureTranslationGlyphRange(
+            paint, layoutText, adaptiveSourceGlyphHeightPx, adaptiveBoundsConstrained,
+        )
+        val minTextSizePx = glyphRange?.minPx
+            ?: sp2px(minimumReadableTextSizeSp).roundToInt().coerceAtLeast(1)
+        val maxTextSizePx = glyphRange?.targetPx ?: sp2px(adaptiveMaximumTextSizeSp)
             .roundToInt()
             .coerceAtLeast(minTextSizePx)
         if (layoutText.isEmpty()) {
@@ -340,7 +355,7 @@ class VerticalTextView(context: Context) : View(context) {
             )
         }
 
-        fun requiredWidthAt(sizePx: Int): Int {
+        fun requiredSizeAt(sizePx: Int): Pair<Int, Int> {
             paint.textSize = sizePx.toFloat()
             return VerticalTextDrawer.measure(
                 layoutText,
@@ -348,17 +363,19 @@ class VerticalTextView(context: Context) : View(context) {
                 contentH.toInt(),
                 letterSpacingEm = textStyle.letterSpacingEm,
                 lineSpacingMultiplier = textStyle.lineSpacingMultiplier,
-            ).first
+            )
         }
 
+        val targetRequiredWidth = requiredSizeAt(maxTextSizePx).first
         val search = adaptiveLargestFittingTextSizePx(
             minSizePx = minTextSizePx,
             maxSizePx = maxTextSizePx,
         ) { candidatePx ->
-            requiredWidthAt(candidatePx) <= contentW
+            val required = requiredSizeAt(candidatePx)
+            required.first <= contentW && required.second <= contentH
         }
         paint.textSize = search.sizePx.toFloat()
-        val requiredWidth = requiredWidthAt(search.sizePx)
+        val required = requiredSizeAt(search.sizePx)
         return AdaptiveVerticalTextFitSnapshot(
             phase = adaptiveTextLayoutPhase,
             textHash = text.hashCode(),
@@ -368,11 +385,12 @@ class VerticalTextView(context: Context) : View(context) {
             minTextSizePx = minTextSizePx,
             maxTextSizePx = maxTextSizePx,
             probes = search.probes,
-            requiredWidthPx = requiredWidth,
+            requiredWidthPx = required.first,
+            targetRequiredWidthPx = targetRequiredWidth,
             contentWidthPx = contentW.toInt(),
             contentHeightPx = contentH.toInt(),
             nextSizeFits = search.nextSizeFits,
-            overflow = requiredWidth > contentW,
+            overflow = required.first > contentW || required.second > contentH,
         )
     }
 }

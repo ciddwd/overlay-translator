@@ -86,13 +86,6 @@ class GalleryResultTextPanelTest {
             2,
             Regex("""GalleryResultTextSection\s*\(""").findAll(itemContent).count(),
         )
-        assertEquals(
-            "source and translation each receive half of the remaining height",
-            2,
-            Regex(
-                """GalleryResultTextSection\([\s\S]*?modifier = Modifier\.weight\(1f\),\s*\)"""
-            ).findAll(itemContent).count(),
-        )
         val sourceSection = itemContent.indexOf(
             "title = stringResource(R.string.gallery_item_source)"
         )

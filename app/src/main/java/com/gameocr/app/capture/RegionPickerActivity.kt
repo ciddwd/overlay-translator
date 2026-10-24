@@ -223,11 +223,15 @@ class RegionPickerActivity : ComponentActivity() {
             val region = CaptureRegion(rect.left, rect.top, rect.right, rect.bottom)
             val screen = physicalDisplaySize(this@RegionPickerActivity)
             // 同时写当前屏幕尺寸——下次读 region 时如果屏幕方向变了，按 saved/current 比例自动 rescale。
-            settingsRepository.update { it.copy(
+            val saved = settingsRepository.tryUpdate { it.copy(
                 captureRegion = region,
                 captureRegionSavedScreenW = screen.width,
                 captureRegionSavedScreenH = screen.height
             ) }
+            if (!saved) {
+                android.widget.Toast.makeText(this@RegionPickerActivity, R.string.settings_storage_save_failed, android.widget.Toast.LENGTH_LONG).show()
+                return@launch
+            }
             finish()
         }
     }
@@ -235,7 +239,10 @@ class RegionPickerActivity : ComponentActivity() {
     /** 双击整屏路径：跟主屏「清除选框」一致，写 null + 关闭 picker。 */
     private fun clearAndFinish() {
         scope.launch {
-            settingsRepository.update { it.copy(captureRegion = null) }
+            if (!settingsRepository.tryUpdate { it.copy(captureRegion = null) }) {
+                android.widget.Toast.makeText(this@RegionPickerActivity, R.string.settings_storage_save_failed, android.widget.Toast.LENGTH_LONG).show()
+                return@launch
+            }
             finish()
         }
     }

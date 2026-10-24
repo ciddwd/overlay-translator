@@ -1,3 +1,8 @@
+import java.io.File
+import java.net.URI
+import java.security.MessageDigest
+import java.util.zip.ZipFile
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -10,6 +15,80 @@ plugins {
 hilt {
     enableAggregatingTask = false
 }
+
+/**
+ * OCR and sherpa-onnx share one arm64 ONNX Runtime, including its matching Java/JNI bindings.
+ * The runtime archive is the same pinned build used by sherpa-onnx v1.13.8:
+ * https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.8/cmake/onnxruntime-android-aarch64.cmake
+ */
+abstract class PrepareOnnxRuntimeTask : DefaultTask() {
+    @get:Input abstract val sherpaUrl: Property<String>
+    @get:Input abstract val sherpaSha256: Property<String>
+    @get:Input abstract val runtimeUrl: Property<String>
+    @get:Input abstract val runtimeSha256: Property<String>
+    @get:OutputDirectory abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun prepare() {
+        val out = outputDir.get().asFile.apply { mkdirs() }
+        val sherpa = download(sherpaUrl.get(), sherpaSha256.get(), File(out, "sherpa-onnx.aar"))
+        val runtime = download(runtimeUrl.get(), runtimeSha256.get(), File(out, "onnxruntime.zip"))
+        val jni = File(out, "jni/arm64-v8a").apply { deleteRecursively(); mkdirs() }
+        ZipFile(sherpa).use { sherpaZip ->
+            ZipFile(runtime).use { runtimeZip ->
+                fun extract(zip: ZipFile, entry: String): ByteArray =
+                    zip.getInputStream(checkNotNull(zip.getEntry(entry)) { "missing $entry" }).use { it.readBytes() }
+                val runtimeEntry = "jni/arm64-v8a/libonnxruntime.so"
+                val runtimeBytes = extract(runtimeZip, runtimeEntry)
+                check(runtimeBytes.contentEquals(extract(sherpaZip, runtimeEntry))) {
+                    "OCR and sherpa-onnx must use the same ONNX Runtime build"
+                }
+                File(out, "sherpa-onnx.jar").writeBytes(extract(sherpaZip, "classes.jar"))
+                File(out, "onnxruntime.jar").writeBytes(extract(runtimeZip, "classes.jar"))
+                File(jni, "libonnxruntime.so").writeBytes(runtimeBytes)
+                File(jni, "libonnxruntime4j_jni.so")
+                    .writeBytes(extract(runtimeZip, "jni/arm64-v8a/libonnxruntime4j_jni.so"))
+                File(jni, "libsherpa-onnx-jni.so")
+                    .writeBytes(extract(sherpaZip, "jni/arm64-v8a/libsherpa-onnx-jni.so"))
+            }
+        }
+    }
+
+    private fun download(url: String, expected: String, cached: File): File {
+        if (!cached.isFile || sha256(cached) != expected) {
+            logger.lifecycle("Downloading $url")
+            URI(url).toURL().openStream().use { input ->
+                cached.outputStream().use { input.copyTo(it) }
+            }
+            check(sha256(cached) == expected) { "Archive SHA-256 mismatch: $url" }
+        }
+        return cached
+    }
+
+    private fun sha256(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(1 shl 16)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+}
+
+val prepareOnnxRuntime = tasks.register<PrepareOnnxRuntimeTask>("prepareOnnxRuntime") {
+    sherpaUrl.set("https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-1.13.8.aar")
+    sherpaSha256.set("633c24321e06b1fe79feafa03ea16cbc0f8a286641e2da3559bac91bdb13bd96")
+    val runtimeVersion = libs.versions.onnxruntime.get()
+    runtimeUrl.set("https://github.com/csukuangfj/onnxruntime-libs/releases/download/v$runtimeVersion/onnxruntime-android-$runtimeVersion.zip")
+    runtimeSha256.set("01518867f78241138b6aa25925802e843a4fa9085af8d303d49e35bbb52aff4d")
+    outputDir.set(layout.buildDirectory.dir("generated/onnxruntime"))
+}
+
+tasks.named("preBuild") { dependsOn(prepareOnnxRuntime) }
 
 val localLlmGenerationThreads = providers
     .gradleProperty("localLlmGenerationThreads")
@@ -34,9 +113,17 @@ val mangaOcrBatchSize = providers
     .orElse("4")
     .get()
     .toInt()
-require(mangaOcrBatchSize in setOf(1, 2, 4)) {
-    "mangaOcrBatchSize must be one of 1, 2, or 4"
+require(mangaOcrBatchSize in setOf(1, 2, 4, 8)) {
+    "mangaOcrBatchSize must be one of 1, 2, 4, or 8"
 }
+
+// Speculative manga-ocr decoding (int8 draft, FP32 verify). On in every build; output is always
+// the FP32 decoder's own. -PmangaOcrSpeculative=false builds an FP32-only variant for comparison.
+val mangaOcrSpeculative = providers
+    .gradleProperty("mangaOcrSpeculative")
+    .orElse("true")
+    .get()
+    .toBooleanStrict()
 
 android {
     namespace = "com.gameocr.app"
@@ -46,8 +133,8 @@ android {
         applicationId = "com.gameocr.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 20
-        versionName = "0.4.7"
+        versionCode = 21
+        versionName = "0.4.8"
 
         // Controlled local-LLM A/B switch. PP remains device-policy selected (6 on the
         // target 8-core phone); TG can be rebuilt as 4 or 6 without source changes.
@@ -94,10 +181,12 @@ android {
             if (hasReleaseSigning) {
                 signingConfig = signingConfigs.getByName("release")
             }
+            buildConfigField("boolean", "MANGA_OCR_SPECULATIVE", mangaOcrSpeculative.toString())
         }
         debug {
             applicationIdSuffix = ".debug"
             isDebuggable = true
+            buildConfigField("boolean", "MANGA_OCR_SPECULATIVE", mangaOcrSpeculative.toString())
         }
     }
 
@@ -118,6 +207,12 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    sourceSets {
+        getByName("main") {
+            jniLibs.srcDir(prepareOnnxRuntime.flatMap { it.outputDir.dir("jni") })
+        }
     }
 
     packaging {
@@ -175,6 +270,7 @@ dependencies {
     implementation(libs.mlkit.text.recognition.japanese)
     implementation(libs.mlkit.text.recognition.chinese)
     implementation(libs.mlkit.text.recognition.korean)
+    implementation("com.google.android.gms:play-services-mlkit-text-recognition-devanagari:16.0.1")
     implementation(libs.mlkit.translate)
     implementation("com.google.mlkit:language-id:17.0.6")
 
@@ -199,8 +295,9 @@ dependencies {
     implementation(libs.shizuku.api)
     implementation(libs.shizuku.provider)
 
-    // ONNX Runtime (PaddleOCR PP-OCRv4)
-    implementation(libs.onnxruntime.android)
+    // Matching OCR and speech Java/JNI bindings; one shared native runtime is prepared above.
+    implementation(files(prepareOnnxRuntime.flatMap { it.outputDir.file("onnxruntime.jar") }).builtBy(prepareOnnxRuntime))
+    implementation(files(prepareOnnxRuntime.flatMap { it.outputDir.file("sherpa-onnx.jar") }).builtBy(prepareOnnxRuntime))
 
     // 端侧 LLM 翻译（llama.cpp + GGUF）。运行时仅在 Build.VERSION.SDK_INT >= 33 启用，
     // 详见 :llama-android 模块说明与 LlamaEngineHolder。

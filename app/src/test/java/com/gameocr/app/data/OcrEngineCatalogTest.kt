@@ -4,6 +4,22 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class OcrEngineCatalogTest {
+    @Test fun quickOptions_tableDriven_autoStaysFirstAndMissingModulesStayOutOfShortcuts() {
+        val optional = OcrEngineKind.ML_KIT_DEVANAGARI
+        for (downloaded in listOf(emptySet(), setOf(optional))) {
+            val quick = OcrEngineCatalog.quickOptions(OcrEngineGroup.ON_DEVICE, downloaded).map { it.engine }
+            assertEquals(OcrEngineKind.ML_KIT_AUTO, quick.first())
+            assertEquals(optional in downloaded, optional in quick)
+            if (optional in downloaded) {
+                assertTrue("Devanagari keeps its script position after Latin",
+                    quick.indexOf(optional) > quick.indexOf(OcrEngineKind.ML_KIT_LATIN))
+            }
+            assertTrue(OcrEngineCatalog.optionsIn(OcrEngineGroup.ON_DEVICE).any { it.engine == optional })
+            for (group in listOf(OcrEngineGroup.LOCAL, OcrEngineGroup.CLOUD)) {
+                assertEquals(OcrEngineCatalog.optionsIn(group), OcrEngineCatalog.quickOptions(group, downloaded))
+            }
+        }
+    }
     @Test fun everyEngineHasOneCatalogEntryAndOneName() {
         val engines = OcrEngineCatalog.options.map { it.engine }
         assertEquals(OcrEngineKind.entries.toSet(), engines.toSet())
@@ -15,7 +31,7 @@ class OcrEngineCatalogTest {
         val groups = mapOf(
             OcrEngineGroup.ON_DEVICE to listOf(OcrEngineKind.ML_KIT_AUTO, OcrEngineKind.ML_KIT_JAPANESE,
                 OcrEngineKind.ML_KIT_KOREAN, OcrEngineKind.ML_KIT_CHINESE, OcrEngineKind.ML_KIT_LATIN,
-                OcrEngineKind.PADDLE_ONNX, OcrEngineKind.MANGA_OCR_JA),
+                OcrEngineKind.ML_KIT_DEVANAGARI, OcrEngineKind.PADDLE_ONNX, OcrEngineKind.MANGA_OCR_JA),
             OcrEngineGroup.LOCAL to listOf(OcrEngineKind.UMI_OCR, OcrEngineKind.LUNA_OCR),
             OcrEngineGroup.CLOUD to listOf(OcrEngineKind.BAIDU, OcrEngineKind.TENCENT,
                 OcrEngineKind.YOUDAO, OcrEngineKind.PADDLE_AI_STUDIO),

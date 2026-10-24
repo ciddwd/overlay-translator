@@ -47,5 +47,6 @@ internal fun modelReadinessWithDependencies(
         installed = artifacts.all { it.installed },
         supported = artifacts.all { it.supported },
         totalBytes = artifacts.sumOf { it.totalBytes },
+        upgradeAvailable = artifacts.any { it.upgradeAvailable },
     )
 }

@@ -40,10 +40,14 @@ data class AutoOcrSettings(
         fun defaultRoute(language: String): AutoOcrRoute? {
             val code = languageKey(language)
             if (code.isBlank() || code == "auto" || code == "und") return null
+            OcrLanguageCapability.preferredPaddleModelVersion(code)?.let {
+                return AutoOcrRoute(OcrEngineKind.PADDLE_ONNX, it)
+            }
             val engine = when (code) {
                 "zh" -> OcrEngineKind.ML_KIT_CHINESE
                 "ja" -> OcrEngineKind.ML_KIT_JAPANESE
                 "ko" -> OcrEngineKind.ML_KIT_KOREAN
+                "hi", "mr", "ne", "sa" -> OcrEngineKind.ML_KIT_DEVANAGARI
                 else -> OcrEngineKind.ML_KIT_LATIN.takeIf {
                     OcrLanguageCapability.supports(it, code)
                 }

@@ -24,7 +24,7 @@ val Slate950 = Color(0xFF020617)
  * Slate 冷蓝灰主题。覆盖所有 Material3 surface 体系，避免默认 surfaceTint=primary
  * 导致 Card / Surface 染上紫调。
  */
-private val SlateLight = lightColorScheme(
+internal val SlateLight = lightColorScheme(
     primary = Slate900,
     onPrimary = Slate50,
     primaryContainer = Slate200,
@@ -71,7 +71,7 @@ private val SlateLight = lightColorScheme(
     onErrorContainer = Color(0xFF7F1D1D),
 )
 
-private val SlateDark = darkColorScheme(
+internal val SlateDark = darkColorScheme(
     primary = Slate50,
     onPrimary = Slate900,
     primaryContainer = Slate800,

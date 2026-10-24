@@ -100,6 +100,15 @@ class PaddleModelInstallerVersioningTest {
                 recRevision = "5c6f574b8e2230adf4287b33e736d71b9fabd28e",
             ),
             Case(
+                version = PaddleModelVersion.V5_ESLAV,
+                detRepo = "PaddlePaddle/PP-OCRv5_mobile_det_onnx",
+                recRepo = "PaddlePaddle/eslav_PP-OCRv5_mobile_rec_onnx",
+                keysRepo = "PaddlePaddle/eslav_PP-OCRv5_mobile_rec_onnx",
+                keysSuffix = "inference.yml",
+                detRevision = "e6f4fa85f00e168c862bc462aebca69eef9b3d3d",
+                recRevision = "9a32171fc5718746875e1a261818884517975013",
+            ),
+            Case(
                 version = PaddleModelVersion.V6_TINY,
                 detRepo = "PaddlePaddle/PP-OCRv6_tiny_det_onnx",
                 recRepo = "PaddlePaddle/PP-OCRv6_tiny_rec_onnx",
@@ -151,6 +160,7 @@ class PaddleModelInstallerVersioningTest {
         val cases = listOf(
             PaddleModelVersion.V5_MOBILE to "v5",
             PaddleModelVersion.V5_KOREAN to "v5ko",
+            PaddleModelVersion.V5_ESLAV to "v5eslav",
             PaddleModelVersion.V6_TINY to "v6tiny",
             PaddleModelVersion.V6_SMALL to "v6small",
             PaddleModelVersion.V6_MEDIUM to "v6medium",

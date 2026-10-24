@@ -7,6 +7,65 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LocalTextBackgroundRepairerTest {
+    @Test fun recognizedBubbleRecoversWideHaloWhileTexturedPathKeepsItsExistingPolicy() {
+        val width=100;val height=90;val background=0xffeaf6ff.toInt()
+        val box=IntRect(20,15,75,70)
+        val source=IntArray(width*height) { background }
+        for(y in 26..55)for(x in 29..49)source[y*width+x]=-1
+        for(y in 31..50)for(x in 34..44)source[y*width+x]=0xff111111.toInt()
+        for(y in 0 until height)source[y*width+74]=0xff111111.toInt()
+        val before=source.copyOf()
+        val core=BooleanArray(source.size) { it%width in box.left until box.right && it/width in box.top until box.bottom }
+        val mask=TextPixelMaskBuilder.BlockMask(0,IntRect(0,0,width,height),core,core.count { it },
+            recognizedBoxPixels=core,recognizedSourceBoxes=listOf(box))
+        val bubble=LocalTextBackgroundRepairer.repair(width,height,source,listOf(mask)).blocks.single()
+        assertEquals(background,requireNotNull(bubble.patchPixels)[26*width+29])
+        for(y in 0 until height)assertEquals("frame",0,requireNotNull(bubble.patchPixels)[y*width+74])
+        val textured=LocalTextBackgroundRepairer.repair(width,height,source,listOf(mask),texturedBlockIndices=setOf(0)).blocks.single()
+        assertEquals("the new halo policy must not change free-text repair",0,requireNotNull(textured.patchPixels)[26*width+29])
+        assertTrue(before.contentEquals(source))
+    }
+
+    @Test
+    fun repair_coloredOutlinedTextRemovesEveryStrokeWithoutFloodingTheOutside_tableDriven() {
+        for (background in listOf(0xffe7f4fd.toInt(), 0xfffde9e7.toInt()))
+            for (scale in listOf(1, 2)) for (transpose in listOf(false, true)) {
+                val size = 96 * scale
+                fun inside(i: Int, l: Int, t: Int, r: Int, b: Int): Boolean {
+                    val x = if (transpose) i / size else i % size
+                    val y = if (transpose) i % size else i / size
+                    return x in l * scale until r * scale && y in t * scale until b * scale
+                }
+                val semantic = BooleanArray(size * size) { inside(it, 25, 8, 88, 88) }
+                // The expanded OCR support extends outside the text extent and the balloon.
+                // Those pixels do not participate in the foreground component audit.
+                val support = BooleanArray(semantic.size) { inside(it, 6, 8, 88, 88) }
+                val core = BooleanArray(semantic.size) { inside(it, 36, 29, 42, 57) }
+                val glyph = BooleanArray(core.size) { inside(it, 35, 28, 43, 58) }
+                val outline = BooleanArray(core.size) { inside(it, 32, 25, 46, 61) && !glyph[it] }
+                val outside = BooleanArray(core.size) { inside(it, 0, 0, 20, 96) }
+                val source = IntArray(core.size) { when {
+                    outside[it] -> gray(255)
+                    glyph[it] -> gray(15)
+                    outline[it] -> gray(253)
+                    else -> background
+                } }
+                val before = source.copyOf()
+                val block = LocalTextBackgroundRepairer.repair(size, size, source, listOf(
+                    TextPixelMaskBuilder.BlockMask(0, IntRect(0, 0, size, size), core,
+                        core.count { it }, core, support, semantic),
+                )).blocks.single()
+                assertTrue(block.displayable)
+                val patch = requireNotNull(block.patchPixels)
+                for (i in source.indices) {
+                    if (outside[i]) assertEquals("outside pixel=$i", 0, patch[i])
+                    if (glyph[i] || outline[i]) assertEquals("glyph/outline pixel=$i", background, patch[i])
+                }
+                assertTrue("source is immutable", before.contentEquals(source))
+                assertEquals(0, block.residualPixels)
+            }
+    }
+
     @Test
     fun repair_tableDriven_erasesDisconnectedInkInExpandedTextExtent() {
         for (darkText in listOf(false, true)) {
@@ -33,7 +92,8 @@ class LocalTextBackgroundRepairerTest {
             assertTrue(block.displayable)
             assertFalse("border blocks blanket fill", block.completion.reliable)
             assertTrue("detached ink recovered from image", block.regionForegroundAddedPixels >= 8)
-            assertTrue(block.residualRepairAttempted)
+            assertTrue("detached ink is planned before repair", block.firstPassAddedPixels >= 8)
+            assertFalse("verified flat foreground no longer needs a second repair", block.residualRepairAttempted)
             assertEquals(0, block.residualPixels)
             for (y in 6..9) for (x in 25..26) {
                 assertEquals(bg, requireNotNull(block.patchPixels)[y * WIDTH + x])
@@ -394,6 +454,114 @@ class LocalTextBackgroundRepairerTest {
             )
             assertTrue("${case.name}: diagnostics do not suppress a valid patch", block.publishable)
         }
+    }
+
+    @Test
+    fun repair_glyphTouchingPanelFrame_isErasedWithoutRemovingTheFrame_tableDriven() {
+        for (dark in listOf(false,true)) for (scale in listOf(1,2)) for (transpose in listOf(false,true)) {
+            val width = (if (transpose) 112 else 80) * scale
+            val height = (if (transpose) 80 else 112) * scale
+            fun x(i: Int) = (if (transpose) i / width else i % width) / scale
+            fun y(i: Int) = (if (transpose) i % width else i / width) / scale
+            val bg = if (dark) gray(20) else gray(250)
+            val ink = if (dark) gray(246) else gray(8)
+            val semantic = BooleanArray(width * height) { x(it) in 8..71 && y(it) in 8..103 }
+            val frame = BooleanArray(semantic.size) { x(it) in 11..13 }
+            val joinedGlyph = BooleanArray(semantic.size) { x(it) in 14..25 && y(it) in 32..41 }
+            val known = BooleanArray(semantic.size) { x(it) in 44..48 && y(it) in 55..66 }
+            val core = BooleanArray(semantic.size) { known[it] || joinedGlyph[it] || (frame[it] && y(it) in 25..45) }
+            val source = IntArray(semantic.size) { if (frame[it] || joinedGlyph[it] || known[it]) ink else bg }
+            val before = source.copyOf()
+            val pixels = BinarySquareDilation.dilate(core,width,height,2*scale)
+            val repair = LocalTextBackgroundRepairer.repair(width,height,source,listOf(
+                TextPixelMaskBuilder.BlockMask(0,IntRect(0,0,width,height),pixels,core.count { it },core,semantic,semantic)),scale.toFloat()).blocks.single()
+            assertTrue("dark=$dark scale=$scale transposed=$transpose", repair.displayable)
+            assertTrue(repair.regionAuditBorderPixels > 0)
+            val patch = requireNotNull(repair.patchPixels)
+            for (i in source.indices) {
+                if (frame[i]) assertEquals("frame=$i",0,patch[i])
+                if (x(i) in 18..25 && y(i) in 33..40) assertEquals("joined glyph=$i",bg,patch[i])
+            }
+            assertTrue(before.contentEquals(source))
+        }
+    }
+
+    @Test
+    fun repair_onlyArtworkWasDetected_recoversTheRecognizedParagraphWithoutPaintingTheArtwork_tableDriven() {
+        for (dark in listOf(false, true)) for (scale in listOf(1, 2)) {
+            val width = 72 * scale; val height = 96 * scale
+            val bg = if (dark) gray(20) else gray(250)
+            val ink = if (dark) gray(246) else gray(8)
+            val semantic = BooleanArray(width * height) {
+                it % width in 8 * scale until 64 * scale && it / width in 8 * scale until 88 * scale
+            }
+            val core = BooleanArray(semantic.size) {
+                it % width in 60 * scale until 63 * scale && it / width in 35 * scale until 45 * scale
+            }
+            val art = BooleanArray(semantic.size) {
+                it % width >= 59 * scale && it / width in 30 * scale until 52 * scale
+            }
+            val glyphs = BooleanArray(semantic.size) {
+                (it % width / scale in 18..21 || it % width / scale in 43..46) &&
+                    it / width / scale in 15..74 && it / width / scale % 15 < 10
+            }
+            val source = IntArray(semantic.size) {
+                when { art[it] -> 0xff6080b0.toInt(); glyphs[it] -> ink; else -> bg }
+            }
+            val before = source.copyOf()
+            val pixels = BinarySquareDilation.dilate(core, width, height, 2 * scale)
+            val result = LocalTextBackgroundRepairer.repair(width,height,source,listOf(
+                TextPixelMaskBuilder.BlockMask(0,IntRect(0,0,width,height),pixels,
+                    core.count { it },core,semantic,semantic)),scale.toFloat()).blocks.single()
+            assertTrue(result.displayable)
+            assertEquals(ink, result.regionAuditInkColor)
+            assertEquals(0, result.residualPixels)
+            val patch = requireNotNull(result.patchPixels)
+            for (i in source.indices) {
+                if (glyphs[i]) assertEquals("glyph=$i dark=$dark scale=$scale", bg, patch[i])
+                if (art[i]) assertEquals("art=$i dark=$dark scale=$scale", 0, patch[i])
+                if (patch[i] != 0 && !glyphs[i]) assertEquals("no artifact halo=$i", source[i], patch[i])
+            }
+            assertTrue(before.contentEquals(source))
+        }
+    }
+
+    @Test
+    fun repair_aContaminatedComponentDoesNotSuppressDetachedGlyphsAcrossTheTextRegion() {
+        val size = 96
+        val known = BooleanArray(size * size) { it % size in 20..24 && it / size in 25..45 }
+        val missing = BooleanArray(known.size) { it % size in 68..72 && it / size in 28..48 }
+        val semantic = BooleanArray(known.size) { it % size in 12..84 && it / size in 8..82 }
+        val source = IntArray(known.size) { if (known[it] || missing[it]) gray(8) else gray(250) }
+        val planned = TextRepairSolidCoverage.plan(size, size, known, known, 1f)
+        val edgeY = planned.repairMask.indices.filter { planned.repairMask[it] }.minOf { it / size } - 1
+        for (x in 0..25) source[edgeY * size + x] = 0xff80a040.toInt()
+        val result = LocalTextBackgroundRepairer.repair(size, size, source, listOf(
+            TextPixelMaskBuilder.BlockMask(0, IntRect(0, 0, size, size), known,
+                known.count { it }, known, semantic, semantic),
+        )).blocks.single()
+        assertEquals(TextInitialForegroundPolicy.Reason.BACKGROUND_NOT_FLAT, result.firstPassReason)
+        assertTrue(result.regionAuditAddedPixels >= missing.count { it })
+        assertTrue(result.displayable)
+        val patch = requireNotNull(result.patchPixels)
+        for (i in missing.indices) if (missing[i]) assertEquals("detached glyph pixel=$i", gray(250), patch[i])
+        assertEquals("the crossing colored edge stays untouched", 0, patch[edgeY * size + 22])
+        assertEquals(0, result.residualPixels)
+    }
+
+    @Test
+    fun repair_displayableSelectedPixelsDoNotMeanTheWholeTextRegionWasVerified() {
+        val semantic = BooleanArray(SIZE) { it % WIDTH in 3..28 && it / WIDTH in 3..28 }
+        val known = centeredMask()
+        val source = IntArray(SIZE) { if (known[it]) gray(8) else gray(250) }
+        for (y in 5..7) for (x in 23..25) source[y * WIDTH + x] = 0xffe02020.toInt()
+        val result = LocalTextBackgroundRepairer.repair(WIDTH, HEIGHT, source,
+            listOf(blockMask(known, known, known, semantic))).blocks.single()
+        assertTrue(result.displayable)
+        assertEquals(0, result.residualPixels)
+        assertEquals(TextRegionInkAudit.Reason.PARTIAL, result.regionAuditReason)
+        assertFalse("unknown ink cannot be reported fully erased", result.fullyRepaired)
+        assertEquals(0, requireNotNull(result.patchPixels)[6 * WIDTH + 24])
     }
 
     private fun blockMask(

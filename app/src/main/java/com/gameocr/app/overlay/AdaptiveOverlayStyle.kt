@@ -83,6 +83,7 @@ internal data class AdaptiveTextSizeSearchResult(
     val sizePx: Int,
     val probes: Int,
     val nextSizeFits: Boolean?,
+    val fits: Boolean,
 )
 
 internal data class AdaptiveOverlaySize(val width: Int, val height: Int)
@@ -188,7 +189,7 @@ internal fun adaptiveTextLayoutOverflow(
     ellipsized = ellipsized,
 ).isNotEmpty()
 
-/** Mirrors framework TextView auto-size: binary-search the largest candidate that still fits. */
+/** Probe from the target downwards; fit need not be monotonic around line/column breaks. */
 internal fun adaptiveLargestFittingTextSizePx(
     minSizePx: Int,
     maxSizePx: Int,
@@ -196,30 +197,19 @@ internal fun adaptiveLargestFittingTextSizePx(
 ): AdaptiveTextSizeSearchResult {
     val resolvedMin = minSizePx.coerceAtLeast(1)
     val resolvedMax = maxSizePx.coerceAtLeast(resolvedMin)
-    var low = resolvedMin
-    var high = resolvedMax
-    var best = resolvedMin
     var probes = 0
-    while (low <= high) {
-        val candidate = low + (high - low) / 2
+    for (candidate in resolvedMax downTo resolvedMin) {
         probes += 1
         if (fits(candidate)) {
-            best = candidate
-            low = candidate + 1
-        } else {
-            high = candidate - 1
+            return AdaptiveTextSizeSearchResult(candidate, probes,
+                if (candidate == resolvedMax) null else false, true)
         }
     }
-    val nextSizeFits = if (best < resolvedMax) {
-        probes += 1
-        fits(best + 1)
-    } else {
-        null
-    }
     return AdaptiveTextSizeSearchResult(
-        sizePx = best,
+        sizePx = resolvedMin,
         probes = probes,
-        nextSizeFits = nextSizeFits,
+        nextSizeFits = if (resolvedMin == resolvedMax) null else false,
+        fits = false,
     )
 }
 

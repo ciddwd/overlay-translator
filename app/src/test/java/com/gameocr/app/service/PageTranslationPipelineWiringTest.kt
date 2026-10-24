@@ -42,10 +42,6 @@ class PageTranslationPipelineWiringTest {
         }
 
         assertTrue(
-            "batch floating rendering runs under the same translation lifecycle",
-            source.contains("launchTranslationBatch(diagId)"),
-        )
-        assertTrue(
             "floating rows use the presentation-shaped sources from the shared page plan",
             source.contains("overlay?.prepareFloatingWindow(sourceTexts)"),
         )

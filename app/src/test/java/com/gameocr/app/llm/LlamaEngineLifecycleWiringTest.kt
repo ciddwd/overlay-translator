@@ -18,10 +18,12 @@ class LlamaEngineLifecycleWiringTest {
         val cases = listOf(
             Case("holder owns one lifecycle gate", holder, "private val lifecycleGate = LlamaEngineLifecycleGate()"),
             Case("session acquires the lifecycle gate", holder, "): T = lifecycleGate.withSession {"),
-            Case("session loads while holding the gate", holder, "action(ensureLoaded(kind, systemPrompt))"),
+            Case("session loads while holding the gate", holder, "action(ensureLoaded(kind, systemPrompt, contextTokens))"),
             Case("unload acquires the lifecycle gate", holder, "suspend fun unload() = lifecycleGate.withSession {"),
-            Case("normal local translation uses sessions", translator, "holder.withEngineSession(modelKind, systemPrompt)"),
-            Case("Sakura token planning uses a session", sakura, "val groups = holder.withEngineSession(modelKind, systemPrompt)"),
+            Case("normal local translation uses sessions", translator, "holder.withManagedEngineSession(modelKind, settings, systemPrompt"),
+            Case("Sakura token planning uses a session", sakura, "val outputBudgetPlan = holder.withManagedEngineSession("),
+            Case("Sakura session uses the request configuration", sakura, "modelKind, budgetedSettings, systemPrompt, nativeContextSize(budgetedSettings)"),
+            Case("managed sessions and deletion share the lifecycle gate", holder, "suspend fun deleteManagedModel(entry: LocalModelEntry): Boolean = withContext(Dispatchers.IO) { lifecycleGate.withSession"),
             Case("native prompt metrics reject a missing template", nativeBuild, "g_chat_templates == nullptr"),
         )
 

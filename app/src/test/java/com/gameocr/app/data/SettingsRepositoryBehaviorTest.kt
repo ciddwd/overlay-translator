@@ -11,9 +11,211 @@ import java.nio.file.Files
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.asCoroutineDispatcher
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Test
 
 class SettingsRepositoryBehaviorTest {
+    @Test fun speechHintsAndCredentialsSurviveReopeningWithoutChangingOtherSettings() = runBlocking {
+        val root = Files.createTempDirectory("speech-hints-settings").toFile()
+        val repository = fileBackedRepository(root)
+        assertEquals(AsrHintSettings(), repository.get().asrHints)
+        val hints = AsrHintSettings("medical course", "Winterfell\nStark", true, AsrHintMode.KEYWORDS,
+            mapOf(AsrCloudModel.PARAFORMER.modelId to "vocab-id"))
+        repository.update { it.copy(asrHints = hints, asrCloudProvider = AsrCloudProvider.OPENAI_COMPATIBLE,
+            asrCloudConnections = it.asrCloudConnections.copy(openAiApiKey = "asr-key",
+                openAiBaseUrl = "https://speech.example/v1", openAiModel = "test-model"), apiTimeoutSeconds = 43) }
+        val restored = fileBackedRepository(root).get()
+        assertEquals(hints, restored.asrHints)
+        assertEquals(AsrCloudProvider.OPENAI_COMPATIBLE, restored.asrCloudProvider)
+        assertEquals("asr-key", restored.asrCloudConnections.openAiApiKey)
+        assertEquals(43, restored.apiTimeoutSeconds)
+    }
+
+    @Test fun speechSegmentationDefaultsAndIndependentProfilesSurviveReopening() = runBlocking {
+        val root = Files.createTempDirectory("speech-segmentation-settings").toFile()
+        val repository = fileBackedRepository(root)
+        assertEquals(AsrSegmentationSettings(), repository.get().asrSegmentation)
+        val profiles = AsrSegmentationSettings(
+            onDevice = AsrSegmentDurations(450, 9000), zipformer = AsrSegmentDurations(800, 12000),
+            http = AsrSegmentDurations(250, 3000), realtime = AsrSegmentDurations(500, 7000))
+        repository.update { it.copy(asrSegmentation = profiles, apiTimeoutSeconds = 43) }
+        val restored = fileBackedRepository(root).get()
+        assertEquals(profiles, restored.asrSegmentation)
+        assertEquals(43, restored.apiTimeoutSeconds)
+        repository.update { it.copy(asrSegmentation = profiles.copy(http = AsrSegmentDurations(-1, Int.MAX_VALUE))) }
+        assertEquals(profiles.copy(http = AsrSegmentDurations(200, 15000)), fileBackedRepository(root).get().asrSegmentation)
+    }
+
+    @Test fun ocrNoTextHintDefaultsVisibleAndPreferenceSurvivesReopening() = runBlocking {
+        val root = Files.createTempDirectory("ocr-no-text-hint-settings-test").toFile()
+        val repository = fileBackedRepository(root)
+        assertEquals(false, repository.get().hideOcrNoTextHint)
+        for (enabled in listOf(true, false, true)) {
+            repository.update { it.copy(hideOcrNoTextHint = enabled) }
+            repository.update { it.copy(apiTimeoutSeconds = 43) }
+            val restored = fileBackedRepository(root).get()
+            assertEquals(enabled, restored.hideOcrNoTextHint)
+            assertEquals(43, restored.apiTimeoutSeconds)
+        }
+    }
+
+    @Test fun manualCredentialsCommitTogetherAndSurviveReopeningWithoutWaitingForDebounce() = runBlocking {
+        val root = Files.createTempDirectory("manual-credentials-save-test").toFile()
+        val repository = fileBackedRepository(root)
+        repository.update { it.copy(tencentSecretId = "old-id") }
+        val initial = repository.get()
+        val draft = AsrCredentialDraft.from(initial).copy(connections = initial.asrCloudConnections.copy(
+            tencentAppId = "123456",
+            volcApiKey = "volc-key", openAiApiKey = "openai-key"), dashScopeApiKey = "aliyun-key")
+        assertEquals("old-id", fileBackedRepository(root).get().tencentSecretId)
+        repository.update { draft.applyTo(it, normalize = true).copy(apiKey = "translation-key",
+            tencentSecretId = "ocr-id", tencentSecretKey = "ocr-key", ttsHttpBearerToken = "tts-key") }
+        val restored = fileBackedRepository(root).get()
+        assertEquals("123456", restored.asrCloudConnections.tencentAppId)
+        assertEquals("translation-key", restored.apiKey)
+        assertEquals("ocr-id", restored.tencentSecretId)
+        assertEquals("ocr-key", restored.tencentSecretKey)
+        assertEquals("tts-key", restored.ttsHttpBearerToken)
+        assertEquals("aliyun-key", restored.asrDashScopeApiKey)
+        val discarded = draft.copy(dashScopeApiKey = "not-saved")
+        assertNotEquals(discarded.dashScopeApiKey, fileBackedRepository(root).get().asrDashScopeApiKey)
+    }
+    @Test fun cloudSpeechConnectionsSurviveReopeningAndStayIndependent_tableDriven() = runBlocking {
+        val root = Files.createTempDirectory("asr-connections-settings-test").toFile()
+        val repository = fileBackedRepository(root)
+        val connections = AsrCloudConnections(tencentAppId = "123456", volcApiKey = "volc-key", openAiApiKey = "openai-key",
+            openAiBaseUrl = "https://asr.example/v1", openAiModel = "asr-model",
+            tencentModel = TencentAsrModel.SPEAKER, volcResource = VolcAsrResource.V2_CONCURRENT)
+        AsrCloudProvider.entries.forEach { provider ->
+            OpenAiAsrTransport.entries.forEach { transport ->
+                val selected = connections.copy(openAiTransport = transport)
+                repository.update { it.copy(asrCloudProvider = provider, asrCloudConnections = selected) }
+                repository.update { it.copy(apiTimeoutSeconds = 43) }
+                val restored = fileBackedRepository(root).get()
+                assertEquals(provider, restored.asrCloudProvider)
+                assertEquals(selected, restored.asrCloudConnections)
+            }
+        }
+    }
+    @Test fun quickPanelPreferenceSurvivesReopeningAndUnrelatedSaves_tableDriven() = runBlocking {
+        val root = Files.createTempDirectory("quick-panel-settings-test").toFile()
+        val repository = fileBackedRepository(root)
+        assertEquals(false, repository.get().quickPanelEnabled)
+        for (enabled in listOf(true, false, true)) {
+            repository.update { it.copy(quickPanelEnabled = enabled) }
+            repository.update { it.copy(apiTimeoutSeconds = 43) }
+            val restored = fileBackedRepository(root).get()
+            assertEquals(enabled, restored.quickPanelEnabled)
+            assertEquals(43, restored.apiTimeoutSeconds)
+            assertEquals(FloatingMenu.DEFAULT_ORDER, restored.floatingMenuItemOrder)
+        }
+    }
+
+    @Test fun speechRecognitionSettingsSurviveReopeningAndUnrelatedSaves_tableDriven() = runBlocking {
+        val root = Files.createTempDirectory("asr-settings-test").toFile()
+        val repository = fileBackedRepository(root)
+        val defaults = repository.get()
+        assertEquals(AsrEngineKind.SENSE_VOICE, defaults.asrEngine)
+        assertEquals(AsrWhisperVariant.TINY, defaults.asrWhisperVariant)
+        assertEquals(AsrLanguage.AUTO, defaults.asrLanguage)
+        assertEquals(10, defaults.asrMaxDisplayedRecords)
+        assertEquals("", defaults.asrDashScopeApiKey)
+        data class Case(val saved: Settings, val expectedRecords: Int)
+        listOf(
+            Case(Settings(asrEngine = AsrEngineKind.WHISPER, asrWhisperVariant = AsrWhisperVariant.BASE, asrLanguage = AsrLanguage.JA, asrMaxDisplayedRecords = 3), 3),
+            Case(Settings(asrEngine = AsrEngineKind.ZIPFORMER, asrLanguage = AsrLanguage.AUTO, asrMaxDisplayedRecords = 50), 50),
+            Case(Settings(asrEngine = AsrEngineKind.SENSE_VOICE, asrLanguage = AsrLanguage.YUE, asrMaxDisplayedRecords = 0), 3),
+            Case(Settings(asrEngine = AsrEngineKind.PARAFORMER_CLOUD, asrDashScopeApiKey = "sk-cloud", asrMaxDisplayedRecords = 999), 50),
+        ).forEach { case ->
+            repository.update {
+                it.copy(asrEngine = case.saved.asrEngine, asrWhisperVariant = case.saved.asrWhisperVariant,
+                    asrLanguage = case.saved.asrLanguage, asrMaxDisplayedRecords = case.saved.asrMaxDisplayedRecords,
+                    asrDashScopeApiKey = case.saved.asrDashScopeApiKey, floatingButtonSkill = FloatingSkill.SPEECH)
+            }
+            repository.update { it.copy(apiTimeoutSeconds = 41) }
+            val restored = fileBackedRepository(root).get()
+            assertEquals(case.saved.asrEngine, restored.asrEngine)
+            assertEquals(case.saved.asrWhisperVariant, restored.asrWhisperVariant)
+            assertEquals(case.saved.asrLanguage, restored.asrLanguage)
+            assertEquals(case.expectedRecords, restored.asrMaxDisplayedRecords)
+            assertEquals(case.saved.asrDashScopeApiKey, restored.asrDashScopeApiKey)
+            assertEquals(FloatingSkill.SPEECH, restored.floatingButtonSkill)
+        }
+    }
+
+    @Test fun gestureBindingsAndModeSurviveReopeningAndUnrelatedSaves() = runBlocking {
+        val root = Files.createTempDirectory("gesture-bindings-test").toFile()
+        val repository = fileBackedRepository(root)
+        assertEquals(GestureBindings.defaults, repository.get().gestureBindings)
+        assertEquals(false, repository.get().gestureEdgeEnabled)
+        assertEquals(false, repository.get().gestureEdgeRight)
+        assertEquals(22, repository.get().gestureEdgeHeightPercent)
+        val bindings = PresetGesture.entries.associateWith { GestureAction.SELECT_WORD } +
+            (PresetGesture.S to GestureAction.NONE) + (PresetGesture.O to GestureAction.TOGGLE_LOOP)
+        repository.update { it.copy(floatingButtonSkill = FloatingSkill.GESTURE, gestureBindings = bindings,
+            gestureEdgeEnabled = true, gestureEdgeRight = true, gestureEdgeHeightPercent = 32) }
+        repository.update { it.copy(apiTimeoutSeconds = 43) }
+        val restored = fileBackedRepository(root).get()
+        assertEquals(bindings, restored.gestureBindings)
+        assertEquals(true, restored.gestureEdgeEnabled)
+        assertEquals(true, restored.gestureEdgeRight)
+        assertEquals(32, restored.gestureEdgeHeightPercent)
+        assertEquals(FloatingSkill.GESTURE, restored.floatingButtonSkill)
+    }
+
+    @Test fun motionMethodsPersistIndependentSensitivityAndActions() = runBlocking {
+        val root = Files.createTempDirectory("gesture-motion-test").toFile()
+        val repo = fileBackedRepository(root)
+        val defaults = repo.get()
+        assertEquals(false, defaults.gestureTwistEnabled)
+        assertEquals(false, defaults.gestureTiltEnabled)
+        assertEquals(3, defaults.gestureTwistSensitivity)
+        assertEquals(3, defaults.gestureTiltSensitivity)
+        assertEquals(null, defaults.gestureTwistAction)
+        assertEquals(null, defaults.gestureTiltAction)
+        repo.update { it.copy(gestureTwistEnabled=true,gestureTwistSensitivity=5,
+            gestureTwistAction=GestureAction.TRANSLATE_SCREEN,gestureTiltSensitivity=1,
+            gestureTiltAction=GestureAction.LANGUAGE_PAIR) }
+        repo.update { it.copy(apiTimeoutSeconds=42) }
+        val restored=fileBackedRepository(root).get()
+        assertEquals(true,restored.gestureTwistEnabled)
+        assertEquals(false,restored.gestureTiltEnabled)
+        assertEquals(5,restored.gestureTwistSensitivity)
+        assertEquals(1,restored.gestureTiltSensitivity)
+        assertEquals(GestureAction.TRANSLATE_SCREEN,restored.gestureTwistAction)
+        assertEquals(GestureAction.LANGUAGE_PAIR,restored.gestureTiltAction)
+        repo.update { it.copy(gestureTwistAction=null,gestureTwistSensitivity=0,gestureTiltSensitivity=8) }
+        val clamped=fileBackedRepository(root).get()
+        assertEquals(null,clamped.gestureTwistAction)
+        assertEquals(1,clamped.gestureTwistSensitivity)
+        assertEquals(5,clamped.gestureTiltSensitivity)
+    }
+
+    @Test fun captureVibration_defaultsOnAndPersists_tableDriven() = runBlocking {
+        val root = Files.createTempDirectory("capture-vibration-test").toFile()
+        val repository = fileBackedRepository(root)
+        assertEquals(true, repository.get().loopCaptureVibrationEnabled)
+        for (enabled in listOf(false, true)) {
+            repository.update { it.copy(loopCaptureVibrationEnabled = enabled) }
+            assertEquals(enabled, repository.get().loopCaptureVibrationEnabled)
+            assertEquals(enabled, fileBackedRepository(root).get().loopCaptureVibrationEnabled)
+            repository.update { it.copy(apiTimeoutSeconds = 43) }
+            assertEquals(enabled, repository.get().loopCaptureVibrationEnabled)
+        }
+    }
+
+    @Test fun textStabilityWait_supports100MillisecondsAndPersistsBoundaries_tableDriven() = runBlocking {
+        val root = Files.createTempDirectory("text-stability-wait-test").toFile()
+        val repository = fileBackedRepository(root)
+        listOf(-1L to 100L, 99L to 100L, 100L to 100L, 101L to 101L,
+            500L to 500L, 2000L to 2000L, 2001L to 2000L).forEach { (input, expected) ->
+            repository.update { it.copy(loopTriggerMode = LoopTriggerMode.SETTLED_PAGE,
+                loopTextStableDurationMs = input) }
+            assertEquals("input=$input", expected, repository.get().loopTextStableDurationMs)
+            assertEquals("reopened input=$input", expected, fileBackedRepository(root).get().loopTextStableDurationMs)
+        }
+    }
+
     @Test fun shareEntireScreen_defaultsOffAndPersists_tableDriven() = runBlocking {
         for (saved in listOf(null, false, true)) {
             val root = Files.createTempDirectory("projection-scope-test").toFile()
@@ -617,6 +819,72 @@ class SettingsRepositoryBehaviorTest {
         assertEquals(CaptureRegion(1, 2, 30, 40), settings.captureRegion)
         assertEquals(.55f, settings.overlayAlpha)
         assertEquals("concurrent-test", settings.apiKey)
+    }
+
+    @Test
+    fun dbnetThresholds_nullMeansModelDefaultAndRoundTrips_tableDriven() = runBlocking {
+        data class Case(val name: String, val prob: Float?, val score: Float?, val unclip: Float?)
+        listOf(
+            Case("all model defaults", null, null, null),
+            Case("partial override", 0.17f, null, null),
+            Case("full override", 0.21f, 0.52f, 1.8f),
+        ).forEach { case ->
+            val repository = fileBackedRepository(Files.createTempDirectory("settings-dbnet-null").toFile())
+            // Start from explicit values so the null case proves the key is removed.
+            repository.update { it.copy(dbnetProbThresh = 0.33f, dbnetBoxScoreThresh = 0.66f, dbnetUnclipRatio = 2.0f) }
+            repository.update {
+                it.copy(dbnetProbThresh = case.prob, dbnetBoxScoreThresh = case.score, dbnetUnclipRatio = case.unclip)
+            }
+            val stored = repository.get()
+            assertEquals(case.name, case.prob, stored.dbnetProbThresh)
+            assertEquals(case.name, case.score, stored.dbnetBoxScoreThresh)
+            assertEquals(case.name, case.unclip, stored.dbnetUnclipRatio)
+        }
+    }
+
+    @Test
+    fun dbnetThresholdMigration_clearsLegacyDefaultsOnceAndKeepsUserValues() = runBlocking {
+        val repository = fileBackedRepository(Files.createTempDirectory("settings-dbnet-migration").toFile())
+        val legacyPreset = TranslationPreset(
+            id = "legacy",
+            name = "legacy",
+            dbnetProbThresh = 0.25f,
+            dbnetBoxScoreThresh = 0.5f,
+            dbnetUnclipRatio = 1.55f,
+        )
+        val customPreset = TranslationPreset(
+            id = "custom",
+            name = "custom",
+            dbnetProbThresh = 0.18f,
+            dbnetBoxScoreThresh = 0.5f,
+            dbnetUnclipRatio = 1.7f,
+        )
+        repository.update {
+            it.copy(
+                dbnetProbThresh = 0.25f,
+                dbnetBoxScoreThresh = 0.48f,
+                dbnetUnclipRatio = 1.55f,
+                translationPresets = listOf(legacyPreset, customPreset),
+            )
+        }
+
+        assertEquals(true, repository.migrateDetectionThresholdsToModelDefaultsIfNeeded())
+        val migrated = repository.get()
+        assertEquals(null, migrated.dbnetProbThresh)
+        assertEquals(0.48f, migrated.dbnetBoxScoreThresh)
+        assertEquals(null, migrated.dbnetUnclipRatio)
+        val presets = migrated.translationPresets.associateBy { it.id }
+        assertEquals(listOf(null, null, null), presets.getValue("legacy").let {
+            listOf(it.dbnetProbThresh, it.dbnetBoxScoreThresh, it.dbnetUnclipRatio)
+        })
+        assertEquals(listOf(0.18f, null, 1.7f), presets.getValue("custom").let {
+            listOf(it.dbnetProbThresh, it.dbnetBoxScoreThresh, it.dbnetUnclipRatio)
+        })
+
+        // After the one-shot migration an explicit 0.25 is a real user choice.
+        repository.update { it.copy(dbnetProbThresh = 0.25f) }
+        assertEquals(false, repository.migrateDetectionThresholdsToModelDefaultsIfNeeded())
+        assertEquals(0.25f, repository.get().dbnetProbThresh)
     }
 
     private fun fileBackedRepository(root: File, cipher: SettingsSecretCipher = PlainTestCipher): SettingsRepository =

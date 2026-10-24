@@ -4,6 +4,17 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class SettledPagePolicyTest {
+    @Test fun minimumWaitAllowsSubmissionAt100Milliseconds_tableDriven() {
+        listOf(99L to false, 100L to true, 101L to true).forEach { (elapsed, expected) ->
+            val policy = SettledPagePolicy()
+            val wait = LoopFrameStabilityPolicy.normalizeStableDuration(100L)
+            policy.observe(false, true, 1000L, wait)
+            val observed = policy.observe(true, true, 1000L + elapsed, wait)
+            assertEquals("elapsed=$elapsed", expected, observed.ready)
+            assertEquals("claim elapsed=$elapsed", expected, policy.claim(observed.revision))
+        }
+    }
+
     @Test fun unavailableSamplesPauseSettlingWithoutClearingOrResubmittingVisibleResult() {
         for (alreadySubmitted in listOf(false, true)) {
             val policy = SettledPagePolicy()

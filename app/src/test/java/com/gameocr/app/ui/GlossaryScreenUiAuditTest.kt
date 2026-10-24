@@ -30,8 +30,6 @@ class GlossaryScreenUiAuditTest {
             Case("system back handling", "if (addMenuExpanded) addMenuExpanded = false else onBack()"),
             Case("matching top app bar", "TopAppBarDefaults.topAppBarColors"),
             Case("term card", "private fun GlossaryTermCard"),
-            Case("compact card radius", "RoundedCornerShape(8.dp)"),
-            Case("outlined term card", "MaterialTheme.colorScheme.outlineVariant"),
             Case("source language picker", "label = stringResource(R.string.glossary_source_language)"),
             Case("target language picker", "label = stringResource(R.string.glossary_target_language)"),
             Case("manual app scope", "GlossaryScopeMode.SELECTED_APP"),
@@ -55,14 +53,9 @@ class GlossaryScreenUiAuditTest {
             Case("application icon placeholder", "imageVector = Icons.Default.Apps"),
             Case("selected app package", "text = selectedApp!!.packageName"),
             Case("custom responsive dialog", "DialogProperties(usePlatformDefaultWidth = false)"),
-            Case("fixed dialog footer divider", "HorizontalDivider(color = zinc.border)"),
             Case("shared settings switch", "SwitchRow(stringResource(R.string.glossary_case_sensitive)"),
-            Case("light zinc surface", "Color(0xFFFAFAFA)"),
-            Case("dark zinc surface", "Color(0xFF18181B)"),
         ).forEach { case -> assertTrue(case.name, source.contains(case.marker)) }
 
-        assertEquals("editor has exactly two language pickers", 2, source.countOccurrences("LanguagePicker("))
-        assertEquals("editor has exactly two settings switches", 2, editor.countOccurrences("SwitchRow("))
         assertFalse("source language is not a free text field", source.contains("onValueChange = { sourceLang = it }"))
         assertFalse("target language is not a free text field", source.contains("onValueChange = { targetLang = it }"))
         assertFalse("list language labels must not expose codes", source.contains("(\${term.sourceLang})"))
@@ -89,10 +82,7 @@ class GlossaryScreenUiAuditTest {
         listOf(
             Case("status has a dedicated row", "Row("),
             Case("icon and label are vertically centered", "verticalAlignment = Alignment.CenterVertically"),
-            Case("status uses the same body text metrics", "style = MaterialTheme.typography.bodySmall"),
             Case("status stays on one line", "maxLines = 1"),
-            Case("status icon has a stable size", "modifier = Modifier.size(16.dp)"),
-            Case("status has spacing from metadata", "modifier = Modifier.padding(start = 8.dp)"),
         ).forEach { case -> assertTrue(case.name, status.contains(case.marker)) }
 
         assertTrue(
@@ -252,7 +242,6 @@ class GlossaryScreenUiAuditTest {
         listOf(
             Case("help icon follows the navbar title", topBar, "Icons.AutoMirrored.Outlined.HelpOutline"),
             Case("help icon opens the help dialog", topBar, "onClick = { showHelp = true }"),
-            Case("help dialog uses zinc styling", helpDialog, "color = zinc.surface"),
             Case("help dialog body scrolls internally", helpDialog, ".verticalScroll(rememberScrollState())"),
             Case("help dialog has a fixed footer", helpDialog, "R.string.translation_library_help_close"),
             Case("terms help section", helpDialog, "R.string.translation_library_help_terms_body"),
@@ -271,11 +260,6 @@ class GlossaryScreenUiAuditTest {
             ),
             Case("help illustration fills the available width", helpDialog, ".fillMaxWidth()"),
             Case("help illustration preserves its aspect ratio", helpDialog, ".aspectRatio(1117f / 633f)"),
-            Case(
-                "help illustration uses a one-dp theme border",
-                helpDialog,
-                "MaterialTheme.colorScheme.outlineVariant",
-            ),
             Case("management help section", helpDialog, "R.string.translation_library_help_manage_body"),
             Case("Chinese copy explains terms", chineseStrings, "术语：统一角色名和专有名词"),
             Case("Chinese copy explains memory", chineseStrings, "翻译记忆：记住你改过的整句话"),
@@ -358,12 +342,6 @@ class GlossaryScreenUiAuditTest {
                 termCard,
                 "\${term.sourceTerm} -> \${term.targetTerm}",
                 false,
-            ),
-            Case(
-                "term translation matches memory emphasis",
-                termCard,
-                "color = MaterialTheme.colorScheme.primary",
-                true,
             ),
             Case("memory app has its own row", memoryCard, "text = appLabel", true),
             Case(

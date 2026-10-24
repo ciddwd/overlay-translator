@@ -1,5 +1,6 @@
 package com.gameocr.app.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -84,6 +85,8 @@ fun DictionaryLibraryScreen(
         }
     }
 
+    BackHandler(onBack = onBack)
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -112,10 +115,14 @@ fun DictionaryLibraryScreen(
                     onTapLookupEnabledChange = viewModel::setTapLookupEnabled,
                     onSelect = { mode ->
                         scope.launch {
-                            if (!viewModel.selectMode(mode)) {
-                                snackbar.showSnackbar(
-                                    context.getString(R.string.dictionary_online_unavailable)
-                                )
+                            runSettingsWrite(onFailure = {
+                                snackbar.showSnackbar(context.getString(R.string.settings_storage_save_failed))
+                            }) {
+                                if (!viewModel.selectMode(mode)) {
+                                    snackbar.showSnackbar(
+                                        context.getString(R.string.dictionary_online_unavailable)
+                                    )
+                                }
                             }
                         }
                     },

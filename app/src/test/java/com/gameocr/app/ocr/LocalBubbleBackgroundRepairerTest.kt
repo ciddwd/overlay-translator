@@ -9,6 +9,20 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LocalBubbleBackgroundRepairerTest {
+    @Test
+    fun noRescueRegions_skipFullImageColorCopyAndLeaveSourceUntouched() {
+        for (size in listOf(1, 64)) {
+            val source = IntArray(size * size) { 0xffa0c0e0.toInt() }
+            val before = source.copyOf()
+            val result = LocalBubbleBackgroundRepairer.repair(size, size, source,
+                BooleanArray(size * size) { true }, emptyList())
+            org.junit.Assert.assertSame(source, result.repairResult.pixels)
+            org.junit.Assert.assertArrayEquals(before, source)
+            assertEquals(0, result.repairResult.repairedPixelCount)
+            assertEquals(0, result.totalWorkingPixels)
+        }
+    }
+
 
     @Test
     fun `shape patch eligibility requires complete repair for each bubble`() {

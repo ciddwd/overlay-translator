@@ -6,6 +6,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.Rect
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
@@ -61,8 +62,22 @@ class TranslationBlockCopyOverlay(
         context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     }
     private var dialog: Dialog? = null
+    private var rootView: FrameLayout? = null
+    internal val englishWordPreview = EnglishWordPreview(
+        context = context,
+        root = { rootView },
+        palette = { settings ->
+            val colors = palette(settings)
+            EnglishWordPreviewPalette(
+                colors.background, colors.foreground, colors.muted, colors.accent,
+                settingsTypeface(settings),
+            )
+        },
+    )
 
     fun dismiss() {
+        englishWordPreview.dismiss()
+        rootView = null
         val current = dialog
         dialog = null
         if (current != null) {
@@ -82,6 +97,7 @@ class TranslationBlockCopyOverlay(
         onSpeakSourceSelection: TtsPlaybackAction? = null,
         onSpeakTranslationSelection: TtsPlaybackAction? = null,
         onCorrectTranslation: (() -> Unit)? = null,
+        onEnglishWordTapped: ((word: String, anchorInWindow: Rect) -> Unit)? = null,
     ) {
         dismiss()
         val density = context.resources.displayMetrics.density
@@ -175,6 +191,14 @@ class TranslationBlockCopyOverlay(
             setTextSize(TypedValue.COMPLEX_UNIT_SP, sourceSpec.textSizeSp)
             setLineSpacing(2f, 1.08f)
             setTextIsSelectable(true)
+            onEnglishWordTapped?.let { callback ->
+                englishWordPreview.attach(
+                    this,
+                    callback,
+                    translationActionMarkerColor(palette.accent),
+                    isEnabled = { settings.dictionaryTapLookupEnabled },
+                )
+            }
             onSpeakSourceSelection?.let { action ->
                 enableSelectionSpeech(
                     label = context.getString(R.string.word_card_speak_selection),
@@ -367,6 +391,7 @@ class TranslationBlockCopyOverlay(
                 WindowManager.LayoutParams.MATCH_PARENT,
             )
             dialog = copyDialog
+            rootView = backdrop
             ViewCompat.requestApplyInsets(backdrop)
         }.onFailure {
             runCatching { pendingDialog?.dismiss() }
@@ -511,22 +536,22 @@ class TranslationBlockCopyOverlay(
     private fun palette(settings: Settings): TranslationBlockCopyPalette =
         when (settings.overlayTheme) {
             OverlayTheme.CLASSIC_DARK -> TranslationBlockCopyPalette(
-                0xE6000000.toInt(), 0xFFFFFFFF.toInt(), 0xCCB0BEC5.toInt(), 0xFF90CAF9.toInt(),
+                0xE6000000.toInt(), 0xFFFFFFFF.toInt(), 0xCCB0BEC5.toInt(), TRANSLATION_ACTION_ACCENT_COLOR,
             )
             OverlayTheme.AMBER_GOLD -> TranslationBlockCopyPalette(
-                0xF0241608.toInt(), 0xFFFFD27F.toInt(), 0xCCB68850.toInt(), 0xFFB8860B.toInt(),
+                0xF0241608.toInt(), 0xFFFFD27F.toInt(), 0xCCB68850.toInt(), TRANSLATION_ACTION_ACCENT_COLOR,
             )
             OverlayTheme.PAPER_LIGHT -> TranslationBlockCopyPalette(
-                0xF0F5EFE0.toInt(), 0xFF3E2A1F.toInt(), 0xCC8B6F47.toInt(), 0xFFB68850.toInt(),
+                0xF0F5EFE0.toInt(), 0xFF3E2A1F.toInt(), 0xCC8B6F47.toInt(), TRANSLATION_ACTION_ACCENT_COLOR,
             )
             OverlayTheme.FROST_GLASS -> TranslationBlockCopyPalette(
-                0xCC1E293B.toInt(), 0xFFE0F2FE.toInt(), 0xCC94A3B8.toInt(), 0xFF60A5FA.toInt(),
+                0xCC1E293B.toInt(), 0xFFE0F2FE.toInt(), 0xCC94A3B8.toInt(), TRANSLATION_ACTION_ACCENT_COLOR,
             )
             OverlayTheme.CUSTOM -> TranslationBlockCopyPalette(
                 settings.customBgColor,
                 settings.customFgColor,
                 (settings.customFgColor and 0x00FFFFFF) or 0xB0000000.toInt(),
-                settings.customBorderColor.takeIf { it != 0 } ?: settings.customFgColor,
+                TRANSLATION_ACTION_ACCENT_COLOR,
             )
         }
 

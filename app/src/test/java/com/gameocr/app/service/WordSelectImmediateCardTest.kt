@@ -1,5 +1,6 @@
 package com.gameocr.app.service
 
+import com.gameocr.app.readSourceText
 import java.io.File
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -24,11 +25,11 @@ class WordSelectImmediateCardTest {
             Case(
                 name = "loading card is visible before OCR starts",
                 before = "sourceText = \"\"",
-                after = "ocrEngine.recognize(cropped, settings.ocrEngine, settings)",
+                after = "ocrEngine.recognize(cropped, settings.ocrEngine,",
             ),
             Case(
                 name = "recognized source replaces the loading placeholder",
-                before = "ocrEngine.recognize(cropped, settings.ocrEngine, settings)",
+                before = "ocrEngine.recognize(cropped, settings.ocrEngine,",
                 after = "card.updateSource(text)",
             ),
             Case(
@@ -122,7 +123,7 @@ class WordSelectImmediateCardTest {
 
         val overlay = sourceFile(
             "src/main/java/com/gameocr/app/overlay/TranslationCardOverlay.kt",
-        ).readText()
+        ).readSourceText()
         val cases = listOf(
             Case(
                 name = "blank source displays a recognition placeholder",
@@ -157,7 +158,7 @@ class WordSelectImmediateCardTest {
         localizedLoadingText.forEach { (path, expected) ->
             assertTrue(
                 "$path should define the loading message",
-                sourceFile(path).readText().contains(expected),
+                sourceFile(path).readSourceText().contains(expected),
             )
         }
     }
@@ -165,7 +166,7 @@ class WordSelectImmediateCardTest {
     private fun wordSelectPipeline(): String {
         val source = sourceFile(
             "src/main/java/com/gameocr/app/service/CaptureService.kt",
-        ).readText()
+        ).readSourceText()
         val start = source.indexOf("private suspend fun runWordSelectPipeline")
         val end = source.indexOf("private fun cropRect", start)
         require(start >= 0 && end > start) { "Word-select pipeline not found" }

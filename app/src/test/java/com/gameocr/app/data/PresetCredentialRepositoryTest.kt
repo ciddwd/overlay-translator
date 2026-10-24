@@ -50,10 +50,15 @@ class PresetCredentialRepositoryTest {
         for (index in listOf(0, 1, 2, 0, 3, 4, 1)) {
             val result = requireNotNull(reopened.applyTranslationPreset(presets[index].id))
             val expected = sources[index]
-            assertEquals(expected.model, result.model)
-            assertEquals(expected.baseUrl, result.baseUrl)
-            if (expected.translatorEngine == TranslatorEngine.ANTHROPIC) assertEquals(expected.anthropicApiKey, result.anthropicApiKey)
-            else assertEquals(expected.apiKey, result.apiKey)
+            if (expected.translatorEngine == TranslatorEngine.ANTHROPIC) {
+                assertEquals(expected.anthropicBaseUrl, result.anthropicBaseUrl)
+                assertEquals(expected.anthropicModel, result.anthropicModel)
+                assertEquals(expected.anthropicApiKey, result.anthropicApiKey)
+            } else {
+                assertEquals(expected.model, result.model)
+                assertEquals(expected.baseUrl, result.baseUrl)
+                assertEquals(expected.apiKey, result.apiKey)
+            }
         }
         reopened.saveTranslationPreset(presets[0], sources[0].copy(apiKey = ""))
         assertEquals("", reopened.applyTranslationPreset(presets[0].id)?.apiKey)
@@ -93,31 +98,29 @@ class PresetCredentialRepositoryTest {
     }
 
     @Test
-    fun encryptionFailure_clearsCredentialsButKeepsPresetAndOtherSettings() = runBlocking {
+    fun encryptionFailure_abortsTheWholePresetSaveAndKeepsOriginalCredentials() = runBlocking {
         val fixture = Fixture()
         val repo = fixture.repo()
         val source = PresetCredentialPolicyTest().withCredentials(Settings(model = "keep-model", promptTemplate = "keep-prompt"), "never-plaintext")
         val p = preset("failure", source)
         repo.saveTranslationPreset(p, source)
         fixture.cipher.fail = true
-        repo.saveTranslationPreset(p, source.copy(apiKey = "replacement-secret"))
-        val saved = repo.get()
-        assertEquals("keep-model", saved.model)
-        assertEquals("keep-prompt", saved.promptTemplate)
-        assertEquals(p.id, saved.translationPresets.single().id)
-        assertEquals("", saved.apiKey)
-        repo.update { source.copy(translationPresets = listOf(p)) }
-        val values = json.encodeToJsonElement(repo.get()).jsonObject
-        PresetCredentialPolicy.credentialFields.forEach { assertEquals(it, "", values[it]?.jsonPrimitive?.content) }
+        val before = repo.get()
+        var rejected = false
+        try { repo.saveTranslationPreset(p, source.copy(apiKey = "replacement-secret", model = "replacement-model")) }
+        catch (_: SettingsSecretStorageException) { rejected = true }
+        assertTrue(rejected)
         fixture.cipher.fail = false
-        assertEquals("", repo.applyTranslationPreset(p.id)?.apiKey)
+        val saved = repo.get()
+        assertEquals(before, saved)
+        assertEquals(source.apiKey, repo.applyTranslationPreset(p.id)?.apiKey)
         val raw = File(fixture.root, "datastore/game_ocr_settings.preferences_pb").readBytes().toString(Charsets.ISO_8859_1)
         assertFalse(raw.contains("replacement-secret"))
         assertFalse(raw.contains("never-plaintext"))
     }
 
     @Test
-    fun duplicateAndImportCollision_doNotBorrowGlobalOrSameNameCredentials() = runBlocking {
+    fun duplicateAndSameNameImport_keepTheirOwnLocalCredentials() = runBlocking {
         for (sameId in listOf(true, false)) {
             val repo = Fixture().repo()
             val source = Settings(apiKey = "original-secret")
@@ -130,7 +133,7 @@ class PresetCredentialRepositoryTest {
             repo.updateAfterPresetImport(setOf(imported.name)) { current ->
                 current.copy(translationPresets = TranslationPresetTransfer.mergeImportedPresets(current.translationPresets, listOf(imported)).presets)
             }
-            assertEquals("", repo.applyTranslationPreset(p.id)?.apiKey)
+            assertEquals("original-secret", repo.applyTranslationPreset(p.id)?.apiKey)
             assertEquals("original-secret", repo.applyTranslationPreset(duplicate.id)?.apiKey)
         }
     }
@@ -188,6 +191,70 @@ class PresetCredentialRepositoryTest {
             assertFalse(text.contains("PresetCredentialRecord"))
             fixture.cipher.ciphertexts.forEach { assertFalse(text.contains(it)) }
         }
+    }
+
+    @Test
+    fun cloudPresetsAndOfflinePreset_roundTripWithoutOverwritingSavedConnections() = runBlocking {
+        val fixture = Fixture()
+        val repo = fixture.repo()
+        val a = Settings(baseUrl = "https://a.test/v1", model = "model-a", apiKey = "key-a")
+        val b = Settings(baseUrl = "https://b.test/v1", model = "model-b", apiKey = "key-b")
+        val c = a.copy(model = "same-endpoint-other-account", apiKey = "key-c")
+        val empty = a.copy(model = "no-auth", apiKey = "")
+        val sources = mapOf("a" to a, "b" to b, "c" to c, "empty" to empty)
+        sources.forEach { (id, source) -> repo.saveTranslationPreset(preset(id, source), source) }
+        val reopened = fixture.repo()
+        for (id in listOf("a", "b", "c", "empty", "a", "b")) {
+            val expected = sources.getValue(id)
+            val cloud = requireNotNull(reopened.applyTranslationPreset(id))
+            assertEquals(expected.baseUrl, cloud.baseUrl)
+            assertEquals(expected.model, cloud.model)
+            assertEquals(expected.apiKey, cloud.apiKey)
+            val offline = requireNotNull(reopened.applyTranslationPreset(TranslationPresetCatalog.BUILTIN_MANGA_JA_ZH))
+            assertEquals(expected.baseUrl, offline.baseUrl)
+            assertEquals(expected.model, offline.model)
+            assertEquals(expected.apiKey, offline.apiKey)
+            assertEquals(TranslatorEngine.LOCAL_SAKURA, offline.translatorEngine)
+            assertEquals(OcrEngineKind.MANGA_OCR_JA, offline.ocrEngine)
+            assertTrue(TranslationPresetCatalog.matchesSettings(TranslationPresetCatalog.builtIns().single(), offline))
+            assertTrue(TranslationPresetCatalog.BUILTIN_MANGA_JA_ZH in reopened.matchingCredentialPresetIds(offline))
+        }
+        // A manual edit must not update a saved preset merely because another preset is applied.
+        reopened.applyTranslationPreset("a")
+        reopened.update { it.copy(baseUrl = "https://unsaved.test", model = "unsaved", apiKey = "unsaved") }
+        reopened.applyTranslationPreset("b")
+        assertEquals("key-a", reopened.applyTranslationPreset("a")?.apiKey)
+        assertEquals("https://a.test/v1", reopened.get().baseUrl)
+        // Explicitly saving A still cannot modify B or C, even when A and C share an endpoint.
+        reopened.saveTranslationPreset(preset("a", a.copy(model = "updated-a")), a.copy(apiKey = "updated-key-a"))
+        assertEquals("key-b", reopened.applyTranslationPreset("b")?.apiKey)
+        assertEquals("key-c", reopened.applyTranslationPreset("c")?.apiKey)
+        assertEquals("updated-key-a", reopened.applyTranslationPreset("a")?.apiKey)
+    }
+
+    @Test
+    fun inactiveCloudGroupsAndLocalCustomPresets_preserveExistingConnections() = runBlocking {
+        val repo = Fixture().repo()
+        val cloud = Settings(baseUrl = "https://cloud.test/v1", model = "cloud-model", apiKey = "cloud-key",
+            anthropicBaseUrl = "https://anthropic.test", anthropicModel = "anthropic-model", anthropicApiKey = "anthropic-key",
+            umiOcrBaseUrl = "http://ocr.test", tencentRegion = "test-region")
+        repo.update { cloud }
+        val offline = Settings(translatorEngine = TranslatorEngine.LOCAL_SAKURA, ocrEngine = OcrEngineKind.MANGA_OCR_JA)
+        repo.saveTranslationPreset(preset("local", offline), offline)
+        val local = repo.get()
+        assertEquals(cloud.baseUrl, local.baseUrl)
+        assertEquals(cloud.apiKey, local.apiKey)
+        assertEquals(cloud.anthropicBaseUrl, local.anthropicBaseUrl)
+        assertEquals(cloud.anthropicApiKey, local.anthropicApiKey)
+        assertEquals(cloud.umiOcrBaseUrl, local.umiOcrBaseUrl)
+        assertEquals(cloud.tencentRegion, local.tencentRegion)
+        val anthropic = cloud.copy(translatorEngine = TranslatorEngine.ANTHROPIC,
+            baseUrl = "https://unused.test", model = "unused", apiKey = "unused")
+        repo.saveTranslationPreset(preset("anthropic", anthropic), anthropic)
+        assertEquals(cloud.baseUrl, repo.get().baseUrl)
+        assertEquals(cloud.apiKey, repo.get().apiKey)
+        assertEquals(cloud.anthropicBaseUrl, repo.get().anthropicBaseUrl)
+        assertEquals(cloud.anthropicApiKey, repo.get().anthropicApiKey)
     }
 
     private fun preset(id: String, source: Settings) = TranslationPresetCatalog.fromSettings(id, id, id, source)

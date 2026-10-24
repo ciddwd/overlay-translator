@@ -24,7 +24,9 @@ class FloatingMenuTourPolicyTest {
                 expected = listOf(
                     defaultOrder.take(4).map(FloatingMenuTourTarget::Action) +
                         FloatingMenuTourTarget.NextPage(1, false),
-                    defaultOrder.drop(4).map(FloatingMenuTourTarget::Action) +
+                    defaultOrder.drop(4).take(4).map(FloatingMenuTourTarget::Action) +
+                        FloatingMenuTourTarget.NextPage(2, false),
+                    defaultOrder.drop(8).map(FloatingMenuTourTarget::Action) +
                         FloatingMenuTourTarget.NextPage(0, true),
                 ),
             ),

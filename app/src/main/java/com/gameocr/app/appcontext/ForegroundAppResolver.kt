@@ -92,7 +92,11 @@ class ForegroundAppResolver @Inject constructor(
         val now = System.currentTimeMillis()
         val events = usage.queryEvents(now - USAGE_LOOKBACK_MS, now)
         val event = UsageEvents.Event()
-        var latest: ForegroundApp? = null
+        // A day of events can hold hundreds of resumes. Resolve the launcher once and build the
+        // labelled app only for the winner; both lookups are PackageManager IPCs.
+        val launcher by lazy(LazyThreadSafetyMode.NONE) { homeLauncherPackage() }
+        var latestPackage: String? = null
+        var latestTimestamp = 0L
         while (events.hasNextEvent()) {
             events.getNextEvent(event)
             val isForeground = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -102,11 +106,12 @@ class ForegroundAppResolver @Inject constructor(
                 event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND
             }
             val packageName = event.packageName.orEmpty()
-            if (isForeground && isCandidate(packageName)) {
-                latest = app(packageName, event.timeStamp, ForegroundAppSource.USAGE_ACCESS)
+            if (isForeground && isCandidate(packageName) { launcher }) {
+                latestPackage = packageName
+                latestTimestamp = event.timeStamp
             }
         }
-        return latest
+        return latestPackage?.let { app(it, latestTimestamp, ForegroundAppSource.USAGE_ACCESS) }
     }
 
     private fun app(packageName: String, observedAtMs: Long, source: ForegroundAppSource): ForegroundApp {
@@ -117,17 +122,21 @@ class ForegroundAppResolver @Inject constructor(
         return ForegroundApp(packageName, label, observedAtMs, source)
     }
 
-    private fun isCandidate(packageName: String): Boolean {
+    private fun isCandidate(
+        packageName: String,
+        launcher: () -> String? = ::homeLauncherPackage,
+    ): Boolean {
         if (packageName.isBlank() || packageName == context.packageName) return false
         if (packageName in SYSTEM_PACKAGES) return false
-        val launcher = runCatching {
-            context.packageManager.resolveActivity(
-                Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
-                0,
-            )?.activityInfo?.packageName
-        }.getOrNull()
-        return packageName != launcher
+        return packageName != launcher()
     }
+
+    private fun homeLauncherPackage(): String? = runCatching {
+        context.packageManager.resolveActivity(
+            Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
+            0,
+        )?.activityInfo?.packageName
+    }.getOrNull()
 
     private companion object {
         const val USAGE_LOOKBACK_MS = 24L * 60L * 60L * 1000L

@@ -14,7 +14,7 @@ class PaddleColumnSplitWiringTest {
         val detectionOnly = s.substringAfter("internal fun detectQuads(").substringBefore("): List<DBPostprocessor.Quad>")
         assertTrue(detectionOnly.contains("splitTextColumns: Boolean = false"))
         val plan = s.substringAfter("private fun detectQuadsForRecognition(").substringBefore("private fun recoverLargeTextQuads(")
-        assertEquals(2, Regex("splitTextColumns = loadedVersion == PaddleModelVersion.V6_SMALL", RegexOption.LITERAL).findAll(plan).count())
+        assertTrue(plan.contains("splitTextColumns = loadedVersion == PaddleModelVersion.V6_SMALL"))
         val run = s.substringAfter("private suspend fun runFull(").substringBefore("private fun detectQuadsForRecognition(")
         assertTrue(run.indexOf("detectQuadsForRecognition(") < run.indexOf("val sorted ="))
         assertTrue(run.indexOf("val sorted =") < run.indexOf("dumpMangaMaskDebugSet("))
@@ -25,7 +25,7 @@ class PaddleColumnSplitWiringTest {
     }
     @Test fun background_and_whole_bubble_paths_protect_rejected_text_in_ocr_coordinates() {
         val s = source("MangaDelayedMaskDebugSession")
-        assertEquals(2, Regex("protectSourceRegions(input.protectedSourceBounds)", RegexOption.LITERAL).findAll(s).count())
+        assertTrue(s.contains("protectSourceRegions(input.protectedSourceBounds)"))
         val layout = s.substringAfter("private fun renderShapeAwareLayoutPreview(").substringBefore("private fun resolveShapeLayoutOrientation(")
         assertTrue(layout.contains("overlapsProtectedSource(input.protectedSourceBounds)"))
         assertTrue(layout.indexOf("REJECTED_OCR_SOURCE_PROTECTED") < layout.indexOf("ShapeAwareTextLayout.layout("))

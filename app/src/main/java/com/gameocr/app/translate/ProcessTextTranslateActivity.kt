@@ -1,6 +1,7 @@
 package com.gameocr.app.translate
 
 import android.content.Intent
+import android.graphics.Rect
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
@@ -10,6 +11,9 @@ import com.gameocr.app.GameOcrApp
 import com.gameocr.app.R
 import com.gameocr.app.data.LogRepository
 import com.gameocr.app.data.SettingsRepository
+import com.gameocr.app.dictionary.OfflineDictionaryRepository
+import com.gameocr.app.overlay.floatingWordDetailsContent
+import com.gameocr.app.overlay.floatingWordPreviewContent
 import com.gameocr.app.overlay.TranslationCardOverlay
 import com.gameocr.app.overlay.TtsPlaybackAction
 import com.gameocr.app.tts.TtsEngine
@@ -18,6 +22,7 @@ import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import timber.log.Timber
@@ -45,6 +50,7 @@ class ProcessTextTranslateActivity : ComponentActivity() {
     @Inject lateinit var settingsRepository: SettingsRepository
     @Inject lateinit var logRepository: LogRepository
     @Inject lateinit var ttsEngine: TtsEngine
+    @Inject lateinit var offlineDictionaryRepository: OfflineDictionaryRepository
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -79,16 +85,20 @@ class ProcessTextTranslateActivity : ComponentActivity() {
             val speechEngine = ttsEngine
             val speechLogRepository = logRepository
             val playbackSessionId = "process-text:${System.nanoTime()}"
+            val wordLookupCoordinator = FloatingWordLookupCoordinator(
+                translator, appScope, offlineDictionaryRepository,
+            )
             fun speechAction(
                 role: ProcessTextSpeechRole,
                 playbackKey: String = role.name.lowercase(),
+                actionSettings: com.gameocr.app.data.Settings = settings,
             ): TtsPlaybackAction? {
                 if (!settings.ttsEnabled) return null
                 val playbackId = "$playbackSessionId:$playbackKey"
                 fun dispatch(spokenText: String, toggle: Boolean) {
                     appScope.launch(Dispatchers.Main.immediate) {
                         runCatching {
-                            val spokenSettings = processTextSpeechSettings(settings, role)
+                            val spokenSettings = processTextSpeechSettings(actionSettings, role)
                             if (role == ProcessTextSpeechRole.SOURCE) {
                                 if (toggle) speechEngine.toggleSource(spokenText, spokenSettings, playbackId)
                                 else speechEngine.speakSource(spokenText, spokenSettings, playbackId)
@@ -125,11 +135,99 @@ class ProcessTextTranslateActivity : ComponentActivity() {
                 role = ProcessTextSpeechRole.TRANSLATION,
                 playbackKey = "dictionary",
             )
+            val englishWordSpeech = speechAction(
+                role = ProcessTextSpeechRole.SOURCE,
+                playbackKey = "word",
+                actionSettings = settings.copy(sourceLang = "en", targetLang = "en"),
+            )
+            var originalContentVisible = true
+            var wordLookupJob: Job? = null
+            var wordDetailsJob: Job? = null
+            var wordDetailsRequestId = 0L
             // 浮卡用 applicationContext 避免持 Activity 引用 leak
             val card = TranslationCardOverlay(
                 context = app,
-                onDismissed = { speechEngine.stop() },
+                onDismissed = {
+                    originalContentVisible = false
+                    speechEngine.stop()
+                },
             )
+            lateinit var onWordTapped: (String, Rect) -> Unit
+            fun showWordDetails(compact: FloatingWordLookupOutcome) {
+                originalContentVisible = false
+                wordDetailsJob?.cancel()
+                val requestId = ++wordDetailsRequestId
+                val loading = floatingWordDetailsContent(
+                    completed = false,
+                    wordResult = null,
+                    failed = false,
+                    failedLabel = app.getString(R.string.floating_word_lookup_failed),
+                    notFoundLabel = app.getString(R.string.floating_word_lookup_not_found),
+                )
+                card.show(
+                    sourceText = compact.word,
+                    translation = loading.translation,
+                    wordResult = loading.wordResult,
+                    settings = settings,
+                    loading = loading.loading,
+                    onSpeakSource = englishWordSpeech,
+                    onSpeakTranslation = translationSpeech,
+                    onSpeakDictionary = dictionarySpeech,
+                    onEnglishWordTapped = onWordTapped,
+                )
+                wordDetailsJob = appScope.launch {
+                    val outcome = wordLookupCoordinator.executeFull(compact.word, settings)
+                    val content = floatingWordDetailsContent(
+                        completed = true,
+                        wordResult = outcome.wordResult,
+                        failed = outcome.error != null,
+                        failedLabel = app.getString(R.string.floating_word_lookup_failed),
+                        notFoundLabel = app.getString(R.string.floating_word_lookup_not_found),
+                    )
+                    withContext(Dispatchers.Main) {
+                        if (requestId == wordDetailsRequestId) {
+                            card.updateWordDetailsForSource(compact.word, content)
+                        }
+                    }
+                }
+            }
+            onWordTapped = { word, anchor ->
+                wordLookupJob?.cancel()
+                val preview = card.englishWordPreview
+                val requestId = preview.requestId
+                fun content(outcome: FloatingWordLookupOutcome?, loading: Boolean) =
+                    floatingWordPreviewContent(
+                        word = word,
+                        translation = outcome?.translation,
+                        wordResult = outcome?.wordResult,
+                        loading = loading,
+                        failed = outcome?.error != null,
+                        loadingLabel = app.getString(R.string.word_card_loading),
+                        failedLabel = app.getString(R.string.floating_word_lookup_failed),
+                        notFoundLabel = app.getString(R.string.floating_word_lookup_not_found),
+                    )
+                preview.show(anchor, content(null, true), settings, null, null)
+                wordLookupJob = appScope.launch {
+                    val outcome = wordLookupCoordinator.execute(word, settings)
+                    withContext(Dispatchers.Main) {
+                        if (requestId != preview.requestId || !preview.isShown()) return@withContext
+                        val wordSpeech = speechAction(
+                            role = ProcessTextSpeechRole.SOURCE,
+                            playbackKey = "word:$requestId",
+                            actionSettings = settings.copy(sourceLang = "en", targetLang = "en"),
+                        )
+                        preview.show(
+                            anchorInWindow = anchor,
+                            content = content(outcome, false),
+                            settings = settings,
+                            onSpeak = wordSpeech?.let { { it.onToggle(word) } },
+                            onOpenDetails = outcome.takeIf(FloatingWordLookupOutcome::hasDetails)?.let {
+                                { showWordDetails(it) }
+                            },
+                        )
+                    }
+                }
+            }
             withContext(Dispatchers.Main) {
                 card.show(
                     sourceText = text,
@@ -137,6 +235,7 @@ class ProcessTextTranslateActivity : ComponentActivity() {
                     wordResult = null,
                     settings = settings,
                     onSpeakSource = sourceSpeech,
+                    onEnglishWordTapped = onWordTapped.takeIf { settings.dictionaryTapLookupEnabled },
                 )
             }
             val translateStartedAt = System.currentTimeMillis()
@@ -158,10 +257,14 @@ class ProcessTextTranslateActivity : ComponentActivity() {
                 settings = settings,
                 dictionaryTerm = dictionaryTerm,
                 onPartialTranslation = { partial ->
-                    withContext(Dispatchers.Main) { card.updateTranslation(partial) }
+                    withContext(Dispatchers.Main) {
+                        if (originalContentVisible) card.updateTranslation(partial)
+                    }
                 },
                 onWordResult = { result ->
-                    withContext(Dispatchers.Main) { card.updateWordResult(result) }
+                    withContext(Dispatchers.Main) {
+                        if (originalContentVisible) card.updateWordResult(result)
+                    }
                 },
             )
             outcome.dictionaryError?.let { error ->
@@ -207,6 +310,7 @@ class ProcessTextTranslateActivity : ComponentActivity() {
                 )
             }
             withContext(Dispatchers.Main) {
+                if (!originalContentVisible) return@withContext
                 card.show(
                     sourceText = text,
                     translation = presentation.translation,
@@ -217,6 +321,7 @@ class ProcessTextTranslateActivity : ComponentActivity() {
                         presentation.translationSucceeded
                     },
                     onSpeakDictionary = dictionarySpeech.takeIf { outcome.wordResult != null },
+                    onEnglishWordTapped = onWordTapped.takeIf { settings.dictionaryTapLookupEnabled },
                 )
             }
         }

@@ -1,5 +1,6 @@
 package com.gameocr.app.ocr
 
+import com.gameocr.app.readSourceText
 import java.io.File
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -37,5 +38,5 @@ class MlKitJapaneseColumnShadowWiringTest {
     private fun source(path: String): String = listOf(
         File("../$path"),
         File(path),
-    ).firstOrNull(File::isFile)?.readText() ?: error("Source not found: $path")
+    ).firstOrNull(File::isFile)?.readSourceText() ?: error("Source not found: $path")
 }

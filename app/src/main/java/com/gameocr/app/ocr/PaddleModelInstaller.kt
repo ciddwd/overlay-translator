@@ -256,6 +256,17 @@ class PaddleModelInstaller @Inject constructor(
             "https://hf-mirror.com/PaddlePaddle/korean_PP-OCRv5_mobile_rec_onnx/resolve/$V5_KOREAN_REC_REVISION/inference.yml"
         )
 
+        /** Official East Slavic PP-OCRv5 recognizer and its matching dictionary. */
+        private const val V5_ESLAV_REC_REVISION = "9a32171fc5718746875e1a261818884517975013"
+        private val V5_ESLAV_REC_URLS = listOf(
+            "https://huggingface.co/PaddlePaddle/eslav_PP-OCRv5_mobile_rec_onnx/resolve/$V5_ESLAV_REC_REVISION/inference.onnx",
+            "https://hf-mirror.com/PaddlePaddle/eslav_PP-OCRv5_mobile_rec_onnx/resolve/$V5_ESLAV_REC_REVISION/inference.onnx"
+        )
+        private val V5_ESLAV_YML_URLS = listOf(
+            "https://huggingface.co/PaddlePaddle/eslav_PP-OCRv5_mobile_rec_onnx/resolve/$V5_ESLAV_REC_REVISION/inference.yml",
+            "https://hf-mirror.com/PaddlePaddle/eslav_PP-OCRv5_mobile_rec_onnx/resolve/$V5_ESLAV_REC_REVISION/inference.yml"
+        )
+
         /**
          * PP-OCRv6 tiny ONNX 模型下载源（PaddlePaddle 官方 HuggingFace 仓库）。
          * - det: PaddlePaddle/PP-OCRv6_tiny_det_onnx (inference.onnx → 重命名为 det.onnx)
@@ -316,6 +327,7 @@ class PaddleModelInstaller @Inject constructor(
         internal fun defaultModelUrls(version: PaddleModelVersion): ModelUrls = when (version) {
             PaddleModelVersion.V5_MOBILE -> ModelUrls(DEFAULT_DET_URLS, DEFAULT_REC_URLS, DEFAULT_KEYS_URLS)
             PaddleModelVersion.V5_KOREAN -> ModelUrls(DEFAULT_DET_URLS, V5_KOREAN_REC_URLS, V5_KOREAN_YML_URLS)
+            PaddleModelVersion.V5_ESLAV -> ModelUrls(DEFAULT_DET_URLS, V5_ESLAV_REC_URLS, V5_ESLAV_YML_URLS)
             PaddleModelVersion.V6_TINY -> ModelUrls(V6_TINY_DET_URLS, V6_TINY_REC_URLS, V6_TINY_YML_URLS)
             PaddleModelVersion.V6_SMALL -> ModelUrls(V6_SMALL_DET_URLS, V6_SMALL_REC_URLS, V6_SMALL_YML_URLS)
             PaddleModelVersion.V6_MEDIUM -> ModelUrls(V6_MEDIUM_DET_URLS, V6_MEDIUM_REC_URLS, V6_MEDIUM_YML_URLS)

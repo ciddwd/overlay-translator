@@ -18,6 +18,7 @@ import kotlinx.serialization.json.Json
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import timber.log.Timber
 
 internal object BaiduFanyiBatchPolicy {
     private val internalLineBreak = Regex("""[ \t]*[\r\n]+[ \t]*""")
@@ -28,6 +29,23 @@ internal object BaiduFanyiBatchPolicy {
         }
 
     fun cacheModel(targetCode: String): String = "baidu-fanyi-v2-$targetCode"
+
+    /**
+     * With auto detection, Baidu can echo the whole query as one item when from == to.
+     * Only an exact unchanged response can safely be mapped back without translating again.
+     * Never split arbitrary translated text: line boundaries alone do not prove alignment.
+     */
+    fun unchangedBatchLines(
+        query: String,
+        detectedSource: String?,
+        target: String?,
+        responseSource: String?,
+        responseTranslation: String?,
+    ): List<String>? {
+        if (detectedSource.isNullOrBlank() || detectedSource != target) return null
+        if (responseSource != query || responseTranslation != query) return null
+        return query.split('\n')
+    }
 
     fun requireResultCount(expected: Int, actual: Int) {
         if (actual != expected) {
@@ -43,7 +61,7 @@ internal object BaiduFanyiBatchPolicy {
  *
  * 协议：POST form-urlencoded `https://fanyi-api.baidu.com/api/trans/vip/translate`
  * 签名：`sign = md5(appid + q + salt + secretKey)`，**全字段（含 q 中的 \n）参与 MD5**。
- * 批量：q 字段用真实 `\n` 分隔多段；响应 `trans_result` 是 list，索引一一对应。
+ * 批量：q 字段用真实 `\n` 分隔多段；同语言原样返回可能合并为一项，须校验后还原。
  *
  * **不同于百度智能云 OCR**：那是 aip.baidubce.com + access_token 体系，本类是另一套老牌
  * 翻译开放平台账号（fanyi-api.baidu.com，appid + key），用户在百度翻译开放平台注册即可。
@@ -125,7 +143,14 @@ class BaiduFanyiTranslator @Inject constructor(
         if (parsed.errorCode != null && parsed.errorCode != "52000") {
             throw TranslationException("百度翻译 ${parsed.errorCode}: ${parsed.errorMsg ?: "unknown"}")
         }
-        val results = parsed.transResult.orEmpty()
+        val rawResults = parsed.transResult.orEmpty()
+        val unchangedLines = rawResults.singleOrNull()?.takeIf { pending.size > 1 }?.let { item ->
+            BaiduFanyiBatchPolicy.unchangedBatchLines(q, parsed.from, parsed.to, item.src, item.dst)
+        }
+        val results = if (unchangedLines != null && unchangedLines.size == pending.size) {
+            Timber.d("[baidu-fanyi] restored unchanged batch from=%s to=%s blocks=%d", parsed.from, parsed.to, pending.size)
+            unchangedLines.map { TransItem(src = it, dst = it) }
+        } else rawResults
         BaiduFanyiBatchPolicy.requireResultCount(
             expected = pending.size,
             actual = results.size,

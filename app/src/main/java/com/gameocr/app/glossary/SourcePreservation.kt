@@ -69,22 +69,42 @@ class SourcePreservationService @Inject constructor(
     private val repository: TranslationGlossaryRepository,
     private val foregroundAppResolver: ForegroundAppResolver,
 ) {
-    internal suspend fun plan(blocks: List<TextBlock>, settings: Settings): SourcePreservationPlan {
+    /** The OCR-independent inputs: preset seeding, the foreground app, and the enabled terms. */
+    internal class Lookup(val packageName: String?, val terms: List<GlossaryTermEntity>)
+
+    /**
+     * Loads everything [plan] needs except the OCR text. It reads usage history and the database,
+     * so capture starts it beside OCR instead of after it. Failures surface from [plan].
+     */
+    internal suspend fun lookup(settings: Settings): Lookup? {
+        if (!settings.sourcePreservationEnabled) return null
+        repository.ensureSourcePreservationPresets()
+        val explicitScope = settings.runtimeTranslationScopePackage
+        val packageName = explicitScope ?: foregroundAppResolver
+            .resolve(settings.foregroundAppDetectionMode)
+            ?.packageName
+        return Lookup(packageName?.takeIf(String::isNotBlank), repository.listEnabled())
+    }
+
+    internal suspend fun plan(blocks: List<TextBlock>, settings: Settings): SourcePreservationPlan =
+        plan(blocks, settings) { lookup(settings) }
+
+    internal suspend fun plan(
+        blocks: List<TextBlock>,
+        settings: Settings,
+        lookup: suspend () -> Lookup?,
+    ): SourcePreservationPlan {
         if (blocks.isEmpty()) return SourcePreservationPlan(emptyList(), emptyList(), emptySet())
         if (!settings.sourcePreservationEnabled) {
             return SourcePreservationPlan(blocks, blocks.indices.toList(), emptySet())
         }
         return try {
-            repository.ensureSourcePreservationPresets()
-            val explicitScope = settings.runtimeTranslationScopePackage
-            val packageName = explicitScope ?: foregroundAppResolver
-                .resolve(settings.foregroundAppDetectionMode)
-                ?.packageName
+            val resolved = lookup() ?: return SourcePreservationPlan(blocks, blocks.indices.toList(), emptySet())
             val preserved = SourcePreservationMatcher.preservedIndexes(
                 sources = blocks.map(TextBlock::text),
                 sourceLang = settings.sourceLang,
-                packageName = packageName?.takeIf(String::isNotBlank),
-                terms = repository.listEnabled(),
+                packageName = resolved.packageName,
+                terms = resolved.terms,
                 preservationEnabled = settings.sourcePreservationEnabled,
             )
             val retainedIndexes = blocks.indices.filterNot(preserved::contains)

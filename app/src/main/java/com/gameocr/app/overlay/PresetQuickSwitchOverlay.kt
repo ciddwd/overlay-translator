@@ -251,21 +251,8 @@ class PresetQuickSwitchOverlay(private val context: Context) {
         else -> preset.name
     }
 
-    private fun ocrName(engine: OcrEngineKind): String = when (engine) {
-        OcrEngineKind.ML_KIT_AUTO -> context.getString(R.string.settings_ocr_chip_auto)
-        OcrEngineKind.ML_KIT_LATIN -> context.getString(R.string.settings_ocr_chip_latin)
-        OcrEngineKind.ML_KIT_JAPANESE -> context.getString(R.string.settings_ocr_chip_japanese)
-        OcrEngineKind.ML_KIT_KOREAN -> context.getString(R.string.settings_ocr_chip_korean)
-        OcrEngineKind.ML_KIT_CHINESE -> context.getString(R.string.settings_ocr_chip_chinese)
-        OcrEngineKind.PADDLE_ONNX -> context.getString(R.string.settings_ocr_chip_paddle)
-        OcrEngineKind.PADDLE_AI_STUDIO -> context.getString(R.string.settings_ocr_chip_paddle_ai_studio)
-        OcrEngineKind.BAIDU -> context.getString(R.string.settings_ocr_chip_baidu)
-        OcrEngineKind.TENCENT -> context.getString(R.string.settings_ocr_chip_tencent)
-        OcrEngineKind.YOUDAO -> context.getString(R.string.settings_ocr_chip_youdao)
-        OcrEngineKind.UMI_OCR -> context.getString(R.string.settings_ocr_chip_umi)
-        OcrEngineKind.LUNA_OCR -> context.getString(R.string.settings_ocr_chip_luna)
-        OcrEngineKind.MANGA_OCR_JA -> context.getString(R.string.settings_ocr_chip_manga_ocr_ja)
-    }
+    private fun ocrName(engine: OcrEngineKind): String =
+        context.getString(com.gameocr.app.data.OcrEngineCatalog.option(engine).labelRes)
 
     private fun translatorName(engine: TranslatorEngine): String = when (engine) {
         TranslatorEngine.OPENAI -> context.getString(R.string.settings_engine_openai_llm)
@@ -280,10 +267,16 @@ class PresetQuickSwitchOverlay(private val context: Context) {
         TranslatorEngine.TENCENT -> context.getString(R.string.settings_engine_tencent)
         TranslatorEngine.LOCAL_SAKURA -> context.getString(R.string.settings_engine_local_sakura)
         TranslatorEngine.LOCAL_HY_MT2 -> context.getString(R.string.settings_engine_local_hymt2)
+        TranslatorEngine.LOCAL_INDEX_TRANSLATE -> context.getString(R.string.settings_engine_local_index_translate)
+        TranslatorEngine.LOCAL_QWEN3 -> context.getString(R.string.settings_engine_local_qwen3)
     }
 
     private fun presetLlmName(preset: TranslationPreset): String = when (preset.translatorEngine) {
-        TranslatorEngine.OPENAI -> preset.model.ifBlank { translatorName(TranslatorEngine.OPENAI) }
+        TranslatorEngine.OPENAI -> if (preset.openAiProvider == com.gameocr.app.data.OpenAiProvider.BILIBILI) {
+            context.getString(R.string.settings_engine_bilibili_index)
+        } else {
+            preset.model.ifBlank { translatorName(TranslatorEngine.OPENAI) }
+        }
         TranslatorEngine.ANTHROPIC -> preset.anthropicModel.ifBlank {
             translatorName(TranslatorEngine.ANTHROPIC)
         }

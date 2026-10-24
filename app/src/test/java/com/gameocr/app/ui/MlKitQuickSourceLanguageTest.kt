@@ -50,23 +50,24 @@ class MlKitQuickSourceLanguageTest {
     }
 
     @Test
-    fun settings_placesAllOnDeviceChoicesInLocalLlmGroupWithManualDownload() {
+    fun settings_placesAllOnDeviceChoicesInOneGroupWithManualDownload() {
         val source = listOf(
             File("src/main/java/com/gameocr/app/ui/SettingsScreen.kt"),
             File("app/src/main/java/com/gameocr/app/ui/SettingsScreen.kt"),
         ).first(File::isFile).readText()
-        val start = source.indexOf("R.string.settings_translator_group_local_llm")
+        val start = source.indexOf("R.string.settings_translator_group_on_device")
         val end = source.indexOf("R.string.settings_translator_group_cloud_llm", start)
-        assertTrue("local on-device group", start >= 0 && end > start)
+        assertTrue("on-device group", start >= 0 && end > start)
         val group = source.substring(start, end)
 
         assertTrue("four recent translation choices", group.contains("mlKitRecentSourceLanguages("))
-        assertTrue("more language action", group.contains("settings_on_device_translation_more"))
+        assertTrue("more language action", group.contains("settings_on_device_more_languages"))
         assertTrue("downloaded status", group.contains("settings_mlkit_model_downloaded_short"))
         assertTrue("download status", group.contains("settings_mlkit_model_download_short"))
-        assertTrue("Sakura shares the group", group.contains("TranslatorEngine.LOCAL_SAKURA"))
-        assertTrue("HY-MT2 shares the group", group.contains("TranslatorEngine.LOCAL_HY_MT2"))
-        assertFalse("no separate on-device translation heading", group.contains("settings_translator_group_on_device"))
+        // Local models (Sakura, HY-MT2, imports) share the group as catalog shortcuts.
+        assertTrue("local models share the group", group.contains("quickLocalModels.forEach { entry ->"))
+        assertTrue("shortcut selects the model's engine", group.contains("modelManagementSelectionSettings(buildSnapshot(), entry.kind, entry.id)"))
+        assertFalse("no separate local-LLM heading", source.contains("R.string.settings_translator_group_local_llm"))
         assertTrue(
             "manual model download action",
             source.contains("R.string.settings_mlkit_download_pair"),
@@ -86,7 +87,8 @@ class MlKitQuickSourceLanguageTest {
         )
         assertTrue(
             "ready state replaces download action",
-            source.contains("currentPairReady -> Text("),
+            source.contains("downloadEnabled = !currentPairReady") &&
+                source.contains("downloadLabel = if (currentPairReady) stringResource(R.string.settings_mlkit_model_ready)"),
         )
         assertTrue(
             "missing model dialog offers download",

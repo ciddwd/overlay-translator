@@ -36,16 +36,16 @@ class FloatingWordPreviewWiringTest {
     @Test
     fun translationCardSource_smoke_reusesTheCompactWordLookup() {
         val card = source("app/src/main/java/com/gameocr/app/overlay/TranslationCardOverlay.kt")
+        val preview = source("app/src/main/java/com/gameocr/app/overlay/EnglishWordPreview.kt")
         val service = source("app/src/main/java/com/gameocr/app/service/CaptureService.kt")
 
         listOf(
             "onEnglishWordTapped",
-            "attachEnglishWordTapListener",
-            "floatingEnglishWordAt(textView.text, offset)",
-            "showEnglishWordPreview",
-            "FloatingWordPreviewContent",
+            "englishWordPreview.attach",
         ).forEach { marker -> assertTrue(marker, card.contains(marker)) }
-        assertTrue(service.contains("lookupEnglishWordInTranslationCard"))
+        listOf("floatingEnglishWordAt(textView.text, offset)", "FloatingWordPreviewContent")
+            .forEach { marker -> assertTrue(marker, preview.contains(marker)) }
+        assertTrue(service.contains("lookupEnglishWordInPreview"))
         assertTrue(service.contains("floatingWordLookupCoordinator.execute(word, settings)"))
         assertTrue(service.contains("showFloatingEnglishWordDetails(it)"))
     }
@@ -56,7 +56,7 @@ class FloatingWordPreviewWiringTest {
         val service = source("app/src/main/java/com/gameocr/app/service/CaptureService.kt")
         val flow = service.substring(
             service.indexOf("private fun showFloatingEnglishWordDetails("),
-            service.indexOf("private fun lookupEnglishWordInTranslationCard(", service.indexOf("private fun showFloatingEnglishWordDetails(")),
+            service.indexOf("private fun lookupEnglishWordInPreview(", service.indexOf("private fun showFloatingEnglishWordDetails(")),
         )
 
         listOf(
@@ -114,7 +114,7 @@ class FloatingWordPreviewWiringTest {
         }
         val fullFlow = service.substring(
             service.indexOf("private fun showFloatingEnglishWordDetails("),
-            service.indexOf("private fun lookupEnglishWordInTranslationCard("),
+            service.indexOf("private fun lookupEnglishWordInPreview("),
         )
         assertTrue(fullFlow.contains("failed = fullOutcome.error != null"))
         assertTrue(fullFlow.contains("FloatingWordLookupOutcome(outcome.word, null, null, error)"))

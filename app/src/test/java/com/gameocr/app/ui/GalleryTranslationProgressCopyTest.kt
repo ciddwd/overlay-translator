@@ -40,9 +40,6 @@ class GalleryTranslationProgressCopyTest {
                 name = "task list and result outcomes match the simple main summary row",
                 actual = component.contains("R.string.gallery_task_success_count") &&
                     component.contains("R.string.gallery_task_failed_count") &&
-                    component.contains("horizontalArrangement = Arrangement.SpaceBetween") &&
-                    component.contains("color = MaterialTheme.colorScheme.primary") &&
-                    component.contains("MaterialTheme.colorScheme.error") &&
                     !component.contains("GalleryTaskOutcomeBadge(") &&
                     !component.contains("Modifier.weight(1f)"),
             ),

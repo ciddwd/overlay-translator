@@ -220,6 +220,8 @@ class TranslationPresetTest {
             shortName = "Manga",
             settings = base
         )
+        assertTrue(TranslationPresetCatalog.matchesSettings(preset,
+            base.copy(openAiRequestOptions = OpenAiRequestOptions(encodeUserTextBase64 = true))))
         val legacyPreset = preset.copy(settingsHash = "")
         val staleHashPreset = preset.copy(settingsHash = "old-version-hash")
 
@@ -271,14 +273,6 @@ class TranslationPresetTest {
             Case("translation output direction", base.copy(translationOutputDirection = TranslationOutputDirection.RIGHT_TO_LEFT)),
             Case("translation glossary", base.copy(translationGlossaryEnabled = false)),
             Case("application context", base.copy(sendAppNameToTranslator = true)),
-            Case(
-                "LLM outbound text encoding",
-                base.copy(
-                    openAiRequestOptions = base.openAiRequestOptions.copy(
-                        encodeUserTextBase64 = true,
-                    )
-                ),
-            ),
             Case("DBNet threshold", base.copy(dbnetProbThresh = 0.25f))
         )
 
@@ -331,7 +325,7 @@ class TranslationPresetTest {
             assertEquals("${case.name} preset enabled", case.enabled, preset.ttsEnabled)
             assertEquals("${case.name} preset provider", case.provider, preset.ttsProvider)
             assertEquals("${case.name} applied enabled", case.enabled, applied.ttsEnabled)
-            assertEquals("${case.name} applied provider", case.provider, applied.ttsProvider)
+            assertEquals("${case.name} applied provider", if (case.enabled) case.provider else destination.ttsProvider, applied.ttsProvider)
             assertEquals("${case.name} voice remains global", "destination-voice", applied.ttsVoice)
             assertEquals(
                 "${case.name} MiniMax credential remains global",
@@ -354,10 +348,8 @@ class TranslationPresetTest {
                 TranslationPresetCatalog.matchesSettings(preset, source.copy(ttsEnabled = !case.enabled)),
             )
             val otherProvider = if (case.provider == TtsProvider.MINIMAX) TtsProvider.MIMO else TtsProvider.MINIMAX
-            assertFalse(
-                "${case.name} rejects changed provider",
-                TranslationPresetCatalog.matchesSettings(preset, source.copy(ttsProvider = otherProvider)),
-            )
+            assertEquals("${case.name} only active provider affects matching", !case.enabled,
+                TranslationPresetCatalog.matchesSettings(preset, source.copy(ttsProvider = otherProvider)))
         }
     }
 
@@ -514,6 +506,12 @@ class TranslationPresetTest {
             java.lang.reflect.Modifier.isStatic(it.modifiers) || it.name in metadata
         }
 
+        // This fixture selects DeepL + Paddle. Other providers must retain destination values.
+        val inactiveConnections = setOf("baseUrl", "model", "openAiProvider", "openAiRequestOptions",
+            "anthropicBaseUrl", "anthropicModel", "niuTransMode", "niuTransTermLibraryId", "niuTransMemoryLibraryId",
+            "baiduOcrEndpoint", "baiduOcrLanguage", "umiOcrBaseUrl", "lunaOcrBaseUrl", "tencentRegion",
+            "tencentOcrEndpoint", "tencentOcrLanguage", "ttsProvider")
+        val destination = Settings()
         fields.forEach { presetField ->
             presetField.isAccessible = true
             val settingsField = Settings::class.java.getDeclaredField(presetField.name).apply {
@@ -522,6 +520,7 @@ class TranslationPresetTest {
             val expected = when (presetField.name) {
                 "bubbleClusterGap" -> MangaOcrAdvancedSettingsPolicy.BUBBLE_CLUSTER_GAP
                 "mangaOcrCropPaddingPx" -> MangaOcrAdvancedSettingsPolicy.CROP_PADDING_PX
+                in inactiveConnections -> settingsField.get(destination)
                 else -> presetField.get(preset)
             }
             assertEquals("applyTo ${presetField.name}", expected, settingsField.get(applied))

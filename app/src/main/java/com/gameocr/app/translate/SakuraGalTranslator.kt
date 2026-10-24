@@ -39,9 +39,7 @@ class SakuraGalTranslator @Inject constructor(
 
     override val bufferGeneratedOutputUntilValidated: Boolean = true
 
-    override val systemPrompt: String =
-        "你是一个轻小说翻译模型，可以流畅通顺地以日本轻小说的风格将日文翻译成简体中文，" +
-            "并联系上下文正确使用人称代词，不擅自添加原文中没有的代词。"
+    override val systemPrompt: String = SakuraPromptPolicy.SYSTEM_PROMPT
 
     override fun buildUserPrompt(source: String, settings: Settings): String =
         SakuraPromptPolicy.build(
@@ -119,13 +117,15 @@ class SakuraGalTranslator @Inject constructor(
         val promptTokenBudget = (
             budgetedSettings.localLlmContextSize - budgetedSettings.localLlmMaxNewTokens - CONTEXT_HEADROOM_TOKENS
             ).coerceAtLeast(MINIMUM_PROMPT_TOKEN_BUDGET)
-        val outputBudgetPlan = holder.withEngineSession(modelKind, systemPrompt) {
+        val outputBudgetPlan = holder.withManagedEngineSession(
+            modelKind, budgetedSettings, systemPrompt, nativeContextSize(budgetedSettings),
+        ) {
             val promptGroups = SakuraContextBatchPolicy.groups(
                 sources = sources,
                 maxPromptTokens = promptTokenBudget,
                 promptTokenCount = { joined ->
                     LlamaPromptMetrics.countUserPromptTokens(
-                        runtimePrompt(buildUserPrompt(joined, budgetedSettings), budgetedSettings)
+                        managedRuntimePrompt(buildUserPrompt(joined, budgetedSettings), budgetedSettings)
                     )
                 },
             )
@@ -383,7 +383,9 @@ class SakuraGalTranslator @Inject constructor(
         settings: Settings,
         stage: SakuraRetryStage,
     ): List<PreparedSakuraGroup> {
-        val sourceTokens = holder.withEngineSession(modelKind, systemPrompt) {
+        val sourceTokens = holder.withManagedEngineSession(
+            modelKind, settings, systemPrompt, nativeContextSize(settings),
+        ) {
             groups.map { LlamaPromptMetrics.countTextTokens(it.joinedSource) }
         }
         return groups.mapIndexed { index, group ->

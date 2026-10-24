@@ -40,8 +40,8 @@ internal object PresetCredentialPolicy {
 
     private fun selectedGroups(settings: Settings): Set<Group> = buildSet {
         when (settings.translatorEngine) {
-            // Local LLM routing already uses the configured OpenAI endpoint as its compatibility fallback.
-            TranslatorEngine.OPENAI, TranslatorEngine.LOCAL_SAKURA, TranslatorEngine.LOCAL_HY_MT2 -> add(Group.OPENAI)
+            // Offline presets must not own or clear the retained cloud compatibility connection.
+            TranslatorEngine.OPENAI -> add(Group.OPENAI)
             TranslatorEngine.ANTHROPIC -> add(Group.ANTHROPIC)
             TranslatorEngine.DEEPL -> add(if (settings.deeplBaseUrl.isBlank()) Group.DEEPL else Group.DEEPL_CUSTOM)
             TranslatorEngine.NIUTRANS -> add(Group.NIUTRANS)
@@ -94,10 +94,33 @@ internal object PresetCredentialPolicy {
         })
     }
 
+    /** Only the current account's matching connection may seed a legacy local preset. */
+    fun legacyRecord(id: String, current: Settings, target: Settings): PresetCredentialRecord? {
+        val source = capture(id, current)
+        val expected = capture(id, target)
+        val groups = source.groups.filter { (name, group) ->
+            group.binding == expected.groups[name]?.binding && when (name) {
+                Group.OPENAI.name -> current.openAiProvider == target.openAiProvider && current.model == target.model
+                Group.ANTHROPIC.name -> current.anthropicModel == target.anthropicModel
+                else -> true
+            }
+        }
+        return source.copy(groups = groups).takeIf { groups.isNotEmpty() }
+    }
+
+    fun retainMatchingGroups(record: PresetCredentialRecord, target: Settings): PresetCredentialRecord {
+        val expected = capture(record.ownerId, target)
+        return record.copy(groups = record.groups.filter { (name, group) ->
+            group.binding == expected.groups[name]?.binding
+        })
+    }
+
     fun matches(id: String, settings: Settings, record: PresetCredentialRecord?): Boolean {
         val expected = capture(id, settings)
         if (record == null) return expected.groups.values.all { group -> group.values.values.all(String::isEmpty) }
-        return expected == record
+        // Older offline presets may contain an obsolete OPENAI group; unused groups do not
+        // participate in restoration or the modified-state check.
+        return expected == record.copy(groups = record.groups.filterKeys { it in expected.groups })
     }
 
     fun apply(id: String, settings: Settings, record: PresetCredentialRecord?): Settings {

@@ -11,6 +11,46 @@ import org.junit.Test
 
 class DictionaryLibraryWiringTest {
     @Test
+    fun dictionaryLibrary_backNavigation_tableDriven_returnsToSettingsWithoutExitingActivity() {
+        val cases = listOf(
+            SourceExpectation(
+                "system back and gesture",
+                "app/src/main/java/com/gameocr/app/ui/DictionaryLibraryScreen.kt",
+                listOf("import androidx.activity.compose.BackHandler", "BackHandler(onBack = onBack)"),
+            ),
+            SourceExpectation(
+                "toolbar uses the same callback",
+                "app/src/main/java/com/gameocr/app/ui/DictionaryLibraryScreen.kt",
+                listOf("IconButton(onClick = onBack)"),
+            ),
+            SourceExpectation(
+                "parent settings route and scroll position",
+                "app/src/main/java/com/gameocr/app/ui/MainActivity.kt",
+                listOf(
+                    "Route.DictionaryLibrary -> DictionaryLibraryScreen(\n" +
+                        "                onBack = { routeName = Route.Settings.name }",
+                    "val settingsListState = rememberLazyListState()",
+                    "listState = settingsListState",
+                ),
+            ),
+        )
+        cases.forEach { case ->
+            val source = projectFile(case.path).readText().replace("\r\n", "\n")
+            case.required.forEach { marker ->
+                assertTrue("${case.name}: missing $marker", marker in source)
+            }
+        }
+        val screen = projectFile(
+            "app/src/main/java/com/gameocr/app/ui/DictionaryLibraryScreen.kt"
+        ).readText()
+        // Register at page scope even while packs are loading, absent, or invalid.
+        assertTrue(screen.indexOf("BackHandler(onBack = onBack)") < screen.indexOf("Scaffold("))
+        listOf("finish()", "moveTaskToBack", "BackHandler(enabled").forEach { marker ->
+            assertFalse("back must not depend on pack readiness or exit the activity: $marker", marker in screen)
+        }
+    }
+
+    @Test
     fun visibleOfflinePacks_tableDriven_hidesJapaneseAndKoreanWithoutMutatingCatalog() {
         data class State(val installed: Boolean, val invalidReason: String?)
         for (state in listOf(State(false, null), State(true, null), State(false, "invalid"))) {
@@ -98,9 +138,14 @@ class DictionaryLibraryWiringTest {
                 "app/src/main/java/com/gameocr/app/overlay/TranslationCardOverlay.kt",
                 listOf(
                     "setSourceWordLookupEnabled",
-                    "if (!sourceWordLookupEnabled)",
+                    "isEnabled = { sourceWordLookupEnabled }",
                     "settings.dictionaryTapLookupEnabled",
                 ),
+            ),
+            SourceExpectation(
+                "shared word preview honours the switch",
+                "app/src/main/java/com/gameocr/app/overlay/EnglishWordPreview.kt",
+                listOf("if (!isEnabled()) return@setOnTouchListener false"),
             ),
             SourceExpectation(
                 "service wiring",
@@ -154,8 +199,6 @@ class DictionaryLibraryWiringTest {
             "DictionaryPackGroup",
             "DictionaryPackRow",
             "DictionarySectionCard",
-            "CardDefaults.cardElevation(defaultElevation = 0.dp)",
-            "BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)",
             "status.installed -> stringResource(R.string.dictionary_pack_installed)",
             "status.invalidReason != null -> status.invalidReason",
             "R.string.dictionary_pack_not_installed",

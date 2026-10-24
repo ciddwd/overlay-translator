@@ -18,6 +18,14 @@ class BubbleShapeMaskQualityTest {
 
         val cases = listOf(
             Case(
+                name = "pixel measured interior constrained by detector",
+                accepted = true,
+                reason = "accepted_detector_constrained_interior",
+                expectedQuality = BubbleShapeMaskQuality.TRUSTED,
+                expectedShapePatch = true,
+                expectedRejectionReason = null,
+            ),
+            Case(
                 name = "measured interior",
                 accepted = true,
                 reason = "accepted",

@@ -12,6 +12,27 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class AutoOcrOptionPolicyTest {
+    @Test fun optionalModule_tableDriven_checksLanguageAvailabilityAndActiveRequest() {
+        val route = AutoOcrRoute(OcrEngineKind.ML_KIT_DEVANAGARI)
+        for (language in listOf("hi", "mr", "ne", "sa", "ko", "kn", "th")) {
+            for (available in listOf(null, emptySet(), setOf(route))) {
+                for (active in listOf(emptySet(), setOf(route.engine))) {
+                    val expected = when {
+                        language in listOf("ko", "kn", "th") -> AutoOcrOptionState.UNSUPPORTED
+                        active.isNotEmpty() -> AutoOcrOptionState.DOWNLOADING
+                        available == null -> AutoOcrOptionState.CHECKING
+                        route in available -> AutoOcrOptionState.READY
+                        else -> AutoOcrOptionState.DOWNLOAD
+                    }
+                    assertEquals("$language $available $active", expected,
+                        autoOcrOptionState(Settings(), language, route, available, emptySet(), active))
+                }
+            }
+        }
+        for (ready in listOf(false, true)) {
+            assertEquals(if (ready) route else null, AutoOcrRoutingPolicy.resolve(Settings(), "hi") { ready })
+        }
+    }
     @Test fun namesMatchOuterChipsAndPaddleVersionPicker_tableDriven() {
         AutoOcrRoutingPolicy.candidates.forEach { route ->
             val expected = if (route.engine == OcrEngineKind.PADDLE_ONNX) route.paddleVersion.displayNameRes

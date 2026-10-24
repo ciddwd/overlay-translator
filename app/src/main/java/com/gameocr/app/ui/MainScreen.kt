@@ -32,7 +32,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -42,6 +41,30 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.outlined.HelpOutline
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.outlined.MenuBook
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.outlined.AccessibilityNew
+import androidx.compose.material.icons.outlined.BatteryChargingFull
+import androidx.compose.material.icons.outlined.Code
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Forum
+import androidx.compose.material.icons.outlined.PhotoLibrary
+import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.PowerSettingsNew
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.WarningAmber
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Share
@@ -59,9 +82,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -101,7 +121,6 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
@@ -121,15 +140,19 @@ import com.gameocr.app.R
 import com.gameocr.app.capture.CaptureRegion
 import com.gameocr.app.capture.CaptureStartRequestActivity
 import com.gameocr.app.capture.CaptureStartPreference
+import com.gameocr.app.capture.isShizukuUsableForCapture
+import com.gameocr.app.capture.rootUsableForAuto
 import com.gameocr.app.capture.resolveCaptureStartMode
 import com.gameocr.app.capture.showCaptureStartControls
 import com.gameocr.app.capture.CaptureStartMode as StartMode
 import com.gameocr.app.shizuku.AppPermissionCoordinator
+import com.gameocr.app.shizuku.shouldPrepareSelectedShizukuOverlay
 import com.gameocr.app.capture.RegionPickerActivity
 import com.gameocr.app.data.Settings as AppSettings
 import com.gameocr.app.data.SettingsRepository
 import com.gameocr.app.data.TranslationPreset
 import com.gameocr.app.data.TranslationPresetCatalog
+import com.gameocr.app.gallery.GalleryImportSource
 import com.gameocr.app.gallery.GalleryTaskStatus
 import com.gameocr.app.gallery.GalleryTranslationTaskEntity
 import com.gameocr.app.gallery.GalleryTranslationRepository
@@ -151,6 +174,9 @@ import com.gameocr.app.trigger.AccessibilityServiceStatus
 import com.gameocr.app.update.UpdateChecker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import com.gameocr.app.gallery.galleryTaskDisplayTitle
+import java.text.DateFormat
+import java.util.Date
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
@@ -163,15 +189,17 @@ import kotlin.math.abs
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
+    initialCaptureSetupPending: Boolean,
+    onInitialCaptureSetupFinished: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenPresetSettings: () -> Unit,
     onOpenLogs: () -> Unit,
     onOpenLegalNotices: () -> Unit,
     onOpenOnboarding: () -> Unit,
-    onGalleryImagesSelected: (List<String>) -> Unit,
+    onGalleryImport: (GalleryImportSource, List<String>) -> Unit,
+    onOpenGalleryAlbums: () -> Unit,
     onOpenGalleryTasks: () -> Unit,
     onOpenGalleryTask: (String) -> Unit,
-    initialStatusPresetPageIndex: Int,
-    onStatusPresetPageChanged: (Int) -> Unit,
     initialCarouselPageIndex: Int,
     onCarouselPageChanged: (Int) -> Unit,
     viewModel: MainViewModel = hiltViewModel()
@@ -194,19 +222,14 @@ fun MainScreen(
         initialValue = MainGalleryTaskLoadState.Loading,
         key1 = viewModel,
     ) {
-        viewModel.featuredGalleryTask.collectLatest { task ->
-            value = MainGalleryTaskLoadState.Loaded(task)
+        viewModel.featuredGalleryTasks.collectLatest { tasks ->
+            value = MainGalleryTaskLoadState.Loaded(tasks)
         }
     }
-    val featuredGalleryTask =
-        (featuredGalleryTaskState as? MainGalleryTaskLoadState.Loaded)?.task
-    val galleryPicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.PickMultipleVisualMedia(
-            GalleryTranslationWorkPolicy.MAX_IMAGES_PER_TASK
-        )
-    ) { uris ->
-        if (uris.isNotEmpty()) onGalleryImagesSelected(uris.map { it.toString() })
-    }
+    val featuredGalleryTasks =
+        (featuredGalleryTaskState as? MainGalleryTaskLoadState.Loaded)?.tasks.orEmpty()
+    // 新建任务入口：选择图片、选择相册、选择文件夹（与任务列表共用同一个来源面板）。
+    val galleryImport = remember { GalleryImportState() }
     val unsavedPresetName = stringResource(R.string.settings_translation_preset_unsaved_name)
     val credentialRequest = appSettings?.let { com.gameocr.app.data.PresetCredentialPolicy.capture("", it) }
     var credentialMatchSnapshot by remember { mutableStateOf<com.gameocr.app.data.PresetCredentialRecord?>(null) }
@@ -232,9 +255,17 @@ fun MainScreen(
         accessibilityServiceEnabled = AccessibilityServiceStatus.isEnabled(context)
     }
     var overlayPermissionRequestRunning by remember { mutableStateOf(false) }
+    var overlayPermissionResumeTick by remember { mutableIntStateOf(0) }
     var showClearRegionDialog by remember { mutableStateOf(false) }
+    var showHelpConfirmDialog by remember { mutableStateOf(false) }
+    var showCaptureMethodSheet by remember { mutableStateOf(false) }
+    var accessibilityEnabling by remember { mutableStateOf(false) }
+    // 一键设置：悬浮窗 → 截屏方式（Shizuku → 无障碍 → 系统截屏）→ 启动；离开去系统设置后在 ON_RESUME 继续。
+    var captureSetup by remember { mutableStateOf(CaptureSetupUiState()) }
+    var captureSetupActive by rememberSaveable { mutableStateOf(false) }
+    var captureSetupAwaiting by rememberSaveable { mutableStateOf<String?>(null) }
+    var captureSetupResumeTick by remember { mutableIntStateOf(0) }
     var showSharePrompt by rememberSaveable { mutableStateOf(false) }
-    var presetPageSeen by rememberSaveable { mutableStateOf<Boolean?>(null) }
     var presetCarouselSeen by rememberSaveable { mutableStateOf<Boolean?>(null) }
     var captureGallerySeen by rememberSaveable { mutableStateOf<Boolean?>(null) }
     var floatingTourCompleted by remember(context) {
@@ -244,6 +275,12 @@ fun MainScreen(
     var pendingSaveBeforePresetSwitch by remember { mutableStateOf<TranslationPreset?>(null) }
     var pendingPresetSaveName by rememberSaveable { mutableStateOf("") }
     val snackbarHostState = remember { SnackbarHostState() }
+    fun launchSettingsWrite(write: suspend () -> Unit) = scope.launch {
+        runSettingsWrite(
+            onFailure = { snackbarHostState.showSnackbar(context.getString(R.string.settings_storage_save_failed)) },
+            write = write,
+        )
+    }
     val presetNotReadyMessage = stringResource(R.string.main_preset_models_not_ready_message)
     val shareSubject = stringResource(R.string.settings_about_share_subject)
     val shareText = stringResource(
@@ -264,10 +301,8 @@ fun MainScreen(
         presetModelIssues = viewModel.presetModelIssues(presets)
     }
     LaunchedEffect(viewModel) {
-        val storedPresetPageSeen = viewModel.hasSeenMainStatusPreset()
         val storedPresetCarouselSeen = viewModel.hasSeenMainPresetCarousel()
         val storedCaptureGallerySeen = viewModel.hasSeenMainCaptureGallery()
-        if (presetPageSeen != true) presetPageSeen = storedPresetPageSeen
         if (presetCarouselSeen != true) presetCarouselSeen = storedPresetCarouselSeen
         if (captureGallerySeen != true) captureGallerySeen = storedCaptureGallerySeen
     }
@@ -327,11 +362,28 @@ fun MainScreen(
         AutoUpdateCheckOverlay()
     }
 
-    // Shizuku 就绪时默认选 Shizuku（用户未手动切换过的前提下）。
+    // 自动模式固定顺序：Root → Shizuku → 无障碍 → 系统截屏（用户未手动指定的前提下）。
     // 进入页面时 shizukuAvail 还在初始 NOT_INSTALLED，等 ON_RESUME 探测完才真实；
-    // 这里跟着变化走，确保用户进来直接看到最优选项。
-    LaunchedEffect(shizukuAvail, preferredStartMode) {
-        startMode = resolveCaptureStartMode(preferredStartMode, shizukuAvail)
+    // 这里跟着变化走，确保用户进来直接看到实际会用的方式。
+    val rootAccess by viewModel.rootAccess.collectAsState()
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(shizukuAvail, preferredStartMode, accessibilityServiceEnabled, rootAccess,
+        canDrawOverlay, overlayPermissionResumeTick) {
+        startMode = resolveCaptureStartMode(
+            preferredStartMode, rootUsableForAuto(rootAccess), shizukuAvail, Build.VERSION.SDK_INT,
+            accessibilityServiceEnabled,
+        )
+        if (!overlayPermissionRequestRunning && !captureSetupActive &&
+            shouldPrepareSelectedShizukuOverlay(startMode, canDrawOverlay, shizukuAvail,
+                lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))) {
+            overlayPermissionRequestRunning = true
+            try {
+                viewModel.prepareSelectedShizukuOverlay()
+                canDrawOverlay = Settings.canDrawOverlays(context)
+            } finally {
+                overlayPermissionRequestRunning = false
+            }
+        }
     }
 
     // binder 死亡 / 重启 / shell 特权变化都会触发重算 Availability，避免「Shizuku 被外部
@@ -342,13 +394,14 @@ fun MainScreen(
         shizukuAvail = viewModel.shizukuAvailability(context)
     }
 
-    val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, presets) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
+                overlayPermissionResumeTick++
                 scope.launch {
                     canDrawOverlay = Settings.canDrawOverlays(context)
                     region = viewModel.currentRegion()
+                    viewModel.refreshRoot()
                     shizukuAvail = viewModel.shizukuAvailability(context)
                     batteryOk = RomHelper.isIgnoringBatteryOptimizations(context)
                     accessibilityServiceEnabled = AccessibilityServiceStatus.isEnabled(context)
@@ -363,12 +416,30 @@ fun MainScreen(
                     }
                     presetModelIssues = viewModel.presetModelIssues(presets)
                 }
+                if (captureSetupAwaiting != null) captureSetupResumeTick++
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    if (showHelpConfirmDialog) {
+        CatalystAlertDialog(
+            onDismissRequest = { showHelpConfirmDialog = false },
+            title = { Text(stringResource(R.string.main_help_confirm_title)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    showHelpConfirmDialog = false
+                    onOpenOnboarding()
+                }) { Text(stringResource(R.string.main_help_confirm_open)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showHelpConfirmDialog = false }) {
+                    Text(stringResource(R.string.main_clear_region_dialog_cancel))
+                }
+            },
+        )
+    }
     if (showClearRegionDialog) {
         CatalystAlertDialog(
             onDismissRequest = { showClearRegionDialog = false },
@@ -377,7 +448,7 @@ fun MainScreen(
             confirmButton = {
                 TextButton(onClick = {
                     showClearRegionDialog = false
-                    scope.launch {
+                    launchSettingsWrite {
                         viewModel.clearRegion()
                         region = null
                     }
@@ -391,6 +462,33 @@ fun MainScreen(
         )
     }
 
+    if (showCaptureMethodSheet) {
+        CaptureMethodSheet(
+            selected = preferredStartMode,
+            autoResolved = resolveCaptureStartMode(
+                null, rootUsableForAuto(rootAccess), shizukuAvail, Build.VERSION.SDK_INT,
+                accessibilityServiceEnabled,
+            ),
+            shizukuAvailability = shizukuAvail,
+            accessibilityEnabled = accessibilityServiceEnabled,
+            rootAccess = rootAccess,
+            sdk = Build.VERSION.SDK_INT,
+            locked = serviceRunning,
+            onSelect = { mode ->
+                CaptureStartPreference.select(mode)
+                showCaptureMethodSheet = false
+            },
+            onDismiss = { showCaptureMethodSheet = false },
+        )
+    }
+
+    GalleryImportHost(
+        state = galleryImport,
+        onReady = onGalleryImport,
+        onOpenAlbums = onOpenGalleryAlbums,
+        onMessage = { message -> scope.launch { snackbarHostState.showSnackbar(message) } },
+    )
+
     if (showSharePrompt) {
         SharePromptDialog(
             onShare = {
@@ -401,8 +499,125 @@ fun MainScreen(
         )
     }
 
-    val applyPresetNow: (TranslationPreset) -> Unit = { preset ->
+    // 一键设置的推进逻辑。每一步只在需要时离开应用；回到前台由 ON_RESUME 再次调用。
+    fun continueCaptureSetup() {
+        if (!initialCaptureSetupPending || captureSetup.busy) return
+        captureSetupActive = true
         scope.launch {
+            captureSetup = captureSetup.copy(busy = true)
+            try {
+                val preferredForSetup = CaptureStartPreference.mode.value
+                val setupMayUseRoot = preferredForSetup == null || preferredForSetup == StartMode.ROOT
+                val checkRoot = setupMayUseRoot && rootUsableForAuto(viewModel.rootAccess.value)
+                captureSetup = captureSetup.copy(
+                    method = CaptureSetupStepState.ACTIVE,
+                    checks = captureSetupCheckOrder.associateWith {
+                        when {
+                            it == StartMode.ROOT && checkRoot -> CaptureMethodCheck.CHECKING
+                            it == StartMode.ROOT -> CaptureMethodCheck.UNAVAILABLE
+                            it == StartMode.SHIZUKU && !checkRoot -> CaptureMethodCheck.CHECKING
+                            else -> CaptureMethodCheck.WAITING
+                        }
+                    },
+                )
+                delay(CAPTURE_SETUP_CHECK_STEP_MS)
+                // Root 管理器可能弹出授权；拒绝会在本次会话内记住，不再重复询问。
+                val rootGranted = checkRoot && viewModel.requestRoot()
+                if (checkRoot && !rootGranted) {
+                    captureSetup = captureSetup.copy(checks = captureSetup.checks + mapOf(
+                        StartMode.ROOT to CaptureMethodCheck.UNAVAILABLE,
+                        StartMode.SHIZUKU to CaptureMethodCheck.CHECKING,
+                    ))
+                    delay(CAPTURE_SETUP_CHECK_STEP_MS)
+                }
+                shizukuAvail = viewModel.shizukuAvailability(context)
+                accessibilityServiceEnabled = AccessibilityServiceStatus.isEnabled(context)
+                val mayUseShizuku = preferredForSetup == null ||
+                    preferredForSetup == StartMode.ROOT || preferredForSetup == StartMode.SHIZUKU
+                val shizukuReady = !rootGranted && mayUseShizuku &&
+                    isShizukuUsableForCapture(shizukuAvail) && viewModel.requestShizukuCapture()
+                // Detect first; disabled Accessibility falls through without prompting.
+                val result = captureSetupMethodResult(
+                    preferred = CaptureStartPreference.mode.value,
+                    rootGranted = rootGranted,
+                    shizukuUsable = shizukuReady,
+                    sdk = Build.VERSION.SDK_INT,
+                    accessibilityEnabled = accessibilityServiceEnabled,
+                )
+                captureSetup = captureSetup.copy(checks = result.checks)
+                val resolved = result.resolved
+                captureSetup = captureSetup.copy(method = CaptureSetupStepState.DONE, resolved = resolved)
+                delay(CAPTURE_SETUP_CHECK_STEP_MS)
+
+                captureSetup = captureSetup.copy(overlay = CaptureSetupStepState.ACTIVE)
+                if (!Settings.canDrawOverlays(context)) {
+                    val granted = when (resolved) {
+                        StartMode.ROOT -> viewModel.grantOverlayViaRoot()
+                        StartMode.SHIZUKU -> viewModel.grantOverlayPermissionViaShizuku()
+                        // An enabled Accessibility service may already have overlay access.
+                        else -> Settings.canDrawOverlays(context)
+                    }
+                    canDrawOverlay = Settings.canDrawOverlays(context)
+                    if (!granted || !canDrawOverlay) {
+                        captureSetupAwaiting = CAPTURE_SETUP_AWAIT_OVERLAY
+                        openOverlayPermissionSettings(context)
+                        return@launch
+                    }
+                }
+                canDrawOverlay = Settings.canDrawOverlays(context)
+                captureSetup = captureSetup.copy(overlay = CaptureSetupStepState.DONE)
+                delay(CAPTURE_SETUP_CHECK_STEP_MS)
+
+                captureSetup = captureSetup.copy(start = CaptureSetupStepState.ACTIVE)
+                captureSetupAwaiting = CAPTURE_SETUP_AWAIT_START
+                context.startActivity(CaptureStartRequestActivity.newIntent(context, modeOverride = resolved))
+            } finally {
+                captureSetup = captureSetup.copy(busy = false)
+            }
+        }
+    }
+
+    // 从系统设置或截屏授权返回后，决定一键设置是继续、跳过无障碍，还是允许重试启动。
+    LaunchedEffect(captureSetupResumeTick) {
+        if (captureSetupResumeTick == 0) return@LaunchedEffect
+        when (captureSetupAwaiting) {
+            CAPTURE_SETUP_AWAIT_OVERLAY -> {
+                captureSetupAwaiting = null
+                if (Settings.canDrawOverlays(context)) {
+                    continueCaptureSetup()
+                } else {
+                    captureSetup = captureSetup.copy(overlay = CaptureSetupStepState.TODO)
+                }
+            }
+            CAPTURE_SETUP_AWAIT_START -> {
+                delay(CAPTURE_SETUP_START_GRACE_MS)
+                if (!CaptureServiceState.running.value) {
+                    captureSetupAwaiting = null
+                    captureSetup = captureSetup.copy(start = CaptureSetupStepState.TODO)
+                }
+            }
+        }
+    }
+    LaunchedEffect(initialCaptureSetupPending) {
+        if (!initialCaptureSetupPending) {
+            captureSetupActive = false
+            captureSetupAwaiting = null
+            captureSetup = CaptureSetupUiState()
+        }
+    }
+    LaunchedEffect(serviceRunning, initialCaptureSetupPending) {
+        if (serviceRunning && initialCaptureSetupPending) {
+            captureSetupAwaiting = null
+            captureSetup = captureSetup.copy(start = CaptureSetupStepState.DONE)
+            if (captureSetupActive) delay(CAPTURE_SETUP_FINISH_HOLD_MS)
+            captureSetupActive = false
+            captureSetup = CaptureSetupUiState()
+            onInitialCaptureSetupFinished()
+        }
+    }
+
+    val applyPresetNow: (TranslationPreset) -> Unit = { preset ->
+        launchSettingsWrite {
             if (!viewModel.applyTranslationPreset(preset.id)) {
                 presetModelIssues = viewModel.presetModelIssues(presets)
                 snackbarHostState.showSnackbar(presetNotReadyMessage)
@@ -509,7 +724,7 @@ fun MainScreen(
                         } ?: return@TextButton
                         pendingSaveBeforePresetSwitch = null
                         pendingPresetSaveName = ""
-                        scope.launch {
+                        launchSettingsWrite {
                             if (!viewModel.saveTranslationPresetAndApply(
                                     presetToSave = presetToSave,
                                     targetId = target.id,
@@ -573,15 +788,127 @@ fun MainScreen(
                 .padding(vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // 状态卡
-            StatusPresetCarousel(
-                initialPageIndex = initialStatusPresetPageIndex,
-                onPageChanged = onStatusPresetPageChanged,
-                canDrawOverlay = canDrawOverlay,
-                region = region,
-                shizukuAvail = shizukuAvail,
-                batteryOk = batteryOk,
-                serviceRunning = serviceRunning,
+            CaptureGalleryCarousel(
+                initialPageIndex = initialCarouselPageIndex,
+                onPageChanged = onCarouselPageChanged,
+                showDiscoveryHint =
+                    captureGallerySeen == false &&
+                        !initialCaptureSetupPending &&
+                        mainGestureGuidesEnabled,
+                onCarouselSeen = {
+                    if (captureGallerySeen != true) {
+                        captureGallerySeen = true
+                        scope.launch { viewModel.markMainCaptureGallerySeen() }
+                    }
+                },
+                capturePage = { pageModifier, onNaturalHeightChanged ->
+                    // 三步引导只由首次设置记录控制，权限缺失保留正常卡片的授权入口。
+                    val modeLabel = captureStartModeLabel(startMode)
+                    CaptureServiceCard(
+                        modifier = pageModifier,
+                        onNaturalHeightChanged = onNaturalHeightChanged,
+                        showSetup = initialCaptureSetupPending,
+                        setup = captureSetup,
+                        startAvailable = showCaptureControls,
+                        serviceRunning = serviceRunning,
+                        overlayGranted = canDrawOverlay,
+                        batteryOk = batteryOk,
+                        modeLabel = modeLabel,
+                        methodValue = if (preferredStartMode == null) {
+                            stringResource(R.string.main_capture_auto_format, modeLabel)
+                        } else {
+                            modeLabel
+                        },
+                        usageText = stringResource(mainUsageTextRes(showCaptureControls)),
+                        onRunSetup = { continueCaptureSetup() },
+                        onStart = { context.startActivity(CaptureStartRequestActivity.newIntent(context)) },
+                        onStop = { context.startService(CaptureService.stopIntent(context)) },
+                        onOpenMethodSheet = { showCaptureMethodSheet = true },
+                        onFixOverlay = {
+                            if (!canDrawOverlay && !overlayPermissionRequestRunning) {
+                                overlayPermissionRequestRunning = true
+                                scope.launch {
+                                    try {
+                                        shizukuAvail = viewModel.shizukuAvailability(context)
+                                        val action = resolveOverlayPermissionEntryAction(
+                                            overlayPermissionGranted = Settings.canDrawOverlays(context),
+                                            shizukuAvailability = shizukuAvail,
+                                        )
+                                        val granted = when (action) {
+                                            OverlayPermissionEntryAction.ALREADY_GRANTED -> true
+                                            OverlayPermissionEntryAction.TRY_SHIZUKU ->
+                                                viewModel.grantOverlayPermissionViaShizuku()
+                                            OverlayPermissionEntryAction.OPEN_SYSTEM_SETTINGS -> false
+                                        }
+                                        canDrawOverlay = Settings.canDrawOverlays(context)
+                                        if (!granted || !canDrawOverlay) {
+                                            openOverlayPermissionSettings(context)
+                                        }
+                                    } finally {
+                                        overlayPermissionRequestRunning = false
+                                    }
+                                }
+                            }
+                        },
+                        onFixBattery = {
+                            if (!batteryOk) {
+                                RomHelper.launchFirstAvailable(context, RomHelper.batteryWhitelistIntents(context))
+                            }
+                        },
+                        onOpenHelp = { showHelpConfirmDialog = true },
+                    )
+                },
+                galleryPage = { pageModifier ->
+                    // 图库翻译：与截屏卡同样的卡头；任务以带进度环的一行展示，“任务列表”放在卡头右侧。
+                    HomeSectionCard(modifier = pageModifier, fillContentHeight = true) {
+                        HomeCardHeader(
+                            title = stringResource(R.string.gallery_main_title),
+                            subtitle = stringResource(R.string.gallery_main_empty),
+                            prominent = true,
+                            actionLabel = stringResource(R.string.gallery_main_all_tasks),
+                            onAction = onOpenGalleryTasks,
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        Column(
+                            modifier = Modifier.fillMaxWidth().weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            when (
+                                mainGalleryTaskSlot(
+                                    isLoaded = featuredGalleryTaskState is MainGalleryTaskLoadState.Loaded,
+                                    hasTask = featuredGalleryTasks.isNotEmpty(),
+                                )
+                            ) {
+                                MainGalleryTaskSlot.PLACEHOLDER -> MainGalleryTaskSummaryPlaceholder()
+                                MainGalleryTaskSlot.EMPTY -> MainGalleryTaskEmptyPlaceholder()
+                                MainGalleryTaskSlot.TASK -> {
+                                    featuredGalleryTasks.forEach { task ->
+                                        MainGalleryTaskSummary(
+                                            task = task,
+                                            onClick = { onOpenGalleryTask(task.id) },
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(14.dp))
+                        Button(
+                            modifier = Modifier.fillMaxWidth().height(48.dp),
+                            onClick = { galleryImport.open() },
+                        ) {
+                            Icon(Icons.Default.AddPhotoAlternate, contentDescription = null)
+                            Text(
+                                stringResource(R.string.gallery_main_import),
+                                modifier = Modifier.padding(start = 8.dp),
+                            )
+                        }
+                    }
+                },
+            )
+
+            // 预设：独立卡片，位于截屏/图库翻转卡下方；横向 3D 轮播停稳 600ms 后自动应用。
+            PresetCarouselCard(
+                modifier = Modifier.padding(horizontal = MainScreenHorizontalPadding),
                 presets = presets,
                 activePresetId = presetPlans?.currentPresetId.orEmpty(),
                 modelIssuesByPreset = presetModelIssues,
@@ -599,268 +926,15 @@ fun MainScreen(
                 onPresetBlocked = {
                     scope.launch { snackbarHostState.showSnackbar(presetNotReadyMessage) }
                 },
-                showPresetDiscoveryHint =
-                    presetPageSeen == false &&
-                        mainGestureGuidesEnabled,
-                onPresetPageSeen = {
-                    if (presetPageSeen != true) {
-                        presetPageSeen = true
-                        scope.launch { viewModel.markMainStatusPresetSeen() }
-                    }
-                },
-                showPresetCarouselDiscoveryHint =
+                onManage = onOpenPresetSettings,
+                showHorizontalDiscoveryHint =
                     presetCarouselSeen == false &&
+                        captureGallerySeen == true &&
                         mainGestureGuidesEnabled,
-                onPresetCarouselSeen = {
+                onHorizontalCarouselSeen = {
                     if (presetCarouselSeen != true) {
                         presetCarouselSeen = true
                         scope.launch { viewModel.markMainPresetCarouselSeen() }
-                    }
-                },
-            )
-
-            CaptureGalleryCarousel(
-                initialPageIndex = initialCarouselPageIndex,
-                onPageChanged = onCarouselPageChanged,
-                showDiscoveryHint =
-                        captureGallerySeen == false &&
-                        presetPageSeen == true &&
-                        presetCarouselSeen == true &&
-                        mainGestureGuidesEnabled,
-                onCarouselSeen = {
-                    if (captureGallerySeen != true) {
-                        captureGallerySeen = true
-                        scope.launch { viewModel.markMainCaptureGallerySeen() }
-                    }
-                },
-                captureMeasurementKey = listOf(
-                    canDrawOverlay,
-                    serviceRunning,
-                    startMode,
-                    shizukuAvail,
-                ),
-                galleryMeasurementKey = listOf(
-                    canDrawOverlay,
-                    featuredGalleryTaskState,
-                ),
-                capturePage = { pageModifier ->
-                    // 主操作：截屏服务
-                    ActionCard(
-                        title = stringResource(R.string.main_section_capture),
-                        modifier = pageModifier,
-                    ) {
-                if (!showCaptureControls) {
-                    Button(
-                        enabled = !overlayPermissionRequestRunning,
-                        modifier = Modifier.fillMaxWidth().height(56.dp),
-                        onClick = {
-                            if (overlayPermissionRequestRunning) return@Button
-                            overlayPermissionRequestRunning = true
-                            scope.launch {
-                                try {
-                                    shizukuAvail = viewModel.shizukuAvailability(context)
-                                    val action = resolveOverlayPermissionEntryAction(
-                                        overlayPermissionGranted = Settings.canDrawOverlays(context),
-                                        shizukuAvailability = shizukuAvail,
-                                    )
-                                    val granted = when (action) {
-                                        OverlayPermissionEntryAction.ALREADY_GRANTED -> true
-                                        OverlayPermissionEntryAction.TRY_SHIZUKU ->
-                                            viewModel.grantOverlayPermissionViaShizuku()
-                                        OverlayPermissionEntryAction.OPEN_SYSTEM_SETTINGS -> false
-                                    }
-                                    canDrawOverlay = Settings.canDrawOverlays(context)
-                                    shizukuAvail = viewModel.shizukuAvailability(context)
-                                    if (!granted || !canDrawOverlay) {
-                                        openOverlayPermissionSettings(context)
-                                    }
-                                } finally {
-                                    overlayPermissionRequestRunning = false
-                                }
-                            }
-                        }
-                    ) { Text(stringResource(R.string.main_action_grant_overlay_first)) }
-                } else {
-                    val shizukuUsable = shizukuAvail == ShizukuCapabilities.Availability.READY ||
-                        shizukuAvail == ShizukuCapabilities.Availability.INSTALLED_NOT_GRANTED
-
-                    // 大主按钮：未运行 → primary 色"启动"；运行中 → error 色"停止"
-                    if (serviceRunning) {
-                        Button(
-                            modifier = Modifier.fillMaxWidth().height(56.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.errorContainer,
-                                contentColor = MaterialTheme.colorScheme.onErrorContainer
-                            ),
-                            onClick = { context.startService(CaptureService.stopIntent(context)) }
-                        ) {
-                            Icon(Icons.Default.Stop, contentDescription = null)
-                            Text("  ${stringResource(R.string.main_action_stop)}", modifier = Modifier.padding(start = 4.dp))
-                        }
-                    } else {
-                        val modeLabel = if (startMode == StartMode.SHIZUKU) "Shizuku" else stringResource(R.string.main_capture_system)
-                        Button(
-                            modifier = Modifier.fillMaxWidth().height(56.dp),
-                            onClick = {
-                                context.startActivity(CaptureStartRequestActivity.newIntent(context))
-                            }
-                        ) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = null)
-                            Text(
-                                "  ${stringResource(R.string.main_action_start_format, modeLabel)}",
-                                modifier = Modifier.padding(start = 4.dp)
-                            )
-                        }
-                    }
-
-                    // 启动方式 tabs：服务运行中禁止切换；Shizuku 不可用时该项禁用
-                    Text(
-                        stringResource(R.string.main_label_start_mode),
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                        SegmentedButton(
-                            selected = startMode == StartMode.SYSTEM,
-                            onClick = {
-                                CaptureStartPreference.select(StartMode.SYSTEM)
-                            },
-                            enabled = !serviceRunning,
-                            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-                            label = { Text(stringResource(R.string.main_capture_system)) }
-                        )
-                        SegmentedButton(
-                            selected = startMode == StartMode.SHIZUKU,
-                            onClick = {
-                                CaptureStartPreference.select(StartMode.SHIZUKU)
-                            },
-                            enabled = !serviceRunning && shizukuUsable,
-                            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-                            label = { Text("Shizuku") }
-                        )
-                    }
-                    val hintRes = when {
-                        startMode == StartMode.SYSTEM -> R.string.main_hint_media_projection
-                        shizukuAvail == ShizukuCapabilities.Availability.READY -> R.string.main_hint_shizuku_ready
-                        shizukuAvail == ShizukuCapabilities.Availability.INSTALLED_NOT_GRANTED -> R.string.main_hint_shizuku_not_granted
-                        shizukuAvail == ShizukuCapabilities.Availability.INSTALLED_NOT_PAIRED -> R.string.main_hint_shizuku_not_paired
-                        shizukuAvail == ShizukuCapabilities.Availability.INSTALLED_COMPATIBILITY_REQUIRED -> R.string.main_hint_shizuku_compatibility_required
-                        shizukuAvail == ShizukuCapabilities.Availability.NOT_RUNNING -> R.string.main_hint_shizuku_not_running
-                        else -> R.string.main_hint_shizuku_not_installed
-                    }
-                    Text(
-                        stringResource(hintRes),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                // 可启动时使用完整说明布局；需要单独授权时紧凑显示授权提示。
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    if (showCaptureControls) {
-                        Text(
-                            stringResource(R.string.main_label_usage),
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    } else {
-                        Column(
-                            modifier = Modifier.weight(1f),
-                            verticalArrangement = Arrangement.spacedBy(2.dp),
-                        ) {
-                            Text(
-                                stringResource(R.string.main_label_usage),
-                                style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Text(
-                                stringResource(mainUsageTextRes(showCaptureControls)),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                    TextButton(onClick = onOpenOnboarding) {
-                        Icon(
-                            Icons.AutoMirrored.Outlined.HelpOutline,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp),
-                        )
-                        Text(
-                            stringResource(R.string.main_help),
-                            modifier = Modifier.padding(start = 4.dp),
-                        )
-                    }
-                }
-                if (showCaptureControls) {
-                    Text(
-                        stringResource(mainUsageTextRes(showCaptureControls)),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                    }
-                },
-                galleryPage = { pageModifier ->
-                    ActionCard(
-                        title = stringResource(R.string.gallery_main_title),
-                        modifier = pageModifier,
-                    ) {
-                Text(
-                    text = stringResource(R.string.gallery_main_empty),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Button(
-                    modifier = Modifier.fillMaxWidth(),
-                    onClick = {
-                        galleryPicker.launch(
-                            PickVisualMediaRequest(
-                                ActivityResultContracts.PickVisualMedia.ImageOnly
-                            )
-                        )
-                    },
-                ) {
-                    Icon(Icons.Default.AddPhotoAlternate, contentDescription = null)
-                    Text(
-                        stringResource(R.string.gallery_main_import),
-                        modifier = Modifier.padding(start = 6.dp),
-                    )
-                }
-                OutlinedButton(
-                    modifier = Modifier.fillMaxWidth(),
-                    onClick = onOpenGalleryTasks,
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.List, contentDescription = null)
-                    Text(
-                        stringResource(R.string.gallery_main_all_tasks),
-                        modifier = Modifier.padding(start = 6.dp),
-                    )
-                }
-                when (
-                    mainGalleryTaskSlot(
-                        canDrawOverlay = canDrawOverlay,
-                        isLoaded = featuredGalleryTaskState is MainGalleryTaskLoadState.Loaded,
-                        hasTask = featuredGalleryTask != null,
-                    )
-                ) {
-                    MainGalleryTaskSlot.PLACEHOLDER -> MainGalleryTaskSummaryPlaceholder()
-                    MainGalleryTaskSlot.EMPTY -> MainGalleryTaskEmptyPlaceholder()
-                    MainGalleryTaskSlot.TASK -> {
-                        val task = requireNotNull(featuredGalleryTask)
-                        MainGalleryTaskSummary(
-                            task = task,
-                            onClick = { onOpenGalleryTask(task.id) },
-                        )
-                    }
-                    MainGalleryTaskSlot.HIDDEN -> Unit
-                }
                     }
                 },
             )
@@ -900,59 +974,86 @@ fun MainScreen(
             }
             END_DISABLED_SCREENSHOT_REGION */
 
-            // 系统兼容：自启动 + 电池白名单是两件事，拆成两个按钮分别引导。
-            // 电池白名单可通过 PowerManager 检测当前状态，已加入时按钮显示已开启并禁用，
-            // 让用户清楚下一步该点哪个；自启动没有公开 API 可探测，按钮始终可点。
-            ActionCard(title = stringResource(R.string.main_section_rom_guide)) {
-                OutlinedButton(
-                    modifier = Modifier.fillMaxWidth(),
+            // 系统兼容：自启动、电池白名单、无障碍各一行。完成的项显示绿色标签且不可点；
+            // 自启动没有公开 API 可探测，始终保留箭头可点。
+            ActionCard(title = stringResource(R.string.main_section_rom_guide), listStyle = true) {
+                HomeListRow(
+                    icon = Icons.Outlined.PowerSettingsNew,
+                    title = stringResource(R.string.main_compat_autostart_title),
+                    subtitle = stringResource(R.string.main_btn_open_autostart),
+                    trailing = HomeRowTrailing.Chevron,
+                    onClickLabel = stringResource(R.string.main_btn_open_autostart),
                     onClick = {
                         RomHelper.launchFirstAvailable(context, RomHelper.autoStartIntents(context))
-                    }
-                ) { Text(stringResource(R.string.main_btn_open_autostart)) }
-                OutlinedButton(
-                    enabled = !batteryOk,
-                    modifier = Modifier.fillMaxWidth(),
+                    },
+                )
+                HomeListRow(
+                    icon = Icons.Outlined.BatteryChargingFull,
+                    title = stringResource(R.string.main_status_battery_whitelist),
+                    subtitle = stringResource(
+                        if (batteryOk) R.string.main_compat_battery_ok_sub else R.string.main_compat_battery_risk_sub
+                    ),
+                    subtitleColor = if (batteryOk) {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    } else {
+                        HomeStatusColors.warn()
+                    },
+                    trailing = if (batteryOk) {
+                        HomeRowTrailing.Done(stringResource(R.string.main_chip_on))
+                    } else {
+                        HomeRowTrailing.Chevron
+                    },
+                    onClickLabel = stringResource(R.string.main_btn_open_battery_whitelist),
                     onClick = {
                         RomHelper.launchFirstAvailable(
                             context,
                             RomHelper.batteryWhitelistIntents(context)
                         )
-                    }
-                ) {
-                    Text(
-                        stringResource(
-                            if (batteryOk) R.string.main_btn_battery_already_ok
-                            else R.string.main_btn_open_battery_whitelist
-                        )
-                    )
-                }
-                OutlinedButton(
-                    enabled = !accessibilityServiceEnabled,
-                    modifier = Modifier.fillMaxWidth(),
+                    },
+                )
+                HomeListRow(
+                    icon = Icons.Outlined.AccessibilityNew,
+                    title = stringResource(R.string.main_status_accessibility_service),
+                    subtitle = stringResource(
+                        when {
+                            accessibilityEnabling -> R.string.main_compat_a11y_busy
+                            accessibilityServiceEnabled -> R.string.main_status_enabled
+                            else -> R.string.main_compat_a11y_off_sub
+                        }
+                    ),
+                    highlighted = accessibilityEnabling,
+                    trailing = when {
+                        accessibilityEnabling -> HomeRowTrailing.Busy
+                        accessibilityServiceEnabled ->
+                            HomeRowTrailing.Done(stringResource(R.string.main_status_enabled))
+                        else -> HomeRowTrailing.Chevron
+                    },
+                    onClickLabel = stringResource(
+                        if (accessibilityServiceEnabled) R.string.settings_btn_a11y_enabled
+                        else R.string.settings_btn_open_a11y
+                    ),
                     onClick = {
+                        accessibilityEnabling = true
                         scope.launch {
-                            if (!viewModel.enableAccessibilityViaShizuku()) {
-                                context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                            try {
+                                if (!viewModel.enableAccessibilityViaShizuku()) {
+                                    context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                                }
+                                accessibilityServiceEnabled = AccessibilityServiceStatus.isEnabled(context)
+                            } finally {
+                                accessibilityEnabling = false
                             }
-                            accessibilityServiceEnabled = AccessibilityServiceStatus.isEnabled(context)
                         }
                     },
-                ) {
-                    Text(
-                        stringResource(
-                            if (accessibilityServiceEnabled) {
-                                R.string.settings_btn_a11y_enabled
-                            } else {
-                                R.string.settings_btn_open_a11y
-                            }
-                        )
-                    )
-                }
+                )
             }
 
             // 关于：放在主屏底部，方便用户一眼看到版本号 / GitHub
-            ActionCard(title = stringResource(R.string.settings_section_about)) {
+            ActionCard(
+                title = stringResource(R.string.settings_section_about),
+                listStyle = true,
+                titleTrailing = stringResource(R.string.settings_about_version_format, BuildConfig.VERSION_NAME),
+            ) {
                 AboutContent(
                     onOpenLegalNotices = onOpenLegalNotices,
                     onShareApp = onShareApp,
@@ -979,53 +1080,44 @@ private fun AboutContent(
     val context = LocalContext.current
     val updateVm: com.gameocr.app.update.UpdateViewModel = hiltViewModel()
     val updateState by updateVm.state.collectAsState()
-
-    Text(
-        text = stringResource(R.string.settings_about_tagline),
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
-    Text(
-        text = stringResource(R.string.settings_about_version_format, BuildConfig.VERSION_NAME),
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
-
-    OutlinedButton(
-        enabled = updateState !is com.gameocr.app.update.UpdateViewModel.State.Checking,
-        onClick = { updateVm.check() },
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Text(
-            stringResource(
-                if (updateState is com.gameocr.app.update.UpdateViewModel.State.Checking)
-                    R.string.update_btn_checking
-                else R.string.update_btn_check
+    val checking = updateState is com.gameocr.app.update.UpdateViewModel.State.Checking
+    val openUrl: (String) -> Unit = { url ->
+        runCatching {
+            context.startActivity(
+                Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             )
-        )
+        }
     }
 
+    // 版本号在卡头右侧；这里一行标语，其余每项都是一行：图标、标题、说明、末尾箭头或外链图标。
     Text(
-        text = stringResource(R.string.settings_about_github_label),
-        style = MaterialTheme.typography.labelLarge
-    )
-    Text(
-        text = GITHUB_URL,
+        text = stringResource(R.string.settings_about_tagline),
+        modifier = Modifier.padding(start = 8.dp, end = 8.dp, bottom = 8.dp),
         style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.primary
+        color = MaterialTheme.colorScheme.onSurfaceVariant
     )
-    OutlinedButton(
-        onClick = {
-            runCatching {
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(GITHUB_URL))
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                context.startActivity(intent)
-            }
-        },
-        modifier = Modifier.fillMaxWidth()
-    ) { Text(stringResource(R.string.settings_about_open_github)) }
 
-    OutlinedButton(
+    HomeListRow(
+        icon = Icons.Outlined.Refresh,
+        title = stringResource(if (checking) R.string.update_btn_checking else R.string.update_btn_check),
+        subtitle = stringResource(R.string.main_about_update_sub),
+        trailing = if (checking) HomeRowTrailing.Busy else HomeRowTrailing.Chevron,
+        highlighted = checking,
+        onClick = { updateVm.check() },
+    )
+    HomeListRow(
+        icon = Icons.Outlined.Code,
+        title = stringResource(R.string.settings_about_github_label),
+        subtitle = GITHUB_URL.removePrefix("https://"),
+        trailing = HomeRowTrailing.External,
+        onClickLabel = stringResource(R.string.settings_about_open_github),
+        onClick = { openUrl(GITHUB_URL) },
+    )
+    HomeListRow(
+        icon = Icons.AutoMirrored.Outlined.MenuBook,
+        title = stringResource(R.string.settings_about_user_guide),
+        subtitle = stringResource(R.string.main_about_user_guide_sub),
+        trailing = HomeRowTrailing.External,
         onClick = {
             runCatching {
                 context.startActivity(
@@ -1034,70 +1126,31 @@ private fun AboutContent(
                 )
             }
         },
-        modifier = Modifier.fillMaxWidth()
-    ) { Text(stringResource(R.string.settings_about_user_guide)) }
-
-    Text(
-        text = stringResource(R.string.settings_about_open_source_licenses),
-        style = MaterialTheme.typography.labelLarge
     )
-    Text(
-        text = stringResource(R.string.settings_about_third_party_notice_summary),
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
-    OutlinedButton(
+    HomeListRow(
+        icon = Icons.Outlined.Description,
+        title = stringResource(R.string.settings_about_open_source_licenses),
+        subtitle = stringResource(R.string.settings_about_third_party_notice_summary),
+        trailing = HomeRowTrailing.Chevron,
+        onClickLabel = stringResource(R.string.settings_about_view_licenses),
         onClick = onOpenLegalNotices,
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Text(stringResource(R.string.settings_about_view_licenses))
-    }
-
-    Text(
-        text = stringResource(R.string.settings_about_share_label),
-        style = MaterialTheme.typography.labelLarge
     )
-    Text(
-        text = stringResource(R.string.settings_about_share_summary),
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
-    OutlinedButton(
+    HomeListRow(
+        icon = Icons.Outlined.Share,
+        title = stringResource(R.string.settings_about_share_label),
+        subtitle = stringResource(R.string.settings_about_share_summary),
+        trailing = HomeRowTrailing.Chevron,
+        onClickLabel = stringResource(R.string.settings_about_share_action),
         onClick = onShareApp,
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Icon(Icons.Default.Share, contentDescription = null)
-        Text(
-            stringResource(R.string.settings_about_share_action),
-            modifier = Modifier.padding(start = 8.dp)
-        )
-    }
-
-    Text(
-        text = stringResource(R.string.settings_about_qq_group_label),
-        style = MaterialTheme.typography.labelLarge
     )
-    Text(
-        text = stringResource(R.string.settings_about_qq_group_name_format, QQ_GROUP_NUMBER),
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
+    HomeListRow(
+        icon = Icons.Outlined.Forum,
+        title = stringResource(R.string.settings_about_qq_group_label),
+        subtitle = stringResource(R.string.settings_about_qq_group_name_format, QQ_GROUP_NUMBER),
+        trailing = HomeRowTrailing.External,
+        onClickLabel = stringResource(R.string.settings_about_join_qq_group),
+        onClick = { openUrl(QQ_GROUP_URL) },
     )
-    OutlinedButton(
-        onClick = {
-            runCatching {
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(QQ_GROUP_URL))
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                context.startActivity(intent)
-            }
-        },
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null)
-        Text(
-            stringResource(R.string.settings_about_join_qq_group),
-            modifier = Modifier.padding(start = 8.dp)
-        )
-    }
 
     // 注意：UpdateResultDialog 已提到 MainScreen 顶层（避免自动检测弹窗被关于卡折叠遮住），
     // 这里不再重复挂——同一 ViewModel state，顶层 dialog 也响应"检查更新"按钮触发的 check()。
@@ -1322,9 +1375,7 @@ private fun CaptureGalleryCarousel(
     onPageChanged: (Int) -> Unit,
     showDiscoveryHint: Boolean,
     onCarouselSeen: () -> Unit,
-    captureMeasurementKey: Any?,
-    galleryMeasurementKey: Any?,
-    capturePage: @Composable (Modifier) -> Unit,
+    capturePage: @Composable (Modifier, (Int) -> Unit) -> Unit,
     galleryPage: @Composable (Modifier) -> Unit,
 ) {
     val initialPage = remember { captureGalleryCarouselInitialPage(initialPageIndex) }
@@ -1333,7 +1384,6 @@ private fun CaptureGalleryCarousel(
     val currentOnCarouselSeen by rememberUpdatedState(onCarouselSeen)
     val density = LocalDensity.current
     var captureHeightPx by remember { mutableIntStateOf(0) }
-    var galleryHeightPx by remember { mutableIntStateOf(0) }
     var discoveryHintPlayed by rememberSaveable { mutableStateOf(false) }
     var discoveryGuideVisible by remember { mutableStateOf(false) }
     var discoveryScrollObserved by remember(pagerState) { mutableStateOf(false) }
@@ -1386,15 +1436,8 @@ private fun CaptureGalleryCarousel(
             discoveryGuideVisible = false
         }
     }
-    LaunchedEffect(captureMeasurementKey) {
-        captureHeightPx = 0
-    }
-    LaunchedEffect(galleryMeasurementKey) {
-        galleryHeightPx = 0
-    }
     val commonHeightPx = captureGalleryCarouselCommonHeightPx(
         captureHeightPx = captureHeightPx,
-        galleryHeightPx = galleryHeightPx,
     )
     val commonHeight = commonHeightPx?.let { with(density) { it.toDp() } }
     val indicatorPage = captureGalleryCarouselPageIndex(pagerState.currentPage)
@@ -1429,28 +1472,11 @@ private fun CaptureGalleryCarousel(
             ) {
                 when (captureGalleryCarouselPageIndex(page)) {
                     CAPTURE_CAROUSEL_PAGE -> capturePage(
-                        Modifier
-                            .onSizeChanged { size ->
-                                if (commonHeightPx == null && size.height > 0) {
-                                    captureHeightPx = size.height
-                                }
-                            }
-                            .then(
-                                if (commonHeightPx != null) Modifier.fillMaxHeight()
-                                else Modifier
-                            )
+                        if (commonHeightPx != null) Modifier.fillMaxHeight() else Modifier,
+                        { height -> if (height > 0) captureHeightPx = height },
                     )
                     GALLERY_CAROUSEL_PAGE -> galleryPage(
-                        Modifier
-                            .onSizeChanged { size ->
-                                if (commonHeightPx == null && size.height > 0) {
-                                    galleryHeightPx = size.height
-                                }
-                            }
-                            .then(
-                                if (commonHeightPx != null) Modifier.fillMaxHeight()
-                                else Modifier
-                            )
+                        if (commonHeightPx != null) Modifier.fillMaxHeight() else Modifier,
                     )
                 }
                 if (discoveryGuideVisible && page == pagerState.currentPage) {
@@ -1515,12 +1541,7 @@ internal fun captureGalleryCarouselRotation(pageOffset: Float): Float =
 
 internal fun captureGalleryCarouselCommonHeightPx(
     captureHeightPx: Int,
-    galleryHeightPx: Int,
-): Int? = if (captureHeightPx > 0 && galleryHeightPx > 0) {
-    maxOf(captureHeightPx, galleryHeightPx)
-} else {
-    null
-}
+): Int? = captureHeightPx.takeIf { it > 0 }
 
 internal fun shouldRunHorizontalDiscoveryHint(
     hintEnabled: Boolean,
@@ -1566,41 +1587,64 @@ private fun MainGalleryTaskSummary(
     Surface(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(8.dp),
-        color = Color.Transparent,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        shape = RoundedCornerShape(12.dp),
+        color = if (isMainGalleryTaskActive(task.status)) {
+            MaterialTheme.colorScheme.surfaceContainer
+        } else {
+            Color.Transparent
+        },
     ) {
         MainGalleryTaskSummaryContent(task)
     }
 }
 
+/** Loading: invisible ghost of a real row keeps the footprint, a shimmer sits on top. */
 @Composable
 private fun MainGalleryTaskSummaryPlaceholder() {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(8.dp),
-        color = Color.Transparent,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-    ) {
+    Box(Modifier.fillMaxWidth()) {
         MainGalleryTaskSummaryContent(task = null)
+        MainGalleryTaskShimmer(Modifier.matchParentSize())
     }
 }
 
 @Composable
 private fun MainGalleryTaskEmptyPlaceholder() {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(8.dp),
-        color = Color.Transparent,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-    ) {
-        Box {
-            MainGalleryTaskSummaryContent(task = null)
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(17.dp),
+        ) {
+            Box(Modifier.size(width = 96.dp, height = 75.dp)) {
+                val photoShape = RoundedCornerShape(10.dp)
+                Box(
+                    Modifier.align(Alignment.TopStart)
+                        .padding(top = 2.dp)
+                        .size(width = 82.dp, height = 60.dp)
+                        .graphicsLayer { rotationZ = -10f }
+                        .background(MaterialTheme.colorScheme.surfaceVariant, photoShape)
+                        .border(BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), photoShape),
+                )
+                Box(
+                    Modifier.align(Alignment.BottomEnd)
+                        .size(width = 82.dp, height = 63.dp)
+                        .graphicsLayer { rotationZ = 7f }
+                        .background(MaterialTheme.colorScheme.surface, photoShape)
+                        .border(BorderStroke(1.5.dp, MaterialTheme.colorScheme.outlineVariant), photoShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Outlined.Image,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(31.dp),
+                    )
+                }
+            }
             Text(
                 stringResource(R.string.gallery_main_no_history_task),
-                modifier = Modifier.align(Alignment.Center),
-                style = MaterialTheme.typography.labelLarge,
+                style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
             )
         }
     }
@@ -1616,6 +1660,11 @@ private fun MainGalleryTaskSummaryContent(
     val completedCount = task?.completedCount ?: 0
     val successCount = task?.successCount ?: 0
     val failedCount = task?.failedCount ?: 0
+    val progress by animateFloatAsState(
+        targetValue = mainGalleryTaskProgress(completedCount, totalCount),
+        animationSpec = tween(600, easing = FastOutSlowInEasing),
+        label = "gallery-task-ring",
+    )
     val contentModifier = if (placeholder) {
         Modifier
             .graphicsLayer { alpha = 0f }
@@ -1624,30 +1673,65 @@ private fun MainGalleryTaskSummaryContent(
         Modifier
     }
 
-        Column(
-            modifier = Modifier
-                .padding(12.dp)
-                .then(contentModifier),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(8.dp)
+            .then(contentModifier),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.align(Alignment.Top).padding(top = 2.dp).size(24.dp),
+            contentAlignment = Alignment.Center,
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+            if (active) {
+                CircularProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier.size(22.dp),
+                    strokeWidth = 2.dp,
+                    trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                )
+            } else {
+                Icon(
+                    imageVector = when (task?.status) {
+                        GalleryTaskStatus.FAILED, GalleryTaskStatus.PARTIAL -> Icons.Outlined.WarningAmber
+                        GalleryTaskStatus.CANCELED -> Icons.Default.Close
+                        else -> Icons.Default.Check
+                    },
+                    contentDescription = null,
+                    tint = when (task?.status) {
+                        GalleryTaskStatus.FAILED, GalleryTaskStatus.PARTIAL -> MaterialTheme.colorScheme.error.copy(alpha = 0.75f)
+                        GalleryTaskStatus.CANCELED -> MaterialTheme.colorScheme.onSurfaceVariant
+                        else -> androidx.compose.ui.graphics.lerp(
+                            HomeStatusColors.ok(), MaterialTheme.colorScheme.onSurfaceVariant, 0.65f,
+                        )
+                    },
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+        }
+        Column(Modifier.weight(1f).padding(start = 8.dp, end = 12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    stringResource(
-                        if (active) {
-                            R.string.gallery_main_active_task
-                        } else {
-                            R.string.gallery_main_latest_task
-                        }
-                    ),
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold,
+                    task?.let {
+                        galleryTaskDisplayTitle(
+                            it.title,
+                            DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
+                                .format(Date(it.createdAtMs)),
+                        )
+                    }.orEmpty(),
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    stringResource(R.string.gallery_task_images, totalCount),
+                    stringResource(
+                        R.string.gallery_main_progress,
+                        completedCount,
+                        totalCount,
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1670,70 +1754,91 @@ private fun MainGalleryTaskSummaryContent(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(
-                stringResource(
-                    R.string.gallery_main_progress,
-                    completedCount,
-                    totalCount,
-                ),
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            if (active) {
-                LinearProgressIndicator(
-                    progress = {
-                        mainGalleryTaskProgress(completedCount, totalCount)
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.padding(top = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Text(
-                    stringResource(
-                        R.string.gallery_task_success_count,
-                        successCount,
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary,
+                GalleryCountChip(
+                    text = stringResource(R.string.gallery_task_success_count, successCount),
+                    container = HomeStatusColors.okContainer(),
+                    content = HomeStatusColors.ok(),
                 )
-                Text(
-                    stringResource(
-                        R.string.gallery_task_failed_count,
-                        failedCount,
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (failedCount > 0) {
-                        MaterialTheme.colorScheme.error
+                GalleryCountChip(
+                    text = stringResource(R.string.gallery_task_failed_count, failedCount),
+                    container = if (failedCount > 0) {
+                        MaterialTheme.colorScheme.errorContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceContainerHigh
+                    },
+                    content = if (failedCount > 0) {
+                        MaterialTheme.colorScheme.onErrorContainer
                     } else {
                         MaterialTheme.colorScheme.onSurfaceVariant
                     },
                 )
             }
         }
+        Icon(
+            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+        )
+    }
 }
 
+@Composable
+private fun MainGalleryTaskShimmer(modifier: Modifier) {
+    val transition = rememberInfiniteTransition(label = "gallery-task-shimmer")
+    val alpha by transition.animateFloat(
+        initialValue = 0.45f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(900, easing = LinearEasing), RepeatMode.Reverse),
+        label = "gallery-task-shimmer-alpha",
+    )
+    val block = MaterialTheme.colorScheme.surfaceContainerHigh
+    Row(
+        modifier = modifier.padding(8.dp).graphicsLayer { this.alpha = alpha },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(44.dp).background(block, CircleShape))
+        Column(Modifier.weight(1f).padding(start = 12.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            Box(Modifier.fillMaxWidth(0.6f).height(12.dp).background(block, RoundedCornerShape(6.dp)))
+            Box(Modifier.fillMaxWidth(0.85f).height(10.dp).background(block, RoundedCornerShape(6.dp)))
+            Box(Modifier.fillMaxWidth(0.5f).height(18.dp).background(block, RoundedCornerShape(9.dp)))
+        }
+    }
+}
+
+@Composable
+private fun GalleryCountChip(text: String, container: Color, content: Color) {
+    Text(
+        text,
+        modifier = Modifier
+            .background(container, RoundedCornerShape(11.dp))
+            .padding(horizontal = 8.dp, vertical = 3.dp),
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.SemiBold,
+        color = content,
+    )
+}
 internal sealed interface MainGalleryTaskLoadState {
     data object Loading : MainGalleryTaskLoadState
     data class Loaded(
-        val task: GalleryTranslationTaskEntity?,
+        val tasks: List<GalleryTranslationTaskEntity>,
     ) : MainGalleryTaskLoadState
 }
 
 internal enum class MainGalleryTaskSlot {
-    HIDDEN,
     PLACEHOLDER,
     EMPTY,
     TASK,
 }
 
 internal fun mainGalleryTaskSlot(
-    canDrawOverlay: Boolean,
     isLoaded: Boolean,
     hasTask: Boolean,
 ): MainGalleryTaskSlot = when {
-    !canDrawOverlay -> MainGalleryTaskSlot.HIDDEN
     !isLoaded -> MainGalleryTaskSlot.PLACEHOLDER
     hasTask -> MainGalleryTaskSlot.TASK
     else -> MainGalleryTaskSlot.EMPTY
@@ -1770,240 +1875,6 @@ internal fun mainGalleryTaskPresetLabel(
 }
 
 @Composable
-private fun StatusPresetCarousel(
-    initialPageIndex: Int,
-    onPageChanged: (Int) -> Unit,
-    canDrawOverlay: Boolean,
-    region: CaptureRegion?,
-    shizukuAvail: ShizukuCapabilities.Availability,
-    batteryOk: Boolean,
-    serviceRunning: Boolean,
-    presets: List<TranslationPreset>,
-    activePresetId: String,
-    modelIssuesByPreset: Map<String, List<TranslationPresetModelIssue>>?,
-    onPresetSelected: (TranslationPreset) -> Unit,
-    onPresetBlocked: () -> Unit,
-    showPresetDiscoveryHint: Boolean,
-    onPresetPageSeen: () -> Unit,
-    showPresetCarouselDiscoveryHint: Boolean,
-    onPresetCarouselSeen: () -> Unit,
-) {
-    val initialPage = remember {
-        mainStatusPresetInitialPage(initialPageIndex)
-    }
-    val pagerState = rememberPagerState(
-        initialPage = initialPage,
-        pageCount = { STATUS_PRESET_PAGE_COUNT },
-    )
-    val currentOnPageChanged by rememberUpdatedState(onPageChanged)
-    val currentOnPresetPageSeen by rememberUpdatedState(onPresetPageSeen)
-    var discoveryHintPlayed by rememberSaveable { mutableStateOf(false) }
-    var discoveryGuideVisible by remember { mutableStateOf(false) }
-
-    LaunchedEffect(pagerState) {
-        snapshotFlow { pagerState.settledPage }
-            .distinctUntilChanged()
-            .collect { settledPage ->
-                currentOnPageChanged(settledPage)
-                if (mainStatusPresetPageWasSeen(settledPage, pagerState.pageCount)) {
-                    currentOnPresetPageSeen()
-                }
-            }
-    }
-
-    LaunchedEffect(pagerState, showPresetDiscoveryHint) {
-        if (!showPresetDiscoveryHint) return@LaunchedEffect
-        delay(STATUS_PRESET_DISCOVERY_HINT_DELAY_MS)
-        if (
-            !shouldRunMainStatusPresetHint(
-                presetPageSeen = false,
-                hintAlreadyPlayed = discoveryHintPlayed,
-                settledPage = pagerState.settledPage,
-                isScrollInProgress = pagerState.isScrollInProgress,
-                pageCount = pagerState.pageCount,
-            )
-        ) {
-            return@LaunchedEffect
-        }
-
-        discoveryHintPlayed = true
-        discoveryGuideVisible = true
-        try {
-            pagerState.animateScrollToPage(
-                page = STATUS_PAGE,
-                pageOffsetFraction = STATUS_PRESET_DISCOVERY_HINT_OFFSET_FRACTION,
-                animationSpec = tween(
-                    durationMillis = STATUS_PRESET_DISCOVERY_HINT_REVEAL_MS,
-                    easing = FastOutSlowInEasing,
-                ),
-            )
-            delay(STATUS_PRESET_DISCOVERY_HINT_HOLD_MS)
-            pagerState.animateScrollToPage(
-                page = STATUS_PAGE,
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioMediumBouncy,
-                    stiffness = Spring.StiffnessVeryLow,
-                ),
-            )
-        } finally {
-            discoveryGuideVisible = false
-        }
-    }
-
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(196.dp),
-    ) {
-        VerticalPager(
-            state = pagerState,
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = MainScreenHorizontalPadding),
-            pageSpacing = 12.dp,
-        ) { page ->
-            when (page) {
-                STATUS_PAGE -> StatusCard(
-                    canDrawOverlay = canDrawOverlay,
-                    region = region,
-                    shizukuAvail = shizukuAvail,
-                    batteryOk = batteryOk,
-                    serviceRunning = serviceRunning,
-                    modifier = Modifier.fillMaxSize(),
-                )
-                PRESET_PAGE -> PresetCarouselCard(
-                    presets = presets,
-                    activePresetId = activePresetId,
-                    modelIssuesByPreset = modelIssuesByPreset,
-                    onPresetSelected = onPresetSelected,
-                    onPresetBlocked = onPresetBlocked,
-                    showHorizontalDiscoveryHint =
-                        showPresetCarouselDiscoveryHint &&
-                            pagerState.settledPage == PRESET_PAGE,
-                    onHorizontalCarouselSeen = onPresetCarouselSeen,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
-        }
-        Column(
-            modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .padding(end = 8.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            repeat(STATUS_PRESET_PAGE_COUNT) { page ->
-                Surface(
-                    modifier = Modifier.size(
-                        width = 6.dp,
-                        height = if (page == pagerState.currentPage) 16.dp else 6.dp,
-                    ),
-                    shape = CircleShape,
-                    color = if (page == pagerState.currentPage) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.outlineVariant
-                    },
-                ) {}
-            }
-        }
-        if (discoveryGuideVisible) {
-            SwipeUpGuide(
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .size(width = 64.dp, height = 148.dp),
-            )
-        }
-    }
-}
-
-private const val STATUS_PRESET_PAGE_COUNT = 2
-private const val STATUS_PAGE = 0
-private const val PRESET_PAGE = 1
-private const val STATUS_PRESET_DISCOVERY_HINT_DELAY_MS = 1_000L
-private const val STATUS_PRESET_DISCOVERY_HINT_REVEAL_MS = 650
-private const val STATUS_PRESET_DISCOVERY_HINT_HOLD_MS = 1_500L
-private const val STATUS_PRESET_DISCOVERY_HINT_OFFSET_FRACTION = 0.18f
-
-internal fun mainStatusPresetInitialPage(pageIndex: Int): Int =
-    pageIndex.coerceIn(STATUS_PAGE, PRESET_PAGE)
-
-internal fun shouldRunMainStatusPresetHint(
-    presetPageSeen: Boolean,
-    hintAlreadyPlayed: Boolean,
-    settledPage: Int,
-    isScrollInProgress: Boolean,
-    pageCount: Int,
-): Boolean =
-    !presetPageSeen &&
-        !hintAlreadyPlayed &&
-        settledPage == STATUS_PAGE &&
-        !isScrollInProgress &&
-        pageCount > PRESET_PAGE
-
-internal fun mainStatusPresetPageWasSeen(settledPage: Int, pageCount: Int): Boolean =
-    pageCount > PRESET_PAGE && settledPage == PRESET_PAGE
-
-@Composable
-private fun StatusCard(
-    canDrawOverlay: Boolean,
-    region: CaptureRegion?,
-    shizukuAvail: ShizukuCapabilities.Availability,
-    batteryOk: Boolean,
-    serviceRunning: Boolean,
-    modifier: Modifier = Modifier,
-) {
-    Card(
-        modifier = modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface,
-            contentColor = MaterialTheme.colorScheme.onSurface
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Text(
-                stringResource(R.string.main_status_title),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold
-            )
-            StatusRow(
-                stringResource(R.string.main_status_capture_service),
-                ok = serviceRunning,
-                detail = stringResource(if (serviceRunning) R.string.main_status_running else R.string.main_status_idle)
-            )
-            StatusRow(stringResource(R.string.main_status_overlay_perm), canDrawOverlay)
-            StatusRow(
-                stringResource(R.string.main_status_region),
-                ok = true,
-                detail = region?.let {
-                    stringResource(R.string.main_status_region_format, it.width, it.height, it.left, it.top)
-                } ?: stringResource(R.string.main_status_region_full)
-            )
-            StatusRow(
-                stringResource(R.string.main_status_shizuku),
-                ok = shizukuAvail == ShizukuCapabilities.Availability.READY,
-                detail = stringResource(
-                    when (shizukuAvail) {
-                        ShizukuCapabilities.Availability.READY -> R.string.main_status_shizuku_ready
-                        ShizukuCapabilities.Availability.INSTALLED_NOT_GRANTED -> R.string.main_status_shizuku_not_granted
-                        ShizukuCapabilities.Availability.INSTALLED_NOT_PAIRED -> R.string.main_status_shizuku_not_paired
-                        ShizukuCapabilities.Availability.INSTALLED_COMPATIBILITY_REQUIRED -> R.string.main_status_shizuku_compatibility_required
-                        ShizukuCapabilities.Availability.NOT_RUNNING -> R.string.main_status_shizuku_not_running
-                        ShizukuCapabilities.Availability.NOT_INSTALLED -> R.string.main_status_shizuku_not_installed
-                    }
-                )
-            )
-            StatusRow(stringResource(R.string.main_status_battery_whitelist), batteryOk)
-        }
-    }
-}
-
-@Composable
 internal fun PresetCarouselCard(
     presets: List<TranslationPreset>,
     activePresetId: String,
@@ -2012,10 +1883,12 @@ internal fun PresetCarouselCard(
     onPresetBlocked: () -> Unit,
     showHorizontalDiscoveryHint: Boolean = false,
     onHorizontalCarouselSeen: () -> Unit = {},
+    onManage: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Card(
         modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface,
             contentColor = MaterialTheme.colorScheme.onSurface,
@@ -2024,22 +1897,27 @@ internal fun PresetCarouselCard(
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Column(
-            modifier = Modifier.padding(vertical = 12.dp),
+            modifier = Modifier.padding(top = 16.dp, bottom = 12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(
-                text = stringResource(R.string.main_preset_title),
-                modifier = Modifier.padding(horizontal = 16.dp),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
+            HomeCardHeader(
+                icon = Icons.Outlined.Tune,
+                title = stringResource(R.string.main_preset_title),
+                subtitle = stringResource(R.string.main_preset_subtitle),
+                prominent = false,
+                actionLabel = onManage?.let { stringResource(R.string.main_preset_manage) },
+                onAction = onManage,
+                modifier = Modifier.padding(start = 16.dp, end = 8.dp),
             )
             if (presets.isEmpty()) {
-                Box(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(122.dp),
-                    contentAlignment = Alignment.Center,
+                    verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically),
+                    horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                     Text(
                         text = stringResource(R.string.main_preset_loading),
                         style = MaterialTheme.typography.bodyMedium,
@@ -2249,30 +2127,64 @@ internal fun PresetCarousel(
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
                     horizontalAlignment = Alignment.Start,
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    Text(
-                        text = translationPresetDisplayName(preset),
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = if (selected) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurface
-                        },
-                        maxLines = mainTranslationPresetNameMaxLines(preset.id),
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    mainPresetDetailLines(translationPresetSummary(preset)).forEach { detail ->
+                    val modelIssues = modelIssuesByPreset?.get(preset.id)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = detail,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
+                            text = translationPresetDisplayName(preset),
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (selected) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurface
+                            },
+                            maxLines = mainTranslationPresetNameMaxLines(preset.id),
                             overflow = TextOverflow.Ellipsis,
                         )
+                        // 使用中 / 模型未就绪：与主屏其他区域一致的状态小标签。
+                        when {
+                            selected -> PresetStateChip(
+                                text = stringResource(R.string.main_preset_in_use),
+                                container = MaterialTheme.colorScheme.primary,
+                                content = MaterialTheme.colorScheme.onPrimary,
+                            )
+                            modelIssues != null && !presetCarouselCanApply(modelIssues) -> PresetStateChip(
+                                text = stringResource(R.string.main_preset_models_not_ready_chip),
+                                container = HomeStatusColors.warnContainer(),
+                                content = HomeStatusColors.warn(),
+                            )
+                        }
+                    }
+                    mainPresetDetailLines(translationPresetSummary(preset)).forEach { detail ->
+                        val (label, value) = presetDetailLabelValue(detail)
+                        Row {
+                            if (label != null) {
+                                Text(
+                                    text = label,
+                                    modifier = Modifier.width(72.dp),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            Text(
+                                text = value,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (label != null) {
+                                    MaterialTheme.colorScheme.onSurface
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     }
                 }
             }
@@ -2357,6 +2269,28 @@ internal fun presetCarouselIsApplied(
 
 internal fun mainPresetDetailLines(summary: String): List<String> =
     summary.lineSequence().take(MAIN_PRESET_DETAIL_COUNT).toList()
+
+/** "OCR: ML Kit" → ("OCR", "ML Kit"); also splits on the full-width colon. A line without one keeps its text as the value. */
+internal fun presetDetailLabelValue(line: String): Pair<String?, String> {
+    val index = line.indexOfFirst { it == ':' || it == '：' }
+    if (index <= 0) return null to line.trim()
+    return line.substring(0, index).trim() to line.substring(index + 1).trim()
+}
+
+@Composable
+private fun PresetStateChip(text: String, container: Color, content: Color) {
+    Text(
+        text = text,
+        modifier = Modifier
+            .padding(start = 8.dp)
+            .background(container, RoundedCornerShape(10.dp))
+            .padding(horizontal = 8.dp, vertical = 2.dp),
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.SemiBold,
+        color = content,
+        maxLines = 1,
+    )
+}
 
 private const val MAIN_PRESET_DETAIL_COUNT = 4
 private const val PRESET_AUTO_APPLY_SETTLE_DELAY_MS = 600L
@@ -2459,42 +2393,19 @@ internal fun presetCarouselScale(pageOffset: Float): Float =
     1f - abs(pageOffset.coerceIn(-1f, 1f)) * 0.08f
 
 @Composable
-private fun StatusRow(label: String, ok: Boolean, detail: String? = null) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Surface(
-            shape = CircleShape,
-            color = if (ok) MaterialTheme.colorScheme.primary
-            else MaterialTheme.colorScheme.outline,
-            modifier = Modifier.size(8.dp)
-        ) {}
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier
-                .padding(start = 12.dp)
-                .weight(1f)
-        )
-        Text(
-            text = detail ?: stringResource(if (ok) R.string.main_status_enabled else R.string.main_status_disabled),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
-}
-
-@Composable
 private fun ActionCard(
     title: String,
     modifier: Modifier = Modifier,
+    /** List sections (System compatibility, About): 8 dp card padding so rows own their 8 dp inset. */
+    listStyle: Boolean = false,
+    titleTrailing: String? = null,
     content: @Composable () -> Unit,
 ) {
     Card(
         modifier = modifier
             .padding(horizontal = MainScreenHorizontalPadding)
             .fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface,
             contentColor = MaterialTheme.colorScheme.onSurface
@@ -2503,14 +2414,34 @@ private fun ActionCard(
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            modifier = if (listStyle) {
+                Modifier.padding(start = 8.dp, end = 8.dp, top = 16.dp, bottom = 8.dp)
+            } else {
+                Modifier.padding(16.dp)
+            },
+            verticalArrangement = Arrangement.spacedBy(if (listStyle) 0.dp else 8.dp)
         ) {
-            Text(
-                title,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold
-            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = if (listStyle) 8.dp else 0.dp)
+                    .padding(bottom = if (listStyle) 4.dp else 0.dp),
+                verticalAlignment = Alignment.Bottom,
+            ) {
+                Text(
+                    title,
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                if (titleTrailing != null) {
+                    Text(
+                        titleTrailing,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
             content()
         }
     }
@@ -2546,6 +2477,12 @@ private fun AutoUpdateCheckOverlay() {
 
 private val MainScreenHorizontalPadding = 16.dp
 
+internal const val CAPTURE_SETUP_AWAIT_OVERLAY = "overlay"
+internal const val CAPTURE_SETUP_AWAIT_START = "start"
+private const val CAPTURE_SETUP_CHECK_STEP_MS = 350L
+private const val CAPTURE_SETUP_START_GRACE_MS = 1_500L
+private const val CAPTURE_SETUP_FINISH_HOLD_MS = 900L
+
 internal fun openOverlayPermissionSettings(context: Context) {
     val appSpecificIntent = Intent(
         Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
@@ -2570,10 +2507,22 @@ class MainViewModel @Inject constructor(
     private val paddleModelInstaller: PaddleModelInstaller,
     private val mangaOcrModelInstaller: MangaOcrModelInstaller,
     private val orientationModelInstaller: OrientationModelInstaller,
+    private val rootShell: com.gameocr.app.capture.RootShell,
 ) : ViewModel() {
+    val rootAccess = rootShell.access
+    fun refreshRoot() = rootShell.refreshInstalled()
+    /** May show the root manager's prompt once; a refusal is remembered for the session. */
+    suspend fun requestRoot(): Boolean = rootShell.ensureGranted()
+    suspend fun requestShizukuCapture(): Boolean = shizukuManager.ensureReady()
+    /** Grants the overlay through root; false when root is missing, refused, or the grant did not stick. */
+    suspend fun grantOverlayViaRoot(): Boolean {
+        if (!rootUsableForAuto(rootShell.access.value) || !rootShell.ensureGranted()) return false
+        rootShell.run("appops set ${BuildConfig.APPLICATION_ID} SYSTEM_ALERT_WINDOW allow")
+        return appPermissions.currentState().overlayGranted
+    }
     private var sharePromptEntryRecorded = false
     val settings = repo.settings
-    val featuredGalleryTask = galleryTranslationRepository.observeFeaturedTask()
+    val featuredGalleryTasks = galleryTranslationRepository.observeFeaturedTasks()
 
     suspend fun currentRegion(): CaptureRegion? = repo.get().captureRegion
     suspend fun clearRegion() {
@@ -2587,10 +2536,6 @@ class MainViewModel @Inject constructor(
     suspend fun markSharePromptShown() {
         repo.markSharePromptShown()
     }
-    suspend fun hasSeenMainStatusPreset(): Boolean = repo.hasSeenMainStatusPreset()
-    suspend fun markMainStatusPresetSeen() {
-        repo.markMainStatusPresetSeen()
-    }
     suspend fun hasSeenMainPresetCarousel(): Boolean = repo.hasSeenMainPresetCarousel()
     suspend fun markMainPresetCarouselSeen() {
         repo.markMainPresetCarouselSeen()
@@ -2603,6 +2548,7 @@ class MainViewModel @Inject constructor(
         shizukuCapabilities.availability(context)
     suspend fun enableAccessibilityViaShizuku(): Boolean = appPermissions.configureIfReady().accessibilityConnected
     suspend fun grantOverlayPermissionViaShizuku(): Boolean = appPermissions.configure().overlayGranted
+    suspend fun prepareSelectedShizukuOverlay(): Boolean = appPermissions.grantOverlayIfReady()
     internal suspend fun presetModelIssues(
         presets: List<TranslationPreset>,
     ): Map<String, List<TranslationPresetModelIssue>> = withContext(Dispatchers.IO) {

@@ -18,13 +18,11 @@ class PaddleDetectionProfileSegmentedButtonUiTest {
         data class Case(val name: String, val marker: String)
 
         listOf(
-            Case("single-choice row", "SingleChoiceSegmentedButtonRow("),
-            Case("connected segment", "SegmentedButton("),
-            Case("position-aware shape", "SegmentedButtonDefaults.itemShape("),
+            Case("single-choice row", "SettingsChoiceRow("),
+            Case("connected segment", "SettingsChoiceButton("),
             Case("current selection", "selected = paddleDetectionProfile == profile"),
             Case("skip redundant save", "if (paddleDetectionProfile != profile)"),
             Case("persist selection", "viewModel.savePaddleDetectionProfile(profile)"),
-            Case("disable shifting check animation", "icon = {}"),
             Case("localized label", "Text(stringResource(profile.labelRes))"),
         ).forEach { case ->
             assertTrue("${case.name}: missing ${case.marker}", block.contains(case.marker))

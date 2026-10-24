@@ -69,6 +69,33 @@ class OcrResultQualityTest {
         }
     }
 
+    @Test
+    fun hidingNoTextHints_doesNotBypassQualityChecks_tableDriven() {
+        for (developer in listOf(false, true)) {
+            for (hideHint in listOf(false, true)) {
+                for ((name, blocks, normallyBlocked) in listOf(
+                    Triple("low confidence", listOf(block("hello", 0.1f)), true),
+                    Triple("zero confidence", listOf(block("hello", 0f)), true),
+                    Triple("healthy", listOf(block("hello", 0.95f)), false),
+                    Triple("threshold", listOf(block("hello", 0.45f)), false),
+                    Triple("unknown confidence", listOf(block("hello", Float.NaN)), false),
+                    Triple("empty", emptyList<TextBlock>(), false),
+                )) {
+                    org.junit.Assert.assertEquals(
+                        "$name hint visibility developer=$developer hideHint=$hideHint",
+                        !(developer && hideHint),
+                        com.gameocr.app.service.DeveloperOcrDebugPolicy.shouldShowNoTextHint(developer, hideHint),
+                    )
+                    val issue = findOcrResultQualityIssue(blocks)
+                    org.junit.Assert.assertEquals(
+                        "$name developer=$developer hideHint=$hideHint",
+                        normallyBlocked, issue != null,
+                    )
+                }
+            }
+        }
+    }
+
     private fun block(text: String, confidence: Float): TextBlock =
         TextBlock(
             text = text,

@@ -1,6 +1,7 @@
 package com.gameocr.app.ocr
 
 import android.content.Context
+import com.gameocr.app.BuildConfig
 import com.gameocr.app.R
 import com.gameocr.app.data.LlmMirrorChoice
 import com.gameocr.app.data.SettingsRepository
@@ -31,6 +32,11 @@ import java.nio.charset.StandardCharsets
  *  - config.json / generation_config.json / preprocessor_config.json / special_tokens_map.json
  *
  * 下载源沿用用户配置；文件传输、续传校验及安装由 ModelFileDownloader 统一处理。
+ *
+ * The same download also fetches the int8 draft decoder used for speculative decoding
+ * (ciddwd/manga-ocr-2025-decoder-int8-pc, pinned to one commit and checked by SHA-256). It only
+ * speeds decoding up, so it is optional: installs without it, or whose download of it fails,
+ * still count as installed and decode with the FP32 decoder alone.
  */
 @Singleton
 class MangaOcrModelInstaller @Inject constructor(
@@ -48,8 +54,15 @@ class MangaOcrModelInstaller @Inject constructor(
         val config: File,
         val generationConfig: File,
         val preprocessorConfig: File,
-        val specialTokensMap: File
-    )
+        val specialTokensMap: File,
+        /** The optional int8 draft decoder, when installed. */
+        val draftDecoder: File? = null,
+    ) {
+        val totalBytes: Long
+            get() = listOfNotNull(
+                encoder, decoder, vocab, config, generationConfig, preprocessorConfig, specialTokensMap, draftDecoder,
+            ).sumOf(File::length)
+    }
 
     fun checkInstalled(): InstalledFiles? {
         val files = REQUIRED_FILES.map { File(modelsDir, it) }
@@ -67,9 +80,14 @@ class MangaOcrModelInstaller @Inject constructor(
             config = files[3],
             generationConfig = files[4],
             preprocessorConfig = files[5],
-            specialTokensMap = files[6]
+            specialTokensMap = files[6],
+            draftDecoder = installedDraftDecoder(),
         )
     }
+
+    /** The int8 draft decoder when it is installed; a cheap check (size and header only). */
+    fun installedDraftDecoder(): File? =
+        File(modelsDir, FILE_DRAFT_DECODER).takeIf { validateModelFile(FILE_DRAFT_DECODER, it) == null }
 
     data class Progress(
         val file: String,
@@ -106,7 +124,9 @@ class MangaOcrModelInstaller @Inject constructor(
             .takeIf { settings.localLlmMirror == LlmMirrorChoice.CUSTOM && it.isNotBlank() }
         val userMirror = legacyMirror ?: networkMirror
 
-        for (name in REQUIRED_FILES) {
+        // Builds that never decode speculatively must not download the unused draft decoder.
+        val optionalFiles = if (BuildConfig.MANGA_OCR_SPECULATIVE) OPTIONAL_FILES else emptyList()
+        for (name in REQUIRED_FILES + optionalFiles) {
             val dest = File(modelsDir, name)
             if (validateModelFile(name, dest) == null) {
                 send(Progress(name, "(already installed)", dest.length(), dest.length(), true))
@@ -125,11 +145,17 @@ class MangaOcrModelInstaller @Inject constructor(
                 } catch (t: Exception) {
                     if (t is CancellationException) throw t
                     lastErr = t
-                    if (!ModelDownloadWorkPolicy.mayTryAnotherSource(t)) throw t
+                    if (!ModelDownloadWorkPolicy.mayTryAnotherSource(t)) break
                     Timber.w(t, "manga-ocr 镜像失败: $url")
                 }
             }
-            if (!ok) throw lastErr ?: IllegalArgumentException("Model download source is empty")
+            if (ok) continue
+            if (name in OPTIONAL_FILES) {
+                // OCR works without it; it only loses the speculative speed-up.
+                Timber.w(lastErr, "manga-ocr optional $name unavailable; decoding stays FP32-only")
+                continue
+            }
+            throw lastErr ?: IllegalArgumentException("Model download source is empty")
         }
     }.flowOn(Dispatchers.IO)
 
@@ -148,7 +174,7 @@ class MangaOcrModelInstaller @Inject constructor(
         name: String,
         mirror: String,
     ) {
-        downloader.download(url, dest, { validateModelFile(name, it) }) { downloaded, total ->
+        downloader.download(url, dest, { validateInstalledContent(name, it) }) { downloaded, total ->
             channel.trySend(Progress(name, mirror, downloaded, total, false))
         }
     }
@@ -167,7 +193,7 @@ class MangaOcrModelInstaller @Inject constructor(
         var imported = 0
         for (uri in uris) {
             val name = queryDisplayName(uri) ?: continue
-            val target = REQUIRED_FILES.firstOrNull { it == name } ?: continue
+            val target = (REQUIRED_FILES + OPTIONAL_FILES).firstOrNull { it == name } ?: continue
             val dest = File(modelsDir, target)
             val tmp = File(modelsDir, "$target.tmp")
             try {
@@ -176,7 +202,7 @@ class MangaOcrModelInstaller @Inject constructor(
                         input.copyTo(output)
                     }
                 }
-                val validationError = validateModelFile(target, tmp)
+                val validationError = validateInstalledContent(target, tmp)
                 if (validationError != null) {
                     throw RuntimeException("invalid manga-ocr model $name: $validationError")
                 }
@@ -215,13 +241,30 @@ class MangaOcrModelInstaller @Inject constructor(
         const val FILE_PREPROC_CONFIG = "preprocessor_config.json"
         const val FILE_SPECIAL_TOKENS = "special_tokens_map.json"
 
+        /** Int8 draft decoder for speculative decoding; see the class comment. */
+        const val FILE_DRAFT_DECODER = "decoder_model.int8_pc.onnx"
+        const val DRAFT_HF_REPO = "ciddwd/manga-ocr-2025-decoder-int8-pc"
+        /** Pinned so the SHA-256 below always describes what the URL serves. */
+        const val DRAFT_REVISION = "ae361bd2dcd5b353a0f33d4f2c68f90d4899f8d7"
+        const val DRAFT_SHA256 = "7648719ca8870795b584819f190c102b8042567bc8a9db6103b4693a6a1b1c83"
+        const val DRAFT_BYTES = 45_275_652L
+
         /** 7 个必装文件，按"重要性/大小"排序，下载顺序也是这个——失败时大文件已下完不浪费。 */
         val REQUIRED_FILES = listOf(
             FILE_ENCODER, FILE_DECODER, FILE_VOCAB,
             FILE_CONFIG, FILE_GEN_CONFIG, FILE_PREPROC_CONFIG, FILE_SPECIAL_TOKENS
         )
 
+        /** Downloaded after the required files; never required for an install to count. */
+        val OPTIONAL_FILES = listOf(FILE_DRAFT_DECODER)
+
         internal fun urlsFor(userMirror: String?, file: String, choice: LlmMirrorChoice): List<String> {
+            if (file == FILE_DRAFT_DECODER) {
+                // A custom mirror serves the l0wgear repository layout, not this separate repository.
+                val official = "https://huggingface.co/$DRAFT_HF_REPO/resolve/$DRAFT_REVISION/$file"
+                val mirror = "https://hf-mirror.com/$DRAFT_HF_REPO/resolve/$DRAFT_REVISION/$file"
+                return if (choice == LlmMirrorChoice.HF_MIRROR) listOf(mirror, official) else listOf(official, mirror)
+            }
             val list = mutableListOf<String>()
             if (userMirror != null) list += ensureSlash(userMirror) + file
             list += when (choice) {
@@ -250,6 +293,9 @@ class MangaOcrModelInstaller @Inject constructor(
         private data class ModelFileSpec(
             val minBytes: Long,
             val kind: ModelFileKind,
+            /** When set, the file must be exactly this long and, once downloaded or imported, match [sha256]. */
+            val exactBytes: Long? = null,
+            val sha256: String? = null,
         )
 
         private val FILE_SPECS = mapOf(
@@ -260,8 +306,13 @@ class MangaOcrModelInstaller @Inject constructor(
             FILE_GEN_CONFIG to ModelFileSpec(MIN_JSON_BYTES, ModelFileKind.JSON),
             FILE_PREPROC_CONFIG to ModelFileSpec(MIN_JSON_BYTES, ModelFileKind.JSON),
             FILE_SPECIAL_TOKENS to ModelFileSpec(MIN_JSON_BYTES, ModelFileKind.JSON),
+            FILE_DRAFT_DECODER to ModelFileSpec(DRAFT_BYTES, ModelFileKind.ONNX, DRAFT_BYTES, DRAFT_SHA256),
         )
 
+        /**
+         * Cheap check used whenever installed files are inspected. A SHA-256 is verified only by
+         * [validateInstalledContent], when a file is downloaded or imported.
+         */
         internal fun validateModelFile(name: String, file: File): String? {
             val spec = FILE_SPECS[name] ?: return "unexpected file: $name"
             if (!file.exists() || !file.isFile) return "missing"
@@ -269,11 +320,36 @@ class MangaOcrModelInstaller @Inject constructor(
             if (length < spec.minBytes) {
                 return "too small: $length bytes, expected at least ${spec.minBytes} bytes"
             }
+            if (spec.exactBytes != null && length != spec.exactBytes) {
+                return "unexpected size: $length bytes, expected ${spec.exactBytes} bytes"
+            }
             return when (spec.kind) {
                 ModelFileKind.ONNX -> validateOnnxFile(file)
                 ModelFileKind.VOCAB -> validateVocabFile(file)
                 ModelFileKind.JSON -> validateJsonFile(file)
             }
+        }
+
+        /** [validateModelFile] plus the pinned SHA-256, for content about to be installed. */
+        internal fun validateInstalledContent(name: String, file: File): String? {
+            validateModelFile(name, file)?.let { return it }
+            val expected = FILE_SPECS.getValue(name).sha256 ?: return null
+            val actual = sha256(file)
+            return if (actual == expected) null else "SHA-256 mismatch: $actual"
+        }
+
+        private fun sha256(file: File): String {
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            file.inputStream().use { input ->
+                val buffer = ByteArray(1 shl 16)
+                while (true) {
+                    if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("cancelled")
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    digest.update(buffer, 0, read)
+                }
+            }
+            return digest.digest().joinToString("") { "%02x".format(it) }
         }
 
         private fun validateOnnxFile(file: File): String? {

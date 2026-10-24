@@ -4,6 +4,7 @@ import android.content.Context
 import com.gameocr.app.R
 import com.gameocr.app.data.Languages
 import com.gameocr.app.data.Settings
+import com.gameocr.app.data.openAiCacheModelKey
 import com.gameocr.app.data.withApiTimeout
 import com.gameocr.app.util.RuntimePerformanceDiagnostics
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -23,6 +24,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -42,6 +44,7 @@ class OpenAiTranslator @Inject constructor(
     private val json: Json,
     private val cache: TranslationCache,
     private val performanceDiagnostics: RuntimePerformanceDiagnostics,
+    private val modelListClient: OpenAiModelListClient,
 ) : Translator {
 
     override val supportsStructuredContextBatch: Boolean = true
@@ -472,7 +475,7 @@ class OpenAiTranslator @Inject constructor(
 
         val cacheKey = cache.key(
             trimmed,
-            settings.model,
+            settings.openAiCacheModelKey(),
             settings.targetLang,
             resolvedRequest.cacheFingerprint,
         )
@@ -541,7 +544,7 @@ class OpenAiTranslator @Inject constructor(
 
         val cacheKey = cache.key(
             trimmed,
-            settings.model,
+            settings.openAiCacheModelKey(),
             settings.targetLang,
             resolvedRequest.cacheFingerprint,
         )
@@ -676,27 +679,17 @@ class OpenAiTranslator @Inject constructor(
         val timedClient = client.withApiTimeout(
             OpenAiRequestPolicy.remoteLlmTimeoutSeconds(settings.apiTimeoutSeconds),
         )
-        val modelsUrl = ensureSlash(settings.baseUrl) + "models"
-        val modelsReq = Request.Builder()
-            .url(modelsUrl)
-            .header("Authorization", "Bearer ${settings.apiKey}")
-            .header("Accept", "application/json")
-            .get()
-            .build()
-        val modelsResult = runCatching {
-            withContext(Dispatchers.IO) {
-                timedClient.newCall(modelsReq).execute().use { resp ->
-                    if (!resp.isSuccessful) return@use null
-                    val raw = resp.body?.string().orEmpty()
-                    runCatching { json.decodeFromString<ModelsResponse>(raw) }
-                        .getOrNull()
-                        ?.data
-                        ?.mapNotNull { it.id }
-                        ?.distinct()
-                        ?.sorted()
-                }
-            }
-        }.getOrNull()
+        val modelsUrl = (ensureSlash(settings.baseUrl) + "models").toHttpUrl()
+        val modelsResult = try {
+            modelListClient.fetch(
+                modelsUrl, settings.apiKey,
+                OpenAiRequestPolicy.remoteLlmTimeoutSeconds(settings.apiTimeoutSeconds),
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            null
+        }
         if (!modelsResult.isNullOrEmpty()) {
             return TestResult(
                 true,

@@ -12,7 +12,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import timber.log.Timber
 
-/** Explicit user action only. No Binder listener or background auto-reenable. */
+/** Accessibility is changed only by explicit actions; a selected ready backend may grant overlay. */
 @Singleton
 class AppPermissionCoordinator @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -21,6 +21,15 @@ class AppPermissionCoordinator @Inject constructor(
     private val mutex = Mutex()
 
     suspend fun configure(): AppPermissionResult = configure(requireAlreadyReady = false)
+
+    suspend fun grantOverlayIfReady(): Boolean = mutex.withLock {
+        val userId = Process.myUid() / 100_000
+        prepareOverlayPermissionIfReady(
+            overlayGranted = { Settings.canDrawOverlays(context) },
+            shizukuReady = ::hasReadyShizuku,
+            grantOverlay = { shizuku.grantOverlayPermission(context.packageName, userId.toString()) },
+        )
+    }
 
     /** Manual accessibility entries must open Settings immediately if Shizuku is not ready. */
     suspend fun configureIfReady(): AppPermissionResult {

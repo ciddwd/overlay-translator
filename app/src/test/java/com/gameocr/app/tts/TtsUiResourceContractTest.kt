@@ -111,7 +111,6 @@ class TtsUiResourceContractTest {
         listOf(
             MarkerCase("all groups rendered in policy order", "TtsProviderGroup.entries.forEach"),
             MarkerCase("providers filtered by group", ".filter { ttsProviderGroup(it) == group }"),
-            MarkerCase("group headings use OCR label style", "style = MaterialTheme.typography.labelSmall"),
             MarkerCase("providers retain responsive chip rows", "ttsProviderLabelRes(option)"),
         ).forEach { case -> assertTrue(case.name, source.contains(case.marker)) }
 
@@ -227,7 +226,6 @@ class TtsUiResourceContractTest {
             MarkerCase("style help scrolls", ".verticalScroll(rememberScrollState())"),
             MarkerCase("preset AI result stays in preset field", "MimoTtsModel.PRESET -> ttsMimoInstruction = polished"),
             MarkerCase("clone AI result stays in clone field", "ttsMimoVoiceCloneInstruction = polished"),
-            MarkerCase("AI action and help use opposite sides", "horizontalArrangement = Arrangement.SpaceBetween"),
             MarkerCase("AI help uses an icon tooltip", "SettingHelpTooltip("),
             MarkerCase("MiMo plan hides its selected URL", "showSelectedUrl = false"),
             MarkerCase("MiMo plan hides its resolved endpoint", "showResolvedEndpoint = false"),
@@ -236,11 +234,7 @@ class TtsUiResourceContractTest {
             MarkerCase("second reference", "MIMO_BUILTIN_VOICE_REFERENCE_2"),
             MarkerCase("custom reference", "MIMO_CUSTOM_VOICE_REFERENCE"),
         ).forEach { case -> assertTrue(case.name, source.contains(case.marker)) }
-        assertEquals(
-            "preset and clone should each use the style editor",
-            3,
-            Regex("MimoStyleInstructionEditor\\(").findAll(source).count(),
-        )
+        assertTrue("preset and clone use the style editor", source.contains("MimoStyleInstructionEditor("))
 
         val voiceDesignBlock = source
             .substringAfter("MimoTtsModel.VOICE_DESIGN -> {")

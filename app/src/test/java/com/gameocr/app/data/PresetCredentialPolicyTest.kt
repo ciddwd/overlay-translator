@@ -33,8 +33,8 @@ class PresetCredentialPolicyTest {
             Case(Settings(translatorEngine = TranslatorEngine.GOOGLE, ttsEnabled = true, ttsProvider = TtsProvider.VOLCENGINE), setOf("ttsVolcengineApiKey")),
             Case(Settings(translatorEngine = TranslatorEngine.GOOGLE, ttsEnabled = true, ttsProvider = TtsProvider.MINIMAX), setOf("ttsMiniMaxApiKey")),
             Case(Settings(translatorEngine = TranslatorEngine.GOOGLE, ttsEnabled = true, ttsProvider = TtsProvider.MIMO), setOf("ttsMimoApiKey")),
-            Case(Settings(translatorEngine = TranslatorEngine.LOCAL_HY_MT2), setOf("apiKey")),
-            Case(Settings(translatorEngine = TranslatorEngine.LOCAL_SAKURA), setOf("apiKey")),
+            Case(Settings(translatorEngine = TranslatorEngine.LOCAL_HY_MT2), emptySet()),
+            Case(Settings(translatorEngine = TranslatorEngine.LOCAL_SAKURA), emptySet()),
             Case(Settings(translatorEngine = TranslatorEngine.GOOGLE_ML_KIT), emptySet()),
         )
         cases.forEachIndexed { index, case ->
@@ -71,13 +71,25 @@ class PresetCredentialPolicyTest {
     @Test
     fun credentialRegistryCoversEveryCredentialAndPreservesRuntimeContext() {
         assertEquals(
-            SettingsFieldPolicy.rules.filter { it.portability == SettingsPortability.CREDENTIAL }.map { it.name }.toSet(),
+            SettingsFieldPolicy.rules.filter { it.portability == SettingsPortability.CREDENTIAL }
+                .map { it.name }.toSet() - setOf("asrCloudConnections", "asrDashScopeApiKey"),
             PresetCredentialPolicy.credentialFields,
         )
         val source = Settings(apiKey = "secret", runtimeTranslationContext = "history", runtimeTranslationScopePackage = "app.test", runtimeTranslationScopeLabel = "label")
         val result = PresetCredentialPolicy.apply("a", source, PresetCredentialPolicy.capture("a", source))
         assertEquals(source, result)
         assertFalse(PresetCredentialPolicy.capture("a", source).toString().contains("secret"))
+    }
+
+    @Test
+    fun legacyLocalPresets_ignoreObsoleteCloudCredentialGroups() {
+        val cloud = Settings(baseUrl = "https://cloud.test", apiKey = "old-cloud-key")
+        val record = PresetCredentialPolicy.capture("local", cloud)
+        val current = cloud.copy(translatorEngine = TranslatorEngine.LOCAL_SAKURA, apiKey = "current-cloud-key")
+        assertEquals("current-cloud-key", PresetCredentialPolicy.apply("local", current, record).apiKey)
+        assertTrue(PresetCredentialPolicy.matches("local", current, record))
+        assertTrue(PresetCredentialPolicy.matches("local", current, null))
+        assertFalse(PresetCredentialPolicy.matches("other", current, record))
     }
 
     internal fun withCredentials(settings: Settings, prefix: String): Settings {

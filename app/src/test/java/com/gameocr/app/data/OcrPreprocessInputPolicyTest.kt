@@ -15,7 +15,8 @@ class OcrPreprocessInputPolicyTest {
         val cases = listOf(
             Case(OcrEngineKind.ML_KIT_JAPANESE, true),
             Case(OcrEngineKind.MANGA_OCR_JA, true),
-            Case(OcrEngineKind.ML_KIT_AUTO, false),
+            // Auto defers tonal preprocessing to the engine it picks (see AutoOcrPreprocessPolicyTest).
+            Case(OcrEngineKind.ML_KIT_AUTO, true),
             Case(OcrEngineKind.ML_KIT_LATIN, false),
             Case(OcrEngineKind.ML_KIT_CHINESE, false),
             Case(OcrEngineKind.ML_KIT_KOREAN, false),

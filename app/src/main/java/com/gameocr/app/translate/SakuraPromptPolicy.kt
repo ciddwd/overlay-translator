@@ -4,6 +4,8 @@ import com.gameocr.app.data.RuntimeTranslationPromptContext
 
 /** Builds only prompt variants documented by SakuraLLM v1.0. */
 internal object SakuraPromptPolicy {
+    const val SYSTEM_PROMPT = "你是一个轻小说翻译模型，可以流畅通顺地以日本轻小说的风格将日文翻译成简体中文，" +
+        "并联系上下文正确使用人称代词，不擅自添加原文中没有的代词。"
     const val BASIC_INSTRUCTION = "将下面的日文文本翻译成中文："
     const val GLOSSARY_HEADER = "根据以下术语表（可以为空）："
     const val GLOSSARY_INSTRUCTION = "将下面的日文文本根据对应关系和备注翻译成中文："

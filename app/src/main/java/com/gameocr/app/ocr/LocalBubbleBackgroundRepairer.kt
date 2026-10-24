@@ -88,6 +88,16 @@ internal object LocalBubbleBackgroundRepairer {
             "Each model bubble must have exactly one local repair region"
         }
 
+        if (regions.isEmpty()) return Result(
+            repairResult = MaskedBackgroundRepairer.Result(
+                pixels = sourceArgb,
+                repairedMask = BooleanArray(sourceArgb.size),
+                decisions = emptyList(),
+            ),
+            crops = emptyList(),
+            fullFramePixels = sourceArgb.size,
+        )
+
         val output = sourceArgb.copyOf()
         val repairedMask = BooleanArray(sourceArgb.size)
         val decisions = mutableListOf<MaskedBackgroundRepairer.ComponentDecision>()

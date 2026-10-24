@@ -131,6 +131,46 @@ class MangaOcrModelInstallerValidationTest {
         }
     }
 
+    @Test
+    fun draftDecoderUrls_arePinnedToTheVerifiedCommitAndSkipCustomMirrors() {
+        val file = MangaOcrModelInstaller.FILE_DRAFT_DECODER
+        val path = "${MangaOcrModelInstaller.DRAFT_HF_REPO}/resolve/${MangaOcrModelInstaller.DRAFT_REVISION}/$file"
+        val official = "https://huggingface.co/$path"
+        val hfMirror = "https://hf-mirror.com/$path"
+
+        assertEquals(listOf(official, hfMirror), MangaOcrModelInstaller.urlsFor(null, file, LlmMirrorChoice.HF_OFFICIAL))
+        assertEquals(listOf(hfMirror, official), MangaOcrModelInstaller.urlsFor(null, file, LlmMirrorChoice.HF_MIRROR))
+        assertEquals(
+            listOf(official, hfMirror),
+            MangaOcrModelInstaller.urlsFor("https://cdn.example/manga", file, LlmMirrorChoice.CUSTOM),
+        )
+    }
+
+    @Test
+    fun draftDecoder_needsTheExactSizeAndOnlyInstalledContentNeedsTheHash() {
+        val file = MangaOcrModelInstaller.FILE_DRAFT_DECODER
+        val exact = temp.newFile("exact.onnx").apply {
+            writeSparse(byteArrayOf(0x08, 0x01, 0x12, 0x00), MangaOcrModelInstaller.DRAFT_BYTES)
+        }
+        val short = temp.newFile("short.onnx").apply {
+            writeSparse(byteArrayOf(0x08, 0x01, 0x12, 0x00), MangaOcrModelInstaller.DRAFT_BYTES - 1)
+        }
+        val long = temp.newFile("long.onnx").apply {
+            writeSparse(byteArrayOf(0x08, 0x01, 0x12, 0x00), MangaOcrModelInstaller.DRAFT_BYTES + 1)
+        }
+
+        // The cheap check accepts the right size; the zero-filled content cannot match the pinned hash.
+        assertNull(MangaOcrModelInstaller.validateModelFile(file, exact))
+        assertTrue(MangaOcrModelInstaller.validateInstalledContent(file, exact)!!.contains("SHA-256 mismatch"))
+        assertTrue(MangaOcrModelInstaller.validateModelFile(file, short)!!.contains("too small"))
+        assertTrue(MangaOcrModelInstaller.validateModelFile(file, long)!!.contains("unexpected size"))
+        // Required files keep their old checks: no hash is pinned for them.
+        val encoder = temp.newFile("encoder.onnx").apply {
+            writeSparse(byteArrayOf(0x08, 0x01, 0x12, 0x00), 11 * 1024 * 1024L)
+        }
+        assertNull(MangaOcrModelInstaller.validateInstalledContent(MangaOcrModelInstaller.FILE_ENCODER, encoder))
+    }
+
     private fun validVocab(): String = buildString {
         append("[PAD]\n")
         append("[UNK]\n")

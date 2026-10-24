@@ -34,13 +34,12 @@ class SettingsSecretCodecTest {
     }
 
     @Test
-    fun nonCredentialMetadata_remainsSaveableWhenCipherIsUnavailable() {
+    fun nonCredentialMetadata_doesNotFallBackToPlaintextWhenCipherIsUnavailable() {
         val unavailableCodec = SettingsSecretCodec(UnavailableCipher())
 
-        val stored = unavailableCodec.encryptPlainText("still-saveable")
-
-        assertEquals("still-saveable", stored)
-        assertFalse(unavailableCodec.isEncrypted(stored))
+        org.junit.Assert.assertThrows(SettingsSecretStorageException::class.java) {
+            unavailableCodec.encryptPlainText("must-remain-encrypted")
+        }
     }
 
     @Test
@@ -60,9 +59,11 @@ class SettingsSecretCodecTest {
         )
         cases.forEachIndexed { index, (cipher, value) ->
             val codec = SettingsSecretCodec(cipher)
-            val stored = codec.encryptCredential(value)
-            if (index == 0) assertEquals(value, codec.decodeStored(stored))
-            else assertEquals("case $index", "", stored)
+            if (index == 0) assertEquals(value, codec.decodeStored(codec.encryptCredential(value)))
+            else if (value.isEmpty()) assertEquals("", codec.encryptCredential(value))
+            else org.junit.Assert.assertThrows("case $index", SettingsSecretStorageException::class.java) {
+                codec.encryptCredential(value)
+            }
         }
     }
 

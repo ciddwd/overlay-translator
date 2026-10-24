@@ -22,7 +22,7 @@ class VerticalTextPreservationPolicyTest {
         }
         org.junit.Assert.assertTrue(
             "Manga OCR free text may use user-requested geometric merging without deletion",
-            source.contains("mergeStandaloneFreeText = kind == OcrEngineKind.MANGA_OCR_JA"),
+            source.contains("val mergeMangaFreeText = autoResult?.manga ?: (kind == OcrEngineKind.MANGA_OCR_JA)"),
         )
     }
 

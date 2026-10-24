@@ -19,6 +19,7 @@ object OcrEngineCatalog {
         OcrEngineOption(OcrEngineKind.ML_KIT_KOREAN, R.string.settings_ocr_chip_korean, OcrEngineGroup.ON_DEVICE),
         OcrEngineOption(OcrEngineKind.ML_KIT_CHINESE, R.string.settings_ocr_chip_chinese, OcrEngineGroup.ON_DEVICE),
         OcrEngineOption(OcrEngineKind.ML_KIT_LATIN, R.string.settings_ocr_chip_latin, OcrEngineGroup.ON_DEVICE),
+        OcrEngineOption(OcrEngineKind.ML_KIT_DEVANAGARI, R.string.settings_ocr_chip_devanagari, OcrEngineGroup.ON_DEVICE),
         OcrEngineOption(OcrEngineKind.PADDLE_ONNX, R.string.settings_ocr_chip_paddle, OcrEngineGroup.ON_DEVICE),
         OcrEngineOption(OcrEngineKind.MANGA_OCR_JA, R.string.settings_ocr_chip_manga_ocr_ja, OcrEngineGroup.ON_DEVICE),
         OcrEngineOption(OcrEngineKind.UMI_OCR, R.string.settings_ocr_chip_umi, OcrEngineGroup.LOCAL),
@@ -32,6 +33,11 @@ object OcrEngineCatalog {
     fun option(engine: OcrEngineKind): OcrEngineOption = options.first { it.engine == engine }
 
     fun optionsIn(group: OcrEngineGroup): List<OcrEngineOption> = options.filter { it.group == group }
+
+    val downloadable = setOf(OcrEngineKind.ML_KIT_DEVANAGARI)
+
+    fun quickOptions(group: OcrEngineGroup, downloaded: Set<OcrEngineKind>): List<OcrEngineOption> =
+        optionsIn(group).filter { it.engine !in downloadable || it.engine in downloaded }
 
     // Automatic routing cannot select itself. Every other outer option stays visible,
     // including missing models; language compatibility only affects selection/runtime.

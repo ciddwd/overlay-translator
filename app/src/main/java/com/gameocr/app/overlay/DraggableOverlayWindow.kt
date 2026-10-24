@@ -114,6 +114,8 @@ class DraggableOverlayWindow(
     private var dialog: Dialog? = null
     private var layoutParams: WindowManager.LayoutParams? = null
     private var contentSlot: FrameLayout? = null
+    /** The shell's scroll container; speech records keep or follow the reading position in it. */
+    private var contentScroll: ScrollView? = null
     private var transientLayer: FrameLayout? = null
     private var wordPreviewView: View? = null
     private var wordPreviewDismissAction: (() -> Unit)? = null
@@ -199,6 +201,7 @@ class DraggableOverlayWindow(
         val showResult = showDialogHost(root, params)
         if (showResult.isFailure) {
             contentSlot = null
+            contentScroll = null
             headerView = null
             footerView = null
             lockButtonView = null
@@ -253,6 +256,8 @@ class DraggableOverlayWindow(
         initialY = newY
         persistGeometry()
     }
+
+    internal fun contentScrollView(): ScrollView? = contentScroll
 
     /** 替换内容区 View。不重建 window，避免每次切换内容都触发闪烁。 */
     fun setContent(content: View) {
@@ -520,6 +525,7 @@ class DraggableOverlayWindow(
         rootView = null
         layoutParams = null
         contentSlot = null
+        contentScroll = null
         transientLayer = null
         headerView = null
         footerView = null
@@ -626,6 +632,7 @@ class DraggableOverlayWindow(
             )
         }
         contentSlot = slot
+        contentScroll = scroll
         wrap.addView(
             scroll,
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
@@ -864,7 +871,7 @@ class DraggableOverlayWindow(
         locked = newLocked
         applyLocked()
         ioScope.launch {
-            settingsRepository.update { it.copy(floatingWindowLocked = newLocked) }
+            settingsRepository.tryUpdate { it.copy(floatingWindowLocked = newLocked) }
         }
     }
 
@@ -972,7 +979,7 @@ class DraggableOverlayWindow(
         val w = widthDp
         val h = heightDp
         ioScope.launch {
-            settingsRepository.update {
+            settingsRepository.tryUpdate {
                 it.copy(
                     floatingWindowX = x,
                     floatingWindowY = y,

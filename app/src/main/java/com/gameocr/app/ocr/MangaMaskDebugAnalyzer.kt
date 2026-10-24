@@ -42,6 +42,8 @@ internal object MangaMaskDebugAnalyzer {
          * attempted only when the first crop leaks at its boundary.
          */
         val useExactSearchBounds: Boolean = false,
+        /** Limits a detector recovery to its conservative interior; pixels still define the shape. */
+        val interiorConstraint: BubbleSegmentationPostprocessor.InstanceMask? = null,
     )
 
     data class BubbleDiagnostic(
@@ -207,7 +209,8 @@ internal object MangaMaskDebugAnalyzer {
         polygons.forEach { polygon ->
             val bounds = clamp(polygon.bounds, width, height)
             if (bounds.width <= 0 || bounds.height <= 0) return@forEach
-            val samples = mutableListOf<Int>()
+            val sampleHistogram = IntArray(256)
+            var sampleCount = 0
             val localSize = bounds.width * bounds.height
             val localArgb = IntArray(localSize)
             val localSupport = BooleanArray(localSize)
@@ -223,7 +226,8 @@ internal object MangaMaskDebugAnalyzer {
                     localSupport[localIndex] = inside
                     if (inside) polygonMask[index] = true
                     if (inside && probabilityTextMask[index]) {
-                        samples += luminance(argb[index])
+                        sampleHistogram[luminance(argb[index])]++
+                        sampleCount++
                     }
                 }
             }
@@ -236,8 +240,9 @@ internal object MangaMaskDebugAnalyzer {
                 localSupport = localSupport,
             )
             val selection = foregroundSelection(
-                samples = samples,
-                surroundingSamples = surroundingColors.map(::luminance),
+                histogram = sampleHistogram,
+                total = sampleCount,
+                surroundingColors = surroundingColors,
             )
             for (y in bounds.top until bounds.bottom) {
                 for (x in bounds.left until bounds.right) {
@@ -255,7 +260,7 @@ internal object MangaMaskDebugAnalyzer {
                     argb = localArgb,
                     strongMask = localStrong,
                     supportMask = localSupport,
-                    backgroundSamples = surroundingColors.toIntArray(),
+                    backgroundSamples = surroundingColors,
                 ).mask
             } else {
                 localStrong
@@ -301,16 +306,14 @@ internal object MangaMaskDebugAnalyzer {
      * ink on a dark balloon). Low-contrast regions keep the DBNet mask as a conservative fallback.
      */
     private fun foregroundSelection(
-        samples: List<Int>,
-        surroundingSamples: List<Int>,
+        histogram: IntArray,
+        total: Int,
+        surroundingColors: IntArray,
     ): ForegroundSelection? {
-        if (samples.size < MIN_TEXT_LUMINANCE_SAMPLES) return null
-        val histogram = IntArray(256)
-        samples.forEach { histogram[it.coerceIn(0, 255)]++ }
-        val low = histogramValueAt(histogram, (samples.lastIndex * 0.1f).roundToInt())
-        val high = histogramValueAt(histogram, (samples.lastIndex * 0.9f).roundToInt())
+        if (total < MIN_TEXT_LUMINANCE_SAMPLES) return null
+        val low = histogramValueAt(histogram, ((total - 1) * 0.1f).roundToInt())
+        val high = histogramValueAt(histogram, ((total - 1) * 0.9f).roundToInt())
         if (high - low < MIN_TEXT_LUMINANCE_CONTRAST) return null
-        val total = samples.size
         var totalWeighted = 0L
         histogram.forEachIndexed { value, count -> totalWeighted += value.toLong() * count }
         var backgroundWeight = 0
@@ -335,11 +338,11 @@ internal object MangaMaskDebugAnalyzer {
         }
         val darkCount = (0..bestThreshold).sumOf { histogram[it] }
         val lightCount = total - darkCount
-        val surroundingBackground = surroundingSamples
+        val surroundingBackground = surroundingColors
             .takeIf { it.size >= MIN_SURROUNDING_LUMINANCE_SAMPLES }
             ?.let { surrounding ->
                 val surroundingHistogram = IntArray(256)
-                surrounding.forEach { surroundingHistogram[it]++ }
+                surrounding.forEach { surroundingHistogram[luminance(it)]++ }
                 histogramValueAt(surroundingHistogram, surrounding.size / 2)
             }
         val darkForeground = if (
@@ -383,7 +386,7 @@ internal object MangaMaskDebugAnalyzer {
         probabilityTextMask: BooleanArray,
         polygon: Polygon,
         localSupport: BooleanArray,
-    ): List<Int> {
+    ): IntArray {
         val bounds = clamp(polygon.bounds, width, height)
         val margin = (minOf(bounds.width, bounds.height) * SURROUNDING_SAMPLE_MARGIN_RATIO)
             .roundToInt()
@@ -398,7 +401,9 @@ internal object MangaMaskDebugAnalyzer {
             width,
             height,
         )
-        val samples = mutableListOf<Int>()
+        // Primitive storage avoids boxing every ARGB pixel during the first full-page pass.
+        val samples = IntArray(expanded.width * expanded.height)
+        var sampleCount = 0
         for (y in expanded.top until expanded.bottom) {
             for (x in expanded.left until expanded.right) {
                 val index = y * width + x
@@ -406,10 +411,10 @@ internal object MangaMaskDebugAnalyzer {
                 if (x in bounds.left until bounds.right && y in bounds.top until bounds.bottom &&
                     localSupport[(y - bounds.top) * bounds.width + x - bounds.left]
                 ) continue
-                samples += argb[index]
+                samples[sampleCount++] = argb[index]
             }
         }
-        return samples
+        return samples.copyOf(sampleCount)
     }
 
     private fun estimateBubble(
@@ -508,6 +513,11 @@ internal object MangaMaskDebugAnalyzer {
             )
             timing?.let { it.luminanceNs += System.nanoTime() - luminanceStartedAtNs }
             val candidate = BooleanArray(roi.width * roi.height)
+            val allowedInterior = bubble.interiorConstraint?.let { constraint ->
+                BooleanArray(candidate.size) { index ->
+                    constraint.contains(roi.left + index % roi.width, roi.top + index / roi.width)
+                }
+            }
             val workQueue = IntArray(candidate.size)
             var bestRegion: BooleanArray? = null
             var bestRegionPixels = 0
@@ -521,6 +531,7 @@ internal object MangaMaskDebugAnalyzer {
                 val minimumLuminance = minimumCandidateLuminance(background, profile)
                 for (localIndex in candidate.indices) {
                     candidate[localIndex] =
+                        (allowedInterior == null || allowedInterior[localIndex]) &&
                         roiFeatures.colorDistanceSquared[localIndex].toFloat() <=
                         maximumColorDistanceSquared &&
                         roiFeatures.luminances[localIndex] >= minimumLuminance
@@ -528,7 +539,7 @@ internal object MangaMaskDebugAnalyzer {
                 timing?.let { it.candidateBuildNs += System.nanoTime() - candidateStartedAtNs }
 
                 val seedStartedAtNs = System.nanoTime()
-                val seeds = seedCandidates.mapNotNull { it.nearest(candidate, roi) }.distinct()
+                val seeds = seedCandidates.flatMap { it.spatialSeeds(candidate, roi) }.distinct()
                 timing?.let { it.seedNs += System.nanoTime() - seedStartedAtNs }
                 if (seeds.isEmpty()) {
                     lastReason = "no_background_seed"
@@ -578,6 +589,7 @@ internal object MangaMaskDebugAnalyzer {
                 luminances = roiFeatures.luminances,
                 queue = workQueue,
                 seedCandidates = seedCandidates,
+                allowedInterior = allowedInterior,
             )
             timing?.let { it.edgeNs += System.nanoTime() - edgeStartedAtNs }
             if (edgeAttempt.regionPixels > lastPixels) {
@@ -610,7 +622,25 @@ internal object MangaMaskDebugAnalyzer {
             )
             timing?.let { it.fillNs += System.nanoTime() - fillStartedAtNs }
             val filled = filledRegion.mask
-            val regionPixels = filledRegion.pixelCount
+            if (allowedInterior != null) {
+                // Recover glyph holes only. Filling all enclosed holes could admit a closed
+                // outline or artwork inside the detector's approximate ellipse.
+                val textSupport = rasterizePolygons(
+                    width = roi.width,
+                    height = roi.height,
+                    polygons = members.map { polygon ->
+                        Polygon(polygon.points.map { point ->
+                            Point(point.x - roi.left, point.y - roi.top)
+                        })
+                    },
+                )
+                for (index in filled.indices) {
+                    filled[index] = allowedInterior[index] &&
+                        (selectedRegion[index] || (filled[index] && textSupport[index]))
+                }
+            }
+            val regionPixels = if (allowedInterior == null) filledRegion.pixelCount
+                else filled.count { it }
             val coverageStartedAtNs = System.nanoTime()
             val memberCoverage = memberRegionCoverage(
                 region = filled,
@@ -828,6 +858,7 @@ internal object MangaMaskDebugAnalyzer {
         luminances: IntArray? = null,
         queue: IntArray? = null,
         seedCandidates: List<MangaSeedSearchOrder>? = null,
+        allowedInterior: BooleanArray? = null,
     ): EdgeRegionAttempt {
         val localLuminances = luminances ?: extractLuminances(argb, imageWidth, roi)
         require(localLuminances.size == roi.width * roi.height)
@@ -853,7 +884,9 @@ internal object MangaMaskDebugAnalyzer {
             height = roi.height,
             radius = EDGE_BARRIER_DILATION_PX,
         )
-        val walkable = BooleanArray(sealedBarrier.size) { index -> !sealedBarrier[index] }
+        val walkable = BooleanArray(sealedBarrier.size) { index ->
+            !sealedBarrier[index] && (allowedInterior == null || allowedInterior[index])
+        }
         val reusableSeeds = seedCandidates ?: members.map { polygon ->
             buildSeedCandidates(
                 polygon = polygon,
@@ -861,7 +894,7 @@ internal object MangaMaskDebugAnalyzer {
                 imageHeight = argb.size / imageWidth,
             )
         }
-        val seeds = reusableSeeds.mapNotNull { it.nearest(walkable, roi) }.distinct()
+        val seeds = reusableSeeds.flatMap { it.spatialSeeds(walkable, roi) }.distinct()
         if (seeds.isEmpty()) {
             return EdgeRegionAttempt(null, 0, "edge_no_seed", false)
         }

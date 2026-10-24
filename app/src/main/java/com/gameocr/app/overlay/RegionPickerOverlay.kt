@@ -5,8 +5,13 @@ import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
+import android.hardware.display.DisplayManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
 import android.util.TypedValue
+import android.view.Display
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.ViewGroup
@@ -16,6 +21,8 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import com.gameocr.app.R
 import com.gameocr.app.capture.RegionPickerView
+import com.gameocr.app.data.AppLocalePrefs
+import com.gameocr.app.util.physicalDisplaySize
 
 /**
  * 悬浮窗版区域选择。复用 [RegionPickerView] + 同款 toolbar，但用 [WindowManager.addView]
@@ -35,24 +42,32 @@ class RegionPickerOverlay(private val context: Context) {
         WindowManager.LayoutParams.TYPE_PHONE
     }
 
-    /**
-     * 拿跟随屏幕旋转的 WindowManager（仿 [com.gameocr.app.overlay.FloatingButtonManager]）。
-     * Service / Application context 的默认 WindowManager 不跟随旋转——横屏 cutout 让出 inset 后
-     * window 原点被推到物理 cutout 之后，左边露出物理屏黑边。API 31+ 用
-     * `createWindowContext(display, type, options)` 拿挂在指定 display 上的 context，其 WM
-     * 会跟随该 display 当前方向。API < 31 退回默认 wm（已知 limitation）。
-     */
-    private val wm: WindowManager by lazy {
-        val defaultWm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return@lazy defaultWm
+    // The views and their WindowManager must share the same visual configuration. A Service
+    // context can retain portrait maxBounds even while the overlay's display is landscape.
+    private val windowContext: Context by lazy {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return@lazy context
         runCatching {
-            val dm = context.getSystemService(Context.DISPLAY_SERVICE)
-                as android.hardware.display.DisplayManager
-            val display = dm.getDisplay(android.view.Display.DEFAULT_DISPLAY)
-                ?: return@runCatching defaultWm
-            val windowContext = context.createWindowContext(display, overlayType, null)
-            windowContext.getSystemService(WindowManager::class.java) ?: defaultWm
-        }.getOrElse { defaultWm }
+            val display = displayManager?.getDisplay(Display.DEFAULT_DISPLAY)
+                ?: return@runCatching context
+            context.createWindowContext(display, overlayType, null)
+        }.getOrElse {
+            Log.w("RegionPicker", "Could not create a display-bound window context", it)
+            context
+        }
+    }
+    private val viewContext: Context by lazy { AppLocalePrefs.live(windowContext) }
+    private val wm: WindowManager by lazy {
+        windowContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+    }
+    private val displayManager = context.getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var observingDisplay = false
+    private val displayListener = object : DisplayManager.DisplayListener {
+        override fun onDisplayAdded(displayId: Int) = onDisplayChanged(displayId)
+        override fun onDisplayRemoved(displayId: Int) = Unit
+        override fun onDisplayChanged(displayId: Int) {
+            if (displayId == Display.DEFAULT_DISPLAY) onConfigurationChanged()
+        }
     }
 
     private var container: FrameLayout? = null
@@ -71,7 +86,7 @@ class RegionPickerOverlay(private val context: Context) {
 
         lateinit var doClearAll: () -> Unit
         val picker = RegionPickerView(
-            context = context,
+            context = viewContext,
             initial = initial,
             onCancel = onCancel,
             onClearAllRequested = { doClearAll() }
@@ -87,7 +102,18 @@ class RegionPickerOverlay(private val context: Context) {
 
         // 自定义 FrameLayout：拦截返回键 = 取消框选。
         // window 去掉了 FLAG_NOT_FOCUSABLE 才能拿到按键事件，否则返回键漏到底层 app（游戏）。
-        val root = object : FrameLayout(context) {
+        val root = object : FrameLayout(viewContext) {
+            override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+                super.onConfigurationChanged(newConfig)
+                Log.i("RegionPicker", "configuration orientation=${newConfig.orientation}")
+                this@RegionPickerOverlay.onConfigurationChanged()
+            }
+
+            override fun onDetachedFromWindow() {
+                if (container === this) stopObservingDisplay()
+                super.onDetachedFromWindow()
+            }
+
             override fun dispatchKeyEvent(event: KeyEvent): Boolean {
                 if (event.keyCode == KeyEvent.KEYCODE_BACK) {
                     if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) {
@@ -144,6 +170,12 @@ class RegionPickerOverlay(private val context: Context) {
             placeToolbar(root, toolbar, rect)
         }
         picker.onRectChanged = updateToolbarPos
+        root.addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+            if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) {
+                Log.i("RegionPicker", "laidOut=${right - left}x${bottom - top}")
+                root.post { updateToolbarPos(picker.currentRect()) }
+            }
+        }
         root.post { updateToolbarPos(picker.currentRect()) }
 
         // 拿屏幕物理真实分辨率（不受 inset / system bar / cutout 让位影响）。
@@ -165,6 +197,7 @@ class RegionPickerOverlay(private val context: Context) {
         ).apply {
             gravity = Gravity.TOP or Gravity.START
             x = 0; y = 0
+            title = "RegionPicker"
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
             }
@@ -173,26 +206,74 @@ class RegionPickerOverlay(private val context: Context) {
                 fitInsetsSides = 0
             }
         }
-        runCatching { wm.addView(root, params) }
+        runCatching {
+            wm.addView(root, params)
+            startObservingDisplay()
+            onConfigurationChanged()
+            Log.i("RegionPicker", "shown requested=${physW}x${physH}")
+        }.onFailure {
+            Log.w("RegionPicker", "Could not show the editor window", it)
+            dismiss()
+            onCancel()
+        }
     }
 
-    /** 屏幕物理真实分辨率。直接用 [android.view.Display.getRealMetrics]——这是 framework 原生接口，
-     *  返回的是物理屏的真实分辨率，跟 cutout / system bar / inset 无关。
-     *  比 [WindowManager.getCurrentWindowMetrics] 可靠：后者在挂 window context 的 wm 上可能返回
-     *  工作区而非物理屏（HyperOS 横屏实测）。 */
+    /** The editor uses explicit physical bounds, so an attached window must be resized too. */
+    fun onConfigurationChanged() {
+        val root = container ?: return
+        refreshDisplayBounds(root)
+        // The display event and the window's configuration can arrive in either order.
+        root.post { if (container === root) refreshDisplayBounds(root) }
+    }
+
+    private fun startObservingDisplay() {
+        if (observingDisplay) return
+        val manager = displayManager ?: return
+        manager.registerDisplayListener(displayListener, mainHandler)
+        observingDisplay = true
+    }
+
+    private fun stopObservingDisplay() {
+        if (!observingDisplay) return
+        displayManager?.unregisterDisplayListener(displayListener)
+        observingDisplay = false
+    }
+
+    private fun refreshDisplayBounds(root: FrameLayout) {
+        if (container !== root) return
+        val params = root.layoutParams as? WindowManager.LayoutParams ?: return
+        val (width, height) = physicalScreenSize()
+        if (params.width == width && params.height == height) return
+        val previousWidth = params.width
+        val previousHeight = params.height
+        params.width = width
+        params.height = height
+        params.x = 0
+        params.y = 0
+        runCatching {
+            wm.updateViewLayout(root, params)
+            Log.i("RegionPicker", "resized=${previousWidth}x${previousHeight}->${width}x${height} " +
+                "view=${root.width}x${root.height}")
+        }.onFailure {
+            params.width = previousWidth
+            params.height = previousHeight
+            Log.w("RegionPicker", "Could not resize the editor window", it)
+        }
+    }
+
+    // The service receives current display bounds even when a ROM leaves an existing
+    // WindowContext at its creation-time bounds. Read them again for every update;
+    // the same source is used when opening the editor and saving the region's coordinate basis.
     private fun physicalScreenSize(): Pair<Int, Int> {
-        val dm = android.util.DisplayMetrics()
-        val displayManager = context.getSystemService(Context.DISPLAY_SERVICE)
-            as android.hardware.display.DisplayManager
-        val display = displayManager.getDisplay(android.view.Display.DEFAULT_DISPLAY)
-        @Suppress("DEPRECATION")
-        display.getRealMetrics(dm)
-        return dm.widthPixels to dm.heightPixels
+        val size = physicalDisplaySize(context)
+        return size.width to size.height
     }
 
     fun dismiss() {
-        container?.let { runCatching { wm.removeView(it) } }
+        stopObservingDisplay()
+        val root = container
         container = null
+        root?.let { runCatching { wm.removeView(it) } }
     }
 
     private fun buildToolbar(
@@ -204,18 +285,18 @@ class RegionPickerOverlay(private val context: Context) {
             cornerRadius = dp(28).toFloat()
             setColor(0xCC222222.toInt())
         }
-        return LinearLayout(context).apply {
+        return LinearLayout(viewContext).apply {
             orientation = LinearLayout.HORIZONTAL
             background = bg
             setPadding(dp(8), dp(8), dp(8), dp(8))
-            addView(buildButton(context.getString(R.string.region_picker_btn_redo), onRedo))
-            addView(buildButton(context.getString(R.string.region_picker_btn_cancel), onCancel))
-            addView(buildButton(context.getString(R.string.region_picker_btn_confirm), onConfirm, primary = true))
+            addView(buildButton(viewContext.getString(R.string.region_picker_btn_redo), onRedo))
+            addView(buildButton(viewContext.getString(R.string.region_picker_btn_cancel), onCancel))
+            addView(buildButton(viewContext.getString(R.string.region_picker_btn_confirm), onConfirm, primary = true))
         }
     }
 
     private fun buildButton(text: String, onClick: () -> Unit, primary: Boolean = false): Button {
-        return Button(context).apply {
+        return Button(viewContext).apply {
             this.text = text
             isAllCaps = false
             setTextColor(if (primary) Color.WHITE else 0xFFE0E0E0.toInt())
@@ -238,6 +319,7 @@ class RegionPickerOverlay(private val context: Context) {
 
     /** rect 变化时把 toolbar 重新摆位（贴 rect 下方/上方/底部，避开选区）。 */
     private fun placeToolbar(container: FrameLayout, toolbar: ViewGroup, rect: Rect?) {
+        if (this.container !== container) return
         val parentW = container.width
         val parentH = container.height
         val tbW = toolbar.width
@@ -255,10 +337,13 @@ class RegionPickerOverlay(private val context: Context) {
             if (top + tbH > parentH - safe) {
                 top = rect.top - gap - tbH
             }
-            if (top < safe) {
-                top = parentH - safe - tbH
-            }
-            val left = (rect.centerX() - tbW / 2).coerceIn(safe, parentW - tbW - safe)
+            if (top < safe) top = parentH - safe - tbH
+            val minLeft = safe.coerceAtMost((parentW - tbW).coerceAtLeast(0))
+            val maxLeft = (parentW - tbW - safe).coerceAtLeast(minLeft)
+            val minTop = safe.coerceAtMost((parentH - tbH).coerceAtLeast(0))
+            val maxTop = (parentH - tbH - safe).coerceAtLeast(minTop)
+            val left = (rect.centerX() - tbW / 2).coerceIn(minLeft, maxLeft)
+            top = top.coerceIn(minTop, maxTop)
             lp.gravity = Gravity.TOP or Gravity.START
             lp.leftMargin = left
             lp.topMargin = top
@@ -276,6 +361,6 @@ class RegionPickerOverlay(private val context: Context) {
 
     private fun dp(v: Int): Int =
         TypedValue.applyDimension(
-            TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), context.resources.displayMetrics
+            TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), viewContext.resources.displayMetrics
         ).toInt()
 }

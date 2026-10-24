@@ -41,6 +41,8 @@ class LocalLlamaTranslationCacheKeyTest {
         val cases = listOf(
             Case(name = "source text", source = "こんばんは"),
             Case(name = "model kind", modelKind = LlmModelKind.HY_MT2_1_8B_Q4_K_M),
+            Case(name = "Index model", modelKind = LlmModelKind.INDEX_TRANSLATE_2B_Q4_K_M),
+            Case(name = "Qwen model", modelKind = LlmModelKind.QWEN3_0_6B_Q8_0),
             Case(name = "source language", sourceLang = "en"),
             Case(name = "target language", targetLang = "zh-TW"),
             Case(name = "max new tokens", maxNewTokens = 128),

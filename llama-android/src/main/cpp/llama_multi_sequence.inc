@@ -29,16 +29,12 @@ struct gameocr_multi_sequence_state {
 };
 
 struct gameocr_multi_resources {
-    llama_batch batch{};
-    bool batch_initialized = false;
+    common_batch batch;
     std::vector<common_sampler *> samplers;
 
     ~gameocr_multi_resources() {
         for (auto * sampler : samplers) {
             common_sampler_free(sampler);
-        }
-        if (batch_initialized) {
-            llama_batch_free(batch);
         }
     }
 };
@@ -302,8 +298,7 @@ Java_com_gameocr_app_llm_LlamaMultiSequence_generateNative(
     // user prefix must never leak into the next generation.
     llama_memory_seq_rm(memory, 0, system_prompt_position, -1);
     gameocr_multi_resources resources;
-    resources.batch = llama_batch_init(std::max(decoded_prompt_tokens, sequence_count), 0, 1);
-    resources.batch_initialized = true;
+    resources.batch = common_batch(g_context);
     resources.samplers.reserve(sequence_count);
     for (auto & sequence : sequences) {
         sequence.sampler = new_sampler(DEFAULT_SAMPLER_TEMP);
@@ -316,17 +311,16 @@ Java_com_gameocr_app_llm_LlamaMultiSequence_generateNative(
     llama_perf_context_reset(g_context);
     const int64_t prefill_started_us = ggml_time_us();
     if (shared_prefix_tokens > 0) {
-        common_batch_clear(resources.batch);
+        resources.batch.clear();
         int32_t position = system_prompt_position;
         for (size_t token_index = 0; token_index < shared_prefix_tokens; ++token_index) {
-            common_batch_add(
-                    resources.batch,
+            resources.batch.add(
                     sequences.front().prompt_tokens[token_index],
                     position++,
-                    {0},
+                    0,
                     false);
         }
-        if (llama_decode(g_context, resources.batch) != 0) {
+        if (llama_process(g_context, LLAMA_PROCESS_TYPE_DECODE, resources.batch.get()) != 0) {
             return gameocr_multi_fail("shared_prefix_decode", sequence_count);
         }
     }
@@ -341,7 +335,7 @@ Java_com_gameocr_app_llm_LlamaMultiSequence_generateNative(
         }
     }
 
-    common_batch_clear(resources.batch);
+    resources.batch.clear();
     for (auto & sequence : sequences) {
         int32_t position = system_prompt_position + (int32_t) shared_prefix_tokens;
         for (size_t token_index = shared_prefix_tokens;
@@ -349,18 +343,17 @@ Java_com_gameocr_app_llm_LlamaMultiSequence_generateNative(
                 ++token_index) {
             const bool want_logits = token_index + 1 == sequence.prompt_tokens.size();
             if (want_logits) {
-                sequence.logit_index = resources.batch.n_tokens;
+                sequence.logit_index = resources.batch.size();
             }
-            common_batch_add(
-                    resources.batch,
+            resources.batch.add(
                     sequence.prompt_tokens[token_index],
                     position++,
-                    {sequence.seq_id},
+                    sequence.seq_id,
                     want_logits);
         }
     }
 
-    if (llama_decode(g_context, resources.batch) != 0) {
+    if (llama_process(g_context, LLAMA_PROCESS_TYPE_DECODE, resources.batch.get()) != 0) {
         return gameocr_multi_fail("prefill_decode", sequence_count);
     }
     const int64_t prefill_finished_us = ggml_time_us();
@@ -420,29 +413,28 @@ Java_com_gameocr_app_llm_LlamaMultiSequence_generateNative(
             return;
         }
 
-        sequence.logit_index = resources.batch.n_tokens;
-        common_batch_add(
-                resources.batch,
+        sequence.logit_index = resources.batch.size();
+        resources.batch.add(
                 token,
                 sequence.position++,
-                {sequence.seq_id},
+                sequence.seq_id,
                 true);
     };
 
-    common_batch_clear(resources.batch);
+    resources.batch.clear();
     for (auto & sequence : sequences) {
         sample_next(sequence, sequence.logit_index);
     }
 
-    while (resources.batch.n_tokens > 0) {
+    while (resources.batch.size() > 0) {
         const int64_t decode_started_us = ggml_time_us();
-        if (llama_decode(g_context, resources.batch) != 0) {
+        if (llama_process(g_context, LLAMA_PROCESS_TYPE_DECODE, resources.batch.get()) != 0) {
             return gameocr_multi_fail("generation_decode", sequence_count);
         }
         generation_decode_us += ggml_time_us() - decode_started_us;
         generation_decode_calls += 1;
 
-        common_batch_clear(resources.batch);
+        resources.batch.clear();
         for (auto & sequence : sequences) {
             if (!sequence.finished) {
                 sample_next(sequence, sequence.logit_index);

@@ -43,14 +43,12 @@ class AccessibilityStatusUiTest {
             settings.windowed("enabled = !accessibilityServiceEnabled".length)
                 .count { it == "enabled = !accessibilityServiceEnabled" },
         )
-        val statusCard = main.substring(
-            main.indexOf("private fun StatusCard("),
-            main.indexOf("internal fun PresetCarouselCard("),
-        )
+        val captureCard = moduleFile("src/main/java/com/gameocr/app/ui/CaptureServiceCard.kt").readText()
         assertFalse(
-            "current status must not render accessibility service",
-            statusCard.contains("R.string.main_status_accessibility_service"),
+            "key status tiles must not render accessibility service",
+            captureCard.contains("R.string.main_status_accessibility_service"),
         )
+        assertFalse("the long current-status card is gone", main.contains("private fun StatusCard("))
     }
 
     @Test

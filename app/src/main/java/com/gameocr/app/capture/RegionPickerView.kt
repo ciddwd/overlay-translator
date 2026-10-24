@@ -112,6 +112,8 @@ class RegionPickerView(
     private var dragDownX = 0f
     private var dragDownY = 0f
     private var lastTapTime = 0L
+    private var waitForNewTouch = false
+    private val viewport = RegionPickerViewport()
 
     init {
         setLayerType(LAYER_TYPE_SOFTWARE, null) // PorterDuff.CLEAR 需要 software layer
@@ -136,13 +138,21 @@ class RegionPickerView(
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
-        // 视图尺寸已知后，把外部传来的 initial 夹回边界；首次 layout 才会跑到这里
-        rect?.let { r ->
-            r.left = r.left.coerceIn(0, w - minSide)
-            r.top = r.top.coerceIn(0, h - minSide)
-            r.right = r.right.coerceIn(r.left + minSide, w)
-            r.bottom = r.bottom.coerceIn(r.top + minSide, h)
-        }
+        if (w <= 0 || h <= 0) return
+        val sizeChanged = viewport.width > 0 && viewport.height > 0 &&
+            (w != viewport.width || h != viewport.height)
+        val selection = rect?.takeIf { mode == Mode.ADJUSTING || (it.width() >= 20 && it.height() >= 20) }
+        rect = viewport.resize(
+            selection?.let { CaptureRegion(it.left, it.top, it.right, it.bottom) },
+            w, h, minSide,
+        )?.let { Rect(it.left, it.top, it.right, it.bottom) }
+        mode = if (rect == null) Mode.DRAWING else Mode.ADJUSTING
+        dragKind = DragKind.NONE
+        dragAnchor = null
+        lastTapTime = 0L
+        if (sizeChanged) waitForNewTouch = true
+        onRectChanged?.invoke(currentRect())
+        invalidate()
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -241,6 +251,10 @@ class RegionPickerView(
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (waitForNewTouch) {
+            if (event.actionMasked != MotionEvent.ACTION_DOWN) return true
+            waitForNewTouch = false
+        }
         return when (mode) {
             Mode.DRAWING -> onTouchDrawing(event)
             Mode.ADJUSTING -> onTouchAdjusting(event)

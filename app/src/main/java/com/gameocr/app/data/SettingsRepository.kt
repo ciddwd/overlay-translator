@@ -22,6 +22,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.retryWhen
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
@@ -33,7 +35,7 @@ private val Context.dataStore by preferencesDataStore("game_ocr_settings")
 private fun normalizeLoopFrameSimilarity(value: Float): Float =
     if (value.isFinite()) value.coerceIn(0.50f, 0.99f) else 0.95f
 
-private fun normalizeLoopTextStableDuration(value: Long): Long = value.coerceIn(200L, 2000L)
+private fun normalizeLoopTextStableDuration(value: Long): Long = value.coerceIn(100L, 2000L)
 
 @Singleton
 class SettingsRepository internal constructor(
@@ -48,6 +50,7 @@ class SettingsRepository internal constructor(
     private object Keys {
         val BaseUrl = stringPreferencesKey("base_url")
         val ApiKey = stringPreferencesKey("api_key")
+        val PresetCredentialsMigrated = booleanPreferencesKey("local_preset_credentials_migrated_v1")
         val Model = stringPreferencesKey("model")
         val AnthropicBaseUrl = stringPreferencesKey("anthropic_base_url")
         val AnthropicApiKey = stringPreferencesKey("anthropic_api_key")
@@ -61,6 +64,7 @@ class SettingsRepository internal constructor(
         val LoopInterval = longPreferencesKey("loop_interval_ms")
         val LoopTriggerMode = stringPreferencesKey("loop_trigger_mode")
         val LoopTextStableDuration = longPreferencesKey("loop_text_stable_duration_ms")
+        val LoopCaptureVibrationEnabled = booleanPreferencesKey("loop_capture_vibration_enabled")
         val LoopSkipSimilarFrames = booleanPreferencesKey("loop_skip_similar_frames")
         val LoopFrameSimilarityThreshold = floatPreferencesKey("loop_frame_similarity_threshold")
         val LoopTextRegionMode = stringPreferencesKey("loop_text_region_mode")
@@ -70,6 +74,7 @@ class SettingsRepository internal constructor(
         val PerformanceOverlayEnabled = booleanPreferencesKey("performance_overlay_enabled")
         val OcrScreenshotSavingEnabled = booleanPreferencesKey("ocr_screenshot_saving_enabled")
         val DisableTranslationCache = booleanPreferencesKey("disable_translation_cache")
+        val HideOcrNoTextHint = booleanPreferencesKey("hide_ocr_no_text_hint")
         val BatchCumulativeCompletionTimeEnabled =
             booleanPreferencesKey("batch_cumulative_completion_time_enabled")
         val TranslationContextMode = stringPreferencesKey("translation_context_mode")
@@ -155,6 +160,7 @@ class SettingsRepository internal constructor(
         val CustomBorder = intPreferencesKey("overlay_custom_border")
         val CustomBorderW = intPreferencesKey("overlay_custom_border_w")
         val TranslatorEng = stringPreferencesKey("translator_engine")
+        val OpenAiProvider = stringPreferencesKey("openai_provider")
         val DeeplKey = stringPreferencesKey("deepl_key")
         val DeeplPro = booleanPreferencesKey("deepl_pro")
         val DeeplProtocol = stringPreferencesKey("deepl_protocol")
@@ -224,10 +230,33 @@ class SettingsRepository internal constructor(
         // 弧菜单按钮顺序：逗号分隔 MenuItemId.name 列表。MenuItemId.name 不含逗号，分隔安全。
         val FloatingMenuOrder = stringPreferencesKey("floating_menu_item_order")
         val ArcMenuPageSize = intPreferencesKey("arc_menu_page_size")
+        val QuickPanelEnabled = booleanPreferencesKey("quick_panel_enabled")
         val TranslationPresets = stringPreferencesKey("translation_presets_json")
         val ActiveTranslationPresetId = stringPreferencesKey("active_translation_preset_id")
         // 主球当前技能（FULL_SCREEN / WORD_SELECT）
         val FloatingSkillKey = stringPreferencesKey("floating_button_skill")
+        val AsrEngine = stringPreferencesKey("asr_engine")
+        val AsrWhisperVariant = stringPreferencesKey("asr_whisper_variant")
+        val AsrCloudModel = stringPreferencesKey("asr_cloud_model")
+        val AsrCloudProvider = stringPreferencesKey("asr_cloud_provider")
+        val AsrCloudConnections = stringPreferencesKey("asr_cloud_connections")
+        val AsrEmptyConnectionDefaultsMigrated = booleanPreferencesKey("asr_empty_connection_defaults_migrated")
+        val AsrLanguage = stringPreferencesKey("asr_language")
+        val AsrSegmentation = stringPreferencesKey("asr_segmentation")
+        val AsrHints = stringPreferencesKey("asr_hints")
+        val AsrMaxDisplayedRecords = intPreferencesKey("asr_max_displayed_records")
+        val AsrDashScopeApiKey = stringPreferencesKey("asr_dashscope_api_key")
+        val GestureBindingsKey = stringPreferencesKey("gesture_bindings")
+        val GestureGlobalEnabled = booleanPreferencesKey("gesture_global_enabled")
+        val GestureEdgeEnabled = booleanPreferencesKey("gesture_edge_enabled")
+        val GestureEdgeRight = booleanPreferencesKey("gesture_edge_right")
+        val GestureEdgeHeight = intPreferencesKey("gesture_edge_height")
+        val GestureTwistEnabled = booleanPreferencesKey("gesture_twist_enabled")
+        val GestureTwistSensitivity = intPreferencesKey("gesture_twist_sensitivity")
+        val GestureTiltEnabled = booleanPreferencesKey("gesture_tilt_enabled")
+        val GestureTiltSensitivity = intPreferencesKey("gesture_tilt_sensitivity")
+        val GestureTwistAction = stringPreferencesKey("gesture_twist_action")
+        val GestureTiltAction = stringPreferencesKey("gesture_tilt_action")
         val InputTranslationDoubleAction =
             stringPreferencesKey("input_translation_double_action")
         // 划词翻译行为开关
@@ -245,12 +274,14 @@ class SettingsRepository internal constructor(
         // 端侧 LLM 推理参数
         val LocalLlmCtxSize = intPreferencesKey("local_llm_ctx_size")
         val LocalLlmMaxNewTokens = intPreferencesKey("local_llm_max_new_tokens")
+        val LocalModelId = stringPreferencesKey("local_model_id")
         val LocalLlmMirrorChoice = stringPreferencesKey("local_llm_mirror_choice")
         val LocalLlmMirror = stringPreferencesKey("local_llm_mirror_url")
         // DBNet 检测阈值：prob/score/gap 共用；unclip 按 Paddle/MangaOCR 分开。
         val DbnetProbThresh = floatPreferencesKey("dbnet_prob_thresh")
         val DbnetBoxScoreThresh = floatPreferencesKey("dbnet_box_score_thresh")
         val DbnetUnclipRatio = floatPreferencesKey("dbnet_unclip_ratio")
+        val DbnetModelDefaultsMigrated = booleanPreferencesKey("dbnet_model_defaults_migrated")
         val MangaOcrDbnetUnclipRatio = floatPreferencesKey("manga_ocr_dbnet_unclip_ratio")
         val BubbleClusterGap = intPreferencesKey("bubble_cluster_gap")
         val MangaOcrCropPaddingPx = intPreferencesKey("manga_ocr_crop_padding_px")
@@ -269,7 +300,7 @@ class SettingsRepository internal constructor(
         Keys.NiuTransApiKey, Keys.NiuTransAppId, Keys.YoudaoAppKey, Keys.YoudaoAppSecret,
         Keys.PaddleAiStudioToken, Keys.VolcAccessKeyId, Keys.VolcSecretAccessKey,
         Keys.BaiduFanyiAppId, Keys.BaiduFanyiSecretKey, Keys.TtsHttpBearerToken,
-        Keys.TtsVolcengineApiKey, Keys.TtsMiniMaxApiKey, Keys.TtsMimoApiKey,
+        Keys.TtsVolcengineApiKey, Keys.TtsMiniMaxApiKey, Keys.TtsMimoApiKey, Keys.AsrDashScopeApiKey, Keys.AsrCloudConnections,
     )
     private var defaultPromptProvider: () -> String = { context.getString(R.string.default_prompt) }
     private var defaultDictionaryPromptProvider: () -> String = {
@@ -311,6 +342,8 @@ class SettingsRepository internal constructor(
         Keys.TtsMiniMaxApiKey,
         Keys.TtsMimoBaseUrl,
         Keys.TtsMimoApiKey,
+        Keys.AsrDashScopeApiKey,
+        Keys.AsrCloudConnections,
         Keys.CleartextHosts,
         Keys.DictionaryPrompt,
         Keys.LocalLlmMirror,
@@ -319,6 +352,10 @@ class SettingsRepository internal constructor(
 
     val settings: Flow<Settings> = settingsStore.data
         .map { prefs -> prefs.toSettings() }
+        .retryWhen { error, _ ->
+            if (error !is SettingsSecretStorageException) false
+            else { delay(1_000); true }
+        }
         .flowOn(Dispatchers.IO)
 
     suspend fun get(): Settings = settings.first()
@@ -380,6 +417,7 @@ class SettingsRepository internal constructor(
     suspend fun migratePlaintextSecretsIfNeeded(): Int {
         var migrated = 0
         settingsStore.edit { prefs ->
+            prefs.requireReadableSecrets()
             secureStringKeys.forEach { key ->
                 val raw = prefs[key]
                 if (secretCodec.needsMigration(raw)) {
@@ -387,6 +425,7 @@ class SettingsRepository internal constructor(
                     migrated++
                 }
             }
+            prefs.migrateLegacyPresetCredentials(prefs.toSettings())
         }
         return migrated
     }
@@ -434,6 +473,42 @@ class SettingsRepository internal constructor(
                 prefs.putSecure(Keys.TranslationPresets, json.encodeToString(normalizedPresets))
                 changed = true
             }
+        }
+        return changed
+    }
+
+    /**
+     * One-shot: stored legacy app defaults (0.25 / 0.5 / 1.55) become "model default" so each
+     * detector runs with its official inference.yml thresholds. Explicit user values are kept.
+     */
+    suspend fun migrateDetectionThresholdsToModelDefaultsIfNeeded(): Boolean {
+        var changed = false
+        settingsStore.edit { prefs ->
+            if (prefs[Keys.DbnetModelDefaultsMigrated] == true) return@edit
+            listOf(
+                Keys.DbnetProbThresh to PaddleDetectionThresholdMigration::probThresh,
+                Keys.DbnetBoxScoreThresh to PaddleDetectionThresholdMigration::boxScoreThresh,
+                Keys.DbnetUnclipRatio to PaddleDetectionThresholdMigration::unclipRatio,
+            ).forEach { (key, migrate) ->
+                val stored = prefs[key] ?: return@forEach
+                if (migrate(stored) == null) {
+                    prefs.remove(key)
+                    changed = true
+                }
+            }
+            val storedPresets = prefs[Keys.TranslationPresets]
+                ?.let(secretCodec::decodeStored)
+                ?.takeIf(String::isNotBlank)
+                ?.let { raw ->
+                    runCatching { json.decodeFromString<List<TranslationPreset>>(raw) }
+                        .getOrNull()
+                }
+            val normalizedPresets = storedPresets?.map(PaddleDetectionThresholdMigration::normalize)
+            if (storedPresets != null && normalizedPresets != storedPresets) {
+                prefs.putSecure(Keys.TranslationPresets, json.encodeToString(normalizedPresets))
+                changed = true
+            }
+            prefs[Keys.DbnetModelDefaultsMigrated] = true
         }
         return changed
     }
@@ -550,7 +625,13 @@ class SettingsRepository internal constructor(
         ) }
     }
 
+    private fun MutablePreferences.putOrRemove(key: Preferences.Key<Float>, value: Float?) {
+        if (value == null) remove(key) else this[key] = value
+    }
+
     private fun MutablePreferences.putSecure(key: Preferences.Key<String>, value: String) {
+        val raw = this[key]
+        if (raw != null && secretCodec.isEncrypted(raw) && secretCodec.decodeForWrite(raw) == value) return
         this[key] = if (key in credentialStringKeys) secretCodec.encryptCredential(value)
             else secretCodec.encryptPlainText(value)
     }
@@ -558,11 +639,71 @@ class SettingsRepository internal constructor(
     // Kept outside both Settings and TranslationPreset: no export/diagnostic serializer sees these records.
     private fun presetCredentialKey(id: String) = stringPreferencesKey("local_preset_credentials_v1_$id")
 
-    private fun Preferences.presetCredentials(id: String): PresetCredentialRecord? =
-        this[presetCredentialKey(id)]?.takeIf(secretCodec::isEncrypted)
-            ?.let(secretCodec::decodeStored)?.let { raw ->
-                runCatching { json.decodeFromString<PresetCredentialRecord>(raw) }.getOrNull()
-            }?.takeIf { it.ownerId == id }
+    private fun Preferences.requireReadableSecrets() {
+        asMap().forEach { (key, value) ->
+            if ((key in secureStringKeys || key.name.startsWith("local_preset_credentials_v1_")) &&
+                value is String && secretCodec.isEncrypted(value)
+            ) secretCodec.decodeForWrite(value)
+        }
+    }
+
+    private fun Preferences.presetCredentials(id: String): PresetCredentialRecord? {
+        val stored = this[presetCredentialKey(id)]?.takeIf(String::isNotEmpty) ?: return null
+        if (!secretCodec.isEncrypted(stored)) throw SettingsSecretStorageException()
+        val raw = secretCodec.decodeForWrite(stored)
+        return runCatching { json.decodeFromString<PresetCredentialRecord>(raw) }.getOrNull()
+            ?.takeIf { it.ownerId == id } ?: throw SettingsSecretStorageException()
+    }
+
+    private fun MutablePreferences.migrateLegacyPresetCredentials(current: Settings) {
+        if (this[Keys.PresetCredentialsMigrated] == true) return
+        val candidates = current.translationPresets.mapNotNull { preset ->
+            if (!this[presetCredentialKey(preset.id)].isNullOrEmpty()) return@mapNotNull null
+            val target = preset.applyTo(current)
+            val record = PresetCredentialPolicy.legacyRecord(preset.id, current, target)
+                ?: return@mapNotNull null
+            preset to record
+        }
+        val selected = if (current.activeTranslationPresetId.isNotBlank()) {
+            candidates.firstOrNull { it.first.id == current.activeTranslationPresetId }
+        } else candidates.singleOrNull()
+        selected?.let { (preset, record) ->
+            this[presetCredentialKey(preset.id)] = secretCodec.encryptCredential(json.encodeToString(record))
+        }
+        this[Keys.PresetCredentialsMigrated] = true
+    }
+
+    /** Process-local rollback only. Never part of a settings/preset export. */
+    internal class ImportSnapshot internal constructor(
+        val settings: Settings,
+    ) {
+        internal var mutation: Pair<Preferences, Preferences>? = null
+        override fun toString(): String = "ImportSnapshot(<redacted>)"
+    }
+
+    internal suspend fun snapshotForImport(): ImportSnapshot = withContext(Dispatchers.IO) {
+        val prefs = settingsStore.data.first()
+        prefs.requireReadableSecrets()
+        ImportSnapshot(prefs.toSettings())
+    }
+
+    internal suspend fun restoreImportSnapshot(snapshot: ImportSnapshot) = withContext(Dispatchers.IO) {
+        val (before, after) = snapshot.mutation ?: return@withContext
+        val oldValues = before.asMap()
+        val importedValues = after.asMap()
+        settingsStore.edit { prefs ->
+            val currentValues = prefs.asMap()
+            (oldValues.keys + importedValues.keys).forEach { key ->
+                if (oldValues[key] != importedValues[key] && currentValues[key] == importedValues[key]) {
+                    @Suppress("UNCHECKED_CAST")
+                    val typedKey = key as Preferences.Key<Any>
+                    val old = oldValues[key]
+                    if (old == null) prefs.remove(typedKey) else prefs[typedKey] = old
+                }
+            }
+        }
+        Unit
+    }
 
     private fun MutablePreferences.rememberCredentials(id: String, source: Settings) {
         this[presetCredentialKey(id)] = secretCodec.encryptCredential(
@@ -626,15 +767,32 @@ class SettingsRepository internal constructor(
     }
 
     suspend fun updateAfterPresetImport(importedNames: Set<String>, transform: (Settings) -> Settings): Settings =
-        updateWithPreferences(readBack = true) { current, prefs ->
+        updateAfterPresetImport(importedNames, null, transform)
+
+    internal suspend fun updateAfterPresetImport(
+        importedNames: Set<String>, rollbackSnapshot: ImportSnapshot?, transform: (Settings) -> Settings,
+    ): Settings =
+        updateWithPreferences(readBack = true, rollbackSnapshot = rollbackSnapshot) { current, prefs ->
             val next = transform(current)
             val normalizedNames = importedNames.mapTo(mutableSetOf()) { it.trim().lowercase(java.util.Locale.ROOT) }
             val importedIds = next.translationPresets.filter {
                 it.name.trim().lowercase(java.util.Locale.ROOT) in normalizedNames
             }.mapTo(mutableSetOf()) { it.id }
-            importedIds.forEach { prefs.remove(presetCredentialKey(it)) }
+            importedIds.forEach { id ->
+                val imported = next.translationPresets.first { it.id == id }
+                val original = current.translationPresets.firstOrNull {
+                    it.id == id && it.name.trim().equals(imported.name.trim(), ignoreCase = true)
+                }
+                val retained = original?.let { prefs.presetCredentials(id) }
+                    ?.let { PresetCredentialPolicy.retainMatchingGroups(it, imported.applyTo(next)) }
+                    ?.takeIf { it.groups.isNotEmpty() }
+                if (retained == null) prefs.remove(presetCredentialKey(id))
+                else prefs[presetCredentialKey(id)] = secretCodec.encryptCredential(json.encodeToString(retained))
+            }
             if (next.activeTranslationPresetId in importedIds) {
-                PresetCredentialPolicy.apply(next.activeTranslationPresetId, next, null)
+                PresetCredentialPolicy.apply(
+                    next.activeTranslationPresetId, next, prefs.presetCredentials(next.activeTranslationPresetId),
+                )
             } else next
         }
 
@@ -655,27 +813,45 @@ class SettingsRepository internal constructor(
 
     suspend fun matchingCredentialPresetIds(source: Settings): Set<String> = withContext(Dispatchers.IO) {
         val prefs = settingsStore.data.first()
-        TranslationPresetCatalog.all(prefs.toSettings().translationPresets).filter {
-            PresetCredentialPolicy.matches(it.id, source, prefs.presetCredentials(it.id))
+        val settings = try { prefs.toSettings() }
+        catch (_: SettingsSecretStorageException) { return@withContext emptySet() }
+        TranslationPresetCatalog.all(settings.translationPresets).filter {
+            val record = try { prefs.presetCredentials(it.id) }
+            catch (_: SettingsSecretStorageException) { return@filter false }
+            PresetCredentialPolicy.matches(it.id, source, record)
         }.mapTo(mutableSetOf()) { it.id }
     }
 
     private fun Preferences.secureString(
         key: Preferences.Key<String>,
         defaultValue: String
-    ): String = this[key]?.let { secretCodec.decodeStored(it) } ?: defaultValue
+    ): String = this[key]?.let { secretCodec.decodeForWrite(it) } ?: defaultValue
 
     suspend fun update(transform: (Settings) -> Settings) {
         updateWithPreferences { current, _ -> transform(current) }
     }
 
+    /** Best-effort background persistence; callers must check success before confirming a save. */
+    internal suspend fun tryUpdate(transform: (Settings) -> Settings): Boolean = try {
+        update(transform)
+        true
+    } catch (_: SettingsSecretStorageException) {
+        timber.log.Timber.w("Settings write rejected; previous stored data retained")
+        false
+    }
+
     private suspend fun updateWithPreferences(
         readBack: Boolean = false,
+        rollbackSnapshot: ImportSnapshot? = null,
         transform: (Settings, MutablePreferences) -> Settings,
     ): Settings = withContext(Dispatchers.IO) {
         var committed: Settings? = null
-        settingsStore.edit { prefs ->
+        var beforeCommit: Preferences? = null
+        val afterCommit = settingsStore.edit { prefs ->
+            if (rollbackSnapshot != null) beforeCommit = prefs.toPreferences()
+            prefs.requireReadableSecrets()
             val current = prefs.toSettings()
+            prefs.migrateLegacyPresetCredentials(current)
             val requested = transform(current, prefs)
             val languageSafe = if (
                 translationLanguageCodesConflict(requested.sourceLang, requested.targetLang)
@@ -711,6 +887,7 @@ class SettingsRepository internal constructor(
             prefs[Keys.LoopTextStableDuration] =
                 normalizeLoopTextStableDuration(next.loopTextStableDurationMs)
             prefs[Keys.LoopSkipSimilarFrames] = next.loopSkipSimilarFrames
+            prefs[Keys.LoopCaptureVibrationEnabled] = next.loopCaptureVibrationEnabled
             prefs[Keys.LoopFrameSimilarityThreshold] =
                 normalizeLoopFrameSimilarity(next.loopFrameSimilarityThreshold)
             prefs[Keys.LoopTextRegionMode] = next.loopTextRegionMode.name
@@ -720,6 +897,7 @@ class SettingsRepository internal constructor(
             prefs[Keys.PerformanceOverlayEnabled] = next.performanceOverlayEnabled
             prefs[Keys.OcrScreenshotSavingEnabled] = next.ocrScreenshotSavingEnabled
             prefs[Keys.DisableTranslationCache] = next.disableTranslationCache
+            prefs[Keys.HideOcrNoTextHint] = next.hideOcrNoTextHint
             prefs[Keys.BatchCumulativeCompletionTimeEnabled] =
                 next.batchCumulativeCompletionTimeEnabled
             prefs[Keys.TranslationContextMode] = next.translationContextMode.name
@@ -810,6 +988,7 @@ class SettingsRepository internal constructor(
             prefs[Keys.CustomBorder] = next.customBorderColor
             prefs[Keys.CustomBorderW] = next.customBorderWidth
             prefs[Keys.TranslatorEng] = next.translatorEngine.name
+            prefs[Keys.OpenAiProvider] = next.openAiProvider.name
             prefs[Keys.TranslationGlossaryEnabled] = next.translationGlossaryEnabled
             prefs[Keys.SourcePreservationEnabled] = next.sourcePreservationEnabled
             prefs[Keys.TranslationMemoryEnabled] = next.translationMemoryEnabled
@@ -883,6 +1062,7 @@ class SettingsRepository internal constructor(
             )
             prefs[Keys.FloatingMenuOrder] = next.floatingMenuItemOrder.joinToString(",") { it.name }
             prefs[Keys.ArcMenuPageSize] = FloatingMenu.coercePageSize(next.arcMenuPageSize)
+            prefs[Keys.QuickPanelEnabled] = next.quickPanelEnabled
             prefs.putSecure(
                 Keys.TranslationPresets,
                 json.encodeToString(
@@ -893,6 +1073,30 @@ class SettingsRepository internal constructor(
             )
             prefs[Keys.ActiveTranslationPresetId] = next.activeTranslationPresetId
             prefs[Keys.FloatingSkillKey] = next.floatingButtonSkill.name
+            prefs[Keys.AsrEngine] = next.asrEngine.name
+            prefs[Keys.AsrWhisperVariant] = next.asrWhisperVariant.name
+            prefs[Keys.AsrCloudModel] = next.asrCloudModel.name
+            prefs[Keys.AsrCloudProvider] = next.asrCloudProvider.name
+            prefs.putSecure(Keys.AsrCloudConnections, json.encodeToString(next.asrCloudConnections))
+            prefs[Keys.AsrEmptyConnectionDefaultsMigrated] = true
+            prefs[Keys.AsrLanguage] = next.asrLanguage.name
+            prefs[Keys.AsrSegmentation] = json.encodeToString(next.asrSegmentation.normalized())
+            prefs[Keys.AsrHints] = json.encodeToString(next.asrHints)
+            prefs[Keys.AsrMaxDisplayedRecords] = AsrDisplayPolicy.clampRecords(next.asrMaxDisplayedRecords)
+            prefs.putSecure(Keys.AsrDashScopeApiKey, next.asrDashScopeApiKey)
+            prefs[Keys.GestureBindingsKey] = json.encodeToString(
+                GestureBindings.normalize(next.gestureBindings).entries.associate { it.key.name to it.value.name }
+            )
+            prefs[Keys.GestureGlobalEnabled] = next.gestureGlobalEnabled
+            prefs[Keys.GestureEdgeEnabled] = next.gestureEdgeEnabled
+            prefs[Keys.GestureEdgeRight] = next.gestureEdgeRight
+            prefs[Keys.GestureEdgeHeight] = next.gestureEdgeHeightPercent.coerceIn(10, 40)
+            prefs[Keys.GestureTwistEnabled] = next.gestureTwistEnabled
+            prefs[Keys.GestureTwistSensitivity] = next.gestureTwistSensitivity.coerceIn(1, 5)
+            prefs[Keys.GestureTiltEnabled] = next.gestureTiltEnabled
+            prefs[Keys.GestureTiltSensitivity] = next.gestureTiltSensitivity.coerceIn(1, 5)
+            prefs[Keys.GestureTwistAction] = next.gestureTwistAction?.name ?: "DRAW"
+            prefs[Keys.GestureTiltAction] = next.gestureTiltAction?.name ?: "DRAW"
             prefs[Keys.InputTranslationDoubleAction] = next.inputTranslationDoubleAction.name
             prefs[Keys.WordSelectPreciseAdjust] = next.wordSelectPreciseAdjust
             prefs[Keys.WordSelectCardMode] = next.wordSelectCardMode
@@ -906,21 +1110,31 @@ class SettingsRepository internal constructor(
             prefs.putSecure(Keys.DictionaryPrompt, next.dictionaryPrompt)
             prefs[Keys.LocalLlmCtxSize] = next.localLlmContextSize
             prefs[Keys.LocalLlmMaxNewTokens] = next.localLlmMaxNewTokens
+            if (next.localModelId == null) prefs.remove(Keys.LocalModelId)
+            else prefs[Keys.LocalModelId] = next.localModelId
             prefs[Keys.LocalLlmMirrorChoice] = next.localLlmMirror.name
             prefs.putSecure(Keys.LocalLlmMirror, next.localLlmMirrorUrl)
-            prefs[Keys.DbnetProbThresh] = next.dbnetProbThresh
-            prefs[Keys.DbnetBoxScoreThresh] = next.dbnetBoxScoreThresh
-            prefs[Keys.DbnetUnclipRatio] = next.dbnetUnclipRatio
+            // Absent key = the selected detector's official value.
+            prefs.putOrRemove(Keys.DbnetProbThresh, next.dbnetProbThresh)
+            prefs.putOrRemove(Keys.DbnetBoxScoreThresh, next.dbnetBoxScoreThresh)
+            prefs.putOrRemove(Keys.DbnetUnclipRatio, next.dbnetUnclipRatio)
             prefs[Keys.MangaOcrDbnetUnclipRatio] = next.mangaOcrDbnetUnclipRatio
             prefs[Keys.BubbleClusterGap] = MangaOcrAdvancedSettingsPolicy.BUBBLE_CLUSTER_GAP
             prefs[Keys.MangaOcrCropPaddingPx] = MangaOcrAdvancedSettingsPolicy.CROP_PADDING_PX
             committed = if (readBack) prefs.toSettings() else next
         }
+        if (rollbackSnapshot != null) rollbackSnapshot.mutation = requireNotNull(beforeCommit) to afterCommit
         requireNotNull(committed)
     }
 
     private fun Preferences.toSettings(): Settings {
         val default = Settings()
+        val asrConnectionsJson = secureString(Keys.AsrCloudConnections, "")
+        val sharedTencent = SharedTencentCredentials.resolve(
+            secureString(Keys.TencentId, default.tencentSecretId),
+            secureString(Keys.TencentKey, default.tencentSecretKey),
+            asrConnectionsJson,
+        )
         val storedTranslationOutputLayout = runCatching {
             TranslationOutputLayout.valueOf(this[Keys.TranslationOutputLayout] ?: "")
         }.getOrDefault(default.translationOutputLayout)
@@ -982,6 +1196,7 @@ class SettingsRepository internal constructor(
                 this[Keys.LoopTextStableDuration] ?: default.loopTextStableDurationMs
             ),
             loopSkipSimilarFrames = this[Keys.LoopSkipSimilarFrames] ?: default.loopSkipSimilarFrames,
+            loopCaptureVibrationEnabled = this[Keys.LoopCaptureVibrationEnabled] ?: default.loopCaptureVibrationEnabled,
             loopFrameSimilarityThreshold = normalizeLoopFrameSimilarity(
                 this[Keys.LoopFrameSimilarityThreshold] ?: default.loopFrameSimilarityThreshold
             ),
@@ -998,6 +1213,8 @@ class SettingsRepository internal constructor(
                 ?: default.ocrScreenshotSavingEnabled,
             disableTranslationCache = this[Keys.DisableTranslationCache]
                 ?: default.disableTranslationCache,
+            hideOcrNoTextHint = this[Keys.HideOcrNoTextHint]
+                ?: default.hideOcrNoTextHint,
             batchCumulativeCompletionTimeEnabled =
                 this[Keys.BatchCumulativeCompletionTimeEnabled]
                     ?: default.batchCumulativeCompletionTimeEnabled,
@@ -1132,8 +1349,8 @@ class SettingsRepository internal constructor(
             baiduOcrApiKey = secureString(Keys.BaiduKey, default.baiduOcrApiKey),
             baiduOcrSecretKey = secureString(Keys.BaiduSecret, default.baiduOcrSecretKey),
             a11yVolumeTrigger = this[Keys.A11yVolume] ?: default.a11yVolumeTrigger,
-            tencentSecretId = secureString(Keys.TencentId, default.tencentSecretId),
-            tencentSecretKey = secureString(Keys.TencentKey, default.tencentSecretKey),
+            tencentSecretId = sharedTencent.first,
+            tencentSecretKey = sharedTencent.second,
             tencentRegion = this[Keys.TencentRegion] ?: default.tencentRegion,
             overlayPlacement = runCatching { OverlayPlacement.valueOf(this[Keys.Placement] ?: "") }
                 .getOrDefault(default.overlayPlacement),
@@ -1158,6 +1375,8 @@ class SettingsRepository internal constructor(
             customBorderWidth = this[Keys.CustomBorderW] ?: default.customBorderWidth,
             translatorEngine = runCatching { TranslatorEngine.valueOf(this[Keys.TranslatorEng] ?: "") }
                 .getOrDefault(default.translatorEngine),
+            openAiProvider = runCatching { OpenAiProvider.valueOf(this[Keys.OpenAiProvider] ?: "") }
+                .getOrDefault(default.openAiProvider),
             translationGlossaryEnabled = this[Keys.TranslationGlossaryEnabled]
                 ?: default.translationGlossaryEnabled,
             sourcePreservationEnabled = this[Keys.SourcePreservationEnabled]
@@ -1272,6 +1491,7 @@ class SettingsRepository internal constructor(
             arcMenuPageSize = FloatingMenu.coercePageSize(
                 this[Keys.ArcMenuPageSize] ?: default.arcMenuPageSize
             ),
+            quickPanelEnabled = this[Keys.QuickPanelEnabled] ?: default.quickPanelEnabled,
             translationPresets = secureString(Keys.TranslationPresets, "")
                 .takeIf { it.isNotBlank() }
                 ?.let { raw ->
@@ -1284,6 +1504,48 @@ class SettingsRepository internal constructor(
                 ?: default.activeTranslationPresetId,
             floatingButtonSkill = runCatching { FloatingSkill.valueOf(this[Keys.FloatingSkillKey] ?: "") }
                 .getOrDefault(default.floatingButtonSkill),
+            asrEngine = AsrEngineKind.entries.firstOrNull { it.name == this[Keys.AsrEngine] }
+                ?: default.asrEngine,
+            asrWhisperVariant = AsrWhisperVariant.entries.firstOrNull { it.name == this[Keys.AsrWhisperVariant] }
+                ?: default.asrWhisperVariant,
+            asrCloudModel = AsrCloudModel.entries.firstOrNull { it.name == this[Keys.AsrCloudModel] }
+                ?: default.asrCloudModel,
+            asrCloudProvider = if (this[Keys.AsrCloudProvider] == "GLM") AsrCloudProvider.OPENAI_COMPATIBLE
+                else AsrCloudProvider.entries.firstOrNull { it.name == this[Keys.AsrCloudProvider] } ?: default.asrCloudProvider,
+            asrCloudConnections = runCatching {
+                json.decodeFromString<AsrCloudConnections>(asrConnectionsJson)
+            }.getOrDefault(default.asrCloudConnections).let { connection ->
+                if (this[Keys.AsrEmptyConnectionDefaultsMigrated] == true) connection
+                else AsrConnectionDefaultsPolicy.clearUnconfiguredLegacyDefaults(connection)
+            },
+            asrLanguage = AsrLanguage.entries.firstOrNull { it.name == this[Keys.AsrLanguage] }
+                ?: default.asrLanguage,
+            asrSegmentation = runCatching {
+                json.decodeFromString<AsrSegmentationSettings>(this[Keys.AsrSegmentation] ?: "{}").normalized()
+            }.getOrDefault(default.asrSegmentation),
+            asrHints = runCatching { json.decodeFromString<AsrHintSettings>(this[Keys.AsrHints] ?: "{}") }
+                .getOrDefault(default.asrHints),
+            asrMaxDisplayedRecords = AsrDisplayPolicy.clampRecords(
+                this[Keys.AsrMaxDisplayedRecords] ?: default.asrMaxDisplayedRecords,
+            ),
+            asrDashScopeApiKey = secureString(Keys.AsrDashScopeApiKey, default.asrDashScopeApiKey),
+            gestureBindings = runCatching {
+                GestureBindings.fromNames(
+                    json.decodeFromString<Map<String, String>>(this[Keys.GestureBindingsKey] ?: "{}")
+                )
+            }.getOrDefault(default.gestureBindings),
+            gestureGlobalEnabled = this[Keys.GestureGlobalEnabled] ?: false,
+            gestureEdgeEnabled = this[Keys.GestureEdgeEnabled] ?: false,
+            gestureEdgeRight = this[Keys.GestureEdgeRight] ?: false,
+            gestureEdgeHeightPercent = (this[Keys.GestureEdgeHeight] ?: 22).coerceIn(10, 40),
+            gestureTwistEnabled = this[Keys.GestureTwistEnabled] ?: false,
+            gestureTwistSensitivity = (this[Keys.GestureTwistSensitivity] ?: 3).coerceIn(1, 5),
+            gestureTiltEnabled = this[Keys.GestureTiltEnabled] ?: false,
+            gestureTiltSensitivity = (this[Keys.GestureTiltSensitivity] ?: 3).coerceIn(1, 5),
+            gestureTwistAction = runCatching { GestureAction.valueOf(this[Keys.GestureTwistAction].orEmpty()) }
+                .getOrNull()?.let { if (it.targetSkill == null) it else GestureAction.NONE },
+            gestureTiltAction = runCatching { GestureAction.valueOf(this[Keys.GestureTiltAction].orEmpty()) }
+                .getOrNull()?.let { if (it.targetSkill == null) it else GestureAction.NONE },
             inputTranslationDoubleAction = runCatching {
                 InputTranslationDoubleAction.valueOf(
                     this[Keys.InputTranslationDoubleAction].orEmpty()
@@ -1309,12 +1571,13 @@ class SettingsRepository internal constructor(
             ),
             localLlmContextSize = this[Keys.LocalLlmCtxSize] ?: default.localLlmContextSize,
             localLlmMaxNewTokens = this[Keys.LocalLlmMaxNewTokens] ?: default.localLlmMaxNewTokens,
+            localModelId = this[Keys.LocalModelId]?.takeIf(String::isNotBlank),
             localLlmMirror = runCatching { LlmMirrorChoice.valueOf(this[Keys.LocalLlmMirrorChoice] ?: "") }
                 .getOrDefault(default.localLlmMirror),
             localLlmMirrorUrl = secureString(Keys.LocalLlmMirror, default.localLlmMirrorUrl),
-            dbnetProbThresh = this[Keys.DbnetProbThresh] ?: default.dbnetProbThresh,
-            dbnetBoxScoreThresh = this[Keys.DbnetBoxScoreThresh] ?: default.dbnetBoxScoreThresh,
-            dbnetUnclipRatio = this[Keys.DbnetUnclipRatio] ?: default.dbnetUnclipRatio,
+            dbnetProbThresh = this[Keys.DbnetProbThresh],
+            dbnetBoxScoreThresh = this[Keys.DbnetBoxScoreThresh],
+            dbnetUnclipRatio = this[Keys.DbnetUnclipRatio],
             mangaOcrDbnetUnclipRatio = this[Keys.MangaOcrDbnetUnclipRatio]
                 ?: default.mangaOcrDbnetUnclipRatio,
             bubbleClusterGap = MangaOcrAdvancedSettingsPolicy.BUBBLE_CLUSTER_GAP,

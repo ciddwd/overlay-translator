@@ -42,7 +42,7 @@ class GalleryTaskConfirmationTest {
             ),
             Case(
                 "task is created only by the confirm action",
-                createScreen.indexOf("viewModel.createAndEnqueue(selectedUris)") <
+                createScreen.indexOf("viewModel.createAndEnqueue(") in 0 until
                     createScreen.indexOf("Scaffold("),
             ),
             Case(

@@ -148,11 +148,17 @@ class LoopFrameStabilityPolicyTest {
     fun durationAndPollingIntervals_areNormalizedForAllBoundaryCases() {
         data class DurationCase(val input: Long, val expected: Long)
         listOf(
-            DurationCase(-1L, 200L),
+            DurationCase(Long.MIN_VALUE, 100L),
+            DurationCase(-1L, 100L),
+            DurationCase(0L, 100L),
+            DurationCase(99L, 100L),
+            DurationCase(100L, 100L),
+            DurationCase(101L, 101L),
             DurationCase(200L, 200L),
             DurationCase(600L, 600L),
             DurationCase(2000L, 2000L),
             DurationCase(5000L, 2000L),
+            DurationCase(Long.MAX_VALUE, 2000L),
         ).forEach { case ->
             assertEquals(
                 case.expected,

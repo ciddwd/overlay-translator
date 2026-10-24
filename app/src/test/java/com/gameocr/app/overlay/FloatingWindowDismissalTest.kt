@@ -78,15 +78,17 @@ class FloatingWindowDismissalTest {
         val processTextSource = sourceFile(
             "app/src/main/java/com/gameocr/app/translate/ProcessTextTranslateActivity.kt",
             "src/main/java/com/gameocr/app/translate/ProcessTextTranslateActivity.kt",
-        ).readText()
+        ).readText().replace("\r\n", "\n")
+        val floatingDismiss = serviceSource.substringAfter("onFloatingWindowDismissed = {")
+            .substringBefore("},")
 
         data class MarkerCase(val name: String, val source: String, val marker: String)
 
         listOf(
             MarkerCase(
                 "capture service stops the shared TTS engine",
-                serviceSource,
-                "onFloatingWindowDismissed = { ttsEngine.stop() }",
+                floatingDismiss,
+                "ttsEngine.stop()",
             ),
             MarkerCase(
                 "user dismiss handles playback before clearing",
@@ -106,7 +108,7 @@ class FloatingWindowDismissalTest {
             MarkerCase(
                 "word translation card stops playback when dismissed",
                 cardSource,
-                "stopPlayback = onDismissed",
+                "stopPlayback = { if (!refreshingLocale) onDismissed() }",
             ),
             MarkerCase(
                 "capture service wires panel dismissal to the shared TTS engine",
@@ -116,15 +118,15 @@ class FloatingWindowDismissalTest {
             MarkerCase(
                 "process-text card wires dismissal to its speech engine",
                 processTextSource,
-                "onDismissed = { speechEngine.stop() }",
+                "originalContentVisible = false\n                    speechEngine.stop()",
             ),
         ).forEach { case ->
             assertTrue(case.name, case.source.contains(case.marker))
         }
 
         assertEquals(
-            "batch and streaming floating windows share the same dismiss handler",
-            2,
+            "batch, streaming and speech floating windows share the same dismiss handler",
+            3,
             Regex("floatingWindow\\.show\\(content, onDismiss = ::handleFloatingWindowUserDismiss\\)")
                 .findAll(managerSource)
                 .count(),

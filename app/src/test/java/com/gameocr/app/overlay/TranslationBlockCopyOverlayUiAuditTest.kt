@@ -33,7 +33,8 @@ class TranslationBlockCopyOverlayUiAuditTest {
             Case("source selection speech callback", overlaySource, "onSpeakSourceSelection"),
             Case("translation selection speech callback", overlaySource, "onSpeakTranslationSelection"),
             Case("selection speech follows TTS enabled state", serviceSource, "if (!settings.ttsEnabled) return null"),
-            Case("source selection uses source language", serviceSource, "settings.copy(targetLang = settings.sourceLang)"),
+            // Source text is spoken through the source-language path (speakSource), not the target voice.
+            Case("source selection uses source language", serviceSource, "sourceEvidence = { emptyList() }"),
             Case("translation selection uses target language", serviceSource, "role = \"block_translation_selection\""),
             Case("source title speaker reads the full source", overlaySource, "speechText = sourceText"),
             Case("translation title speaker reads the full translation", overlaySource, "speechText = translation"),

@@ -2,9 +2,16 @@ package com.gameocr.app.gallery
 
 import com.gameocr.app.data.OcrEngineKind
 import com.gameocr.app.data.TranslatorEngine
+import com.gameocr.app.data.Settings
+import com.gameocr.app.R
 import java.io.IOException
 
 internal object GalleryTranslationWorkPolicy {
+    fun creationErrorRes(settings: Settings): Int? =
+        if (settings.translatorEngine == TranslatorEngine.OPENAI && settings.apiKey.isBlank()) {
+            R.string.err_openai_no_api_key
+        } else null
+
     const val ACTION_SEND = "android.intent.action.SEND"
     const val ACTION_SEND_MULTIPLE = "android.intent.action.SEND_MULTIPLE"
     const val MAX_IMAGES_PER_TASK = 100
@@ -56,7 +63,9 @@ internal object GalleryTranslationWorkPolicy {
     ): Boolean =
         imageCount >= FOREGROUND_IMAGE_THRESHOLD ||
             translatorEngine == TranslatorEngine.LOCAL_SAKURA ||
-            translatorEngine == TranslatorEngine.LOCAL_HY_MT2
+            translatorEngine == TranslatorEngine.LOCAL_HY_MT2 ||
+            translatorEngine == TranslatorEngine.LOCAL_INDEX_TRANSLATE ||
+            translatorEngine == TranslatorEngine.LOCAL_QWEN3
 
     fun terminalStatus(
         progress: GalleryTaskProgress,

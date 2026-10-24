@@ -73,6 +73,7 @@ internal object MaskedBackgroundRepairer {
         allowDirectionalInterpolation: Boolean = false,
         allowComplexBackgroundInterpolation: Boolean = false,
         foregroundReferenceMask: BooleanArray? = null,
+        preferSpatialInterpolation: Boolean = false,
     ): Result {
         require(width > 0 && height > 0)
         require(sourceArgb.size == width * height)
@@ -101,6 +102,7 @@ internal object MaskedBackgroundRepairer {
                 component = component,
                 sampleMarks = sampleMarks,
                 sampleStamp = sampleStamp,
+                searchOutsideDetector = preferSpatialInterpolation,
             )
             if (samples.size < minimumBoundarySamples(component.size)) {
                 return@mapIndexed RepairPlan(
@@ -172,7 +174,7 @@ internal object MaskedBackgroundRepairer {
                 )
             }
             val mode = when {
-                backgroundTooComplex -> Mode.SPATIAL_INTERPOLATION
+                backgroundTooComplex || preferSpatialInterpolation -> Mode.SPATIAL_INTERPOLATION
                 estimate.colorSpread > MAX_FLAT_BACKGROUND_SPREAD -> Mode.DIRECTIONAL_INTERPOLATION
                 else -> Mode.DOMINANT_FILL
             }
@@ -412,6 +414,7 @@ internal object MaskedBackgroundRepairer {
         component: IntArray,
         sampleMarks: IntArray,
         sampleStamp: Int,
+        searchOutsideDetector: Boolean,
     ): IntArray {
         val samples = IntArray(MAX_BOUNDARY_SAMPLES)
         var count = 0
@@ -446,6 +449,29 @@ internal object MaskedBackgroundRepairer {
                     if (count >= samples.size) break
                 }
                 if (count >= samples.size) break
+            }
+        }
+        if (searchOutsideDetector && count < minimumBoundarySamples(component.size)) {
+            // A text detector covers the full outlined word. Its inner holes are not clean
+            // samples, and the nearest clean pixels can be farther than the usual local ring.
+            // Search sparsely along rays instead of widening a quadratic ring at every pixel.
+            val maximumDistance = minOf(width, height) / 2
+            for (index in component) {
+                if (count >= samples.size) break
+                val x = index % width; val y = index / width
+                if (!isComponentBoundary(x, y, width, height, eraseMask)) continue
+                for ((dx, dy) in DIRECTIONS) {
+                    for (distance in BOUNDARY_OUTER_RADIUS + 1..maximumDistance) {
+                        val nx = x + dx * distance; val ny = y + dy * distance
+                        if (nx !in 0 until width || ny !in 0 until height) break
+                        val sample = ny * width + nx
+                        if (eraseMask[sample] || !allowedSampleMask[sample]) continue
+                        if (sampleMarks[sample] != sampleStamp && count < samples.size) {
+                            sampleMarks[sample] = sampleStamp; samples[count++] = sample
+                        }
+                        break
+                    }
+                }
             }
         }
         return samples.copyOf(count)

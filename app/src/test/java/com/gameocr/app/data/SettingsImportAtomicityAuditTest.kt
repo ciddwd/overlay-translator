@@ -4,37 +4,30 @@ import java.io.File
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+/**
+ * Commit order and rollback are behavior-tested in [SettingsBundleImportTransactionTest]. This only
+ * checks what a JVM test cannot run: the ViewModel's real stores and Room transactions.
+ */
 class SettingsImportAtomicityAuditTest {
 
     @Test
-    fun bundleImport_stagesEveryFontBeforeAnyPersistentCommit() {
-        val source = sourceFile("src/main/java/com/gameocr/app/ui/SettingsViewModel.kt").readText()
-        val function = source.substring(
-            source.indexOf("suspend fun importSettingsBundle"),
-            source.indexOf("suspend fun importOverlayFont"),
-        )
-        val stage = function.indexOf("stageTransferredFont")
-        val fontCommit = function.indexOf("commitTransferredFont")
-        val glossaryCommit = function.indexOf("glossaryRepository.importTerms")
-        val settingsCommit = function.indexOf("repo.update { merged.settings }")
-
-        assertTrue("font staging must happen first", stage >= 0)
-        assertTrue("font files commit after full package staging", fontCommit > stage)
-        assertTrue("glossary commits after fonts are validated", glossaryCommit > fontCommit)
-        assertTrue("settings commits only after atomic glossary import", settingsCommit > glossaryCommit)
-    }
-
-    @Test
-    fun bundleImport_hasCompensatingRollbackForEveryPersistentStore() {
+    fun bundleImport_wiresEveryPersistentStoreIntoTheTransaction() {
         val viewModel = sourceFile("src/main/java/com/gameocr/app/ui/SettingsViewModel.kt").readText()
         val glossary = sourceFile("src/main/java/com/gameocr/app/glossary/TranslationGlossary.kt").readText()
-
+        val function = viewModel.substring(
+            viewModel.indexOf("suspend fun importSettingsBundle"),
+            viewModel.indexOf("suspend fun importOverlayFont"),
+        )
         listOf(
-            "repo.update { beforeSettings }",
-            "glossaryRepository.restoreTerms(beforeGlossary)",
-            "overlayFontManager.rollbackTransferredFont(commit)",
+            "SettingsBundleImportTransaction(",
+            "commitFont = overlayFontManager::commitTransferredFont",
+            "importGlossary = { glossaryRepository.importTerms(preview.glossaryTerms) }",
+            "val beforeState = repo.snapshotForImport()",
+            "restoreSettings = { repo.restoreImportSnapshot(beforeState) }",
+            "restoreGlossary = { glossaryRepository.restoreTerms(beforeGlossary) }",
+            "rollbackFont = overlayFontManager::rollbackTransferredFont",
         ).forEach { marker ->
-            assertTrue("missing import rollback: $marker", viewModel.contains(marker))
+            assertTrue("missing import step: $marker", function.contains(marker))
         }
         assertTrue("glossary import must be a Room transaction", glossary.contains("suspend fun importTermsAtomically"))
         assertTrue("glossary restore must be a Room transaction", glossary.contains("suspend fun replaceAllAtomically"))

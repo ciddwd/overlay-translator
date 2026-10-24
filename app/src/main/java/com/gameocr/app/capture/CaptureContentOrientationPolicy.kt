@@ -66,7 +66,9 @@ internal object CaptureContentOrientationPolicy {
                 sourceBoxes = block.sourceBoxes.map { box ->
                     mapRectToOriginal(box, originalWidth, originalHeight, angle)
                 },
-                presentationRotationDegrees = angle,
+                // OCR may have needed a second, 180-degree correction. Keep its display turn
+                // while restoring coordinates using only the original bitmap normalization.
+                presentationRotationDegrees = normalizeAngle(block.presentationRotationDegrees + angle),
             )
         }
     }
@@ -165,34 +167,9 @@ internal object CaptureContentOrientationPolicy {
         originalHeight: Int,
         counterClockwiseDegrees: Int,
     ): Rect {
-        val angle = normalizeAngle(counterClockwiseDegrees)
-        val mapped = when (angle) {
-            90 -> Rect(
-                originalWidth - rect.bottom,
-                rect.left,
-                originalWidth - rect.top,
-                rect.right,
-            )
-            180 -> Rect(
-                originalWidth - rect.right,
-                originalHeight - rect.bottom,
-                originalWidth - rect.left,
-                originalHeight - rect.top,
-            )
-            270 -> Rect(
-                rect.top,
-                originalHeight - rect.right,
-                rect.bottom,
-                originalHeight - rect.left,
-            )
-            else -> Rect(rect)
-        }
-        mapped.left = mapped.left.coerceIn(0, originalWidth)
-        mapped.right = mapped.right.coerceIn(0, originalWidth)
-        mapped.top = mapped.top.coerceIn(0, originalHeight)
-        mapped.bottom = mapped.bottom.coerceIn(0, originalHeight)
-        if (mapped.left > mapped.right) mapped.sort()
-        return mapped
+        val mapped = mapIntRectToOriginal(IntRect(rect.left, rect.top, rect.right, rect.bottom),
+            originalWidth, originalHeight, counterClockwiseDegrees)
+        return Rect(mapped.left, mapped.top, mapped.right, mapped.bottom)
     }
 
     internal fun mapRectToOcr(
@@ -201,39 +178,22 @@ internal object CaptureContentOrientationPolicy {
         originalHeight: Int,
         counterClockwiseDegrees: Int,
     ): Rect {
-        val angle = normalizeAngle(counterClockwiseDegrees)
-        val rotatedWidth = rotatedWidth(originalWidth, originalHeight, angle)
-        val rotatedHeight = rotatedHeight(originalWidth, originalHeight, angle)
-        val mapped = when (angle) {
-            90 -> Rect(
-                rect.top,
-                originalWidth - rect.right,
-                rect.bottom,
-                originalWidth - rect.left,
-            )
-            180 -> Rect(
-                originalWidth - rect.right,
-                originalHeight - rect.bottom,
-                originalWidth - rect.left,
-                originalHeight - rect.top,
-            )
-            270 -> Rect(
-                originalHeight - rect.bottom,
-                rect.left,
-                originalHeight - rect.top,
-                rect.right,
-            )
-            else -> Rect(rect)
-        }
-        mapped.left = mapped.left.coerceIn(0, rotatedWidth)
-        mapped.right = mapped.right.coerceIn(0, rotatedWidth)
-        mapped.top = mapped.top.coerceIn(0, rotatedHeight)
-        mapped.bottom = mapped.bottom.coerceIn(0, rotatedHeight)
-        if (mapped.left > mapped.right || mapped.top > mapped.bottom) mapped.sort()
-        return mapped
+        val mapped = mapIntRectToOcr(IntRect(rect.left, rect.top, rect.right, rect.bottom),
+            originalWidth, originalHeight, counterClockwiseDegrees)
+        return Rect(mapped.left, mapped.top, mapped.right, mapped.bottom)
     }
 
-    private fun mapIntRectToOriginal(
+    internal fun mapIntRectToOcr(
+        rect: IntRect,
+        originalWidth: Int,
+        originalHeight: Int,
+        counterClockwiseDegrees: Int,
+    ): IntRect = mapIntRectToOriginal(rect,
+        rotatedWidth(originalWidth, originalHeight, counterClockwiseDegrees),
+        rotatedHeight(originalWidth, originalHeight, counterClockwiseDegrees),
+        -counterClockwiseDegrees)
+
+    internal fun mapIntRectToOriginal(
         rect: IntRect,
         originalWidth: Int,
         originalHeight: Int,

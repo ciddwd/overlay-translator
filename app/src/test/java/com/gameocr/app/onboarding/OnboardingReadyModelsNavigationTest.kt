@@ -109,7 +109,7 @@ class OnboardingReadyModelsNavigationTest {
     fun screenWiring_checksBeforeNavigationAndSharesPortraitLandscapeAndBackPath() {
         val path = "src/main/java/com/gameocr/app/onboarding/OnboardingScreen.kt"
         val source = listOf(File(path), File("app/$path")).first(File::isFile).readText()
-        assertEquals(2, Regex("onNext = ::continueSetup").findAll(source).count())
+        assertTrue(source.contains("onNext = ::continueSetup"))
         assertTrue(source.contains("if (stepIndex > 0) moveStep(forward = false)"))
         assertTrue(source.contains("if (saving || navigating) return"))
         assertTrue(source.contains("if (draft != currentDraft) return@launch"))

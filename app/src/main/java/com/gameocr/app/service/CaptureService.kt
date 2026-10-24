@@ -29,6 +29,7 @@ import com.gameocr.app.capture.captureRegionOrigin
 import com.gameocr.app.capture.wordSelectCapturePlan
 import com.gameocr.app.capture.FloatingWindowCaptureAction
 import com.gameocr.app.capture.LoopFrameChangePolicy
+import com.gameocr.app.capture.LoopCaptureFeedbackPolicy
 import com.gameocr.app.capture.LoopFrameFingerprint
 import com.gameocr.app.capture.LoopFrameFingerprintFactory
 import com.gameocr.app.capture.LoopFramePreOcrDecision
@@ -72,7 +73,10 @@ import com.gameocr.app.data.OcrEngineKind
 import com.gameocr.app.data.OverlayFontManager
 import com.gameocr.app.data.OverlayStyleMode
 import com.gameocr.app.data.adaptiveOverlayActive
+import com.gameocr.app.data.paddleDetectionThresholds
 import com.gameocr.app.data.effectiveOverlayRenderSettings
+import com.gameocr.app.data.floatingWindowRenderSettings
+import com.gameocr.app.overlay.FloatingWindowAppearance
 import com.gameocr.app.data.RenderMode
 import com.gameocr.app.data.Settings
 import com.gameocr.app.data.SettingsRepository
@@ -103,7 +107,6 @@ import com.gameocr.app.ocr.TextBlock
 import com.gameocr.app.ocr.TextOrientation
 import com.gameocr.app.ocr.TranslationOutputOrientationPolicy
 import com.gameocr.app.ocr.findOcrResultQualityIssue
-import com.gameocr.app.ocr.mapBlocksFromRotated180
 import com.gameocr.app.ocr.orientationHintFromLayout
 import com.gameocr.app.ocr.resolveTextBlockReadingOrientation
 import com.gameocr.app.ocr.shouldRerunLowQualityChinesePaddleOcr
@@ -111,9 +114,25 @@ import com.gameocr.app.ocr.sortTextBlocksForMergedPage
 import com.gameocr.app.ocr.sortTextBlocksForReading
 import com.gameocr.app.data.resolveTranslationOutputSettings
 import com.gameocr.app.data.FloatingSkill
+import com.gameocr.app.data.GestureAction
+import com.gameocr.app.data.GestureBindings
+import com.gameocr.app.overlay.GestureEdgeOverlay
+import com.gameocr.app.overlay.GestureMotionWake
+import com.gameocr.app.overlay.GestureWakeMotion
+import com.gameocr.app.overlay.GestureInputOverlay
 import com.gameocr.app.data.InputTranslationDoubleAction
 import com.gameocr.app.tts.ttsFailureMessage
 import com.gameocr.app.overlay.FloatingButtonManager
+import com.gameocr.app.overlay.SpeechBallState
+import com.gameocr.app.asr.AsrModelId
+import com.gameocr.app.asr.AsrModelInstaller
+import com.gameocr.app.asr.SpeechCaptureRequestActivity
+import com.gameocr.app.asr.SpeechConsentResult
+import com.gameocr.app.asr.SpeechEvent
+import com.gameocr.app.asr.SpeechSessionController
+import com.gameocr.app.asr.SpeechSubtitleCoordinator
+import com.gameocr.app.tts.TtsPlaybackPhase
+import androidx.core.content.ContextCompat
 import com.gameocr.app.overlay.FloatingMenuTourPrefs
 import com.gameocr.app.overlay.InputTranslationGuidePrefs
 import com.gameocr.app.overlay.CaptureRegionBorderOverlay
@@ -132,6 +151,7 @@ import com.gameocr.app.overlay.TranslationCorrectionRequest
 import com.gameocr.app.overlay.TtsPlaybackAction
 import com.gameocr.app.overlay.WordSelectOverlay
 import com.gameocr.app.overlay.floatingWordDetailsContent
+import com.gameocr.app.overlay.EnglishWordPreview
 import com.gameocr.app.overlay.floatingWordPreviewContent
 import com.gameocr.app.ui.MainActivity
 import com.gameocr.app.translate.BatchTranslationProgressState
@@ -179,6 +199,7 @@ import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -211,6 +232,7 @@ internal fun allowsFrequentTextStabilityProbe(
         OcrEngineKind.LUNA_OCR,
         OcrEngineKind.ML_KIT_AUTO,
         OcrEngineKind.ML_KIT_LATIN,
+        OcrEngineKind.ML_KIT_DEVANAGARI,
         OcrEngineKind.ML_KIT_JAPANESE,
         OcrEngineKind.ML_KIT_CHINESE,
         OcrEngineKind.ML_KIT_KOREAN,
@@ -278,8 +300,10 @@ class CaptureService : Service() {
     @Inject lateinit var foregroundAppResolver: ForegroundAppResolver
     @Inject lateinit var overlayFontManager: OverlayFontManager
     @Inject lateinit var ocrEngine: OcrEngine
+    @Inject lateinit var paddleOcrEngine: com.gameocr.app.ocr.PaddleOcrEngine
     @Inject lateinit var translator: Translator
     @Inject lateinit var shizukuCapabilities: ShizukuCapabilities
+    @Inject lateinit var rootShell: com.gameocr.app.capture.RootShell
     @Inject lateinit var logRepository: LogRepository
     @Inject lateinit var performanceDiagnostics: RuntimePerformanceDiagnostics
     // 端侧 LLM 翻译共享层。设置里切走 LOCAL_* 引擎或 Service 销毁时主动 unload 释放 ~500 MB 内存。
@@ -290,6 +314,10 @@ class CaptureService : Service() {
     @Inject lateinit var mangaOcrModelInstaller: MangaOcrModelInstaller
     @Inject lateinit var mangaOcrEngine: MangaOcrEngine
     @Inject lateinit var ttsEngine: TtsEngine
+    @Inject lateinit var asrModelInstaller: AsrModelInstaller
+    @Inject internal lateinit var asrHintResolver: com.gameocr.app.asr.AsrHintResolver
+    @Inject lateinit var speechPermissionPreparer: com.gameocr.app.asr.SpeechPermissionPreparer
+    @Inject lateinit var okHttpClient: okhttp3.OkHttpClient
     @Inject lateinit var translationMemoryService: TranslationMemoryService
     @Inject lateinit var translationGlossaryRepository: TranslationGlossaryRepository
     @Inject lateinit var sourcePreservationService: SourcePreservationService
@@ -297,6 +325,16 @@ class CaptureService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private fun launchSettingsWrite(write: suspend () -> Unit) = scope.launch {
+        com.gameocr.app.ui.runSettingsWrite(
+            onFailure = {
+                withContext(Dispatchers.Main.immediate) {
+                    overlay?.showInfoHint(getString(R.string.settings_storage_save_failed))
+                }
+            },
+            write = write,
+        )
+    }
     private val captureLock = Mutex()
     private val screenshotLock = Mutex()
     private val translationVisualDebugStore by lazy {
@@ -312,10 +350,39 @@ class CaptureService : Service() {
     private var captureUiStartupJob: Job? = null
     private var captureProbeJob: Job? = null
     private var projection: MediaProjection? = null
+    // Speech recognition: the controller owns model, capture and audio thread. A projection
+    // obtained only for speech is owned here and released with the session; the OCR projection
+    // is shared but never stopped by speech cleanup.
+    private var speechController: SpeechSessionController? = null
+    private var speechSubtitles: SpeechSubtitleCoordinator? = null
+    private var speechProjection: MediaProjection? = null
+    private var speechProjectionCallback: MediaProjection.Callback? = null
+    private var speechForegroundUpgraded = false
+    private var speechConsentPending = false
+    private var speechConsentTimeoutJob: Job? = null
+    /** Scopes accessibility help to the consent dialogs of the request in flight. */
+    private var speechConsentAssistToken: Long? = null
+    /**
+     * Main thread only. Held from the tap that starts speech until the start hands off to the
+     * consent flow or the controller, so repeated taps during checks and backend preparation
+     * cannot start a second preparation or open a second permission screen.
+     */
+    private val speechStartGuard = com.gameocr.app.asr.SpeechStartGuard()
+    private var speechSessionKey: String? = null
     private var floatingButton: FloatingButtonManager? = null
     private var overlay: OverlayManager? = null
     private var captureRegionBorder: CaptureRegionBorderOverlay? = null
     private var regionPicker: RegionPickerOverlay? = null
+    private var gestureInput: GestureInputOverlay? = null
+    private var gestureEdge: GestureEdgeOverlay? = null
+    private var gestureMotion: GestureMotionWake? = null
+    private var gestureTwistAction: GestureAction? = null
+    private var gestureTiltAction: GestureAction? = null
+    private var gestureEdgeCaptureHidden = false
+    private var gestureActionJob: Job? = null
+    @Volatile private var gestureInputActive = false
+    private var globalGestureEnabled = false
+    @Volatile private var gestureBindings = GestureBindings.defaults
     private var regionPickerJob: Job? = null
     private var languageQuickSwitch: LanguageQuickSwitchOverlay? = null
     private var presetQuickSwitch: PresetQuickSwitchOverlay? = null
@@ -355,12 +422,20 @@ class CaptureService : Service() {
     private var settingsCollectJob: Job? = null
     private var performanceOverlayCollectJob: Job? = null
     @Volatile private var loopMode: Boolean = false
+    private val loopCaptureFeedback = LoopCaptureFeedbackPolicy()
     private val captureSequence = AtomicLong(0L)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
         super.onConfigurationChanged(newConfig)
+        gestureInput?.cancel()
+        gestureEdge?.dismiss()
+        gestureMotion?.reset()
+        scope.launch {
+            val settings = settingsRepository.get()
+            withContext(Dispatchers.Main) { configureGestureWake(settings) }
+        }
         VerticalDiagnosticLog.i(
             "service configurationChanged orientation=${newConfig.orientation.toDiagOrientation()} " +
                 "display=${currentDisplayGeometry().toDiagString()} projection=${projectionDiagnosticSummary()}"
@@ -370,6 +445,7 @@ class CaptureService : Service() {
         // captureRegion 走 SettingsRepository.rescaleCaptureRegionIfNeeded——
         // 它用 saved 元数据按当前屏幕尺寸自动算比例，比"上次 onConfigurationChanged 拿到的尺寸"更稳。
         floatingButton?.onConfigurationChanged()
+        regionPicker?.onConfigurationChanged()
         mainScope.launch { overlay?.onConfigurationChanged() }
         scope.launch {
             val screen = physicalDisplaySize(this@CaptureService)
@@ -385,6 +461,7 @@ class CaptureService : Service() {
                 stopSelf()
             }
             ACTION_TRIGGER_ONCE -> triggerOnce()
+            ACTION_SPEECH_CONSENT -> handleSpeechConsent(intent)
             ACTION_PICK_REGION -> showRegionPickerOverlay()
             ACTION_RUN_FLOATING_TOUR -> {
                 FloatingMenuTourPrefs.reset(this)
@@ -432,8 +509,10 @@ class CaptureService : Service() {
         else CaptureBackend.MEDIA_PROJECTION
         val useShizuku = backend == CaptureBackend.SHIZUKU
         val useAccessibility = backend == CaptureBackend.ACCESSIBILITY
+        val useRoot = backend == CaptureBackend.ROOT
         if ((useShizuku && shizukuCapabilities.availability(this) != ShizukuCapabilities.Availability.READY) ||
-            (useAccessibility && !GameOcrAccessibilityService.isScreenshotReady())) {
+            (useAccessibility && !GameOcrAccessibilityService.isScreenshotReady()) ||
+            (useRoot && !rootShell.isGranted)) {
             Timber.w("[capture-start] selected backend no longer available: %s", backend)
             failCaptureStart()
             return
@@ -443,7 +522,7 @@ class CaptureService : Service() {
         // MediaProjection 路径走 MEDIA_PROJECTION；Shizuku 路径走 SPECIAL_USE。
         val fgType = when {
             Build.VERSION.SDK_INT < Build.VERSION_CODES.Q -> 0
-            useShizuku || useAccessibility -> android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            useShizuku || useAccessibility || useRoot -> android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
             else -> android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
         }
             // Android 14+ HyperOS/MIUI 上常见 race：CaptureStartRequestActivity onActivityResult
@@ -454,7 +533,10 @@ class CaptureService : Service() {
             return
         }
 
-        if (useShizuku) {
+        if (useRoot) {
+            screenshotter = com.gameocr.app.capture.RootScreenshotter(rootShell)
+            Timber.i("CaptureService started with Root path")
+        } else if (useShizuku) {
             screenshotter = ShizukuScreenshotter()
             Timber.i("CaptureService started with Shizuku path")
         } else if (useAccessibility) {
@@ -495,7 +577,11 @@ class CaptureService : Service() {
             ioScope = scope,
             onTranslationBlockDetailRequested = ::showTranslationBlockCopyPanel,
             onTranslationCorrectionRequested = ::showTranslationCorrection,
-            onFloatingWindowDismissed = { ttsEngine.stop() },
+            onFloatingWindowDismissed = {
+                ttsEngine.stop()
+                // Closing the result window ends the speech session; the ball can start it again.
+                stopSpeechSession()
+            },
             onFloatingWordLookupRequested = ::lookupFloatingEnglishWord,
             onFloatingWordDetailsRequested = ::showFloatingEnglishWordDetails,
         )
@@ -514,6 +600,8 @@ class CaptureService : Service() {
                     FloatingSkill.WORD_SELECT -> triggerWordSelect()
                     FloatingSkill.LOOP -> toggleLoopMode()
                     FloatingSkill.INPUT_TRANSLATE -> triggerInputTranslation()
+                    FloatingSkill.GESTURE -> showGestureInput()
+                    FloatingSkill.SPEECH -> onSpeechTap()
                 }
             },
             onDoubleTap = {
@@ -572,10 +660,15 @@ class CaptureService : Service() {
                     floatingButton?.dockEdgeInsetPx = (s.floatingButtonDockInsetDp * resources.displayMetrics.density).toInt()
                     floatingButton?.menuItemOrder = s.floatingMenuItemOrder
                     floatingButton?.arcMenuPageSize = s.arcMenuPageSize
+                    floatingButton?.applyQuickPanelPreference(s.quickPanelEnabled)
+                    floatingButton?.quickPanelLanguages = s.sourceLang to s.targetLang
                     floatingButton?.skill = s.floatingButtonSkill
+                    speechSessionKey = SpeechModePolicy.sessionKey(s)
+                    gestureBindings = GestureBindings.normalize(s.gestureBindings)
                     floatingButton?.inputTranslationDoubleAction = s.inputTranslationDoubleAction
                     floatingButton?.applyOpacity(s.floatingButtonAlpha)
                     floatingButton?.show()
+                    configureGestureWake(s)
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -613,8 +706,8 @@ class CaptureService : Service() {
         startOcrWarmupIfNeeded()
         startLocalLlmWarmupIfNeeded()
 
-        // Keep the existing Shizuku trial capture and its failure hint.
-        if (useShizuku) {
+        // Trial capture for shell-based paths (Shizuku and Root) with a failure hint.
+        if (useShizuku || useRoot) {
             captureProbeJob = scope.launch {
                 try {
                     val shotter = screenshotter ?: return@launch
@@ -623,10 +716,15 @@ class CaptureService : Service() {
                         withContext(Dispatchers.Main.immediate) {
                             if (captureStopRequested) return@withContext
                             if (test == null) {
-                                Timber.w("Shizuku dry-run failed; stopping service")
+                                Timber.w("%s dry-run failed; stopping service", backend)
                                 logRepository.error(LogRepository.Category.CAPTURE,
-                                    getString(R.string.log_msg_shizuku_dry_run_failed))
-                                overlay?.showErrorHint(getString(R.string.toast_shizuku_dry_run_failed), durationMs = 8000L)
+                                    getString(if (useRoot) R.string.log_msg_root_dry_run_failed
+                                        else R.string.log_msg_shizuku_dry_run_failed))
+                                overlay?.showErrorHint(
+                                    getString(if (useRoot) R.string.toast_root_dry_run_failed
+                                        else R.string.toast_shizuku_dry_run_failed),
+                                    durationMs = 8000L,
+                                )
                                 delay(8500L)
                                 if (!captureStopRequested) stopSelf()
                             }
@@ -777,6 +875,7 @@ class CaptureService : Service() {
     }
 
     private fun triggerOnce() {
+        gestureInput?.cancel()
         if (captureLock.isLocked) {
             Timber.i("Skip manual trigger because capture is already running")
             return
@@ -1023,7 +1122,7 @@ class CaptureService : Service() {
                             // 保存本次选框
                             if (plan.saveLastSelection) {
                                 val s = physicalDisplaySize(this@CaptureService)
-                                settingsRepository.update { it.copy(
+                                settingsRepository.tryUpdate { it.copy(
                                     wordSelectLastRegion = selectedRegion,
                                     wordSelectLastRegionSavedScreenW = s.width,
                                     wordSelectLastRegionSavedScreenH = s.height,
@@ -1189,9 +1288,9 @@ class CaptureService : Service() {
                                 TranslationCorrectionRequest(source, translation)
                             )
                         },
-                        onEnglishWordTapped = if (!extractTextOnly && settings.dictionaryTapLookupEnabled) {
+                        onEnglishWordTapped = if (settings.dictionaryTapLookupEnabled) {
                             { word, anchor ->
-                                lookupEnglishWordInTranslationCard(shownCard, word, anchor, settings)
+                                lookupEnglishWordInPreview(shownCard.englishWordPreview, word, anchor, settings)
                             }
                         } else null,
                     )
@@ -1433,29 +1532,56 @@ class CaptureService : Service() {
     }
 
     private fun shouldRerunForTextLine180(result: OrientationResult): Boolean =
-        result.source == PaddleTextLineOrientationClassifier.SOURCE && result.rawAngle == 180
+        result.rawAngle == 180 && (result.source == PaddleTextLineOrientationClassifier.SOURCE ||
+            result.source == com.gameocr.app.ocr.OcrHalfTurnPolicy.SOURCE)
 
+    private data class CorrectedOcrFrame(
+        val bitmap: Bitmap,
+        val preprocessed: Bitmap,
+        val rotation: Int,
+        val blocks: List<TextBlock>,
+    )
+
+    /** Returns the rotated pass only when it reads clearly better than [firstBlocks]. */
     private suspend fun rerunOcrRotated180(
-        bitmap: Bitmap,
+        originalBitmap: Bitmap,
+        currentRotation: Int,
         engine: OcrEngineKind,
         settings: Settings,
         diagId: Long,
-    ): List<TextBlock> {
-        val rotated = rotateBitmap180(bitmap)
+        firstBlocks: List<TextBlock>,
+    ): CorrectedOcrFrame? {
+        val rotation = com.gameocr.app.ocr.OcrHalfTurnPolicy.correctedRotation(currentRotation)
+        val normalized = CaptureContentOrientationPolicy.rotateForOcr(originalBitmap, rotation)
+        var processed: Bitmap? = null
+        var keep = false
         return try {
-            logVerticalDiag(diagId, "rerun OCR rotated180 engine=${engine.name} bitmap=${bitmap.width}x${bitmap.height}")
-            val blocks = ocrEngine.recognize(rotated, engine, settings)
-            val mapped = mapBlocksFromRotated180(blocks, bitmap.width, bitmap.height)
-            logVerticalBlocks(diagId, "rerunBlocks rotated180 engine=${engine.name}", mapped)
-            mapped
+            val preprocess = if (engine.needsRawBitmap) {
+                settings.preprocess.copy(invert = false, binarize = false)
+            } else settings.preprocess
+            val correctedInput = BitmapPreprocessor.apply(normalized, preprocess)
+            processed = correctedInput
+            logVerticalDiag(diagId, "rerun OCR rotated180 engine=${engine.name} " +
+                "normalization=$currentRotation->$rotation bitmap=${normalized.width}x${normalized.height}")
+            val blocks = ocrEngine.recognize(correctedInput, engine, settings)
+            val accepted = com.gameocr.app.ocr.OcrHalfTurnRerunPolicy.prefersRerun(firstBlocks, blocks)
+            logOcrInfo(
+                "[orient-textline] 180deg rerun score=%.1f first=%.1f accepted=%s".format(
+                    com.gameocr.app.ocr.OcrHalfTurnRerunPolicy.score(blocks),
+                    com.gameocr.app.ocr.OcrHalfTurnRerunPolicy.score(firstBlocks),
+                    accepted,
+                )
+            )
+            if (!accepted) return null
+            logVerticalBlocks(diagId, "rerunBlocks rotated180 engine=${engine.name}", blocks)
+            keep = true
+            CorrectedOcrFrame(normalized, correctedInput, rotation, blocks)
         } finally {
-            rotated.recycle()
+            if (!keep) {
+                processed?.takeIf { it !== normalized }?.recycle()
+                if (normalized !== originalBitmap) normalized.recycle()
+            }
         }
-    }
-
-    private fun rotateBitmap180(bitmap: Bitmap): Bitmap {
-        val matrix = Matrix().apply { postRotate(180f) }
-        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
     }
 
     /**
@@ -1464,21 +1590,18 @@ class CaptureService : Service() {
      * applySkillIcon 避免一次跨线程延迟。
      */
     private fun applyFloatingSkill(newSkill: FloatingSkill) {
+        // Leaving speech mode cancels capture and pending work without another visible action.
+        if (newSkill != FloatingSkill.SPEECH) stopSpeechSession()
         if (newSkill != FloatingSkill.LOOP && loopMode) toggleLoopMode()
         if (newSkill != FloatingSkill.INPUT_TRANSLATE) cancelInputTranslation(silent = true)
-        scope.launch {
+        launchSettingsWrite {
             settingsRepository.update { it.copy(floatingButtonSkill = newSkill) }
         }
         floatingButton?.skill = newSkill
         mainScope.launch { floatingButton?.applySkillIcon() }
-        val msgRes = when (newSkill) {
-            FloatingSkill.FULL_SCREEN -> R.string.toast_skill_switched_full_screen
-            FloatingSkill.WORD_SELECT -> R.string.toast_skill_switched_word_select
-            FloatingSkill.LOOP -> R.string.toast_skill_switched_loop
-            FloatingSkill.INPUT_TRANSLATE -> R.string.toast_skill_switched_input_translate
-        }
+        val msgRes = floatingSkillSwitchHintRes(newSkill, floatingButton?.inputTranslationDoubleAction)
         mainScope.launch {
-            overlay?.showInfoHint(getString(msgRes))
+            overlay?.showInfoHint(getString(msgRes), durationMs = 3500L, maxLines = 4)
             if (
                 newSkill == FloatingSkill.INPUT_TRANSLATE &&
                 !InputTranslationGuidePrefs.shouldShow(this@CaptureService)
@@ -1501,6 +1624,414 @@ class CaptureService : Service() {
         }
     }
 
+    // —— Speech recognition (shared operation ball, speech mode) ——
+
+    /** Tap in speech mode: start, pause or resume. Duplicate taps while preparing are ignored. */
+    private fun onSpeechTap() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            overlay?.showInfoHint(getString(R.string.asr_error_unsupported_android), durationMs = 3500L, maxLines = 3)
+            return
+        }
+        if (speechConsentPending || speechStartGuard.isActive) return
+        val controller = ensureSpeechController()
+        when (controller.state) {
+            SpeechBallState.PREPARING -> Unit
+            SpeechBallState.RECOGNIZING -> controller.pause()
+            SpeechBallState.PAUSED -> {
+                if (activeSpeechProjection() != null) {
+                    controller.resume()
+                } else {
+                    // The projection ended while paused: authorization must be requested again.
+                    controller.stop()
+                    startSpeechSession()
+                }
+            }
+            SpeechBallState.IDLE -> startSpeechSession()
+        }
+    }
+
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.Q)
+    private fun startSpeechSession(requireSpeechMode: Boolean = true) {
+        val request = speechStartGuard.begin() ?: return
+        floatingButton?.applySpeechState(SpeechBallState.PREPARING)
+        showSpeechNotice(R.string.asr_notice_preparing)
+        scope.launch {
+            var handedOff = false
+            try {
+                val settings = settingsRepository.get()
+                val model = AsrModelId.forSettings(settings.asrEngine, settings.asrWhisperVariant)
+                // Model or cloud configuration first: no permission prompt for a session that cannot run.
+                val block = com.gameocr.app.asr.SpeechStartPolicy.blockReason(
+                    settings, model?.let { asrModelInstaller.checkInstalled(it) != null },
+                )
+                if (block != null) {
+                    showSpeechNotice(block.message)
+                    return@launch
+                }
+                // Shizuku/root, when already set up, can grant recording and pre-approve projection.
+                runCatching { speechPermissionPreparer.prepare() }
+                    .onFailure { Timber.w(it, "[asr] backend pre-authorization failed") }
+                handedOff = withContext(Dispatchers.Main.immediate) {
+                    // The tap may have been superseded meanwhile: session stopped, mode or window changed.
+                    if (!speechStartGuard.isCurrent(request) ||
+                        (requireSpeechMode && floatingButton?.skill != FloatingSkill.SPEECH)) {
+                        return@withContext false
+                    }
+                    val audioGranted = speechPermissionPreparer.audioGranted()
+                    val activeProjection = activeSpeechProjection()
+                    if (audioGranted && activeProjection != null) {
+                        val started = ensureSpeechController().start(activeProjection)
+                        mainScope.launch {
+                            started.join()
+                            finishSpeechStart(request)
+                        }
+                    } else {
+                        requestSpeechConsent(needsProjection = activeProjection == null, audioGranted)
+                        finishSpeechStart(request)
+                    }
+                    true
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Timber.w(error, "[asr] speech start preparation failed")
+            } finally {
+                if (!handedOff) withContext(NonCancellable + Dispatchers.Main.immediate) { finishSpeechStart(request) }
+            }
+        }
+    }
+
+    /** Ends [request]'s start guard; the ball then mirrors consent or controller state again. */
+    private fun finishSpeechStart(request: Long) {
+        if (!speechStartGuard.finish(request)) return
+        if (!speechConsentPending) floatingButton?.applySpeechState(currentSpeechBallState())
+    }
+
+    private fun currentSpeechBallState(): SpeechBallState =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) speechController?.state ?: SpeechBallState.IDLE
+        else SpeechBallState.IDLE
+
+    private fun requestSpeechConsent(needsProjection: Boolean, audioGranted: Boolean) {
+        if (!audioGranted) {
+            overlay?.showInfoHint(getString(R.string.asr_permission_explanation), durationMs = 4000L, maxLines = 4)
+        }
+        speechConsentPending = true
+        floatingButton?.applySpeechState(SpeechBallState.PREPARING)
+        if (com.gameocr.app.trigger.GameOcrAccessibilityService.isConnected()) {
+            speechConsentAssistToken = com.gameocr.app.trigger.ConsentDialogAssist.arm(
+                appLabel = applicationInfo.loadLabel(packageManager).toString(),
+                timeoutMs = SPEECH_CONSENT_ASSIST_MS,
+            )
+        }
+        speechConsentTimeoutJob?.cancel()
+        // A consent host that never reports back (e.g. killed) must not lock the ball forever.
+        speechConsentTimeoutJob = mainScope.launch {
+            delay(SPEECH_CONSENT_TIMEOUT_MS)
+            if (speechConsentPending) {
+                speechConsentPending = false
+                floatingButton?.applySpeechState(currentSpeechBallState())
+            }
+        }
+        try {
+            startActivity(SpeechCaptureRequestActivity.intent(this, needsProjection))
+        } catch (error: Exception) {
+            Timber.w(error, "[asr] consent host could not be opened")
+            finishSpeechConsent()
+        }
+    }
+
+    private fun finishSpeechConsent() {
+        speechConsentAssistToken?.let(com.gameocr.app.trigger.ConsentDialogAssist::disarm)
+        speechConsentAssistToken = null
+        speechConsentPending = false
+        speechConsentTimeoutJob?.cancel()
+        speechConsentTimeoutJob = null
+        floatingButton?.applySpeechState(currentSpeechBallState())
+    }
+
+    private fun handleSpeechConsent(intent: Intent) {
+        if (!speechConsentPending) {
+            Timber.i("[asr] ignore consent result without a pending request")
+            return
+        }
+        finishSpeechConsent()
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || floatingButton == null) return
+        when (intent.getStringExtra(EXTRA_SPEECH_CONSENT)) {
+            SpeechConsentResult.AUDIO_DENIED.name -> showSpeechNotice(R.string.asr_error_audio_denied)
+            SpeechConsentResult.PROJECTION_CANCELED.name -> showSpeechNotice(R.string.asr_error_projection_canceled)
+            SpeechConsentResult.GRANTED.name -> {
+                val data = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
+                } else {
+                    @Suppress("DEPRECATION") intent.getParcelableExtra(EXTRA_RESULT_DATA)
+                }
+                val active = if (data != null) {
+                    acquireSpeechProjection(intent.getIntExtra(EXTRA_RESULT_CODE, 0), data)
+                } else activeSpeechProjection()
+                if (active == null) {
+                    showSpeechNotice(R.string.asr_error_capture_stopped)
+                } else {
+                    ensureSpeechController().start(active)
+                }
+            }
+        }
+    }
+
+    /**
+     * Android 14+ only hands out a projection while the service runs with the mediaProjection
+     * foreground type, so a Shizuku/accessibility/root session adds that type for speech.
+     */
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.Q)
+    private fun acquireSpeechProjection(resultCode: Int, data: Intent): MediaProjection? {
+        releaseSpeechProjection()
+        if (projection == null) {
+            try {
+                ServiceCompat.startForeground(
+                    this, CaptureNotification.NOTIF_ID, CaptureNotification.build(this),
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or
+                        android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION,
+                )
+                speechForegroundUpgraded = true
+            } catch (error: Exception) {
+                Timber.w(error, "[asr] could not add the mediaProjection foreground type")
+                return null
+            }
+        }
+        val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        val acquired = runCatching { mpm.getMediaProjection(resultCode, data) }
+            .onFailure { Timber.w(it, "[asr] getMediaProjection failed") }
+            .getOrNull()
+        if (acquired == null) {
+            restoreForegroundAfterSpeech()
+            return null
+        }
+        val callback = object : MediaProjection.Callback() {
+            override fun onStop() {
+                mainScope.launch {
+                    if (speechProjection !== acquired) return@launch
+                    Timber.i("[asr] speech projection stopped by the system or user")
+                    stopSpeechSession()
+                    showSpeechNotice(R.string.asr_error_capture_stopped)
+                }
+            }
+        }
+        acquired.registerCallback(callback, android.os.Handler(mainLooper))
+        speechProjection = acquired
+        speechProjectionCallback = callback
+        return acquired
+    }
+
+    /** Projection used for speech: the OCR session's projection when present, else speech's own. */
+    private fun activeSpeechProjection(): MediaProjection? = projection ?: speechProjection
+
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.Q)
+    private fun ensureSpeechController(): SpeechSessionController {
+        speechController?.let { return it }
+        val controller = SpeechSessionController(
+            hintResolver = asrHintResolver,
+            logRepository = logRepository,
+            userMessage = { getString(it) },
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+            assets = assets,
+            installer = asrModelInstaller,
+            httpClient = okHttpClient,
+            settings = { settingsRepository.get() },
+            isOwnAudioPlaying = {
+                ttsEngine.playbackState.value.phase.let {
+                    it == TtsPlaybackPhase.PLAYING || it == TtsPlaybackPhase.LOADING
+                }
+            },
+            listener = object : SpeechSessionController.Listener {
+                override fun onState(state: SpeechBallState) {
+                    mainScope.launch {
+                        if (!speechConsentPending && !speechStartGuard.isActive) floatingButton?.applySpeechState(state)
+                    }
+                }
+
+                override fun onEvent(generation: Long, event: SpeechEvent) {
+                    speechSubtitles?.onEvent(generation, event)
+                }
+
+                override fun onGenerationChanged() {
+                    speechSubtitles?.onGenerationChanged()
+                }
+
+                override fun onNotice(message: Int) = showSpeechNotice(message)
+            },
+        )
+        speechController = controller
+        speechSubtitles = SpeechSubtitleCoordinator(
+            logRepository = logRepository,
+            userMessage = { getString(it) },
+            scope = scope,
+            translator = translator,
+            settings = { settingsRepository.get() },
+            currentGeneration = { controller.generation },
+            metrics = { controller.metrics },
+            render = { records -> mainScope.launch { overlay?.showSpeechRecords(records) } },
+        ).also { coordinator ->
+            scope.launch { coordinator.setMaxRecords(settingsRepository.get().asrMaxDisplayedRecords) }
+        }
+        return controller
+    }
+
+    /**
+     * Stops capture, recognition and pending translations. Displayed results stay. Never stops a
+     * projection that the OCR session still owns.
+     */
+    private fun stopSpeechSession() {
+        // Invalidates a start still preparing; its main-thread hand-off then does nothing.
+        speechStartGuard.invalidate()
+        if (speechConsentPending) finishSpeechConsent()
+        speechSubtitles?.reset()
+        val controller = speechController ?: run {
+            releaseSpeechProjection()
+            return
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        val stopped = controller.stop()
+        mainScope.launch {
+            stopped.join()
+            if (controller.state == SpeechBallState.IDLE) releaseSpeechProjection()
+        }
+    }
+
+    private fun releaseSpeechProjection() {
+        val owned = speechProjection ?: return
+        speechProjection = null
+        speechProjectionCallback?.let { runCatching { owned.unregisterCallback(it) } }
+        speechProjectionCallback = null
+        runCatching { owned.stop() }
+        restoreForegroundAfterSpeech()
+    }
+
+    private fun restoreForegroundAfterSpeech() {
+        if (!speechForegroundUpgraded || captureStopRequested) return
+        speechForegroundUpgraded = false
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        runCatching {
+            ServiceCompat.startForeground(
+                this, CaptureNotification.NOTIF_ID, CaptureNotification.build(this),
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+            )
+        }.onFailure { Timber.w(it, "[asr] could not restore the foreground type") }
+    }
+
+    private fun showSpeechNotice(@androidx.annotation.StringRes message: Int) {
+        mainScope.launch {
+            overlay?.showInfoHint(getString(message), durationMs = 4000L, maxLines = 4)
+        }
+    }
+
+    private fun gestureWakeAllowed(): Boolean {
+        val ball = floatingButton ?: return false
+        return !captureStopRequested &&
+            (ball.skill == FloatingSkill.GESTURE || globalGestureEnabled)
+    }
+
+    private fun configureGestureWake(settings: Settings) {
+        globalGestureEnabled = settings.gestureGlobalEnabled
+        val allowed = gestureWakeAllowed()
+        if (!allowed && gestureInputActive) gestureInput?.cancel()
+        val enabled = settings.gestureEdgeEnabled && allowed
+        val edge = gestureEdge ?: GestureEdgeOverlay(
+            this,
+            onEnter = { showGestureInput() },
+            onInput = { action, x, y -> gestureInput?.forwardEdge(action, x, y) },
+        ).also { gestureEdge = it }
+        edge.configure(settings, enabled)
+        edge.setSuppressed(gestureInputActive || gestureEdgeCaptureHidden)
+        gestureTwistAction = settings.gestureTwistAction
+        gestureTiltAction = settings.gestureTiltAction
+        val motion = gestureMotion ?: GestureMotionWake(
+            this,
+            canTrigger = { !gestureInputActive && !gestureEdgeCaptureHidden && !captureStopRequested &&
+                (loopMode || (!captureLock.isLocked && !screenshotLock.isLocked)) && gestureActionJob?.isActive != true &&
+                regionPicker?.isShown() != true && wordSelect?.isShown() != true &&
+                languageQuickSwitch?.isShown() != true && presetQuickSwitch?.isShown() != true &&
+                gestureWakeAllowed() },
+            onTrigger = { motion ->
+                val action = if (motion == GestureWakeMotion.TWIST) gestureTwistAction else gestureTiltAction
+                if (action == null) showGestureInput()
+                else if (action != GestureAction.NONE && action.targetSkill == null) {
+                    gestureActionJob = mainScope.launch { executeGestureAction(action) }
+                }
+            },
+            onUnavailable = { overlay?.showInfoHint(getString(R.string.gesture_motion_unavailable)) },
+        ).also { gestureMotion = it }
+        motion.configure(settings, allowed)
+    }
+
+    private fun showGestureInput(): Boolean {
+        if (!gestureWakeAllowed() || (!loopMode && (captureLock.isLocked || screenshotLock.isLocked)) || gestureActionJob?.isActive == true) return false
+        val panel = gestureInput ?: GestureInputOverlay(this).also { gestureInput = it }
+        if (panel.isShown()) return false
+        gestureInputActive = true
+        gestureEdge?.setSuppressed(true)
+        floatingButton?.setHiddenForCapture(true)
+        fun restore() {
+            gestureInputActive = false
+            gestureEdge?.setSuppressed(gestureEdgeCaptureHidden)
+            floatingButton?.setHiddenForCapture(false)
+        }
+        val opened = panel.show(
+            actionFor = { gestureBindings[it] ?: GestureAction.NONE },
+            loopRunning = { loopMode },
+            onResult = { gesture ->
+                restore()
+                val action = gesture?.let { gestureBindings[it] }
+                when {
+                    gesture == null -> overlay?.showInfoHint(getString(R.string.gesture_not_recognized))
+                    action == null || action == GestureAction.NONE ->
+                        overlay?.showInfoHint(getString(R.string.gesture_not_bound))
+                    else -> gestureActionJob = mainScope.launch {
+                        // Return input focus before screenshot, selection or text input.
+                        delay(100)
+                        if (!captureStopRequested) executeGestureAction(action)
+                    }
+                }
+            },
+            onCancel = { restore() },
+        )
+        if (!opened) {
+            restore()
+            overlay?.showErrorHint(getString(R.string.gesture_open_failed))
+        }
+        return opened
+    }
+
+    private suspend fun executeGestureAction(action: GestureAction) {
+        if (!gestureWakeAllowed() || action == GestureAction.NONE || action.targetSkill != null) return
+        if (action != GestureAction.TOGGLE_SPEECH) stopSpeechSession()
+        if (loopMode && action != GestureAction.TOGGLE_LOOP) {
+            toggleLoopMode()
+            // Let the cancelled loop release its capture before starting another action.
+            captureLock.withLock { }
+        }
+        if (captureStopRequested) return
+        when (action) {
+            GestureAction.TRANSLATE_SCREEN -> triggerOnce()
+            GestureAction.SELECT_WORD -> triggerWordSelect()
+            GestureAction.TOGGLE_LOOP -> toggleLoopMode()
+            GestureAction.TOGGLE_SPEECH -> {
+                if (speechConsentPending || speechStartGuard.isActive || currentSpeechBallState() != SpeechBallState.IDLE) {
+                    stopSpeechSession()
+                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    startSpeechSession(requireSpeechMode = false)
+                } else {
+                    showSpeechNotice(R.string.asr_error_unsupported_android)
+                }
+            }
+            GestureAction.TRANSLATE_INPUT -> triggerInputTranslation()
+            GestureAction.PICK_REGION -> showRegionPickerOverlay()
+            GestureAction.LANGUAGE_PAIR -> showLanguageQuickSwitchOverlay()
+            GestureAction.PRESET_SWITCH -> showPresetQuickSwitchOverlay()
+            GestureAction.SETTINGS -> floatingButton?.onMenuOpenSettings?.invoke()
+            GestureAction.HOME -> floatingButton?.onMenuOpenMainActivity?.invoke()
+            else -> Unit // Unbound and legacy mode bindings never change the gesture ball.
+        }
+    }
+
     private fun showLanguageQuickSwitchOverlay() {
         val panel = languageQuickSwitch ?: LanguageQuickSwitchOverlay(this).also {
             languageQuickSwitch = it
@@ -1511,18 +2042,18 @@ class CaptureService : Service() {
             mainScope.launch {
                 panel.show(settings) { source, target ->
                     if (!translationLanguageCodesConflict(source, target)) {
-                        scope.launch {
+                        launchSettingsWrite {
                             settingsRepository.update {
                                 it.copy(sourceLang = source, targetLang = target)
                             }
+                            withContext(Dispatchers.Main.immediate) {
+                                overlay?.showInfoHint(getString(
+                                    R.string.language_quick_updated_format,
+                                    Languages.nameOf(this@CaptureService, source),
+                                    Languages.nameOf(this@CaptureService, target),
+                                ))
+                            }
                         }
-                        overlay?.showInfoHint(
-                            getString(
-                                R.string.language_quick_updated_format,
-                                Languages.nameOf(this@CaptureService, source),
-                                Languages.nameOf(this@CaptureService, target)
-                            )
-                        )
                     }
                 }
             }
@@ -1538,15 +2069,14 @@ class CaptureService : Service() {
             val settings = settingsRepository.get()
             mainScope.launch {
                 panel.show(settings) { preset ->
-                    scope.launch {
+                    launchSettingsWrite {
                         settingsRepository.applyTranslationPreset(preset.id)
+                        withContext(Dispatchers.Main.immediate) {
+                            overlay?.showInfoHint(getString(
+                                R.string.preset_quick_applied_format, presetDisplayName(preset),
+                            ))
+                        }
                     }
-                    overlay?.showInfoHint(
-                        getString(
-                            R.string.preset_quick_applied_format,
-                            presetDisplayName(preset)
-                        )
-                    )
                 }
             }
         }
@@ -1629,6 +2159,10 @@ class CaptureService : Service() {
                         )
                         loopJob = scope.launch {
                             while (isActive && loopMode) {
+                                if (gestureInputActive) {
+                                    delay(100)
+                                    continue
+                                }
                                 val s2 = settingsRepository.get()
                                 if (s2.loopTriggerMode == LoopTriggerMode.SETTLED_PAGE) {
                                     observeSettledPage()
@@ -1681,6 +2215,11 @@ class CaptureService : Service() {
                         role = "block_translation_selection",
                         playbackId = "translation-block:$diagId:translation",
                     ),
+                    onEnglishWordTapped = if (settings.dictionaryTapLookupEnabled) {
+                        { word, anchor ->
+                            lookupEnglishWordInPreview(copyOverlay.englishWordPreview, word, anchor, settings)
+                        }
+                    } else null,
                     onCorrectTranslation = {
                         showTranslationCorrection(
                             TranslationCorrectionRequest(source, translation)
@@ -1800,9 +2339,18 @@ class CaptureService : Service() {
     }
 
     private fun resetLoopRuntimeState() {
+        loopCaptureFeedback.reset()
         loopSessionId += 1L
         loopTranslationInFlight = false
         lastLoopRuntimeLogState = null
+    }
+
+    private suspend fun provideLoopCaptureFeedback(settings: Settings, captureId: Long) {
+        withContext(Dispatchers.Main.immediate) {
+            if (loopCaptureFeedback.accept(settings.loopCaptureVibrationEnabled, loopMode, captureId)) {
+                floatingButton?.performCaptureHapticFeedback()
+            }
+        }
     }
 
     private fun beginTranslationBatch(batchId: Long) {
@@ -2361,8 +2909,25 @@ class CaptureService : Service() {
         screenshotter: Screenshotter,
         diagId: Long,
     ): Bitmap? = screenshotLock.withLock {
+        while (gestureInputActive) delay(50)
         val startedAt = SystemClock.elapsedRealtime()
-        val bitmap = screenshotter.capture()
+        val hideEdge = withContext(Dispatchers.Main.immediate) {
+            (gestureEdge?.isShown() == true).also {
+                if (it) {
+                    gestureEdgeCaptureHidden = true
+                    gestureEdge?.setSuppressed(true)
+                }
+            }
+        }
+        val bitmap = try {
+            if (hideEdge) delay(32)
+            screenshotter.capture()
+        } finally {
+            if (hideEdge) withContext(NonCancellable + Dispatchers.Main.immediate) {
+                gestureEdgeCaptureHidden = false
+                gestureEdge?.setSuppressed(gestureInputActive)
+            }
+        }
         val elapsedMs = (SystemClock.elapsedRealtime() - startedAt).coerceAtLeast(0L)
         val wakeContext = performanceDiagnostics.currentWakeContext()
         val wakeSuffix = wakeContext?.let {
@@ -2412,6 +2977,8 @@ class CaptureService : Service() {
         var captureRegionBorderHiddenForCapture = false
         var floatingWindowPreparation = PreparedFloatingWindowCapture()
         var unclaimedPreparedFull = preparedFullScreen
+        // OCR-independent source-preservation inputs, loaded beside OCR (see sourcePreservationService.lookup).
+        var sourcePreservationLookup: Deferred<SourcePreservationService.Lookup?>? = null
         fun restoreCaptureChromeOnce(showLoading: Boolean) {
             if (captureChromeRestored) return
             captureChromeRestored = true
@@ -2492,6 +3059,9 @@ class CaptureService : Service() {
                 }
                 captureChromeChanged = captureRegionBorderHiddenForCapture
                 if (loopMode) {
+                    if (settings.loopTriggerMode != LoopTriggerMode.WAIT_FOR_TEXT_COMPLETE) {
+                        provideLoopCaptureFeedback(settings, diagId)
+                    }
                     val floatingButtonShown = withContext(Dispatchers.Main) {
                         floatingButton?.isShown() == true
                     }
@@ -2662,6 +3232,7 @@ class CaptureService : Service() {
                                 return
                             }
                             LoopRoiStabilityDecision.RUN_FINAL_ROI_OCR -> {
+                                provideLoopCaptureFeedback(settings, diagId)
                                 val roiOcrStartedAt = System.currentTimeMillis()
                                 val finalBlocks = try {
                                     recognizeLoopRoi(workBitmap, pending, settings)
@@ -2790,6 +3361,7 @@ class CaptureService : Service() {
                 )
             }
 
+            provideLoopCaptureFeedback(settings, diagId)
             // 端到端引擎（有道图片翻译）：跳过 OCR 阶段，直接拿带译文的 box；不走 mergeAdjacentBlocks
             // 也不走后续 translateOne，因为译文已经在 region 粒度上对齐好了。
             logVerticalDiag(
@@ -2800,6 +3372,12 @@ class CaptureService : Service() {
                     "renderMode=${settings.renderMode.name}"
             )
             val ocrStartedAt = System.currentTimeMillis()
+            if (!isEndToEnd && settings.sourcePreservationEnabled) {
+                // Usage history and glossary reads take ~1 s and do not depend on OCR output.
+                sourcePreservationLookup = scope.async(Dispatchers.IO) {
+                    sourcePreservationService.lookup(settings)
+                }
+            }
             if (isEndToEnd) {
                 val translatedBlocks = try {
                     translator.ocrAndTranslate(workBitmap, settings)
@@ -2886,13 +3464,13 @@ class CaptureService : Service() {
             } else {
                 null
             }
-            val contentRotationDegrees = CaptureContentOrientationPolicy.resolveRotationDegrees(
+            var contentRotationDegrees = CaptureContentOrientationPolicy.resolveRotationDegrees(
                 requested = settings.captureContentOrientation,
                 imageWidth = workBitmap.width,
                 imageHeight = workBitmap.height,
                 modelAngle = contentOrientationModelHint?.rawAngle ?: 0,
             )
-            val ocrBitmap = CaptureContentOrientationPolicy.rotateForOcr(
+            var ocrBitmap = CaptureContentOrientationPolicy.rotateForOcr(
                 bitmap = workBitmap,
                 counterClockwiseDegrees = contentRotationDegrees,
             )
@@ -3035,11 +3613,28 @@ class CaptureService : Service() {
             // （如发现是日文竖排但用了 ML Kit Latin），用更合适的引擎重跑一次。横排场景路由返回
             // null，零开销；竖排误用其它引擎时 OCR 跑 2 次但用户被自动救。详见 OrientationCoordinator。
             // hint 提升到外层：渲染层 renderBlocks 也要用（按方向选 TextView vs VerticalTextView）
+            val contentHalfTurn = if (contentRotationDegrees != 0 &&
+                effectiveEngine == OcrEngineKind.PADDLE_ONNX && firstBlocks.isNotEmpty()
+            ) {
+                try {
+                    paddleOcrEngine.probeHalfTurn(preprocessed, firstBlocks, settings.paddleModelVersion)
+                } catch (ce: kotlinx.coroutines.CancellationException) {
+                    if (preprocessed !== ocrBitmap) preprocessed.recycle()
+                    if (ocrBitmap !== workBitmap) ocrBitmap.recycle()
+                    workBitmap.recycle()
+                    throw ce
+                } catch (t: Throwable) {
+                    logVerticalDiag(t, diagId, "content half-turn recognition probe failed; keep orientation classifier")
+                    null
+                }
+            } else null
             val rawBlocks: List<TextBlock> = if (
-                settings.textOrientationAutoDetect &&
+                (settings.textOrientationAutoDetect || contentHalfTurn?.rawAngle == 180) &&
                 (firstBlocks.isNotEmpty() || lowQualityChinesePaddleFallback)
             ) {
-                val hint = if (settings.manualTextOrientation != null) {
+                val hint = if (contentHalfTurn != null) {
+                    contentHalfTurn.copy(orientation = settings.manualTextOrientation ?: contentHalfTurn.orientation)
+                } else if (settings.manualTextOrientation != null) {
                     orientationHint ?: OrientationResult(settings.manualTextOrientation, 1f, 0, "manual")
                 } else {
                     val layoutHint = orientationHintFromLayout(firstBlocks)
@@ -3062,20 +3657,39 @@ class CaptureService : Service() {
                 }
                 orientationHint = hint
                 logVerticalOrientation(diagId, "post", hint)
-                val upsideDownRerun = if (shouldRerunForTextLine180(hint)) {
+                // Paddle reports real line confidences; a confident first pass is already upright.
+                val firstPassReliable = effectiveEngine == OcrEngineKind.PADDLE_ONNX &&
+                    com.gameocr.app.ocr.OcrHalfTurnRerunPolicy.firstPassIsReliable(firstBlocks)
+                if (shouldRerunForTextLine180(hint) && firstPassReliable) {
+                    logOcrInfo(
+                        "[orient-textline] 180deg conf=%.2f src=%s ignored: first pass reads confidently".format(
+                            hint.confidence, hint.source
+                        )
+                    )
+                }
+                val upsideDownRerun = if (shouldRerunForTextLine180(hint) && !firstPassReliable) {
                     try {
                         val rerun = rerunOcrRotated180(
-                            preprocessed,
+                            workBitmap,
+                            contentRotationDegrees,
                             effectiveEngine,
                             settings,
                             diagId,
+                            firstBlocks,
                         )
+                        if (rerun != null) {
+                            if (preprocessed !== ocrBitmap) preprocessed.recycle()
+                            if (ocrBitmap !== workBitmap) ocrBitmap.recycle()
+                            ocrBitmap = rerun.bitmap
+                            preprocessed = rerun.preprocessed
+                            contentRotationDegrees = rerun.rotation
+                        }
                         logOcrInfo(
-                            "[orient-textline] 180deg conf=%.2f src=%s -> rerun %s and map boxes back".format(
-                                hint.confidence, hint.source, effectiveEngine.name
+                            "[orient-textline] 180deg conf=%.2f src=%s -> rerun %s correctionApplied=%s".format(
+                                hint.confidence, hint.source, effectiveEngine.name, rerun != null
                             )
                         )
-                        rerun
+                        rerun?.blocks
                     } catch (ce: kotlinx.coroutines.CancellationException) {
                         if (preprocessed !== ocrBitmap) preprocessed.recycle()
                         if (ocrBitmap !== workBitmap) ocrBitmap.recycle()
@@ -3095,7 +3709,8 @@ class CaptureService : Service() {
                 if (upsideDownRerun != null) {
                     upsideDownRerun
                 } else {
-                    val newEngine = if (effectiveEngine == OcrEngineKind.ML_KIT_AUTO) null else OrientationRouting.resolveEngine(
+                    val newEngine = if (!settings.textOrientationAutoDetect ||
+                        effectiveEngine == OcrEngineKind.ML_KIT_AUTO) null else OrientationRouting.resolveEngine(
                         orientation = hint.orientation,
                         sourceLangBcp47 = settings.sourceLang,
                         userEngine = effectiveEngine,
@@ -3240,6 +3855,7 @@ class CaptureService : Service() {
             // 把所有 box 拼成"#1 原文 / #2 原文 / ..."一条日志，避免一次 OCR 写多条。
             // 用 effectiveEngine 而非 settings.ocrEngine——方向自动分流时实际跑的可能是另一个引擎
             val ocrElapsedMs = elapsedSince(ocrStartedAt)
+            val postOcrStartedAt = SystemClock.elapsedRealtime()
 
             // 预处理 upscale 会让 boundingBox 坐标变成 2 倍，渲染前缩回
             val scaledBlocks = if (settings.preprocess.upscale2x) {
@@ -3262,7 +3878,9 @@ class CaptureService : Service() {
             if (settings.preprocess.upscale2x) {
                 logVerticalBlocks(diagId, "scaledBlocks for overlay", blocks)
             }
-            if (contentRotationDegrees != 0) {
+            if (contentRotationDegrees != 0 || blocks.any { it.presentationRotationDegrees != 0 }) {
+                logVerticalDiag(diagId, "presentation turns normalization=$contentRotationDegrees " +
+                    "final=${blocks.map { it.presentationRotationDegrees }.distinct()}")
                 logVerticalBlocks(diagId, "content-orientation blocks mapped to capture", blocks)
             }
             val normalizedLoopOcrText = LoopFrameChangePolicy.normalizeOcrText(blocks.map { it.text })
@@ -3287,7 +3905,11 @@ class CaptureService : Service() {
                     elapsedMs = ocrElapsedMs
                 )
                 val message = getString(R.string.toast_ocr_unreliable_result)
-                mainScope.launch { overlay?.showErrorHint(message) }
+                if (DeveloperOcrDebugPolicy.shouldShowNoTextHint(
+                        settings.developerOptionsEnabled, settings.hideOcrNoTextHint,
+                    )) {
+                    mainScope.launch { overlay?.showErrorHint(message) }
+                }
                 return
             }
             val qualityIssue = findOcrResultQualityIssue(blocks)
@@ -3304,7 +3926,11 @@ class CaptureService : Service() {
                     qualityIssue.toLogString()
                 )
                 logRepository.warn(LogRepository.Category.OCR, message, elapsedMs = ocrElapsedMs)
-                mainScope.launch { overlay?.showErrorHint(message) }
+                if (DeveloperOcrDebugPolicy.shouldShowNoTextHint(
+                        settings.developerOptionsEnabled, settings.hideOcrNoTextHint,
+                    )) {
+                    mainScope.launch { overlay?.showErrorHint(message) }
+                }
                 return
             }
             val shouldSeedLoopRoi = roiOptimizationEnabled &&
@@ -3484,7 +4110,14 @@ class CaptureService : Service() {
                 markLoopResultVisible(diagId)
                 return
             }
-            val sourcePreservationPlan = sourcePreservationService.plan(blocks, settings)
+            val preservationStartedAt = SystemClock.elapsedRealtime()
+            val prefetchedLookup = sourcePreservationLookup
+            val sourcePreservationPlan = if (prefetchedLookup != null) {
+                sourcePreservationService.plan(blocks, settings) { prefetchedLookup.await() }
+            } else {
+                sourcePreservationService.plan(blocks, settings)
+            }
+            val preservationMs = SystemClock.elapsedRealtime() - preservationStartedAt
             val retainedTranslationBlocks = sourcePreservationPlan.retainedBlocks
             val mergeAllFloating = PageTranslationGroupingPolicy.shouldMergeAll(
                 presentation = settings.renderMode,
@@ -3501,6 +4134,7 @@ class CaptureService : Service() {
             } else {
                 retainedTranslationBlocks
             }
+            val visualStartedAt = SystemClock.elapsedRealtime()
             val translationRequestSettings = prepareVisualTranslationSettings(
                 bitmap = workBitmap,
                 blocks = translationBlocks,
@@ -3508,11 +4142,20 @@ class CaptureService : Service() {
                 diagId = diagId,
                 origin = "realtime-$diagId",
             )
+            val visualMs = SystemClock.elapsedRealtime() - visualStartedAt
+            val stylesStartedAt = SystemClock.elapsedRealtime()
             val adaptiveStyles = analyzeAdaptiveOverlayStyles(
                 workBitmap,
                 translationBlocks,
                 settings,
                 diagId,
+            )
+            logVerticalDiag(
+                diagId,
+                "postOcr timing totalMs=${SystemClock.elapsedRealtime() - postOcrStartedAt} " +
+                    "beforePreservationMs=${preservationStartedAt - postOcrStartedAt} " +
+                    "preservationMs=$preservationMs visualMs=$visualMs " +
+                    "stylesMs=${SystemClock.elapsedRealtime() - stylesStartedAt}",
             )
             workBitmap.recycle()
             ensureCurrentSettledPage(settledPageRevision)
@@ -3598,6 +4241,7 @@ class CaptureService : Service() {
                 else -> renderFloatingWindow(translationBlocks, translationRequestSettings, diagId)
             }
         } finally {
+            sourcePreservationLookup?.cancel()
             unclaimedPreparedFull?.let { if (!it.isRecycled) it.recycle() }
             restoreCaptureRegionBorderAfterCapture()
             restoreFloatingButtonAfterCapture()
@@ -3911,7 +4555,7 @@ class CaptureService : Service() {
                     },
                     onEnglishWordTapped = if (settings.dictionaryTapLookupEnabled) {
                         { word, anchor ->
-                            lookupEnglishWordInTranslationCard(card, word, anchor, settings)
+                            lookupEnglishWordInPreview(card.englishWordPreview, word, anchor, settings)
                         }
                     } else null,
                 )
@@ -3952,15 +4596,16 @@ class CaptureService : Service() {
         }
     }
 
-    private fun lookupEnglishWordInTranslationCard(
-        card: TranslationCardOverlay,
+    private fun lookupEnglishWordInPreview(
+        preview: EnglishWordPreview,
         word: String,
         anchorInWindow: Rect,
         settings: Settings,
     ) {
         translationCardWordLookupJob?.cancel()
         val requestId = ++translationCardWordLookupId
-        card.showEnglishWordPreview(
+        val previewRequestId = preview.requestId
+        preview.show(
             anchorInWindow = anchorInWindow,
             content = floatingWordPreviewContent(
                 word = word,
@@ -3986,8 +4631,10 @@ class CaptureService : Service() {
                 playbackId = "translation-card-word:$requestId",
             )
             withContext(Dispatchers.Main) {
-                if (requestId != translationCardWordLookupId || !card.isShown()) return@withContext
-                card.showEnglishWordPreview(
+                if (requestId != translationCardWordLookupId || !preview.isShown() ||
+                    previewRequestId != preview.requestId
+                ) return@withContext
+                preview.show(
                     anchorInWindow = anchorInWindow,
                     content = floatingWordPreviewContent(
                         word = word,
@@ -4074,43 +4721,54 @@ class CaptureService : Service() {
             layout = translationOutput.layout,
             direction = translationOutput.direction,
         )
-        val preparedDelayedMask = prepareDelayedMaskBeforeTranslation(
-            batch = delayedMaskRenderSession?.batch,
-            diagId = diagId,
-        )
-        val preparedDisplayPatches = preparedDelayedMask?.let {
-            requireNotNull(delayedMaskRenderSession).mapPatchesToDisplay(it.backgroundPatches)
-        }
-        val showRecognizedSource = preparedDelayedMask != null
-        diagId?.let {
-            logVerticalDiag(
-                it,
-                "renderBlocks show waiting text source=$showRecognizedSource " +
-                    "orientation=$orientation count=${blocks.size} " +
-                    "followBlockOrientations=$followBlockOrientations"
-            )
-        }
         // A prepared background already covers the captured glyphs, so the recognized source is a
         // useful pending state. Without a prepared patch, retain the ellipsis to avoid drawing the
         // OCR source on top of the still-visible captured source.
-        withContext(Dispatchers.Main) {
-            overlay?.showBlocks(
-                blocks.map { block -> block to if (showRecognizedSource) block.text else "…" },
-                orientation,
-                diagnosticId = diagId,
-                adaptiveStyles = adaptiveStyles,
-                followBlockOrientations = followBlockOrientations,
-                pixelMaskPatchPipelineEnabled = delayedMaskRenderSession != null,
-                recognizedSourcePending = showRecognizedSource,
-            )
-            if (preparedDelayedMask != null) {
-                overlay?.showShapeAwareBubblePatches(
-                    patches = requireNotNull(preparedDisplayPatches),
-                    fallbackBlockIndices = preparedDelayedMask.blockIndices,
-                    diagnosticId = diagId,
+        suspend fun showWaitingBlocks(
+            prepared: MangaDelayedMaskDebugSessionManager.Prepared?,
+            preparedDisplayPatches: List<ShapeAwareBubblePatch>?,
+        ) {
+            val showRecognizedSource = prepared != null && preparedDisplayPatches != null
+            diagId?.let {
+                logVerticalDiag(
+                    it,
+                    "renderBlocks show waiting text source=$showRecognizedSource " +
+                        "orientation=$orientation count=${blocks.size} " +
+                        "followBlockOrientations=$followBlockOrientations"
                 )
             }
+            withContext(Dispatchers.Main) {
+                if (!translationBatchGate.accepts(diagId)) return@withContext
+                overlay?.showBlocks(
+                    blocks.map { block -> block to if (showRecognizedSource) block.text else "…" },
+                    orientation,
+                    diagnosticId = diagId,
+                    adaptiveStyles = adaptiveStyles,
+                    followBlockOrientations = followBlockOrientations,
+                    pixelMaskPatchPipelineEnabled = delayedMaskRenderSession != null,
+                    recognizedSourcePending = showRecognizedSource,
+                )
+                if (showRecognizedSource) {
+                    overlay?.showShapeAwareBubblePatches(
+                        patches = requireNotNull(preparedDisplayPatches),
+                        fallbackBlockIndices = requireNotNull(prepared).blockIndices,
+                        diagnosticId = diagId,
+                    )
+                }
+            }
         }
+        // Translation is requested before the erase finishes, but blocks appear only once it has:
+        // the same source-or-ellipsis display as before, just with translation already in flight.
+        // Translation output waits here so no update reaches a block view that does not exist yet.
+        val waitingBlocksShown = kotlinx.coroutines.CompletableDeferred<Unit>()
+        if (delayedMaskRenderSession == null) {
+            showWaitingBlocks(prepared = null, preparedDisplayPatches = null)
+            waitingBlocksShown.complete(Unit)
+        }
+        // Written by the erase job once its patches are on screen; read by onFinished after join.
+        val preparedDelayedMask =
+            java.util.concurrent.atomic.AtomicReference<MangaDelayedMaskDebugSessionManager.Prepared?>()
+        var preparedDelayedMaskJob: Job? = null
         // Recognition and semantic OCR grouping stay shared. Translation-unit presentation may
         // apply a floating-only grouping policy, while this Blocks path remains one-to-one.
         val pagePlan = preparePageTranslationPlan(blocks, settings, RenderMode.BLOCKS, diagId)
@@ -4131,8 +4789,34 @@ class CaptureService : Service() {
         launchPageTranslationExecution(
             pagePlan = pagePlan,
             diagId = diagId,
+            startConcurrent = {
+                // Erasing is CPU-bound and translation is network-bound, so overlap them. The
+                // job is a child of the translation batch and is cancelled with it.
+                if (delayedMaskRenderSession != null) {
+                    preparedDelayedMaskJob = launch(Dispatchers.Default) {
+                        try {
+                            val prepared = prepareDelayedMaskBesideTranslation(
+                                batch = delayedMaskRenderSession.batch,
+                                diagId = diagId,
+                            )
+                            val displayPatches = prepared?.let {
+                                runCatching {
+                                    delayedMaskRenderSession.mapPatchesToDisplay(it.backgroundPatches)
+                                }.onFailure { error ->
+                                    Timber.w(error, "Unable to map prepared manga erase patches")
+                                }.getOrNull()
+                            }
+                            showWaitingBlocks(prepared, displayPatches)
+                            if (displayPatches != null) preparedDelayedMask.set(prepared)
+                        } finally {
+                            waitingBlocksShown.complete(Unit)
+                        }
+                    }
+                }
+            },
             prepare = {},
             render = { _, unit, translatedText, _, phase ->
+                waitingBlocksShown.await()
                 withContext(Dispatchers.Main) {
                     updateTranslationUnit(
                         unit = unit,
@@ -4143,6 +4827,7 @@ class CaptureService : Service() {
                 }
             },
             publishFailure = { pendingIndexes, error ->
+                waitingBlocksShown.await()
                 withContext(Dispatchers.Main) {
                     pendingIndexes.forEach { index ->
                         updateTranslationUnit(
@@ -4159,9 +4844,15 @@ class CaptureService : Service() {
                 recordTranslatedUnit(unit, translatedText)
             },
             onFinished = { completed ->
+                // Final patches replace the prepared ones, so preparation must land first.
+                if (completed) {
+                    preparedDelayedMaskJob?.join()
+                } else {
+                    preparedDelayedMaskJob?.cancel()
+                }
                 finishDelayedMaskDebug(
                     session = delayedMaskRenderSession,
-                    prepared = preparedDelayedMask,
+                    prepared = preparedDelayedMask.get(),
                     successfulBlockIndices = successfulMaskBlockIndices,
                     translatedBlockTexts = translatedMaskBlockTexts,
                     outputOrientation = delayedLayoutOrientation,
@@ -4176,6 +4867,7 @@ class CaptureService : Service() {
     private suspend fun launchPageTranslationExecution(
         pagePlan: PageTranslationPlan,
         diagId: Long?,
+        startConcurrent: CoroutineScope.() -> Unit = {},
         prepare: suspend (List<String>) -> Unit,
         render: suspend (
             Int,
@@ -4197,6 +4889,7 @@ class CaptureService : Service() {
         launchTranslationBatch(diagId) {
             var completed = false
             try {
+                startConcurrent()
                 prepare(translationUnits.map(PageTranslationUnit::sourceText))
                 pagePlan.reusedTranslationsByIndex.forEach { (index, translatedText) ->
                     val unit = translationUnits.getOrNull(index) ?: return@forEach
@@ -4337,7 +5030,7 @@ class CaptureService : Service() {
         successful.toMap()
     }
 
-    private suspend fun prepareDelayedMaskBeforeTranslation(
+    private suspend fun prepareDelayedMaskBesideTranslation(
         batch: MangaDelayedMaskDebugSessionManager.Batch?,
         diagId: Long?,
     ): MangaDelayedMaskDebugSessionManager.Prepared? {
@@ -4349,7 +5042,7 @@ class CaptureService : Service() {
                 blockIndices = (0 until batch.blockCount).toSet(),
             )
         }.onSuccess { prepared ->
-            val summary = "delayed mask prepared before translation " +
+            val summary = "delayed mask prepared beside translation " +
                 "blocks=${prepared.blockIndices.size}/${batch.blockCount} " +
                 "accepted=${prepared.result.acceptedBlockCount} " +
                 "modelBackgroundPatches=${prepared.modelBackgroundPatches.size} " +
@@ -4534,6 +5227,14 @@ class CaptureService : Service() {
                     "residualPixels=${repair.residualPixels} " +
                     "eraseCoverage=${repair.repairedRequiredErasePixels}/${repair.requiredErasePixels} " +
                     "regionForeground=${repair.regionForegroundAddedPixels}/${repair.regionForegroundReason} " +
+                    "firstPassForeground=${repair.firstPassAddedPixels}/${repair.firstPassReason} " +
+                    "regionAudit=${repair.regionAuditAddedPixels}/${repair.regionAuditReason} " +
+                    "regionAuditUncertain=${repair.regionAuditUncertainPixels} " +
+                    "regionAuditInk=${repair.regionAuditInkColor?.let { "#%06X".format(it and 0xFFFFFF) } ?: "none"} " +
+                    "regionAuditSeeds=${repair.regionAuditInteriorSeeds} " +
+                    "regionAuditBorders=${repair.regionAuditBorderPixels} " +
+                    "regionAuditOutlines=${repair.regionAuditOutlinePixels} " +
+                    "regionAuditColors=${repair.regionAuditInkColorCount} " +
                     "semanticCoverage=${repair.repairedSemanticPixels}/" +
                     "${repair.completion.semanticPixels} " +
                     "completionStrategy=${repair.completion.strategy.name} " +
@@ -5231,7 +5932,8 @@ class CaptureService : Service() {
                 "ocr=${settings.ocrEngine.name} translator=${settings.translatorEngine.name} " +
                 "paddleVersion=${settings.paddleModelVersion.name} " +
                 "baiduEndpoint=${settings.baiduOcrEndpoint.name} baiduLanguage=${settings.baiduOcrLanguage.name} " +
-                "dbnet=prob:${settings.dbnetProbThresh.toDiagFloat()},box:${settings.dbnetBoxScoreThresh.toDiagFloat()},unclip:${settings.dbnetUnclipRatio.toDiagFloat()} " +
+                "dbnet=${settings.paddleDetectionThresholds(settings.paddleModelVersion).let { "prob:${it.binThresh.toDiagFloat()},box:${it.boxThresh.toDiagFloat()},unclip:${it.unclipRatio.toDiagFloat()}" }}" +
+                " modelDefault=prob:${settings.dbnetProbThresh == null},box:${settings.dbnetBoxScoreThresh == null},unclip:${settings.dbnetUnclipRatio == null} " +
                 "render=${settings.renderMode.name} streaming=${settings.streamingTranslate} " +
             "retryFailedTranslation=${settings.retryFailedTranslation} " +
                 "loopTrigger=${settings.loopTriggerMode.name} loopIntervalMs=${settings.captureLoopIntervalMs} " +
@@ -5406,6 +6108,7 @@ class CaptureService : Service() {
                 customBorderStyle = settings.customBorderStyle
                 overlayTypeface = typeface
                 overlayTextStyle = effectiveOverlaySettings.overlayTextStyle.normalized()
+                floatingAppearance = FloatingWindowAppearance.from(settings.floatingWindowRenderSettings())
                 ocrDebugRedBoxActive = DeveloperOcrDebugPolicy.redBoxActive(
                     settings.developerOptionsEnabled,
                     settings.ocrRedBoxModeEnabled,
@@ -5417,7 +6120,7 @@ class CaptureService : Service() {
                     snapshot = performanceDiagnostics.performanceSnapshot.value,
                 )
                 syncFloatingWindowFromSettings(
-                    effectiveOverlaySettings,
+                    settings.floatingWindowRenderSettings(),
                     syncLockedState = syncFloatingWindowLock,
                 )
             }
@@ -5433,17 +6136,37 @@ class CaptureService : Service() {
                 it.dockEdgeInsetPx = dockEdgeInsetPx
                 it.menuItemOrder = settings.floatingMenuItemOrder
                 it.arcMenuPageSize = settings.arcMenuPageSize
+                it.applyQuickPanelPreference(settings.quickPanelEnabled)
+                it.quickPanelLanguages = settings.sourceLang to settings.targetLang
                 it.inputTranslationDoubleAction = settings.inputTranslationDoubleAction
+                gestureBindings = GestureBindings.normalize(settings.gestureBindings)
                 if (it.skill != settings.floatingButtonSkill) {
+                    if (it.skill == FloatingSkill.SPEECH) stopSpeechSession()
                     it.skill = settings.floatingButtonSkill
                     it.applySkillIcon()
                 }
+                speechSubtitles?.setMaxRecords(settings.asrMaxDisplayedRecords)
+                val speechKey = SpeechModePolicy.sessionKey(settings)
+                if (speechSessionKey != null && speechSessionKey != speechKey) stopSpeechSession()
+                speechSessionKey = speechKey
             }
+            configureGestureWake(settings)
         }
     }
 
     /** 释放截屏相关资源（不停 Service），用于 handleStart 重入时去重 + onDestroy 兜底。 */
     private fun cleanupCapture() {
+        stopSpeechSession()
+        gestureInputActive = false
+        gestureActionJob?.cancel()
+        gestureActionJob = null
+        gestureInput?.dismiss()
+        gestureInput = null
+        gestureEdge?.dismiss()
+        gestureEdge = null
+        gestureMotion?.close()
+        gestureMotion = null
+        gestureEdgeCaptureHidden = false
         captureUiStartupJob?.cancel()
         captureUiStartupJob = null
         captureProbeJob?.cancel()
@@ -5499,6 +6222,10 @@ class CaptureService : Service() {
     override fun onDestroy() {
         captureStopRequested = true
         cleanupCapture()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) speechController?.shutdown()
+        speechController = null
+        speechSubtitles = null
+        releaseSpeechProjection()
         // 释放端侧 LLM 权重。runBlocking 在 onDestroy 是可接受的——cleanUp 内部是同步 JNI 调用，
         // 几十毫秒级；不阻塞主线程没意义，等 Mutex 拿到锁就立刻返回。
         runCatching {
@@ -5519,6 +6246,12 @@ class CaptureService : Service() {
             "com.gameocr.app.action.RUN_FLOATING_TOUR"
         /** 主屏框选区域时走这条——floating window 模式，绕开 Activity 的横屏 long-edge cutout letterbox。 */
         const val ACTION_PICK_REGION = "com.gameocr.app.action.PICK_REGION"
+        /** Result of [com.gameocr.app.asr.SpeechCaptureRequestActivity]'s permission/consent prompts. */
+        const val ACTION_SPEECH_CONSENT = "com.gameocr.app.action.SPEECH_CONSENT"
+        const val EXTRA_SPEECH_CONSENT = "extra_speech_consent"
+        private const val SPEECH_CONSENT_TIMEOUT_MS = 120_000L
+        /** Accessibility may confirm this request's dialogs only shortly after the user's tap. */
+        private const val SPEECH_CONSENT_ASSIST_MS = 15_000L
         const val EXTRA_RESULT_CODE = "extra_result_code"
         const val EXTRA_RESULT_DATA = "extra_result_data"
         const val EXTRA_USE_SHIZUKU = "extra_use_shizuku"

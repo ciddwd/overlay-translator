@@ -100,6 +100,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.clip
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.PhotoAlbum
+import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -126,11 +130,18 @@ import com.gameocr.app.R
 import com.gameocr.app.data.Languages
 import com.gameocr.app.data.OcrEngineKind
 import com.gameocr.app.data.Settings
+import com.gameocr.app.data.OpenAiProvider
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
 import com.gameocr.app.data.SettingsRepository
 import com.gameocr.app.data.TranslationPreset
 import com.gameocr.app.data.TranslationPresetCatalog
 import com.gameocr.app.data.TranslatorEngine
 import com.gameocr.app.gallery.GalleryImageDecoder
+import com.gameocr.app.gallery.GalleryImportKind
+import com.gameocr.app.gallery.GalleryImportPolicy
+import com.gameocr.app.gallery.GalleryImportSource
+import com.gameocr.app.gallery.galleryTaskDisplayTitle
 import com.gameocr.app.gallery.GalleryExportProgress
 import com.gameocr.app.gallery.GalleryExportRenderMode
 import com.gameocr.app.gallery.GalleryItemStatus
@@ -162,12 +173,29 @@ fun GalleryTranslationConfirmScreen(
     onSelectionChanged: (List<String>) -> Unit,
     onBack: () -> Unit,
     onCreated: (String) -> Unit,
+    source: GalleryImportSource = GalleryImportSource(),
+    onSourceChanged: (GalleryImportSource) -> Unit = {},
+    onOpenAlbums: () -> Unit = {},
     viewModel: GalleryTranslationViewModel = hiltViewModel(),
     presetViewModel: MainViewModel = hiltViewModel(),
 ) {
     val settings by viewModel.settings.collectAsState(initial = null)
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    // 来源（相册、文件夹或手选）决定默认标题、可否排序，以及超过 100 张时拆成几个任务。
+    val isCollection = source.kind != GalleryImportKind.PICKED
+    var title by rememberSaveable(source.kind, source.name) {
+        mutableStateOf(GalleryImportPolicy.defaultTitle(source))
+    }
+    val parts = remember(selectedUris, source.kind, source.splitMode) {
+        GalleryImportPolicy.parts(selectedUris, source.kind, source.splitMode)
+    }
+    val previewUris = parts.firstOrNull().orEmpty()
+    val taskImageCount = parts.sumOf { it.size }
+    val importState = remember { GalleryImportState() }
+    val createdAtPreview = remember {
+        DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date())
+    }
     var creating by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf("") }
     var previewIndex by remember { mutableStateOf<Int?>(null) }
@@ -189,9 +217,18 @@ fun GalleryTranslationConfirmScreen(
         }
     }
     BackHandler(enabled = !creating, onBack = onBack)
+    GalleryImportHost(
+        state = importState,
+        onReady = { newSource, uris ->
+            onSourceChanged(newSource)
+            onSelectionChanged(uris)
+        },
+        onOpenAlbums = onOpenAlbums,
+        onMessage = { message -> scope.launch { snackbarHostState.showSnackbar(message) } },
+    )
     previewIndex?.let { initialPage ->
         GalleryImagePreviewDialog(
-            sources = selectedUris.mapIndexed { index, uri ->
+            sources = previewUris.mapIndexed { index, uri ->
                 GalleryPreviewSource(
                     sourceUri = uri,
                     localPath = "",
@@ -214,10 +251,18 @@ fun GalleryTranslationConfirmScreen(
             },
             text = {
                 Text(
-                    stringResource(
-                        R.string.gallery_confirm_create_dialog_message,
-                        selectedUris.size,
-                    )
+                    if (parts.size > 1) {
+                        stringResource(
+                            R.string.gallery_confirm_create_dialog_parts_message,
+                            taskImageCount,
+                            parts.size,
+                        )
+                    } else {
+                        stringResource(
+                            R.string.gallery_confirm_create_dialog_message,
+                            taskImageCount,
+                        )
+                    }
                 )
             },
             confirmButton = {
@@ -227,7 +272,13 @@ fun GalleryTranslationConfirmScreen(
                         creating = true
                         errorMessage = ""
                         scope.launch {
-                            runCatching { viewModel.createAndEnqueue(selectedUris) }
+                            runCatching {
+                                viewModel.createAndEnqueue(
+                                    parts = parts,
+                                    titles = GalleryImportPolicy.partTitles(title, parts.size),
+                                    sourceKind = source.kind,
+                                )
+                            }
                                 .onSuccess(onCreated)
                                 .onFailure {
                                     errorMessage = it.message ?: it.javaClass.simpleName
@@ -272,9 +323,26 @@ fun GalleryTranslationConfirmScreen(
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 item {
+                    GalleryTaskTitleField(
+                        title = title,
+                        onTitleChange = { title = it.take(GalleryImportPolicy.MAX_TITLE_LENGTH) },
+                        defaultTitle = GalleryImportPolicy.defaultTitle(source).ifBlank { createdAtPreview },
+                        enabled = !creating,
+                    )
+                }
+                item {
+                    GallerySourceCard(
+                        source = source,
+                        imageCount = selectedUris.size,
+                        parts = parts.size,
+                        enabled = !creating,
+                        onChange = { importState.open() },
+                    )
+                }
+                item {
                     Card(
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(8.dp),
+                        shape = RoundedCornerShape(16.dp),
                         colors = CardDefaults.cardColors(
                             containerColor = MaterialTheme.colorScheme.surface,
                         ),
@@ -310,7 +378,7 @@ fun GalleryTranslationConfirmScreen(
                                     stringResource(
                                         R.string.gallery_confirm_translator,
                                         stringResource(
-                                            translatorEngineLabelRes(current.translatorEngine)
+                                            translatorEngineLabelRes(current.translatorEngine, current.openAiProvider)
                                         ),
                                     )
                                 )
@@ -390,11 +458,15 @@ fun GalleryTranslationConfirmScreen(
                     }
                 }
                 item {
-                    Text(
-                        text = stringResource(R.string.gallery_confirm_count, selectedUris.size),
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.SemiBold,
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = stringResource(R.string.gallery_confirm_count, taskImageCount),
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+
+                    }
                 }
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -418,7 +490,7 @@ fun GalleryTranslationConfirmScreen(
                                 verticalArrangement = Arrangement.spacedBy(spacing),
                                 maxItemsInEachRow = columnCount,
                             ) {
-                                selectedUris.forEachIndexed { index, uri ->
+                                previewUris.forEachIndexed { index, uri ->
                                     key(uri) {
                                         GallerySelectedThumbnail(
                                             uriString = uri,
@@ -429,16 +501,22 @@ fun GalleryTranslationConfirmScreen(
                                             onPreview = { previewIndex = index },
                                             onRemove = {
                                                 onSelectionChanged(
-                                                    GalleryTranslationWorkPolicy.removeSelection(
-                                                        current = selectedUris,
-                                                        uriString = uri,
-                                                    )
+                                                    if (isCollection) {
+                                                        // 相册/文件夹可能超过 100 张，不能按单任务上限截断。
+                                                        selectedUris.filterNot { it == uri }
+                                                    } else {
+                                                        GalleryTranslationWorkPolicy.removeSelection(
+                                                            current = selectedUris,
+                                                            uriString = uri,
+                                                        )
+                                                    }
                                                 )
                                             },
                                         )
                                     }
                                 }
                                 if (
+                                    !isCollection &&
                                     selectedUris.size <
                                     GalleryTranslationWorkPolicy.MAX_IMAGES_PER_TASK
                                 ) {
@@ -484,6 +562,8 @@ fun GalleryTranslationConfirmScreen(
                         stringResource(R.string.gallery_confirm_creating),
                         modifier = Modifier.padding(start = 10.dp),
                     )
+                } else if (parts.size > 1) {
+                    Text(stringResource(R.string.gallery_confirm_create_parts, parts.size))
                 } else {
                     Text(stringResource(R.string.gallery_confirm_create))
                 }
@@ -807,21 +887,26 @@ private fun GalleryAddImageTile(
 @Composable
 fun GalleryTranslationTasksScreen(
     onBack: () -> Unit,
-    onImagesSelected: (List<String>) -> Unit,
+    onImport: (GalleryImportSource, List<String>) -> Unit,
     onOpenTask: (String) -> Unit,
+    onOpenAlbums: () -> Unit = {},
     viewModel: GalleryTranslationViewModel = hiltViewModel(),
 ) {
     val tasks by viewModel.tasks.collectAsState(initial = emptyList())
-    val picker = rememberLauncherForActivityResult(
-        ActivityResultContracts.PickMultipleVisualMedia(
-            GalleryTranslationWorkPolicy.MAX_IMAGES_PER_TASK
-        )
-    ) { uris ->
-        if (uris.isNotEmpty()) onImagesSelected(uris.map(Uri::toString))
-    }
+    val scope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
+    // 与主屏图库卡共用的新建任务来源面板：选择图片、选择相册、选择文件夹。
+    val importState = remember { GalleryImportState() }
     BackHandler(onBack = onBack)
+    GalleryImportHost(
+        state = importState,
+        onReady = onImport,
+        onOpenAlbums = onOpenAlbums,
+        onMessage = { message -> scope.launch { snackbarHostState.showSnackbar(message) } },
+    )
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.gallery_tasks_title)) },
@@ -832,11 +917,7 @@ fun GalleryTranslationTasksScreen(
                 },
                 actions = {
                     TextButton(
-                        onClick = {
-                            picker.launch(
-                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                            )
-                        }
+                        onClick = { importState.open() }
                     ) {
                         Icon(Icons.Default.AddPhotoAlternate, contentDescription = null)
                         Text(
@@ -894,6 +975,7 @@ fun GalleryTranslationTaskDetailScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showCancelDialog by remember { mutableStateOf(false) }
+    var showRenameDialog by remember { mutableStateOf(false) }
     var actionsExpanded by remember { mutableStateOf(false) }
     var previewItemId by remember { mutableStateOf<String?>(null) }
     var exportProgress by remember { mutableStateOf<GalleryExportProgress?>(null) }
@@ -997,6 +1079,19 @@ fun GalleryTranslationTaskDetailScreen(
                     Text(stringResource(android.R.string.cancel))
                 }
             },
+        )
+    }
+    val renameTarget = task
+    if (showRenameDialog && renameTarget != null) {
+        GalleryRenameDialog(
+            currentTitle = renameTarget.title,
+            defaultTitle = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
+                .format(Date(renameTarget.createdAtMs)),
+            onSave = { newTitle ->
+                showRenameDialog = false
+                scope.launch { viewModel.rename(renameTarget.id, newTitle) }
+            },
+            onDismiss = { showRenameDialog = false },
         )
     }
     if (showCancelDialog) {
@@ -1145,6 +1240,7 @@ fun GalleryTranslationTaskDetailScreen(
                         onRetry = {
                             scope.launch { viewModel.retryFailed(currentTask.id) }
                         },
+                        onRename = { showRenameDialog = true },
                     )
                 }
             }
@@ -1182,7 +1278,7 @@ private fun GalleryTaskCard(
     Card(
         onClick = onOpen,
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(8.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface,
             contentColor = MaterialTheme.colorScheme.onSurface,
@@ -1191,23 +1287,43 @@ private fun GalleryTaskCard(
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier.padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            val createdAtText = DateFormat.getDateTimeInstance(
+                DateFormat.SHORT,
+                DateFormat.SHORT,
+            ).format(Date(task.createdAtMs))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    DateFormat.getDateTimeInstance(
-                        DateFormat.SHORT,
-                        DateFormat.SHORT,
-                    ).format(Date(task.createdAtMs)),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
+                // 来源图标：手选、相册、文件夹，与新建任务面板一致。
+                HomeIconTile(
+                    when (task.sourceKind) {
+                        GalleryImportKind.ALBUM.name -> Icons.Outlined.PhotoAlbum
+                        GalleryImportKind.FOLDER.name -> Icons.Outlined.Folder
+                        else -> Icons.Outlined.PhotoLibrary
+                    }
                 )
-                GalleryStatusText(task.status)
+                Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                    Text(
+                        galleryTaskDisplayTitle(task.title, createdAtText),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (task.title.isNotBlank()) {
+                        Text(
+                            stringResource(R.string.gallery_task_card_meta, createdAtText, task.totalCount),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                GalleryStatusChip(task.status)
             }
             GalleryTaskSettingsSummary(task)
             GalleryTaskProgressSummary(task)
@@ -1226,10 +1342,16 @@ private fun GalleryTaskSettingsSummary(
     val translatorEngine = remember(task.translatorEngine) {
         runCatching { TranslatorEngine.valueOf(task.translatorEngine) }.getOrNull()
     }
+    val openAiProvider = remember(task.settingsSnapshotJson) {
+        runCatching {
+            Json { ignoreUnknownKeys = true }
+                .decodeFromString<TranslationPreset>(task.settingsSnapshotJson).openAiProvider
+        }.getOrDefault(OpenAiProvider.CUSTOM)
+    }
     val ocrLabel = ocrEngine?.let { stringResource(ocrEngineLabelRes(it)) }
         ?: task.ocrEngine
     val translatorLabel = translatorEngine?.let {
-        stringResource(translatorEngineLabelRes(it))
+        stringResource(translatorEngineLabelRes(it, openAiProvider))
     } ?: task.translatorEngine
     Text(
         stringResource(
@@ -1252,6 +1374,7 @@ private fun GalleryTaskSummary(
     task: GalleryTranslationTaskEntity,
     onCancel: () -> Unit,
     onRetry: () -> Unit,
+    onRename: () -> Unit,
 ) {
     val active = task.status in activeTaskStatuses
     val canRetry = task.failedCount > 0 && !active
@@ -1290,14 +1413,45 @@ private fun GalleryTaskSummary(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.Top,
             ) {
-                Text(
-                    DateFormat.getDateTimeInstance(
-                        DateFormat.SHORT,
-                        DateFormat.SHORT,
-                    ).format(Date(task.createdAtMs)),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                )
+                val createdAtText = DateFormat.getDateTimeInstance(
+                    DateFormat.SHORT,
+                    DateFormat.SHORT,
+                ).format(Date(task.createdAtMs))
+                Column(Modifier.weight(1f).padding(end = 8.dp)) {
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable(
+                                onClickLabel = stringResource(R.string.gallery_task_rename),
+                                role = Role.Button,
+                                onClick = onRename,
+                            )
+                            .padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            galleryTaskDisplayTitle(task.title, createdAtText),
+                            modifier = Modifier.weight(1f, fill = false),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Icon(
+                            Icons.Outlined.Edit,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 6.dp).size(16.dp),
+                        )
+                    }
+                    if (task.title.isNotBlank()) {
+                        Text(
+                            createdAtText,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
                 Column(horizontalAlignment = Alignment.End) {
                     GalleryStatusText(task.status)
                     elapsedSeconds?.let { seconds ->
@@ -1901,6 +2055,30 @@ internal fun galleryPreviewInitialPage(
     requestedPage.coerceIn(0, pageCount - 1)
 }
 
+/** Task list status: same colours as the home status chips (green done, amber partial, red failed). */
+@Composable
+private fun GalleryStatusChip(status: GalleryTaskStatus) {
+    val (container, content) = when (status) {
+        GalleryTaskStatus.SUCCEEDED -> HomeStatusColors.okContainer() to HomeStatusColors.ok()
+        GalleryTaskStatus.PARTIAL -> HomeStatusColors.warnContainer() to HomeStatusColors.warn()
+        GalleryTaskStatus.FAILED ->
+            MaterialTheme.colorScheme.errorContainer to MaterialTheme.colorScheme.onErrorContainer
+        GalleryTaskStatus.CANCELED ->
+            MaterialTheme.colorScheme.surfaceContainerHigh to MaterialTheme.colorScheme.onSurfaceVariant
+        else -> MaterialTheme.colorScheme.surfaceContainerHighest to MaterialTheme.colorScheme.onSurface
+    }
+    Text(
+        stringResource(status.labelRes()),
+        modifier = Modifier
+            .background(container, RoundedCornerShape(12.dp))
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+        color = content,
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.SemiBold,
+        maxLines = 1,
+    )
+}
+
 @Composable
 private fun GalleryStatusText(status: GalleryTaskStatus) {
     val color = when (status) {
@@ -1964,11 +2142,24 @@ class GalleryTranslationViewModel @Inject constructor(
     fun observeItems(taskId: String): Flow<List<GalleryTranslationItemEntity>> =
         repository.observeItems(taskId)
 
-    suspend fun createAndEnqueue(uriStrings: List<String>): String {
-        val task = repository.createTask(uriStrings)
-        manager.enqueue(task)
-        return task.id
+    /** Creates one task per part, in order, and returns the first task's id. */
+    suspend fun createAndEnqueue(
+        parts: List<List<String>>,
+        titles: List<String>,
+        sourceKind: GalleryImportKind,
+    ): String {
+        require(parts.isNotEmpty()) { "No images selected." }
+        repository.validateCreationSettings()
+        var firstId = ""
+        parts.forEachIndexed { index, uris ->
+            val task = repository.createTask(uris, titles.getOrElse(index) { "" }, sourceKind)
+            manager.enqueue(task)
+            if (index == 0) firstId = task.id
+        }
+        return firstId
     }
+
+    suspend fun rename(taskId: String, title: String) = repository.renameTask(taskId, title)
 
     suspend fun cancel(taskId: String) = manager.cancel(taskId)
 

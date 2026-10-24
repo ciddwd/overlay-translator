@@ -111,6 +111,12 @@ class ShizukuManager @Inject constructor() {
         executePermissionCommand(overlayPermissionAppOpsCommand(packageName, user)) != null
     }
 
+    /** Only `pm grant` / `appops set` built by [SpeechPermissionCommands] for this app. */
+    internal suspend fun executeGrantCommand(command: Array<String>): Boolean = withContext(Dispatchers.IO) {
+        require(command.firstOrNull() == "pm" || command.firstOrNull() == "appops")
+        executePermissionCommand(command) != null
+    }
+
     /** Only settings get/put for this app's accessibility configuration; never log service lists. */
     internal suspend fun executeSettingsCommand(command: Array<String>): String? = withContext(Dispatchers.IO) {
         require(command.firstOrNull() == "settings")

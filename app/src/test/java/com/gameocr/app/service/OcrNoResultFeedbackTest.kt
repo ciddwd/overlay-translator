@@ -7,7 +7,7 @@ import org.junit.Test
 class OcrNoResultFeedbackTest {
 
     @Test
-    fun emptyOcrResult_keepsLogAndShowsTheUserVisibleErrorHint() {
+    fun emptyOcrResult_keepsLogAndOnlyConditionallyShowsTheErrorHint() {
         val source = sourceFile().readText()
         val branchStart = source.indexOf("if (blocks.isEmpty())")
         val branchEnd = source.indexOf("val qualityIssue =", branchStart)
@@ -18,6 +18,8 @@ class OcrNoResultFeedbackTest {
         val required = listOf(
             Case("diagnostic log remains", "R.string.log_msg_ocr_no_result_format"),
             Case("same actionable message is used", "R.string.toast_ocr_unreliable_result"),
+            Case("hint visibility respects the developer option", "DeveloperOcrDebugPolicy.shouldShowNoTextHint("),
+            Case("hint preference is passed", "settings.hideOcrNoTextHint"),
             Case("message is shown in the overlay feedback bar", "overlay?.showErrorHint(message)"),
         )
 

@@ -1,5 +1,6 @@
 package com.gameocr.app.onboarding
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import com.gameocr.app.data.PaddleModelVersion
 import com.gameocr.app.data.SettingsRepository
@@ -10,6 +11,7 @@ import com.gameocr.app.download.ModelDownloadSpec
 import com.gameocr.app.llm.LlmModelKind
 import com.gameocr.app.translate.RoutingTranslator
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 
 @HiltViewModel
@@ -19,10 +21,14 @@ class OnboardingViewModel @Inject constructor(
     private val connectionTester: com.gameocr.app.translate.TranslatorConnectionTester,
     private val modelReadinessChecker: ModelReadinessChecker,
     private val modelDownloadManager: ModelDownloadManager,
+    @ApplicationContext private val context: Context,
 ) : ViewModel() {
     suspend fun loadDraft(firstRun: Boolean): OnboardingDraft =
         if (firstRun) OnboardingDraft()
-        else OnboardingPolicy.fromSettings(settingsRepository.get())
+        else OnboardingPolicy.fromSettings(
+            settingsRepository.get(),
+            usageHint = OnboardingPrefs.usage(context),
+        )
 
     suspend fun testCloudConnection(draft: OnboardingDraft): com.gameocr.app.translate.TestResult =
         connectionTester.test(OnboardingPolicy.apply(settingsRepository.get(), draft))
@@ -35,6 +41,7 @@ class OnboardingViewModel @Inject constructor(
                 localLlmSupported = modelReadinessChecker.isLocalLlmSupported(),
             )
         }
+        OnboardingPrefs.rememberUsage(context, draft.usage)
     }
 
     suspend fun downloadMlKitLanguagePair(sourceLang: String, targetLang: String) {
@@ -61,11 +68,12 @@ class OnboardingViewModel @Inject constructor(
 
     suspend fun downloadMissingRecommendedModels(
         draft: OnboardingDraft,
+        onWorkInfo: (androidx.work.WorkInfo) -> Unit = {},
         onProgress: (String) -> Unit,
     ) {
         val specs = recommendedModelsDownloadSpecs(recommendedModelsReadiness(draft))
         if (specs.isNotEmpty()) {
-            modelDownloadManager.enqueueIndependentlyAndAwait(specs, onProgress)
+            modelDownloadManager.enqueueIndependentlyAndAwait(specs, onProgress, onWorkInfo = onWorkInfo)
         }
     }
 
@@ -89,11 +97,12 @@ class OnboardingViewModel @Inject constructor(
 
     suspend fun downloadMissingMangaOfflineModels(
         includeSakura: Boolean,
+        onWorkInfo: (androidx.work.WorkInfo) -> Unit = {},
         onProgress: (String) -> Unit,
     ) {
         val specs = mangaOfflineDownloadSpecs(mangaOfflineModelReadiness(includeSakura))
         if (specs.isNotEmpty()) {
-            modelDownloadManager.enqueueIndependentlyAndAwait(specs, onProgress)
+            modelDownloadManager.enqueueIndependentlyAndAwait(specs, onProgress, onWorkInfo = onWorkInfo)
         }
     }
 

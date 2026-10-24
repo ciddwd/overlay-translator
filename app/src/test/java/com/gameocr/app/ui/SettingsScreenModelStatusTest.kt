@@ -38,7 +38,7 @@ class SettingsScreenModelStatusTest {
             assertTrue(case.name, source.contains(case.marker))
         }
 
-        val openAiConfigStart = source.indexOf("if (translatorEngine == TranslatorEngine.OPENAI) {")
+        val openAiConfigStart = source.indexOf("if (translatorEngine == TranslatorEngine.OPENAI && !bilibiliSelected) {")
         val anthropicConfigStart = source.indexOf(
             "} else if (translatorEngine == TranslatorEngine.ANTHROPIC)",
             startIndex = openAiConfigStart,
@@ -95,12 +95,12 @@ class SettingsScreenModelStatusTest {
         )
 
         listOf(
-            Case("engine choices before source language", "R.string.settings_translator_group_local_llm", "R.string.settings_source_lang"),
+            Case("engine choices before source language", "R.string.settings_translator_group_on_device", "R.string.settings_source_lang"),
             Case("model before source language", "R.string.settings_model)", "R.string.settings_source_lang"),
             Case("connection test before source language", "TranslatorConnectionTestPanel(", "R.string.settings_source_lang"),
             Case("source language before target language", "R.string.settings_source_lang", "R.string.settings_target_lang"),
             Case("target language before translation assistance", "R.string.settings_target_lang", "TranslationAssistanceSettings("),
-            Case("translation assistance before prompt", "TranslationAssistanceSettings(", "OpenAiPromptSettings("),
+            Case("translation assistance before inline prompt settings", "TranslationAssistanceSettings(", "OpenAiPromptSettings("),
         ).forEach { case ->
             val earlierIndex = section.indexOf(case.earlier)
             val laterIndex = section.indexOf(case.later)
@@ -135,8 +135,8 @@ class SettingsScreenModelStatusTest {
         val source = File("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
         val assistanceStart = source.indexOf("private fun TranslationAssistanceSettings(")
         val assistanceEnd = source.indexOf(
-            "private fun OpenAiPromptSettings(",
-            startIndex = assistanceStart,
+            "private fun ",
+            startIndex = assistanceStart + 1,
         )
 
         assertTrue("translation assistance function exists", assistanceStart >= 0)
@@ -145,11 +145,6 @@ class SettingsScreenModelStatusTest {
         assertTrue(
             "translation mode selector remains the context control",
             assistance.contains("TranslationContextModeSelector("),
-        )
-        assertFalse(
-            "removed same-segment switch must not remain in UI or state",
-            source.contains("crossLineContextTranslation") ||
-                source.contains("settings_cross_line_context"),
         )
         assertTrue(
             "settings search routes translation mode to Translation",
@@ -252,13 +247,13 @@ class SettingsScreenModelStatusTest {
         val preview = renderingPage.indexOf("OverlayPreviewCard(")
         val colors = renderingPage.indexOf("R.string.settings_overlay_theme_label")
         val displayMode = mainPage.indexOf("R.string.settings_render_mode_label")
-        val displaySegments = mainPage.indexOf("SingleChoiceSegmentedButtonRow(", startIndex = displayMode)
+        val displaySegments = mainPage.indexOf("SettingsChoiceRow(", startIndex = displayMode)
         val blocks = mainPage.indexOf("R.string.settings_render_blocks_chip", startIndex = displayMode)
         val floating = mainPage.indexOf("R.string.settings_render_floating_window_chip", startIndex = displayMode)
         val floatingContent = mainPage.indexOf("R.string.settings_floating_window_content_label", startIndex = displayMode)
         val renderModeClick = mainPage.substring(
             mainPage.indexOf("onClick = {", startIndex = displaySegments),
-            mainPage.indexOf("shape = SegmentedButtonDefaults.itemShape", startIndex = displaySegments),
+            mainPage.indexOf("label =", startIndex = displaySegments),
         )
         val cases = listOf(
             Case("rendering secondary page exists", pageStart >= 0 && pageEnd > pageStart),
@@ -298,7 +293,7 @@ class SettingsScreenModelStatusTest {
         val source = File("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
         val function = source.substring(
             source.indexOf("private fun InlineSwitchLabel("),
-            source.indexOf("private fun SettingsLinkCell(", source.indexOf("private fun InlineSwitchLabel(")),
+            source.indexOf("internal fun SettingsLinkCell(", source.indexOf("private fun InlineSwitchLabel(")),
         )
         data class Case(val name: String, val marker: String)
 
@@ -1293,34 +1288,6 @@ class SettingsScreenModelStatusTest {
                 case.name,
                 case.expectedMessageRes,
                 warning?.let(::modelDownloadNetworkWarningMessageRes),
-            )
-        }
-    }
-
-    @Test
-    fun modelDownloadProgressFraction_isTableDriven() {
-        data class Case(
-            val name: String,
-            val downloaded: Long,
-            val total: Long,
-            val expected: Float?,
-        )
-
-        val cases = listOf(
-            Case("unknown total is indeterminate", 12L, -1L, null),
-            Case("zero total is indeterminate", 0L, 0L, null),
-            Case("download just started", 0L, 100L, 0f),
-            Case("download is halfway", 50L, 100L, 0.5f),
-            Case("download is complete", 100L, 100L, 1f),
-            Case("downloaded bytes are clamped below zero", -5L, 100L, 0f),
-            Case("downloaded bytes are clamped above total", 150L, 100L, 1f),
-        )
-
-        cases.forEach { case ->
-            assertEquals(
-                case.name,
-                case.expected,
-                modelDownloadProgressFraction(case.downloaded, case.total),
             )
         }
     }

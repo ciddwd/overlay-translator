@@ -25,6 +25,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.IntentCompat
+import com.gameocr.app.gallery.GalleryImportPolicy
+import com.gameocr.app.gallery.GalleryImportSource
 import com.gameocr.app.gallery.GalleryTranslationWorkPolicy
 import com.gameocr.app.data.AppLocalePrefs
 import com.gameocr.app.data.ThemeModePrefs
@@ -132,6 +134,7 @@ private enum class Route {
     Main,
     Onboarding,
     Settings,
+    ModelManagement,
     Glossary,
     DictionaryLibrary,
     Logs,
@@ -139,6 +142,7 @@ private enum class Route {
     GalleryConfirm,
     GalleryTasks,
     GalleryTaskDetail,
+    GalleryAlbums,
 }
 
 @Composable
@@ -149,6 +153,9 @@ private fun AppRoot(
     val context = LocalContext.current
     var onboardingFirstRun by rememberSaveable {
         mutableStateOf(!OnboardingPrefs.isCompleted(context))
+    }
+    var initialCaptureSetupPending by rememberSaveable {
+        mutableStateOf(OnboardingPrefs.isCaptureSetupPending(context))
     }
     var onboardingOpenedFromHelp by rememberSaveable {
         mutableStateOf(false)
@@ -164,11 +171,20 @@ private fun AppRoot(
         )
     }
     val settingsListState = rememberLazyListState()
+    var settingsInitialSection by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedGalleryUris by rememberSaveable {
         mutableStateOf(galleryShareRequest.value.uris)
     }
     var selectedGalleryTaskId by rememberSaveable { mutableStateOf("") }
-    var mainStatusPresetPageIndex by rememberSaveable { mutableIntStateOf(0) }
+    // 新建任务的来源（手选、相册或文件夹），序列化保存以跨重建保留；空表示手选/分享。
+    var gallerySourceJson by rememberSaveable { mutableStateOf("") }
+    var galleryAlbumsBackRoute by rememberSaveable { mutableStateOf(Route.Main.name) }
+    val gallerySource = GalleryImportPolicy.decode(gallerySourceJson)
+    val startGalleryImport: (GalleryImportSource, List<String>) -> Unit = { source, uris ->
+        gallerySourceJson = GalleryImportPolicy.encode(source)
+        selectedGalleryUris = uris
+        routeName = Route.GalleryConfirm.name
+    }
     var mainCarouselPageIndex by rememberSaveable { mutableIntStateOf(0) }
     LaunchedEffect(routeRequest.value) {
         val requested = routeRequest.value ?: return@LaunchedEffect
@@ -179,6 +195,7 @@ private fun AppRoot(
     LaunchedEffect(galleryShareRequest.value.id) {
         val sharedUris = galleryShareRequest.value.uris
         if (sharedUris.isNotEmpty()) {
+            gallerySourceJson = ""
             selectedGalleryUris = sharedUris
             routeName = Route.GalleryConfirm.name
         }
@@ -191,7 +208,16 @@ private fun AppRoot(
     ) {
         when (route) {
             Route.Main -> MainScreen(
+                initialCaptureSetupPending = initialCaptureSetupPending,
+                onInitialCaptureSetupFinished = {
+                    OnboardingPrefs.markCaptureSetupCompleted(context)
+                    initialCaptureSetupPending = false
+                },
                 onOpenSettings = { routeName = Route.Settings.name },
+                onOpenPresetSettings = {
+                    settingsInitialSection = SETTINGS_SECTION_PRESETS
+                    routeName = Route.Settings.name
+                },
                 onOpenLogs = { routeName = Route.Logs.name },
                 onOpenLegalNotices = { routeName = Route.LegalNotices.name },
                 onOpenOnboarding = {
@@ -203,17 +229,16 @@ private fun AppRoot(
                     onboardingFirstRun = false
                     routeName = Route.Onboarding.name
                 },
-                onGalleryImagesSelected = { uris ->
-                    selectedGalleryUris = uris
-                    routeName = Route.GalleryConfirm.name
+                onGalleryImport = startGalleryImport,
+                onOpenGalleryAlbums = {
+                    galleryAlbumsBackRoute = Route.Main.name
+                    routeName = Route.GalleryAlbums.name
                 },
                 onOpenGalleryTasks = { routeName = Route.GalleryTasks.name },
                 onOpenGalleryTask = { taskId ->
                     selectedGalleryTaskId = taskId
                     routeName = Route.GalleryTaskDetail.name
                 },
-                initialStatusPresetPageIndex = mainStatusPresetPageIndex,
-                onStatusPresetPageChanged = { mainStatusPresetPageIndex = it },
                 initialCarouselPageIndex = mainCarouselPageIndex,
                 onCarouselPageChanged = { mainCarouselPageIndex = it },
             )
@@ -247,8 +272,11 @@ private fun AppRoot(
                 onOpenGlossary = { routeName = Route.Glossary.name },
                 onOpenDictionaryLibrary = { routeName = Route.DictionaryLibrary.name },
                 listState = settingsListState,
+                initialSectionKey = settingsInitialSection,
+                onInitialSectionHandled = { settingsInitialSection = null },
             )
             Route.Glossary -> GlossaryScreen(onBack = { routeName = Route.Settings.name })
+            Route.ModelManagement -> ModelManagementScreen(onBack = { routeName = Route.Settings.name })
             Route.DictionaryLibrary -> DictionaryLibraryScreen(
                 onBack = { routeName = Route.Settings.name }
             )
@@ -259,19 +287,28 @@ private fun AppRoot(
                 onSelectionChanged = { selectedGalleryUris = it },
                 onBack = {
                     selectedGalleryUris = emptyList()
+                    gallerySourceJson = ""
                     routeName = Route.Main.name
                 },
                 onCreated = { taskId ->
                     selectedGalleryUris = emptyList()
+                    gallerySourceJson = ""
                     selectedGalleryTaskId = taskId
                     routeName = Route.GalleryTaskDetail.name
+                },
+                source = gallerySource,
+                onSourceChanged = { gallerySourceJson = GalleryImportPolicy.encode(it) },
+                onOpenAlbums = {
+                    galleryAlbumsBackRoute = Route.GalleryConfirm.name
+                    routeName = Route.GalleryAlbums.name
                 },
             )
             Route.GalleryTasks -> GalleryTranslationTasksScreen(
                 onBack = { routeName = Route.Main.name },
-                onImagesSelected = { uris ->
-                    selectedGalleryUris = uris
-                    routeName = Route.GalleryConfirm.name
+                onImport = startGalleryImport,
+                onOpenAlbums = {
+                    galleryAlbumsBackRoute = Route.GalleryTasks.name
+                    routeName = Route.GalleryAlbums.name
                 },
                 onOpenTask = { taskId ->
                     selectedGalleryTaskId = taskId
@@ -285,6 +322,10 @@ private fun AppRoot(
                     selectedGalleryTaskId = ""
                     routeName = Route.GalleryTasks.name
                 },
+            )
+            Route.GalleryAlbums -> GalleryAlbumPickerScreen(
+                onBack = { routeName = galleryAlbumsBackRoute },
+                onSelected = startGalleryImport,
             )
         }
     }
