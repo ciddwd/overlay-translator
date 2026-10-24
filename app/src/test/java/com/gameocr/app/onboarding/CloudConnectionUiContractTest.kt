@@ -18,6 +18,8 @@ class CloudConnectionUiContractTest {
             CloudProvider.MODELSCOPE to "modelscope.cn", CloudProvider.OPENROUTER to "openrouter.ai",
             CloudProvider.AIHUBMIX to "docs.aihubmix.com", CloudProvider.AI_302 to "doc.302.ai",
             CloudProvider.SCNET to "www.scnet.cn",
+            CloudProvider.SILICONFLOW_CN to "docs.siliconflow.cn",
+            CloudProvider.SILICONFLOW to "docs.siliconflow.com",
         )
         assertEquals(CloudProvider.entries.toSet() - CloudProvider.CUSTOM, hosts.keys)
         hosts.forEach { (provider, host) ->

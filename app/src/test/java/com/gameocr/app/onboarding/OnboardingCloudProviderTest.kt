@@ -32,7 +32,8 @@ class OnboardingCloudProviderTest {
             CloudProvider.DEEPSEEK, CloudProvider.GEMINI, CloudProvider.GLM,
             CloudProvider.KIMI, CloudProvider.MIMO, CloudProvider.MINIMAX,
             CloudProvider.MODELSCOPE, CloudProvider.OPENAI, CloudProvider.OPENROUTER,
-            CloudProvider.SCNET, CloudProvider.CUSTOM,
+            CloudProvider.SCNET, CloudProvider.SILICONFLOW, CloudProvider.SILICONFLOW_CN,
+            CloudProvider.CUSTOM,
         )
         assertEquals(expected, CloudProvider.sortedChoices)
         CloudProvider.sortedChoices.filterNot { it == CloudProvider.CUSTOM }.zipWithNext().forEach { (a, b) ->
@@ -189,7 +190,8 @@ class OnboardingCloudProviderTest {
     @Test
     fun aggregatorSetupSmoke_requiresUserModelThenUsesTheExistingOpenAiPipeline() {
         listOf(CloudProvider.MODELSCOPE, CloudProvider.OPENROUTER, CloudProvider.AIHUBMIX,
-            CloudProvider.AI_302, CloudProvider.SCNET).forEach { provider ->
+            CloudProvider.AI_302, CloudProvider.SCNET, CloudProvider.SILICONFLOW_CN,
+            CloudProvider.SILICONFLOW).forEach { provider ->
             val draft = OnboardingPolicy.selectCloudProvider(
                 OnboardingDraft(translationMethod = OnboardingTranslationMethod.CLOUD_LLM), provider,
             ).copy(cloudApiKey = "test-key")
@@ -232,6 +234,32 @@ class OnboardingCloudProviderTest {
         }
         assertTrue(page.indexOf("onboarding_cloud_region)") < page.indexOf("onboarding_cloud_url)"))
         assertTrue(source.contains("cloudProviderLabel(draft.cloudProvider)"))
+    }
+
+    @Test
+    fun siliconFlowSites_setupAndReopenPreserveUserChosenModelAndCredentials() {
+        listOf(CloudProvider.SILICONFLOW_CN, CloudProvider.SILICONFLOW).forEach { provider ->
+            val draft = OnboardingPolicy.selectCloudProvider(
+                OnboardingDraft(translationMethod = OnboardingTranslationMethod.CLOUD_LLM), provider,
+            )
+            assertEquals("", draft.cloudModel)
+            assertEquals("", draft.cloudApiKey)
+            val configured = draft.copy(cloudModel = "org/user-chosen-model", cloudApiKey = "${provider.name}-key")
+            val saved = OnboardingPolicy.apply(Settings(), configured)
+            assertEquals(TranslatorEngine.OPENAI, saved.translatorEngine)
+            val restored = OnboardingPolicy.fromSettings(saved)
+            assertEquals(provider, restored.cloudProvider)
+            assertEquals(provider.baseUrl, restored.cloudBaseUrl)
+            assertEquals(configured.cloudApiKey, restored.cloudApiKey)
+            assertEquals(configured.cloudModel, restored.cloudModel)
+            val other = if (provider == CloudProvider.SILICONFLOW_CN) CloudProvider.SILICONFLOW else CloudProvider.SILICONFLOW_CN
+            val switched = OnboardingPolicy.selectCloudProvider(restored, other)
+            assertEquals(other.baseUrl, switched.cloudBaseUrl)
+            assertEquals("", switched.cloudApiKey)
+            assertEquals("", switched.cloudModel)
+            assertEquals(configured.cloudApiKey, saved.apiKey)
+            assertEquals(provider.baseUrl, saved.baseUrl)
+        }
     }
 
     private fun sourceFile(path: String): File =

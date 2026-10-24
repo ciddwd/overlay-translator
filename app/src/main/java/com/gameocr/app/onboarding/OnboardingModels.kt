@@ -142,6 +142,14 @@ enum class CloudProvider(
         baseUrl = "https://api.scnet.cn/api/llm/v1/",
         sortName = "SCNet",
     ),
+    SILICONFLOW_CN(
+        displayName = "SiliconFlow CN",
+        baseUrl = "https://api.siliconflow.cn/v1/",
+    ),
+    SILICONFLOW(
+        displayName = "SiliconFlow",
+        baseUrl = "https://api.siliconflow.com/v1/",
+    ),
     CUSTOM(
         displayName = "Custom",
         baseUrl = "",

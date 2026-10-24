@@ -16,5 +16,7 @@ internal val CloudProvider.documentationUrl: String?
         CloudProvider.AIHUBMIX -> "https://docs.aihubmix.com/cn"
         CloudProvider.AI_302 -> "https://doc.302.ai/"
         CloudProvider.SCNET -> "https://www.scnet.cn/ac/openapi/doc/2.0/moduleapi/overview.html"
+        CloudProvider.SILICONFLOW_CN -> "https://docs.siliconflow.cn/docs/api/models-get"
+        CloudProvider.SILICONFLOW -> "https://docs.siliconflow.com/en/api-reference/models/get-model-list"
         CloudProvider.CUSTOM -> null
     }

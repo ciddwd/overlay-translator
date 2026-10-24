@@ -1388,6 +1388,8 @@ private fun cloudProviderLabel(provider: CloudProvider): String = when (provider
     CloudProvider.CUSTOM -> stringResource(R.string.onboarding_cloud_custom)
     CloudProvider.MODELSCOPE -> stringResource(R.string.onboarding_cloud_provider_modelscope)
     CloudProvider.SCNET -> stringResource(R.string.onboarding_cloud_provider_scnet)
+    CloudProvider.SILICONFLOW_CN -> stringResource(R.string.onboarding_cloud_provider_siliconflow_cn)
+    CloudProvider.SILICONFLOW -> stringResource(R.string.onboarding_cloud_provider_siliconflow)
     else -> provider.displayName
 }
 

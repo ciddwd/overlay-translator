@@ -679,7 +679,7 @@ class OpenAiTranslator @Inject constructor(
         val timedClient = client.withApiTimeout(
             OpenAiRequestPolicy.remoteLlmTimeoutSeconds(settings.apiTimeoutSeconds),
         )
-        val modelsUrl = (ensureSlash(settings.baseUrl) + "models").toHttpUrl()
+        val modelsUrl = chatModelListUrl((ensureSlash(settings.baseUrl) + "models").toHttpUrl())
         val modelsResult = try {
             modelListClient.fetch(
                 modelsUrl, settings.apiKey,

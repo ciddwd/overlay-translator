@@ -614,6 +614,16 @@ class OnboardingPolicyTest {
                 "",
                 CloudApiProtocol.OPENAI,
             ),
+            Case(
+                CloudProvider.SILICONFLOW_CN,
+                "https://api.siliconflow.cn/v1/",
+                CloudApiProtocol.OPENAI,
+            ),
+            Case(
+                CloudProvider.SILICONFLOW,
+                "https://api.siliconflow.com/v1/",
+                CloudApiProtocol.OPENAI,
+            ),
         )
 
         assertEquals(CloudProvider.entries.size, cases.size)
