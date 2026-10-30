@@ -10632,6 +10632,7 @@ private val APP_LANGUAGE_OPTIONS: List<AppLanguageOption> = listOf(
     AppLanguageOption("zh-CN", R.string.settings_app_lang_zh),
     AppLanguageOption("en", R.string.settings_app_lang_en),
     AppLanguageOption("ar", R.string.settings_app_lang_ar),
+    AppLanguageOption("ru", R.string.settings_app_lang_ru),
     // 未来扩展：zh-TW（繁中）/ mn（蒙）/ ug（维）等只需在此追加
 )
 

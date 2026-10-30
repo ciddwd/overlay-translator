@@ -1985,4 +1985,5 @@
     <string name="word_select_btn_redraw">إعادة الرسم</string>
     <string name="word_select_btn_translate">ترجمة</string>
     <string name="word_select_hint_drawing">اسحب مستطيلاً حول النص لترجمته</string>
+    <string name="settings_app_lang_ru">Русский</string>
 </resources>
