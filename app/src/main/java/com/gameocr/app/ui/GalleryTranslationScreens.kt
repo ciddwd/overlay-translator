@@ -1832,7 +1832,7 @@ internal fun galleryResultThumbnailShowsProcessing(
     -> false
 }
 
-private data class GalleryPreviewSource(
+internal data class GalleryPreviewSource(
     val sourceUri: String,
     val localPath: String,
     val displayName: String,
@@ -1845,7 +1845,7 @@ private data class GalleryPreviewLoadState(
 )
 
 @Composable
-private fun GalleryImagePreviewDialog(
+internal fun GalleryImagePreviewDialog(
     sources: List<GalleryPreviewSource>,
     initialPage: Int,
     imageDecoder: GalleryImageDecoder,
@@ -1853,9 +1853,6 @@ private fun GalleryImagePreviewDialog(
     onDismiss: () -> Unit,
 ) {
     if (sources.isEmpty()) return
-    val safeInitialPage = galleryPreviewInitialPage(initialPage, sources.size)
-    val pagerState = rememberPagerState(initialPage = safeInitialPage) { sources.size }
-    val currentSource = sources[pagerState.currentPage]
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -1865,6 +1862,11 @@ private fun GalleryImagePreviewDialog(
             dismissOnClickOutside = false,
         ),
     ) {
+        // Dialog has its own composition: update the page count and index callbacks together.
+        val safeInitialPage = galleryPreviewInitialPage(initialPage, sources.size)
+        val pagerState = rememberPagerState(initialPage = safeInitialPage) { sources.size }
+        val currentSource = sources[galleryPreviewInitialPage(pagerState.currentPage, sources.size)]
+
         Box(
             modifier = Modifier
                 .fillMaxSize()

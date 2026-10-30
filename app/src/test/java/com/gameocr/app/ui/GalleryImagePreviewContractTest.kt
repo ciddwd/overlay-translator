@@ -15,12 +15,12 @@ class GalleryImagePreviewContractTest {
             "src/main/java/com/gameocr/app/gallery/GalleryImageDecoder.kt"
         ).readText()
         val preview = screen.substring(
-            screen.indexOf("private fun GalleryImagePreviewDialog("),
+            screen.indexOf("internal fun GalleryImagePreviewDialog("),
             screen.indexOf("private fun GalleryStatusText("),
         )
         val resultThumbnail = screen.substring(
             screen.indexOf("private fun GalleryResultThumbnail("),
-            screen.indexOf("private data class GalleryPreviewSource("),
+            screen.indexOf("internal data class GalleryPreviewSource("),
         )
 
         data class Case(
