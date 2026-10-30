@@ -1157,7 +1157,7 @@ class MangaOcrEngine @Inject constructor(
             selectedEntries.size, consolidated.entries.size, consolidated.absorbedByOwner)
         // Publish final ownership after both geometry-based and text-confirmed consolidation.
         shapeAwareReport?.delayedMaskInput?.let { input ->
-            shapeAwareSessionStore.manager.publish(input.copy(
+            shapeAwareSessionStore.publish(input.copy(
                 protectedSourceBounds = (input.protectedSourceBounds + preservedFragmentBounds).distinct(),
                 modelGroups = if (bubbleSelection.source == MangaOcrBubbleGroupingPolicy.Source.DETECTOR_GUIDED) {
                     textEvidenceResult.copy(entries = consolidated.entries).toModelGroups()

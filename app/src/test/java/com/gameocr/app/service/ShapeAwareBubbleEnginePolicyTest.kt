@@ -1,6 +1,7 @@
 package com.gameocr.app.service
 
 import com.gameocr.app.data.OcrEngineKind
+import com.gameocr.app.ocr.supportsShapeAwareBubblePatches
 import org.junit.Assert.assertEquals
 import org.junit.Test
 

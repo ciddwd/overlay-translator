@@ -6,8 +6,6 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.graphics.Bitmap
-import android.graphics.Rect
 import androidx.core.app.NotificationCompat
 import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
@@ -16,19 +14,21 @@ import androidx.work.WorkerParameters
 import com.gameocr.app.R
 import com.gameocr.app.data.RenderMode
 import com.gameocr.app.data.Settings
-import com.gameocr.app.data.needsRawBitmap
-import com.gameocr.app.ocr.BitmapPreprocessor
-import com.gameocr.app.ocr.RoutingOcrEngine
-import com.gameocr.app.ocr.TextBlock
+import com.gameocr.app.ocr.PageOcrFrame
+import com.gameocr.app.ocr.PageOcrPipeline
 import com.gameocr.app.translate.RoutingTranslator
-import com.gameocr.app.translate.TranslationVisualContextPreparer
+import com.gameocr.app.translate.DialogueHistorySession
+import com.gameocr.app.translate.DialogueTranslationContextPolicy
+import com.gameocr.app.translate.PageTranslationPlan
+import com.gameocr.app.translate.PageTranslationPreparer
+import com.gameocr.app.translate.PreparedPageTranslation
 import com.gameocr.app.translate.TranslationVisualDebugStore
+import com.gameocr.app.translate.pageTranslationRowUpdates
+import com.gameocr.app.translate.planPageTranslation
 import com.gameocr.app.ui.MainActivity
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import timber.log.Timber
 
 @HiltWorker
@@ -37,7 +37,8 @@ class GalleryTranslationWorker @AssistedInject constructor(
     @Assisted workerParams: WorkerParameters,
     private val repository: GalleryTranslationRepository,
     private val imageDecoder: GalleryImageDecoder,
-    private val ocrEngine: RoutingOcrEngine,
+    private val pageOcrPipeline: PageOcrPipeline,
+    private val pageTranslationPreparer: PageTranslationPreparer,
     private val translator: RoutingTranslator,
     private val translatedPreviewStore: GalleryTranslatedPreviewStore,
 ) : CoroutineWorker(appContext, workerParams) {
@@ -64,6 +65,7 @@ class GalleryTranslationWorker @AssistedInject constructor(
         repository.resetInterruptedItems(taskId)
         repository.markTaskRunning(taskId)
         Timber.i("Gallery translation started task=%s images=%d", taskId, task.totalCount)
+        val historySession = DialogueHistorySession()
 
         while (true) {
             val latestTask = repository.getTask(taskId) ?: return Result.failure()
@@ -72,7 +74,7 @@ class GalleryTranslationWorker @AssistedInject constructor(
             repository.markItemRunning(taskId, item)
 
             try {
-                processItem(item, settings)
+                processItem(item, settings, historySession)
                 val progress = repository.refreshProgress(taskId)
                 if (useForeground) {
                     setForeground(createForegroundInfo(latestTask, progress.completed))
@@ -119,9 +121,13 @@ class GalleryTranslationWorker @AssistedInject constructor(
     private suspend fun processItem(
         item: GalleryTranslationItemEntity,
         settings: Settings,
+        historySession: DialogueHistorySession,
     ) {
         var decoded: GalleryDecodedImage? = null
-        var preprocessed: Bitmap? = null
+        var visualFrame: PageOcrFrame? = null
+        var completedPagePlan: PageTranslationPlan? = null
+        var completedTranslations = emptyMap<Int, String>()
+        var preparedPage: PreparedPageTranslation? = null
         try {
             decoded = imageDecoder.decode(item)
             val segments = if (translator.isEndToEndFor(settings)) {
@@ -131,34 +137,21 @@ class GalleryTranslationWorker @AssistedInject constructor(
                     GalleryTranslationSegment.from(block, text)
                 }
             } else {
-                val preprocessOptions = if (settings.ocrEngine.needsRawBitmap) {
-                    settings.preprocess.copy(invert = false, binarize = false)
-                } else {
-                    settings.preprocess
-                }
-                preprocessed = BitmapPreprocessor.apply(decoded.bitmap, preprocessOptions)
-                val rawBlocks = ocrEngine.recognizeWithSettings(
-                    bitmap = preprocessed,
-                    kind = settings.ocrEngine,
+                val page = pageOcrPipeline.recognize(decoded.bitmap, settings)
+                visualFrame = page.frame
+                if (page.blocks.isEmpty()) throw NoTextDetectedException()
+                val content = pageTranslationPreparer.prepare(
+                    bitmap = decoded.bitmap,
+                    blocks = page.blocks,
                     settings = settings,
+                    readingOrientation = page.frame.readingOrientation,
+                    presentation = RenderMode.BLOCKS,
+                    origin = "gallery-${item.id}",
+                    debugStore = translationVisualDebugStore,
                 )
-                val blocks = if (preprocessOptions.upscale2x) {
-                    rawBlocks.map(::downscaleTwo)
-                } else {
-                    rawBlocks
-                }
-                if (blocks.isEmpty()) throw NoTextDetectedException()
-                val visualPreparation = withContext(Dispatchers.Default) {
-                    TranslationVisualContextPreparer.prepare(
-                        bitmap = decoded.bitmap,
-                        blocks = blocks,
-                        settings = settings,
-                        presentation = RenderMode.BLOCKS,
-                        combineIntoSingleOutput = false,
-                        origin = "gallery-${item.id}",
-                        debugStore = translationVisualDebugStore,
-                    )
-                }
+                preparedPage = content
+                val blocks = content.blocks
+                val visualPreparation = content.visual
                 visualPreparation.context?.let { visual ->
                     Timber.i(
                         "Gallery visual context item=%s image=%dx%d bytes=%d sha256=%s debugPath=%s",
@@ -170,18 +163,41 @@ class GalleryTranslationWorker @AssistedInject constructor(
                         visualPreparation.debugArtifact?.absolutePath ?: "none",
                     )
                 }
+                val pagePlan = planPageTranslation(
+                    blocks = blocks,
+                    settings = visualPreparation.settings,
+                    presentation = RenderMode.BLOCKS,
+                    translator = translator,
+                    historySession = historySession,
+                )
+                val pendingIndexes = pagePlan.units.indices
+                    .filterNot(pagePlan.reusedTranslationsByIndex::containsKey)
                 val translated = translateOrThrow {
                     translator.translateBatch(
-                        blocks.map(TextBlock::text),
-                        visualPreparation.settings,
+                        pendingIndexes.map { pagePlan.units[it].sourceText },
+                        pagePlan.contextualSettings,
                     )
                 }
+                val translationsByIndex = pagePlan.reusedTranslationsByIndex.toMutableMap()
+                pendingIndexes.forEachIndexed { pendingIndex, index ->
+                    translated.getOrNull(pendingIndex)?.takeIf(String::isNotBlank)?.let {
+                        translationsByIndex[index] = it
+                    }
+                }
+                val translationsByBlock = translationsByIndex.flatMap { (index, text) ->
+                    pageTranslationRowUpdates(text, pagePlan.units[index])
+                }.associate { it.blockIndex to it.text }
+                completedPagePlan = pagePlan
+                completedTranslations = translationsByIndex
                 blocks.mapIndexed { index, block ->
-                    GalleryTranslationSegment.from(block, translated.getOrNull(index))
+                    GalleryTranslationSegment.from(block, translationsByBlock[index], page.frame.readingOrientation)
                 }
             }
-            if (segments.isEmpty()) throw NoTextDetectedException()
-            if (segments.all { it.translatedText.isBlank() }) {
+            val allSourcePreserved = preparedPage?.let {
+                it.blocks.isEmpty() && it.preservation.preservedIndexes.isNotEmpty()
+            } == true
+            if (segments.isEmpty() && !allSourcePreserved) throw NoTextDetectedException()
+            if (!allSourcePreserved && segments.all { it.translatedText.isBlank() }) {
                 throw EmptyTranslationException()
             }
             translatedPreviewStore.storeTranslatedPreview(
@@ -191,6 +207,8 @@ class GalleryTranslationWorker @AssistedInject constructor(
                 processedHeight = decoded.bitmap.height,
                 segments = segments,
                 settings = settings,
+                frame = visualFrame,
+                preparedPage = preparedPage,
             )
             repository.completeItem(
                 itemId = item.id,
@@ -199,8 +217,17 @@ class GalleryTranslationWorker @AssistedInject constructor(
                 processedHeight = decoded.bitmap.height,
                 segments = segments,
             )
+            completedPagePlan?.let { plan ->
+                if (DialogueTranslationContextPolicy.shouldCommitHistory(
+                        plan.contextualSettings, plan.units.size, completedTranslations)) {
+                    historySession.commitUnits(
+                        DialogueTranslationContextPolicy.contextKey(plan.contextualSettings),
+                        plan.units,
+                        completedTranslations,
+                    )
+                }
+            }
         } finally {
-            preprocessed?.takeIf { it !== decoded?.bitmap && !it.isRecycled }?.recycle()
             decoded?.bitmap?.takeIf { !it.isRecycled }?.recycle()
         }
     }
@@ -273,12 +300,4 @@ class GalleryTranslationWorker @AssistedInject constructor(
         private const val NOTIFICATION_CHANNEL_ID = "gallery_translation"
         private const val NOTIFICATION_ID_BASE = 6100
     }
-}
-
-private fun downscaleTwo(block: TextBlock): TextBlock {
-    fun Rect.half(): Rect = Rect(left / 2, top / 2, right / 2, bottom / 2)
-    return block.copy(
-        boundingBox = block.boundingBox.half(),
-        sourceBoxes = block.sourceBoxes.map { it.half() },
-    )
 }

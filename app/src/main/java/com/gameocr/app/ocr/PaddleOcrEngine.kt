@@ -808,7 +808,7 @@ class PaddleOcrEngine @Inject constructor(
                     )
                 }
             }
-            shapeAwareSessionStore.manager.publish(input.copy(protectedSourceBounds = protected))
+            shapeAwareSessionStore.publish(input.copy(protectedSourceBounds = protected))
         }
         val rawResults = indexedResults.map { it.second }
         val memberDetectionIndices =

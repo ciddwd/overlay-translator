@@ -13,6 +13,7 @@ class OcrSettingsSnapshotWiringTest {
         val manga = source("app/src/main/java/com/gameocr/app/ocr/MangaOcrEngine.kt")
         val paddle = source("app/src/main/java/com/gameocr/app/ocr/PaddleOcrEngine.kt")
         val capture = source("app/src/main/java/com/gameocr/app/service/CaptureService.kt")
+        val page = source("app/src/main/java/com/gameocr/app/ocr/PageOcrPipeline.kt")
 
         data class Case(val name: String, val content: String, val marker: String)
         listOf(
@@ -26,9 +27,11 @@ class OcrSettingsSnapshotWiringTest {
             Case("Paddle snapshot selects model", paddle, "ensureReady(settings.paddleModelVersion)"),
             Case("word select forwards snapshot", capture, "ocrEngine.recognize(cropped, settings.ocrEngine,"),
             Case("loop ROI forwards snapshot", capture, "ocrEngine.recognize(preprocessed, pending.effectiveEngine, settings)"),
-            Case("first pass forwards snapshot", capture, "ocrEngine.recognize(preprocessed, effectiveEngine, settings)"),
-            Case("orientation rerun forwards snapshot", capture, "ocrEngine.recognize(preprocessed, rerunEngine, settings)"),
-            Case("rotated rerun forwards snapshot", capture, "ocrEngine.recognize(correctedInput, engine, settings)"),
+            Case("capture delegates its snapshot", capture, "pageOcrPipeline.recognize(workBitmap, settings)"),
+            Case("first pass forwards snapshot", page, "recognizePass(source, normalized, rotation, effectiveEngine, settings)"),
+            Case("orientation rerun forwards snapshot", page, "rotation, rerunEngine, settings)"),
+            Case("rotated rerun forwards snapshot", page, "turn, effectiveEngine, settings)"),
+            Case("shared inference forwards snapshot", page, "ocr.recognizeWithSettings(input, engine, settings)"),
         ).forEach { case ->
             assertTrue(case.name, case.content.contains(case.marker))
         }

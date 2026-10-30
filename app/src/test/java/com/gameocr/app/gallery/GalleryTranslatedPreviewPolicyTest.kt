@@ -86,13 +86,12 @@ class GalleryTranslatedPreviewPolicyTest {
 
         listOf(
             Case(
-                "preview files use the rebuildable app cache",
-                store.contains("File(context.cacheDir, CACHE_ROOT)"),
+                "translated results persist with their task",
+                store.contains("File(context.filesDir, \"gallery_translation\")"),
             ),
             Case(
-                "preview cache keeps text readable with high quality JPEG",
-                store.contains("Bitmap.CompressFormat.JPEG") &&
-                    store.contains("const val JPEG_QUALITY = 90"),
+                "translated results keep lossless pixels for preview and export",
+                store.contains("Bitmap.CompressFormat.PNG, 100"),
             ),
             Case(
                 "floating window rendering is skipped before any cache write",
@@ -120,8 +119,8 @@ class GalleryTranslatedPreviewPolicyTest {
                     store.contains("Gallery translated preview %s failed"),
             ),
             Case(
-                "full resolution export does not reuse preview cache",
-                !exporter.contains("GalleryTranslatedPreviewStore"),
+                "export reuses the same lossless translated result",
+                exporter.contains("translatedPreviewStore.loadTranslatedPreview(item, settings)"),
             ),
         ).forEach { case ->
             assertEquals(case.name, true, case.actual)

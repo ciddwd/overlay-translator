@@ -14,13 +14,13 @@ class SourcePreservationWiringTest {
 
     @Test
     fun normalCapture_filtersBeforeMaskAndBothRenderModes_tableDriven() {
-        val plan = source.indexOf("val sourcePreservationPlan = sourcePreservationService.plan(blocks, settings)")
-        val claim = source.indexOf("mangaOcrEngine.claimDelayedMaskDebugBatch(", plan)
+        val plan = source.indexOf("val sourcePreservationPlan =", source.indexOf("val preservationStartedAt ="))
+        val claim = source.indexOf("pageOcr.frame.claim(", plan)
         val renderEnd = source.indexOf("} finally {", claim)
         val snippet = source.substring(plan, renderEnd)
         data class Case(val name: String, val marker: String)
         listOf(
-            Case("mask uses retained blocks", "blocks = translationBlocks"),
+            Case("mask uses retained blocks", "pageOcr.frame.claim(translationBlocks)"),
             Case("block overlay uses retained blocks", "renderBlocks(\n                        translationBlocks"),
             Case("floating window uses retained blocks", "renderFloatingWindow(translationBlocks"),
             Case("all-preserved frame skips translation", "if (translationBlocks.isEmpty())"),

@@ -227,7 +227,7 @@ class AutoOcrUiWiringTest {
         }
         assertTrue(routing.contains("if (kind == OcrEngineKind.ML_KIT_AUTO)"))
         assertTrue(routing.contains("automatic.recognize(bitmap, settings, ::recognizeRaw)"))
-        val capture = source("service/CaptureService.kt")
+        val capture = source("ocr/PageOcrPipeline.kt")
         listOf("preEngine", "newEngine").forEach {
             val condition = capture.substringAfter("val $it = if (")
                 .substringBefore(") null else OrientationRouting.resolveEngine(")

@@ -3,6 +3,8 @@ package com.gameocr.app.gallery
 import android.content.Context
 import android.graphics.Bitmap
 import com.gameocr.app.data.Settings
+import com.gameocr.app.ocr.PageOcrFrame
+import com.gameocr.app.translate.PreparedPageTranslation
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.io.FileOutputStream
@@ -24,16 +26,19 @@ class GalleryTranslatedPreviewStore @Inject constructor(
     private val renderer: GalleryTranslatedImageRenderer,
     private val json: Json,
 ) {
-    private val root = File(context.cacheDir, CACHE_ROOT)
+    private val root = File(context.filesDir, "gallery_translation")
+    private val legacyRoot = File(context.cacheDir, "gallery-translated-previews-v1")
     private val generationMutex = Mutex()
 
-    suspend fun storeTranslatedPreview(
+    internal suspend fun storeTranslatedPreview(
         item: GalleryTranslationItemEntity,
         source: Bitmap,
         processedWidth: Int,
         processedHeight: Int,
         segments: List<GalleryTranslationSegment>,
         settings: Settings,
+        frame: PageOcrFrame? = null,
+        preparedPage: PreparedPageTranslation? = null,
     ): Boolean = safely(item, "store") {
         if (galleryExportRenderMode(settings) == GalleryExportRenderMode.UNSUPPORTED_FLOATING) {
             return@safely false
@@ -47,6 +52,9 @@ class GalleryTranslatedPreviewStore @Inject constructor(
                     processedHeight = processedHeight,
                     segments = segments,
                     settings = settings,
+                    frame = frame,
+                    preparedPage = preparedPage,
+                    rebuildVisualContext = false,
                 )
             }
         }
@@ -64,7 +72,8 @@ class GalleryTranslatedPreviewStore @Inject constructor(
     ): Bitmap? = loadTranslated(item, settings, thumbnail = false)
 
     fun deleteTask(taskId: String) {
-        File(root, taskId).deleteRecursively()
+        File(File(root, taskId), "rendered").deleteRecursively()
+        File(legacyRoot, taskId).deleteRecursively()
     }
 
     private suspend fun loadTranslated(
@@ -106,7 +115,6 @@ class GalleryTranslatedPreviewStore @Inject constructor(
         if (target.isFile && target.length() > 0L) return@withLock target
 
         val segments = json.decodeFromString<List<GalleryTranslationSegment>>(item.segmentsJson)
-            .filter { it.translatedText.isNotBlank() }
         if (segments.isEmpty()) return@withLock null
 
         var decoded: GalleryDecodedImage? = null
@@ -120,18 +128,30 @@ class GalleryTranslatedPreviewStore @Inject constructor(
                 segments = segments,
                 settings = settings,
             )
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (error: Throwable) {
+            // A historical task may have lost its original but still have a readable result.
+            // Prefer rebuilding through the shared pipeline; retain that last copy on failure.
+            val legacy = File(File(legacyRoot, item.taskId), "${item.id}.jpg")
+            if (!legacy.isFile || legacy.length() == 0L) throw error
+            Timber.w(error, "Gallery source unavailable; retaining legacy result item=%s", item.id)
+            legacy
         } finally {
             decoded?.bitmap?.takeIf { !it.isRecycled }?.recycle()
         }
     }
 
-    private fun writePreview(
+    private suspend fun writePreview(
         item: GalleryTranslationItemEntity,
         source: Bitmap,
         processedWidth: Int,
         processedHeight: Int,
         segments: List<GalleryTranslationSegment>,
         settings: Settings,
+        frame: PageOcrFrame? = null,
+        preparedPage: PreparedPageTranslation? = null,
+        rebuildVisualContext: Boolean = true,
     ): File {
         val target = previewFile(item)
         val directory = requireNotNull(target.parentFile)
@@ -145,10 +165,13 @@ class GalleryTranslatedPreviewStore @Inject constructor(
                 processedHeight = processedHeight,
                 segments = segments,
                 settings = settings,
+                frame = frame,
+                preparedPage = preparedPage,
+                rebuildVisualContext = rebuildVisualContext,
             )
             rendered = outputBitmap
             FileOutputStream(temporary).use { output ->
-                check(outputBitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, output)) {
+                check(outputBitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) {
                     "Unable to encode translated preview."
                 }
             }
@@ -166,7 +189,7 @@ class GalleryTranslatedPreviewStore @Inject constructor(
     }
 
     private fun previewFile(item: GalleryTranslationItemEntity): File =
-        File(File(root, item.taskId), "${item.id}.jpg")
+        File(File(File(root, item.taskId), "rendered"), "${item.id}.png")
 
     private suspend fun <T> safely(
         item: GalleryTranslationItemEntity,
@@ -187,10 +210,6 @@ class GalleryTranslatedPreviewStore @Inject constructor(
         null
     }
 
-    private companion object {
-        const val CACHE_ROOT = "gallery-translated-previews-v1"
-        const val JPEG_QUALITY = 90
-    }
 }
 
 internal fun galleryResultUsesTranslatedPreview(

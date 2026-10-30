@@ -53,21 +53,32 @@ data class GalleryTranslationSegment(
     val confidence: Float,
     val recognizedLanguage: String? = null,
     val layoutOrientation: String? = null,
+    val bubbleGroupId: Int? = null,
+    val regionId: Int? = null,
+    val parentRegionId: Int? = null,
+    val regionGranularity: String = "UNKNOWN",
+    val presentationRotationDegrees: Int = 0,
+    val pageReadingOrientation: String? = null,
 ) {
     companion object {
-        fun from(block: TextBlock, translation: String?): GalleryTranslationSegment =
+        fun from(block: TextBlock, translation: String?, pageReadingOrientation: TextOrientation? = null): GalleryTranslationSegment =
             GalleryTranslationSegment(
                 sourceText = block.text,
                 translatedText = translation.orEmpty(),
                 boundingBox = GalleryRect.from(block.boundingBox),
                 sourceBoxes = block.sourceBoxes
-                    .ifEmpty { listOf(block.boundingBox) }
                     .map(GalleryRect::from),
                 confidence = block.confidence,
                 recognizedLanguage = block.recognizedLanguage,
                 layoutOrientation = block.layoutOrientation
                     ?.takeUnless { it == TextOrientation.UNKNOWN }
                     ?.name,
+                bubbleGroupId = block.bubbleGroupId,
+                regionId = block.regionId,
+                parentRegionId = block.parentRegionId,
+                regionGranularity = block.regionGranularity.name,
+                presentationRotationDegrees = block.presentationRotationDegrees,
+                pageReadingOrientation = pageReadingOrientation?.name,
             )
     }
 }

@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import com.gameocr.app.data.OcrEngineKind
 import com.gameocr.app.ocr.BubbleClusterer.IntRect
 import java.text.BreakIterator
 import java.util.Locale
@@ -14,6 +15,12 @@ import kotlin.math.floor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import javax.inject.Singleton
+import kotlin.coroutines.AbstractCoroutineContextElement
+import kotlin.coroutines.CoroutineContext
+import kotlinx.coroutines.currentCoroutineContext
+
+internal fun supportsShapeAwareBubblePatches(engine: OcrEngineKind): Boolean =
+    engine == OcrEngineKind.MANGA_OCR_JA || engine == OcrEngineKind.PADDLE_ONNX
 
 internal fun reusableBackgroundPatches(
     shapeTranslationPatches: List<ShapeAwareBubblePatch>,
@@ -37,6 +44,23 @@ internal fun reusableBackgroundPatches(
 @Singleton
 class ShapeAwareBubbleSessionStore @Inject constructor() {
     internal val manager = MangaDelayedMaskDebugSessionManager()
+
+    // File translation must not replace a screen capture's pending mask frame (or vice versa).
+    private class Frame(val manager: MangaDelayedMaskDebugSessionManager) :
+        AbstractCoroutineContextElement(Key) {
+        companion object Key : CoroutineContext.Key<Frame>
+    }
+
+    internal suspend fun publish(input: MangaDelayedMaskDebugSessionManager.Input) {
+        (currentCoroutineContext()[Frame]?.manager ?: manager).publish(input)
+    }
+
+    internal suspend fun <T> withFrame(
+        block: suspend (MangaDelayedMaskDebugSessionManager) -> T,
+    ): T {
+        val frame = Frame(MangaDelayedMaskDebugSessionManager())
+        return withContext(frame) { block(frame.manager) }
+    }
 }
 
 internal class MangaDelayedMaskDebugSessionManager {

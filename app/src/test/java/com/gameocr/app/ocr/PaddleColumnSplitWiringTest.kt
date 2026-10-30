@@ -20,7 +20,7 @@ class PaddleColumnSplitWiringTest {
         assertTrue(run.indexOf("val sorted =") < run.indexOf("dumpMangaMaskDebugSet("))
         assertTrue(run.contains("PaddleRecognitionAcceptancePolicy.accepts(text, recognition.confidence)"))
         assertTrue(run.contains("memberDetectionIndices[memberIndex]"))
-        assertTrue(run.indexOf("val acceptedIndices") < run.indexOf("shapeAwareSessionStore.manager.publish"))
+        assertTrue(run.indexOf("val acceptedIndices") < run.indexOf("shapeAwareSessionStore.publish"))
         assertTrue(run.contains("input.copy(protectedSourceBounds = protected)"))
     }
     @Test fun background_and_whole_bubble_paths_protect_rejected_text_in_ocr_coordinates() {

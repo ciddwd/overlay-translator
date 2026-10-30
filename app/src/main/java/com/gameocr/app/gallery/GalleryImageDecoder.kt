@@ -7,6 +7,7 @@ import android.graphics.Matrix
 import android.media.ExifInterface
 import android.net.Uri
 import dagger.hilt.android.qualifiers.ApplicationContext
+import com.gameocr.app.util.physicalDisplaySize
 import java.io.File
 import java.io.FileInputStream
 import java.io.InputStream
@@ -23,8 +24,8 @@ data class GalleryDecodedImage(
 class GalleryImageDecoder @Inject constructor(
     @ApplicationContext private val context: Context,
 ) {
-    fun decode(item: GalleryTranslationItemEntity, maxDimension: Int = MAX_OCR_DIMENSION): GalleryDecodedImage {
-        require(maxDimension > 0)
+    fun decode(item: GalleryTranslationItemEntity, maxDimension: Int? = null): GalleryDecodedImage {
+        require(maxDimension == null || maxDimension > 0)
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         open(item).use { BitmapFactory.decodeStream(it, null, bounds) }
         require(bounds.outWidth > 0 && bounds.outHeight > 0) {
@@ -32,7 +33,13 @@ class GalleryImageDecoder @Inject constructor(
         }
 
         val orientation = readExifOrientation(item)
-        val sampleSize = sampleSize(bounds.outWidth, bounds.outHeight, maxDimension)
+        val sampleSize = if (maxDimension != null) {
+            sampleSize(bounds.outWidth, bounds.outHeight, maxDimension)
+        } else {
+            val screen = physicalDisplaySize(context)
+            galleryImageSampleSize(bounds.outWidth, bounds.outHeight,
+                maxOf(MAX_OCR_PIXELS, screen.width.toLong() * screen.height))
+        }
         val options = BitmapFactory.Options().apply {
             inSampleSize = sampleSize
             inPreferredConfig = Bitmap.Config.ARGB_8888
@@ -78,7 +85,7 @@ class GalleryImageDecoder @Inject constructor(
     fun decodePreview(
         sourceUri: String,
         localPath: String,
-        maxDimension: Int = PREVIEW_DIMENSION,
+        maxDimension: Int? = null,
     ): Bitmap? = runCatching {
         decode(
             GalleryTranslationItemEntity(
@@ -153,8 +160,17 @@ class GalleryImageDecoder @Inject constructor(
     }
 
     private companion object {
-        const val MAX_OCR_DIMENSION = 3072
+        const val MAX_OCR_PIXELS = 3072L * 3072
         const val THUMBNAIL_DIMENSION = 160
-        const val PREVIEW_DIMENSION = 3072
     }
+}
+
+/** Keep screen captures intact; bound decoded memory by area rather than a long-edge cliff. */
+internal fun galleryImageSampleSize(width: Int, height: Int, maxPixels: Long): Int {
+    require(width > 0 && height > 0 && maxPixels > 0)
+    var sample = 1
+    fun pixels() = ((width.toLong() + sample - 1) / sample) *
+        ((height.toLong() + sample - 1) / sample)
+    while (pixels() > maxPixels && sample < (1 shl 30)) sample *= 2
+    return sample
 }

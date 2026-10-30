@@ -40,6 +40,8 @@ import com.gameocr.app.data.OverlayTextStyle
 import com.gameocr.app.data.OverlayTheme
 import com.gameocr.app.data.Settings
 import com.gameocr.app.data.SettingsRepository
+import com.gameocr.app.data.effectiveOverlayRenderSettings
+import com.gameocr.app.data.adaptiveOverlayActive
 import com.gameocr.app.data.TranslationBlockInteractionMode
 import com.gameocr.app.ocr.TextBlock
 import com.gameocr.app.ocr.TextOrientation
@@ -120,9 +122,88 @@ class OverlayManager(
     @Volatile var ocrDebugShowSourceText: Boolean = true,
     @Volatile var ocrDebugShowTranslation: Boolean = false,
     @Volatile var performanceOverlayEnabled: Boolean = false,
+    private val bitmapTargetSize: android.util.Size? = null,
 ) {
 
     private val wm by lazy { context.getSystemService(Context.WINDOW_SERVICE) as WindowManager }
+
+    internal fun applyBlockRenderSettings(settings: Settings, typeface: Typeface?) {
+        val effective = settings.effectiveOverlayRenderSettings()
+        overlayStyleMode = if (adaptiveOverlayActive(settings.overlayStyleMode, settings.renderMode)) {
+            OverlayStyleMode.ADAPTIVE
+        } else OverlayStyleMode.FIXED
+        textSizeSp = effective.overlayTextSizeSp
+        alpha = effective.overlayAlpha
+        placement = effective.overlayPlacement
+        offsetX = effective.overlayOffsetX
+        offsetY = effective.overlayOffsetY
+        theme = effective.overlayTheme
+        customBg = settings.customBgColor
+        customFg = settings.customFgColor
+        customBorder = settings.customBorderColor
+        customBorderWidthDp = settings.customBorderWidth
+        customBorderStyle = settings.customBorderStyle
+        allowWrap = effective.overlayAllowWrap
+        avoidCollision = effective.overlayAvoidCollision
+        overlayTypeface = typeface
+        overlayTextStyle = effective.overlayTextStyle.normalized()
+    }
+
+    /** Draw the same block views and patches without creating an Android overlay window. */
+    internal fun drawBlocksToBitmap(
+        source: Bitmap,
+        blocks: List<Pair<TextBlock, String>>,
+        orientation: TextOrientation,
+        adaptiveStyles: List<AdaptiveOverlayStyle>,
+        followBlockOrientations: Boolean,
+        pixelMaskPatchPipelineEnabled: Boolean,
+        patches: List<ShapeAwareBubblePatch>,
+        backgroundPatches: List<ShapeAwareBubblePatch> = emptyList(),
+    ): Bitmap {
+        check(bitmapTargetSize == android.util.Size(source.width, source.height))
+        val output = requireNotNull(source.copy(Bitmap.Config.ARGB_8888, true))
+        try {
+            showBlocks(blocks.map { (block, _) ->
+                block to if (pixelMaskPatchPipelineEnabled) block.text else "…"
+            }, orientation, adaptiveStyles = adaptiveStyles,
+                followBlockOrientations = followBlockOrientations,
+                pixelMaskPatchPipelineEnabled = pixelMaskPatchPipelineEnabled,
+                recognizedSourcePending = pixelMaskPatchPipelineEnabled)
+            if (pixelMaskPatchPipelineEnabled) {
+                showShapeAwareBubblePatches(backgroundPatches, blocks.indices.toSet())
+            }
+            val root = blocksView ?: return output
+            val widthSpec = View.MeasureSpec.makeMeasureSpec(source.width, View.MeasureSpec.EXACTLY)
+            val heightSpec = View.MeasureSpec.makeMeasureSpec(source.height, View.MeasureSpec.EXACTLY)
+            fun drawUntilLaidOut() {
+                // Text fitting may request another layout after its first measured/drawn viewport.
+                repeat(3) {
+                    root.measure(widthSpec, heightSpec)
+                    root.layout(0, 0, source.width, source.height)
+                    val canvas = android.graphics.Canvas(output)
+                    canvas.drawColor(Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR)
+                    canvas.drawBitmap(source, 0f, 0f, null)
+                    val layer = canvas.saveLayerAlpha(0f, 0f, source.width.toFloat(), source.height.toFloat(),
+                        (root.alpha * 255).roundToInt())
+                    root.draw(canvas)
+                    canvas.restoreToCount(layer)
+                    if (!root.isLayoutRequested) return
+                }
+            }
+            drawUntilLaidOut()
+            blocks.forEachIndexed { index, (_, text) ->
+                updateBlockText(index, text, AdaptiveTextLayoutPhase.FINAL)
+            }
+            if (pixelMaskPatchPipelineEnabled) showShapeAwareBubblePatches(patches, blocks.indices.toSet())
+            drawUntilLaidOut()
+            return output
+        } catch (error: Throwable) {
+            output.recycle()
+            throw error
+        } finally {
+            clearBlockResults()
+        }
+    }
 
     fun updateDictionaryTapLookupEnabled(enabled: Boolean) {
         dictionaryTapLookupEnabled = enabled
@@ -1206,7 +1287,7 @@ class OverlayManager(
         recognizedSourcePending: Boolean = false,
     ) {
         clearBlockResults()
-        clearFloatingWindow()
+        if (bitmapTargetSize == null) clearFloatingWindow()
         if (blocks.isEmpty()) return
         blocksDiagnosticId = diagnosticId
         if (ocrDebugRedBoxActive) {
@@ -1220,8 +1301,8 @@ class OverlayManager(
         }
         val dm = context.resources.displayMetrics
         val physicalSize = physicalDisplaySize(context)
-        val screenW = physicalSize.width
-        val screenH = physicalSize.height
+        val screenW = bitmapTargetSize?.width ?: physicalSize.width
+        val screenH = bitmapTargetSize?.height ?: physicalSize.height
         val interactionPlan = translationBlockInteractionPlan(translationBlockInteractionMode)
         val defaultIsVertical = orientation == TextOrientation.VERTICAL_RTL ||
             orientation == TextOrientation.VERTICAL_LTR
@@ -1724,8 +1805,8 @@ class OverlayManager(
             )
             root.addView(view, lp)
             blockViews[idx] = view
-            configureTranslationBlockView(idx, view, interactionPlan)
-            view.post {
+            if (bitmapTargetSize == null) configureTranslationBlockView(idx, view, interactionPlan)
+            if (bitmapTargetSize == null) view.post {
                 val location = IntArray(2)
                 view.getLocationOnScreen(location)
                 VerticalDiagnosticLog.i(
@@ -1735,6 +1816,10 @@ class OverlayManager(
             }
         }
         if (sourceEraseLayers.isNotEmpty()) root.background = LayerDrawable(sourceEraseLayers.toTypedArray())
+        if (bitmapTargetSize != null) {
+            blocksView = root
+            return
+        }
         root.setOnClickListener { clear() }
 
         val params = newLayoutParams(focusable = interactionPlan.windowFocusable)
@@ -2425,7 +2510,7 @@ class OverlayManager(
         blocksDialog = null
         if (dialog != null) {
             runCatching { dialog.dismiss() }
-        } else {
+        } else if (bitmapTargetSize == null) {
             blocksView?.let { runCatching { wm.removeView(it) } }
         }
         blocksView = null

@@ -14,8 +14,6 @@ import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.decodeFromString
-import kotlinx.serialization.json.Json
 import timber.log.Timber
 import java.util.Locale
 
@@ -35,9 +33,7 @@ data class GalleryExportResult(
 class GalleryTranslationExporter @Inject constructor(
     @ApplicationContext private val context: Context,
     private val repository: GalleryTranslationRepository,
-    private val imageDecoder: GalleryImageDecoder,
-    private val renderer: GalleryTranslatedImageRenderer,
-    private val json: Json,
+    private val translatedPreviewStore: GalleryTranslatedPreviewStore,
 ) {
     suspend fun exportTask(
         taskId: String,
@@ -119,28 +115,18 @@ class GalleryTranslationExporter @Inject constructor(
         )
     }
 
-    private fun exportItem(
+    private suspend fun exportItem(
         item: GalleryTranslationItemEntity,
         parentDocumentUri: Uri,
         settings: Settings,
     ) {
-        val segments = json.decodeFromString<List<GalleryTranslationSegment>>(item.segmentsJson)
-            .filter { it.translatedText.isNotBlank() }
-        require(segments.isNotEmpty()) { "No translated regions to export." }
-
-        var decoded: GalleryDecodedImage? = null
         var rendered: Bitmap? = null
         var encodedFile: File? = null
         var outputUri: Uri? = null
         try {
-            decoded = imageDecoder.decode(item)
-            rendered = renderer.render(
-                source = decoded.bitmap,
-                processedWidth = item.processedWidth,
-                processedHeight = item.processedHeight,
-                segments = segments,
-                settings = settings,
-            )
+            rendered = requireNotNull(translatedPreviewStore.loadTranslatedPreview(item, settings)) {
+                "No translated image to export."
+            }
             encodedFile = encodeTranslatedPng(rendered)
             outputUri = requireNotNull(
                 DocumentsContract.createDocument(
@@ -172,9 +158,8 @@ class GalleryTranslationExporter @Inject constructor(
                 }
             }
             rendered
-                ?.takeIf { it !== decoded?.bitmap && !it.isRecycled }
+                ?.takeIf { !it.isRecycled }
                 ?.recycle()
-            decoded?.bitmap?.takeIf { !it.isRecycled }?.recycle()
         }
     }
 

@@ -108,50 +108,9 @@ class GalleryTranslationExportContractTest {
                     exporter.contains("settings = settings"),
             ),
             Case(
-                "renderer erases original source boxes",
-                renderer.contains("segment.sourceBoxes") &&
-                    renderer.contains("expandedGalleryEraseRect") &&
-                    renderer.contains("canvas.drawRoundRect"),
-            ),
-            Case(
-                "renderer samples readable adaptive colors",
-                renderer.contains("AdaptiveOverlayStyleAnalyzer.analyze") &&
-                    renderer.contains("style.backgroundColor") &&
-                    renderer.contains("adaptiveStyle?.foregroundColor"),
-            ),
-            Case(
-                "fixed renderer applies theme alpha border and custom font",
-                renderer.contains("galleryExportPalette(settings") &&
-                    renderer.contains("overlayFontManager.typefaceFor(settings)") &&
-                    renderer.contains("palette.borderStyle") &&
-                    renderer.contains("palette.backgroundColor"),
-            ),
-            Case(
-                "renderer applies typography effects and spacing",
-                renderer.contains("textStyle.bold") &&
-                    renderer.contains("textStyle.italic") &&
-                    renderer.contains("isUnderlineText = textStyle.underline") &&
-                    renderer.contains("letterSpacing = textStyle.letterSpacingEm") &&
-                    renderer.contains("textStyle.lineSpacingMultiplier") &&
-                    renderer.contains("textStyle.strokeEnabled") &&
-                    renderer.contains("textStyle.shadowEnabled"),
-            ),
-            Case(
-                "renderer uses saved output orientation for horizontal and vertical text",
-                renderer.contains("galleryExportOrientation(settings") &&
-                    renderer.contains("TextOrientation.HORIZONTAL_RTL") &&
-                    renderer.contains("TextOrientation.VERTICAL_LTR") &&
-                    renderer.contains("horizontalRtlDisplayText"),
-            ),
-            Case(
-                "horizontal translation wraps inside its region",
-                renderer.contains("StaticLayout.Builder") &&
-                    renderer.contains("largestFittingTextSize"),
-            ),
-            Case(
-                "vertical translation reuses the existing vertical renderer",
-                renderer.contains("VerticalTextDrawer.measure") &&
-                    renderer.contains("VerticalTextDrawer.draw"),
+                "gallery delegates repair and shape layout to the screen pipeline",
+                renderer.contains("manager.finish(") && renderer.contains("overlay.drawBlocksToBitmap(") &&
+                    renderer.contains("overlay.applyBlockRenderSettings(settings, typeface)"),
             ),
             Case(
                 "both locales contain complete export feedback",

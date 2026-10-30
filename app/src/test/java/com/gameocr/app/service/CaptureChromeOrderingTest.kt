@@ -370,8 +370,8 @@ class CaptureChromeOrderingTest {
 
         assertTrue(
             "both renderers should plan presentation translation units from OCR blocks in one place",
-            "val units = planPageTranslationUnits(" in planSnippet &&
-                "mergeStrength = settings.mergeStrength" in planSnippet,
+            "val plan = planPageTranslation(" in planSnippet &&
+                "blocks = blocks" in planSnippet && "val units = plan.units" in planSnippet,
         )
         assertFalse(
             "translation planning must not run a second geometry merger",

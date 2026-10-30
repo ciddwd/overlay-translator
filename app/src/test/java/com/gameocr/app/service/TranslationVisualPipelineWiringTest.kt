@@ -83,16 +83,19 @@ class TranslationVisualPipelineWiringTest {
     @Test
     fun mergeAll_ordersByRecognizedGeometryWithoutChangingOrdinaryPresentations() {
         val source = source("app/src/main/java/com/gameocr/app/service/CaptureService.kt")
-        val mergeAllGate = source.indexOf("val mergeAllFloating = PageTranslationGroupingPolicy.shouldMergeAll(")
-        val pageSorter = source.indexOf("sortTextBlocksForMergedPage(", startIndex = mergeAllGate)
-        val visualPreparation = source.indexOf("prepareVisualTranslationSettings(", startIndex = pageSorter)
+        val preparation = this.source("app/src/main/java/com/gameocr/app/translate/PageTranslationPreparer.kt")
+        val mergeAllGate = preparation.indexOf("val mergeAll = PageTranslationGroupingPolicy.shouldMergeAll(")
+        val pageSorter = preparation.indexOf("sortTextBlocksForMergedPage(", startIndex = mergeAllGate)
+        val visualPreparation = preparation.indexOf("TranslationVisualContextPreparer.prepare(", startIndex = pageSorter)
 
         assertTrue("merge-all gate exists", mergeAllGate >= 0)
         assertTrue("page sorter is inside the gated branch", pageSorter > mergeAllGate)
         assertTrue("visual request receives the canonical order", visualPreparation > pageSorter)
         assertTrue(
             "source order is independent from translation render layout",
-            source.contains("sortTextBlocksForReading(rawBlocks, recognizedReadingOrientation)"),
+            source.contains("pageOcrPipeline.recognize(workBitmap, settings)") &&
+                this.source("app/src/main/java/com/gameocr/app/ocr/PageOcrPipeline.kt")
+                    .contains("sortTextBlocksForReading(accepted.blocks, reading)"),
         )
     }
 

@@ -153,7 +153,8 @@ class GalleryImagePreviewContractTest {
             ),
             Case(
                 "preview decoder caps memory use",
-                decoder.contains("const val PREVIEW_DIMENSION = 3072") &&
+                decoder.contains("MAX_OCR_PIXELS = 3072L * 3072") &&
+                    decoder.contains("galleryImageSampleSize(") &&
                     decoder.contains("fun decodePreview("),
             ),
         ).forEach { case ->

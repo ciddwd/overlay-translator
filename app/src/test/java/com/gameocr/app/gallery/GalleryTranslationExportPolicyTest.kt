@@ -156,47 +156,6 @@ class GalleryTranslationExportPolicyTest {
     }
 
     @Test
-    fun `erase rectangles add safe margins without leaving the bitmap`() {
-        data class Case(
-            val name: String,
-            val rect: GalleryRect,
-            val width: Int,
-            val height: Int,
-            val expected: GalleryRect,
-        )
-
-        listOf(
-            Case(
-                "small text gets minimum margin",
-                GalleryRect(10, 10, 20, 20),
-                100,
-                100,
-                GalleryRect(8, 8, 22, 22),
-            ),
-            Case(
-                "large text margin is capped",
-                GalleryRect(50, 50, 250, 250),
-                400,
-                400,
-                GalleryRect(38, 38, 262, 262),
-            ),
-            Case(
-                "edge expansion is clipped",
-                GalleryRect(0, 1, 20, 21),
-                100,
-                100,
-                GalleryRect(0, 0, 22, 23),
-            ),
-        ).forEach { case ->
-            assertEquals(
-                case.name,
-                case.expected,
-                expandedGalleryEraseRect(case.rect, case.width, case.height),
-            )
-        }
-    }
-
-    @Test
     fun `export text normalization preserves intentional lines`() {
         data class Case(
             val name: String,
@@ -214,30 +173,4 @@ class GalleryTranslationExportPolicyTest {
         }
     }
 
-    @Test
-    fun `text size search returns the largest fitting candidate`() {
-        data class Case(
-            val name: String,
-            val minimum: Int,
-            val maximum: Int,
-            val largestFit: Int,
-            val expected: Int,
-        )
-
-        listOf(
-            Case("middle fit", 4, 20, 13, 13),
-            Case("maximum fits", 4, 20, 20, 20),
-            Case("only minimum fits", 4, 20, 4, 4),
-            Case("nothing fits keeps safe minimum", 4, 20, 0, 4),
-            Case("inverted range normalizes", 8, 4, 8, 8),
-        ).forEach { case ->
-            assertEquals(
-                case.name,
-                case.expected,
-                largestFittingTextSize(case.minimum, case.maximum) {
-                    it <= case.largestFit
-                },
-            )
-        }
-    }
 }

@@ -3,6 +3,7 @@ package com.gameocr.app.translate
 import android.graphics.Rect
 import com.gameocr.app.data.MergeStrength
 import com.gameocr.app.data.RenderMode
+import com.gameocr.app.data.Settings
 import com.gameocr.app.ocr.TextBlock
 
 /**
@@ -47,6 +48,57 @@ internal data class PageTranslationRowUpdate(
     val blockIndex: Int,
     val text: String,
 )
+
+internal data class PageTranslationPlan(
+    val units: List<PageTranslationUnit>,
+    val contextualSettings: Settings,
+    val reusedTranslationsByIndex: Map<Int, String>,
+    val useBatch: Boolean,
+    val structuredContextBatch: Boolean,
+    val contextModeName: String,
+    val presentation: RenderMode,
+    val historySession: DialogueHistorySession,
+)
+
+/** Screen frames and file pages must construct the same contextual translation request. */
+internal fun planPageTranslation(
+    blocks: List<TextBlock>,
+    settings: Settings,
+    presentation: RenderMode,
+    translator: Translator,
+    historySession: DialogueHistorySession,
+): PageTranslationPlan {
+    val routing = translator as? RoutingTranslator
+    val units = planPageTranslationUnits(blocks, presentation,
+        settings.mergeAdjacentBlocks, settings.mergeStrength)
+    val mode = DialogueTranslationContextPolicy.effectiveMode(settings)
+    val previousFrame = PageTranslationPresentationTextPolicy.normalizeHistory(
+        presentation, historySession.historyFor(DialogueTranslationContextPolicy.contextKey(settings)))
+    val structuredContextBatch = StructuredContextBatchSelectionPolicy.shouldUse(
+        mode = mode,
+        unitCount = units.size,
+        engineSupportsStructuredBatch = routing?.supportsStructuredContextBatchFor(settings)
+            ?: translator.supportsStructuredContextBatch,
+        forceSingleVisualBatch = settings.runtimeTranslationVisualContext != null,
+    )
+    return PageTranslationPlan(
+        units = units,
+        contextualSettings = DialogueTranslationContextPolicy.contextualize(
+            settings = settings,
+            currentSources = units.map(PageTranslationUnit::sourceText),
+            historySession = historySession,
+            availableHistory = previousFrame,
+            singleMergedFloating = PageTranslationGroupingPolicy.shouldMergeAll(
+                presentation, settings.mergeAdjacentBlocks, settings.mergeStrength),
+        ),
+        reusedTranslationsByIndex = ContinuousTranslationReusePolicy.plan(mode, units, previousFrame),
+        useBatch = (routing?.prefersBatchFor(settings) ?: translator.prefersBatch) || structuredContextBatch,
+        structuredContextBatch = structuredContextBatch,
+        contextModeName = mode.name,
+        presentation = presentation,
+        historySession = historySession,
+    )
+}
 
 internal fun planPageTranslationUnits(
     blocks: List<TextBlock>,
