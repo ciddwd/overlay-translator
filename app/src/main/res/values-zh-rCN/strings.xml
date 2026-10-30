@@ -2547,4 +2547,6 @@
     <string name="settings_asr_use_glossary">使用术语表辅助识别</string>
     <string name="settings_asr_use_glossary_help">使用已启用词条的原文词，辅助识别人名、地名和专有名词。按当前应用和识别语言筛选，译文仍由翻译设置处理。</string>
     <string name="settings_asr_duration_value">%1$s：%2$s</string>
+    <string name="settings_app_lang_ru">Русский</string>
+    <string name="settings_model_picker_count">%1$d 个模型</string>
 </resources>
