@@ -110,11 +110,11 @@ class CaptureStartCoordinator @Inject constructor(
         return CaptureStartDecision.Ready(CaptureBackend.ROOT)
     }
 
-    internal fun start(backend: CaptureBackend, resultCode: Int = 0, data: Intent? = null) {
-        if (CaptureServiceState.running.value) return
+    internal fun start(backend: CaptureBackend, resultCode: Int = 0, data: Intent? = null): Boolean {
+        if (CaptureServiceState.running.value) return true
         require(backend != CaptureBackend.MEDIA_PROJECTION || data != null)
         Timber.i("[capture-start] backend=%s", backend)
-        try {
+        return try {
             ContextCompat.startForegroundService(context, Intent(context, CaptureService::class.java).apply {
                 action = CaptureService.ACTION_START
                 putExtra(CaptureService.EXTRA_CAPTURE_BACKEND, backend.name)
@@ -123,9 +123,11 @@ class CaptureStartCoordinator @Inject constructor(
                     putExtra(CaptureService.EXTRA_RESULT_DATA, data)
                 }
             })
+            true
         } catch (error: Exception) {
             logs.error(LogRepository.Category.CAPTURE, context.getString(R.string.log_msg_capture_failed), error)
             showStartFailure()
+            false
         }
     }
 

@@ -17,6 +17,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewModelScope
 import com.gameocr.app.ui.MainActivity
 import com.gameocr.app.data.SettingsRepository
+import com.gameocr.app.service.CaptureServiceState
 import com.gameocr.app.ui.openOverlayPermissionSettings
 import dagger.hilt.android.AndroidEntryPoint
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -24,10 +25,12 @@ import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import timber.log.Timber
 
-/** Shared transparent launch host, isolated from home so a tile tap preserves the foreground app. */
+/** Shared transparent launch host. Only Quick Settings needs a separate task. */
 @AndroidEntryPoint
 class CaptureStartRequestActivity : ComponentActivity() {
     private val viewModel: CaptureStartViewModel by viewModels()
@@ -44,8 +47,8 @@ class CaptureStartRequestActivity : ComponentActivity() {
             viewModel.projectionGranted(result.resultCode, result.data!!)
         } else {
             Timber.w("MediaProjection denied")
+            finishRequest()
         }
-        finishRequest()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -75,12 +78,15 @@ class CaptureStartRequestActivity : ComponentActivity() {
                         finishRequest()
                     }
                     CaptureStartStage.SETUP -> {
-                        startActivity(Intent(this@CaptureStartRequestActivity, MainActivity::class.java)
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or
-                                Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+                        if (isTaskRoot) {
+                            startActivity(Intent(this@CaptureStartRequestActivity, MainActivity::class.java)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or
+                                    Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+                        }
                         finishRequest()
                     }
                     CaptureStartStage.FINISHED -> finishRequest()
+                    CaptureStartStage.CLOSE_PAGE -> finish()
                 }
             }
         }
@@ -93,17 +99,26 @@ class CaptureStartRequestActivity : ComponentActivity() {
 
     companion object {
         internal const val EXTRA_MODE_OVERRIDE = "com.gameocr.app.capture.MODE_OVERRIDE"
+        internal const val EXTRA_FROM_QUICK_SETTINGS = "com.gameocr.app.capture.FROM_QUICK_SETTINGS"
 
         /** [modeOverride]: the method the home one-button setup resolved; used for this launch only. */
-        fun newIntent(context: Context, modeOverride: CaptureStartMode? = null): Intent =
+        fun newIntent(
+            context: Context,
+            modeOverride: CaptureStartMode? = null,
+            fromQuickSettings: Boolean = false,
+        ): Intent =
             Intent(context, CaptureStartRequestActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                if (fromQuickSettings) {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    putExtra(EXTRA_FROM_QUICK_SETTINGS, true)
+                }
                 modeOverride?.let { putExtra(EXTRA_MODE_OVERRIDE, it.name) }
             }
     }
 }
 
-enum class CaptureStartStage { WAITING, PROJECTION, OVERLAY_PERMISSION, ACCESSIBILITY_SETTINGS, SETUP, FINISHED }
+enum class CaptureStartStage { WAITING, PROJECTION, OVERLAY_PERMISSION, ACCESSIBILITY_SETTINGS, SETUP, FINISHED, CLOSE_PAGE }
 
 @HiltViewModel
 class CaptureStartViewModel @Inject constructor(
@@ -114,12 +129,14 @@ class CaptureStartViewModel @Inject constructor(
     private val ownsGate = coordinator.gate.acquire()
     private val currentStage = MutableStateFlow(CaptureStartStage.WAITING)
     val stage = currentStage.asStateFlow()
+    private val fromQuickSettings = savedState.get<Boolean>(CaptureStartRequestActivity.EXTRA_FROM_QUICK_SETTINGS) == true
     private var projectionRequested = savedState.get<Boolean>("projectionRequested") == true
 
     init {
         viewModelScope.launch {
             if (!ownsGate) {
-                currentStage.value = CaptureStartStage.FINISHED
+                // Another request may still be starting the foreground service.
+                currentStage.value = CaptureStartStage.CLOSE_PAGE
             } else if (projectionRequested) {
                 // The ActivityResultRegistry restores the outstanding consent request after recreation.
                 currentStage.value = CaptureStartStage.PROJECTION
@@ -136,8 +153,7 @@ class CaptureStartViewModel @Inject constructor(
                         if (decision.backend == CaptureBackend.MEDIA_PROJECTION) {
                             currentStage.value = CaptureStartStage.PROJECTION
                         } else {
-                            coordinator.start(decision.backend)
-                            currentStage.value = CaptureStartStage.FINISHED
+                            finishAfterStart(coordinator.start(decision.backend))
                         }
                     }
                 }
@@ -165,11 +181,23 @@ class CaptureStartViewModel @Inject constructor(
     }
 
     fun projectionGranted(code: Int, data: Intent) {
-        try {
-            coordinator.start(CaptureBackend.MEDIA_PROJECTION, code, data)
-        } catch (error: Exception) {
-            Timber.w(error, "[capture-start] projection startup failed")
+        viewModelScope.launch {
+            finishAfterStart(coordinator.start(CaptureBackend.MEDIA_PROJECTION, code, data))
         }
+    }
+
+    private suspend fun finishAfterStart(dispatched: Boolean) {
+        if (!fromQuickSettings) {
+            currentStage.value = CaptureStartStage.FINISHED
+            return
+        }
+
+        // running becomes true only after CaptureService has entered the foreground.
+        val running = dispatched && withTimeoutOrNull(5_000L) {
+            CaptureServiceState.running.first { it }
+        } == true
+        // On failure or timeout, close only the page. Do not remove its task during startup.
+        currentStage.value = if (running) CaptureStartStage.FINISHED else CaptureStartStage.CLOSE_PAGE
     }
 
     override fun onCleared() {

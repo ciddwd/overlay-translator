@@ -16,6 +16,8 @@ class CaptureQuickSettingsPolicyTest {
     @Test fun homeAndTileUseOneEntryAndTileRetainsPlatformBoundaries() {
         val tile = File("src/main/java/com/gameocr/app/service/CaptureQuickSettingsTileService.kt").readText()
         val home = File("src/main/java/com/gameocr/app/ui/MainScreen.kt").readText()
+        assertTrue(tile.contains("CaptureStartRequestActivity.newIntent(this, fromQuickSettings = true)"))
+        assertFalse(home.contains("fromQuickSettings"))
         for (source in listOf(tile, home)) {
             assertTrue(source.contains("CaptureStartRequestActivity.newIntent("))
             assertFalse(source.contains("CaptureService.ACTION_START"))
@@ -59,6 +61,7 @@ class CaptureQuickSettingsPolicyTest {
             Case(CaptureStartStage.ACCESSIBILITY_SETTINGS, "Settings.ACTION_ACCESSIBILITY_SETTINGS", false),
             Case(CaptureStartStage.SETUP, "finishRequest()", true),
             Case(CaptureStartStage.FINISHED, "finishRequest()", false),
+            Case(CaptureStartStage.CLOSE_PAGE, "finish()", false),
         )
         assertEquals(stages.toSet(), cases.map { it.stage }.toSet())
         cases.forEach { case ->
@@ -74,12 +77,28 @@ class CaptureQuickSettingsPolicyTest {
         }
         val resultCallback = host.substringAfter("ActivityResultContracts.StartActivityForResult()")
             .substringBefore("override fun onCreate")
-        assertTrue("grant callback is preserved", resultCallback.contains("viewModel.projectionGranted("))
-        assertTrue("both grant and denial return to caller", resultCallback.trimEnd().endsWith("finishRequest()\n    }"))
+        assertTrue(resultCallback.substringBefore("} else {").contains("viewModel.projectionGranted("))
+        assertFalse("grant waits for the service before removal", resultCallback.substringBefore("} else {").contains("finishRequest()"))
+        assertTrue("denial can close immediately", resultCallback.substringAfter("} else {").contains("finishRequest()"))
         assertFalse(resultCallback.contains("MainActivity"))
         assertTrue(host.contains("if (isTaskRoot) finishAndRemoveTask() else finish()"))
         assertFalse("never clear another activity's task", host.contains("finishAffinity()"))
-        val factory = host.substringAfter("fun newIntent(context: Context)").substringBefore("enum class")
-        assertTrue(factory.contains("Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION"))
+        val factory = host.substringAfter("fun newIntent(").substringBefore("enum class")
+        assertTrue(factory.contains("fromQuickSettings: Boolean = false"))
+        assertTrue(factory.contains("putExtra(EXTRA_FROM_QUICK_SETTINGS, true)"))
+    }
+
+    @Test fun tileRemovesTaskOnlyAfterServiceSignalsRunning() {
+        val host = File("src/main/java/com/gameocr/app/capture/CaptureStartRequestActivity.kt").readText()
+        val startup = host.substringAfter("private suspend fun finishAfterStart(")
+            .substringBefore("override fun onCleared()")
+        val service = File("src/main/java/com/gameocr/app/service/CaptureService.kt").readText()
+        val foreground = service.indexOf("if (!startForegroundCompat(fgType, intent))")
+        val running = service.indexOf("CaptureServiceState.setRunning(true)")
+        assertTrue("running must follow foreground promotion", foreground >= 0 && running > foreground)
+        assertTrue(host.contains("finishAfterStart(coordinator.start(decision.backend))"))
+        assertTrue(host.contains("finishAfterStart(coordinator.start(CaptureBackend.MEDIA_PROJECTION, code, data))"))
+        assertTrue(startup.contains("CaptureServiceState.running.first { it }"))
+        assertTrue(startup.contains("if (running) CaptureStartStage.FINISHED else CaptureStartStage.CLOSE_PAGE"))
     }
 }

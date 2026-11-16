@@ -70,7 +70,7 @@ class CaptureQuickSettingsTileService : TileService() {
         when (action) {
             CaptureQuickSettingsAction.STOP_SERVICE -> Unit
             CaptureQuickSettingsAction.REQUEST_START ->
-                launchActivity(CaptureStartRequestActivity.newIntent(this), CAPTURE_START_REQUEST_CODE)
+                launchActivity(CaptureStartRequestActivity.newIntent(this, fromQuickSettings = true), CAPTURE_START_REQUEST_CODE)
         }
     }
 
