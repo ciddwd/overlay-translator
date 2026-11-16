@@ -2550,4 +2550,6 @@
     <string name="settings_asr_use_glossary">Use glossary for recognition</string>
     <string name="settings_asr_use_glossary_help">Use source terms from enabled glossary entries to help recognize names, places and specialized terms. Entries are filtered by the current app and recognition language.</string>
     <string name="settings_asr_duration_value">%1$s: %2$s</string>
+    <string name="settings_app_lang_ru">Русский</string>
+    <string name="settings_model_picker_count">%1$d models</string>
 </resources>
