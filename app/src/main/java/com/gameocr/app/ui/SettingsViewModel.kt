@@ -182,7 +182,7 @@ class SettingsViewModel @Inject constructor(
             update = repo::update,
             currentDefault = activityContext.getString(R.string.default_prompt),
             knownDefaults = {
-                listOf("zh-CN", "en").map { tag ->
+                listOf("zh-CN", "en", "ru").map { tag ->
                     val cfg = android.content.res.Configuration(activityContext.resources.configuration)
                         .apply { setLocale(java.util.Locale.forLanguageTag(tag)) }
                     activityContext.createConfigurationContext(cfg).getString(R.string.default_prompt)

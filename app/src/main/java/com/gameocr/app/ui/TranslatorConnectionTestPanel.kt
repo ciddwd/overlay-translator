@@ -118,7 +118,7 @@ internal fun TranslatorModelPicker(models: List<String>, onSelect: (String) -> U
             onValueChange = {},
             readOnly = true,
             label = { Text(stringResource(R.string.settings_test_pick_model)) },
-            placeholder = { Text("${models.size} models") },
+            placeholder = { Text(stringResource(R.string.settings_model_picker_count, models.size)) },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
             modifier = Modifier.menuAnchor().fillMaxWidth(),
         )
