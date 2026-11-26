@@ -251,6 +251,7 @@ data class Settings(
     val floatingButtonSizeDp: Int = 40,
     /** Operation button opacity; independent of translation windows and arc-menu buttons. */
     val floatingButtonAlpha: Float = 1f,
+    val floatingButtonAccessibilityOverlay: Boolean = false,
     /**
      * 悬浮按钮 X 坐标（px，gravity=TOP|START 参考左上角）。-1 表示未保存过，按代码默认值
      * `(16dp, screenH/4)` 初始化。松手吸边后由 [FloatingButtonManager] 写回。

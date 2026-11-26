@@ -42,6 +42,7 @@ internal fun FloatingSettingsOverview(
     menuMode: @Composable () -> Unit,
     dockSummary: String,
     quickPanelEnabled: Boolean,
+    compatibility: @Composable () -> Unit,
     onOpen: (FloatingSettingsPage) -> Unit,
 ) {
     SectionCard(title = stringResource(R.string.settings_section_floating)) {
@@ -49,6 +50,7 @@ internal fun FloatingSettingsOverview(
         menuMode()
         FloatingSettingsLink(FloatingSettingsPage.DOCKING, dockSummary, onOpen)
         FloatingSettingsLink(FloatingSettingsPage.MENU, null, onOpen, enabled = !quickPanelEnabled)
+        compatibility()
     }
 }
 

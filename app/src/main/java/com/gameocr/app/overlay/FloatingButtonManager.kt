@@ -72,7 +72,7 @@ class FloatingButtonManager(
         val button = view ?: return
         if (params.alpha == buttonAlpha) return
         params.alpha = buttonAlpha
-        runCatching { wm.updateViewLayout(button, params) }
+        runCatching { ballWm.updateViewLayout(button, params) }
     }
     /** 初始位置：构造后由 CaptureService 注入；若 ≥ 0 则 show() 时优先使用。 */
     @Volatile var initialX: Int = -1
@@ -173,6 +173,8 @@ class FloatingButtonManager(
      * API < 30 没这个 API，退回默认 wm（横竖屏切换时有 known limitation）。
      */
     private val wm: WindowManager by lazy { createDisplayBoundWm() }
+    internal var accessibilityBallManager: WindowManager? = null
+    private val ballWm: WindowManager get() = accessibilityBallManager ?: wm
     private val displayManager by lazy {
         context.getSystemService(Context.DISPLAY_SERVICE) as android.hardware.display.DisplayManager
     }
@@ -350,7 +352,7 @@ class FloatingButtonManager(
 
         val params = WindowManager.LayoutParams(
             containerW, containerH,
-            overlayType,
+            if (accessibilityBallManager != null) WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY else overlayType,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
@@ -383,7 +385,15 @@ class FloatingButtonManager(
             showArcMenu()
             true
         }
-        wm.addView(container, params)
+        try {
+            ballWm.addView(container, params)
+        } catch (error: RuntimeException) {
+            if (accessibilityBallManager == null) throw error
+            android.util.Log.w("FBM", "Could not open the accessibility floating button", error)
+            accessibilityBallManager = null
+            show()
+            return
+        }
         view = container
         loopProgressState.attach { spec ->
             when {
@@ -458,7 +468,7 @@ class FloatingButtonManager(
             lp.height = size
             child.layoutParams = lp
         }
-        runCatching { wm.updateViewLayout(container, params) }
+        runCatching { ballWm.updateViewLayout(container, params) }
     }
 
     /**
@@ -486,7 +496,7 @@ class FloatingButtonManager(
         lastScreenSize = screenW to screenH
         params.x = params.x.coerceIn(0, (screenW - params.width).coerceAtLeast(0))
         params.y = params.y.coerceIn(0, (screenH - params.height).coerceAtLeast(0))
-        runCatching { wm.updateViewLayout(v, params) }
+        runCatching { ballWm.updateViewLayout(v, params) }
         // post 到下一帧再 snap：避开 onConfigurationChanged 到达时 wm 尺寸尚未切换的窗口期
         v.post {
             if (dockSide != DockSide.NONE) snapToEdge()
@@ -587,7 +597,7 @@ class FloatingButtonManager(
             initialY = it.y
         }
         view?.let {
-            runCatching { wm.removeView(it) }
+            runCatching { ballWm.removeView(it) }
             view = null
             layoutParams = null
         }
@@ -658,7 +668,7 @@ class FloatingButtonManager(
             }
             addUpdateListener { _, value, _ ->
                 params.x = value.toInt()
-                runCatching { wm.updateViewLayout(v, params) }
+                runCatching { ballWm.updateViewLayout(v, params) }
             }
             addEndListener { _, _, _, _ -> persistPositionDebounced() }
             start()
@@ -710,7 +720,7 @@ class FloatingButtonManager(
                 }
                 addUpdateListener { _, value, _ ->
                     params.x = value.toInt()
-                    runCatching { wm.updateViewLayout(v, params) }
+                    runCatching { ballWm.updateViewLayout(v, params) }
                 }
                 addEndListener { _, _, _, _ ->
                     persistPositionDebounced()
@@ -733,7 +743,7 @@ class FloatingButtonManager(
             }
             addUpdateListener { _, value, _ ->
                 params.y = value.toInt()
-                runCatching { wm.updateViewLayout(v, params) }
+                runCatching { ballWm.updateViewLayout(v, params) }
             }
             start()
         }
@@ -770,7 +780,7 @@ class FloatingButtonManager(
             }
             addUpdateListener { _, value, _ ->
                 params.x = value.toInt()
-                runCatching { wm.updateViewLayout(v, params) }
+                runCatching { ballWm.updateViewLayout(v, params) }
             }
             start()
         }
@@ -1283,7 +1293,7 @@ class FloatingButtonManager(
                     if (moved) {
                         params.x = (initX + dx).toInt()
                         params.y = (initY + dy).toInt()
-                        runCatching { wm.updateViewLayout(view, params) }
+                        runCatching { ballWm.updateViewLayout(view, params) }
                     }
                     true
                 }
@@ -1700,7 +1710,7 @@ class FloatingButtonManager(
                 }
                 addUpdateListener { _, value, _ ->
                     params.x = value.toInt()
-                    runCatching { wm.updateViewLayout(v, params) }
+                    runCatching { ballWm.updateViewLayout(v, params) }
                 }
                 start()
             }
@@ -1717,7 +1727,7 @@ class FloatingButtonManager(
             }
             addUpdateListener { _, value, _ ->
                 params.y = value.toInt()
-                runCatching { wm.updateViewLayout(v, params) }
+                runCatching { ballWm.updateViewLayout(v, params) }
             }
             if (onSettle != null) {
                 addEndListener { _, canceled, value, _ ->

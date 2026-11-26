@@ -204,6 +204,8 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -656,6 +658,11 @@ class CaptureService : Service() {
                     gestureBindings = GestureBindings.normalize(s.gestureBindings)
                     floatingButton?.inputTranslationDoubleAction = s.inputTranslationDoubleAction
                     floatingButton?.applyOpacity(s.floatingButtonAlpha)
+                    floatingButton?.accessibilityBallManager = if (s.floatingButtonAccessibilityOverlay) {
+                        GameOcrAccessibilityService.overlayWindowManagerOrNull()
+                    } else {
+                        null
+                    }
                     floatingButton?.show()
                     configureGestureWake(s)
                 }

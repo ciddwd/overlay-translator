@@ -9,6 +9,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.KeyEvent
+import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.gameocr.app.data.SettingsRepository
@@ -129,6 +130,10 @@ class GameOcrAccessibilityService : AccessibilityService() {
         val connected = connection.asStateFlow()
 
         fun isConnected(): Boolean = connectedInstance != null
+
+        // This manager carries the overlay token supplied to the connected accessibility service.
+        internal fun overlayWindowManagerOrNull(): WindowManager? =
+            connectedInstance?.getSystemService(WindowManager::class.java)
 
         fun isScreenshotReady(): Boolean = screenshotServiceOrNull() != null
 

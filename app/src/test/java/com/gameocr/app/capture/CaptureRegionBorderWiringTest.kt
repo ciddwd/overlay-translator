@@ -104,8 +104,7 @@ class CaptureRegionBorderWiringTest {
         assertTrue("all backends honor same option", overlay.contains("autoHideOnCapture = settings.captureRegionHideOnCapture"))
         assertTrue("visibility uses the option", overlay.contains("autoHideOnCapture = autoHideOnCapture"))
         assertTrue("disabled option must not report a hidden window", overlay.contains("return wasVisible && borderView?.visibility != View.VISIBLE"))
-        assertTrue("toggle saves immediately", settings.contains("viewModel.saveCaptureRegionHideOnCapture(enabled)"))
-        assertTrue("draft included when saving/exporting", settings.contains("captureRegionHideOnCapture = captureRegionHideOnCapture,"))
+        assertTrue("draft included when saving/exporting", settings.contains("captureRegionHideOnCapture = selectionDraft.captureRegionHideOnCapture,"))
     }
 
     @Test

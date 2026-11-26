@@ -682,8 +682,7 @@ fun SettingsScreen(
     var customFg by remember { mutableStateOf(0xFFFFFFFF.toInt()) }
     var customBorder by remember { mutableStateOf(0) }
     var customBorderW by remember { mutableStateOf(0f) }
-    var captureRegionBorderEnabled by remember { mutableStateOf(true) }
-    var captureRegionHideOnCapture by remember { mutableStateOf(true) }
+    val selectionDraft = remember { SelectionSettingsDraft() }
     var captureRegionBorderColor by remember {
         mutableStateOf(DEFAULT_CAPTURE_REGION_BORDER_COLOR)
     }
@@ -693,7 +692,6 @@ fun SettingsScreen(
     var captureRegionBorderStyle by remember {
         mutableStateOf(CaptureRegionBorderStyle.SOLID)
     }
-    var captureRegionAdjustmentEnabled by remember { mutableStateOf(false) }
     var captureRegionStyleExpanded by remember { mutableStateOf(false) }
     var offsetX by remember { mutableStateOf(0f) }
     var offsetY by remember { mutableStateOf(0f) }
@@ -744,6 +742,7 @@ fun SettingsScreen(
     var floatingSize by remember { mutableStateOf(56f) }
     var floatingAlpha by remember { mutableStateOf(Settings().floatingButtonAlpha) }
     var floatingSnapEdge by remember { mutableStateOf(true) }
+    var floatingCompatibilityEnabled by remember { mutableStateOf(false) }
     var floatingAutoDock by remember { mutableStateOf(false) }
     var floatingDockInset by remember { mutableStateOf(0f) }
     // 弧菜单按钮顺序：拖动后即时通过 vm 的 saveArcMenuOrder 单字段落盘，**不**走主 save 的
@@ -759,10 +758,6 @@ fun SettingsScreen(
     var inputTranslationDoubleAction by remember {
         mutableStateOf(InputTranslationDoubleAction.FULL_SCREEN)
     }
-    var wordSelectPreciseAdjust by remember { mutableStateOf(true) }
-    var wordSelectCardMode by remember { mutableStateOf(true) }
-    var wordSelectExtractOnly by remember { mutableStateOf(false) }
-    var wordSelectRememberRegion by remember { mutableStateOf(false) }
     var floatingWindowAutoHideWhenObstructing by remember { mutableStateOf(false) }
     var dictionaryPrompt by remember { mutableStateOf("") }
     // 悬浮按钮"贴边距离" slider 的实时预览：屏幕两侧画 inset 宽度的半透粉条。
@@ -1201,6 +1196,7 @@ fun SettingsScreen(
         floatingSize = s.floatingButtonSizeDp.toFloat()
         floatingAlpha = normalizedFloatingButtonAlpha(s.floatingButtonAlpha)
         floatingSnapEdge = s.floatingButtonSnapToEdge
+        floatingCompatibilityEnabled = s.floatingButtonAccessibilityOverlay
         floatingAutoDock = s.floatingButtonAutoDock
         floatingDockInset = s.floatingButtonDockInsetDp.toFloat()
         menuOrder = s.floatingMenuItemOrder
@@ -1208,10 +1204,7 @@ fun SettingsScreen(
         currentSkill = s.floatingButtonSkill
         gestureUi.load(s)
         inputTranslationDoubleAction = s.inputTranslationDoubleAction
-        wordSelectPreciseAdjust = s.wordSelectPreciseAdjust
-        wordSelectCardMode = s.wordSelectCardMode
-        wordSelectExtractOnly = s.wordSelectExtractOnly
-        wordSelectRememberRegion = s.wordSelectRememberRegion
+        selectionDraft.load(s)
         floatingWindowAutoHideWhenObstructing = s.floatingWindowAutoHideWhenObstructing
         apiTimeoutSec = s.apiTimeoutSeconds.toFloat()
         mergeAdjacent = s.mergeAdjacentBlocks
@@ -1470,8 +1463,13 @@ fun SettingsScreen(
         asrHints = asrCredentialDraft?.applyTo(initialSettings ?: Settings())?.asrHints
             ?: initialSettings?.asrHints ?: com.gameocr.app.data.AsrHintSettings(),
         localModelId = localModelId.takeIf { translatorEngine == TranslatorEngine.LOCAL_QWEN3 },
-        captureRegionHideOnCapture = captureRegionHideOnCapture,
-        wordSelectExtractOnly = wordSelectExtractOnly,
+        captureRegionBorderEnabled = selectionDraft.captureRegionBorderEnabled,
+        captureRegionHideOnCapture = selectionDraft.captureRegionHideOnCapture,
+        captureRegionAdjustmentEnabled = selectionDraft.captureRegionAdjustmentEnabled,
+        wordSelectPreciseAdjust = selectionDraft.wordSelectPreciseAdjust,
+        wordSelectCardMode = selectionDraft.wordSelectCardMode,
+        wordSelectExtractOnly = selectionDraft.wordSelectExtractOnly,
+        wordSelectRememberRegion = selectionDraft.wordSelectRememberRegion,
         baseUrl = baseUrl,
         apiKey = apiKey,
         model = model,
@@ -1589,6 +1587,7 @@ fun SettingsScreen(
         floatingButtonSizeDp = floatingSize.toInt(),
         floatingButtonAlpha = floatingAlpha,
         floatingButtonSnapToEdge = floatingSnapEdge,
+        floatingButtonAccessibilityOverlay = floatingCompatibilityEnabled,
         floatingButtonAutoDock = floatingAutoDock,
         floatingButtonDockInsetDp = floatingDockInset.toInt(),
         overlayAllowWrap = allowWrap,
@@ -1739,6 +1738,13 @@ fun SettingsScreen(
         viewModel.save(
             asrCredentialDraft = asrCredentialDraft,
             autoOcr = autoOcr,
+            captureRegionBorderEnabled = selectionDraft.captureRegionBorderEnabled,
+            captureRegionHideOnCapture = selectionDraft.captureRegionHideOnCapture,
+            captureRegionAdjustmentEnabled = selectionDraft.captureRegionAdjustmentEnabled,
+            wordSelectPreciseAdjust = selectionDraft.wordSelectPreciseAdjust,
+            wordSelectCardMode = selectionDraft.wordSelectCardMode,
+            wordSelectExtractOnly = selectionDraft.wordSelectExtractOnly,
+            wordSelectRememberRegion = selectionDraft.wordSelectRememberRegion,
             baseUrl = baseUrl, apiKey = apiKey, model = model,
             anthropicBaseUrl = anthropicBaseUrl,
             anthropicApiKey = anthropicApiKey,
@@ -1822,6 +1828,7 @@ fun SettingsScreen(
             floatingButtonSizeDp = floatingSize.toInt(),
             floatingButtonAlpha = floatingAlpha,
             floatingButtonSnapToEdge = floatingSnapEdge,
+            floatingButtonAccessibilityOverlay = floatingCompatibilityEnabled,
             floatingButtonAutoDock = floatingAutoDock,
             floatingButtonDockInsetDp = floatingDockInset.toInt(),
             allowWrap = allowWrap,
@@ -2993,12 +3000,10 @@ fun SettingsScreen(
             customFg = s.customFgColor
             customBorder = s.customBorderColor
             customBorderW = s.customBorderWidth.toFloat()
-            captureRegionBorderEnabled = s.captureRegionBorderEnabled
-            captureRegionHideOnCapture = s.captureRegionHideOnCapture
+            selectionDraft.load(s)
             captureRegionBorderColor = s.captureRegionBorderColor
             captureRegionBorderWidth = s.captureRegionBorderWidthDp.toFloat()
             captureRegionBorderStyle = s.captureRegionBorderStyle
-            captureRegionAdjustmentEnabled = s.captureRegionAdjustmentEnabled
             offsetX = s.overlayOffsetX.toFloat()
             offsetY = s.overlayOffsetY.toFloat()
         ocrEngine = s.ocrEngine
@@ -3031,6 +3036,7 @@ fun SettingsScreen(
             floatingSize = s.floatingButtonSizeDp.toFloat()
             floatingAlpha = normalizedFloatingButtonAlpha(s.floatingButtonAlpha)
             floatingSnapEdge = s.floatingButtonSnapToEdge
+            floatingCompatibilityEnabled = s.floatingButtonAccessibilityOverlay
             floatingAutoDock = s.floatingButtonAutoDock
             floatingDockInset = s.floatingButtonDockInsetDp.toFloat()
             menuOrder = s.floatingMenuItemOrder
@@ -3038,10 +3044,6 @@ fun SettingsScreen(
             currentSkill = s.floatingButtonSkill
             gestureUi.load(s)
             inputTranslationDoubleAction = s.inputTranslationDoubleAction
-            wordSelectPreciseAdjust = s.wordSelectPreciseAdjust
-            wordSelectCardMode = s.wordSelectCardMode
-            wordSelectExtractOnly = s.wordSelectExtractOnly
-            wordSelectRememberRegion = s.wordSelectRememberRegion
             floatingWindowAutoHideWhenObstructing = s.floatingWindowAutoHideWhenObstructing
             dictionaryPrompt = s.dictionaryPrompt
             translationPresets = s.translationPresets
@@ -5986,50 +5988,25 @@ fun SettingsScreen(
             SectionCard(title = stringResource(R.string.settings_section_word_select)) {
                 SwitchRow(
                     stringResource(R.string.settings_word_select_extract_only),
-                    wordSelectExtractOnly,
+                    selectionDraft.wordSelectExtractOnly,
                     helpText = stringResource(R.string.settings_word_select_extract_only_help),
-                ) { enabled ->
-                    wordSelectExtractOnly = enabled
-                    scope.launch {
-                        try {
-                            viewModel.saveWordSelectExtractOnly(enabled)
-                            initialSettings = initialSettings?.copy(wordSelectExtractOnly = enabled)
-                        } catch (cancelled: CancellationException) {
-                            throw cancelled
-                        } catch (error: Exception) {
-                            Timber.e(error, "Failed to auto-save word-select extraction mode")
-                            if (wordSelectExtractOnly == enabled) {
-                                wordSelectExtractOnly = initialSettings?.wordSelectExtractOnly ?: false
-                            }
-                            snackbarHostState.showSnackbar(settingsWriteErrorMessage(context, error))
-                        }
-                    }
-                }
+                ) { selectionDraft.wordSelectExtractOnly = it }
                 SwitchRow(
                     stringResource(R.string.settings_word_select_precise_adjust),
-                    wordSelectPreciseAdjust,
+                    selectionDraft.wordSelectPreciseAdjust,
                     helpText = stringResource(R.string.settings_word_select_precise_adjust_help)
-                ) {
-                    wordSelectPreciseAdjust = it
-                    launchSettingsWrite { viewModel.saveWordSelectPreciseAdjust(it) }
-                }
+                ) { selectionDraft.wordSelectPreciseAdjust = it }
                 SwitchRow(
                     stringResource(R.string.settings_word_select_card_mode),
-                    wordSelectCardMode || wordSelectExtractOnly,
-                    enabled = !wordSelectExtractOnly,
+                    selectionDraft.wordSelectCardMode || selectionDraft.wordSelectExtractOnly,
+                    enabled = !selectionDraft.wordSelectExtractOnly,
                     helpText = stringResource(R.string.settings_word_select_card_mode_help)
-                ) {
-                    wordSelectCardMode = it
-                    launchSettingsWrite { viewModel.saveWordSelectCardMode(it) }
-                }
+                ) { selectionDraft.wordSelectCardMode = it }
                 SwitchRow(
                     stringResource(R.string.settings_word_select_remember_region),
-                    wordSelectRememberRegion,
+                    selectionDraft.wordSelectRememberRegion,
                     helpText = stringResource(R.string.settings_word_select_remember_region_help)
-                ) {
-                    wordSelectRememberRegion = it
-                    launchSettingsWrite { viewModel.saveWordSelectRememberRegion(it) }
-                }
+                ) { selectionDraft.wordSelectRememberRegion = it }
                 SwitchRow(
                     stringResource(R.string.settings_floating_window_auto_hide),
                     floatingWindowAutoHideWhenObstructing,
@@ -6047,26 +6024,17 @@ fun SettingsScreen(
             SectionCard(title = stringResource(R.string.settings_section_capture_region)) {
                 SwitchRow(
                     stringResource(R.string.settings_capture_region_border_enabled),
-                    captureRegionBorderEnabled,
-                ) { enabled ->
-                    captureRegionBorderEnabled = enabled
-                    launchSettingsWrite { viewModel.saveCaptureRegionBorderEnabled(enabled) }
-                }
+                    selectionDraft.captureRegionBorderEnabled,
+                ) { selectionDraft.captureRegionBorderEnabled = it }
                 SwitchRow(
                     stringResource(R.string.settings_capture_region_hide_on_capture),
-                    captureRegionHideOnCapture,
-                ) { enabled ->
-                    captureRegionHideOnCapture = enabled
-                    launchSettingsWrite { viewModel.saveCaptureRegionHideOnCapture(enabled) }
-                }
+                    selectionDraft.captureRegionHideOnCapture,
+                ) { selectionDraft.captureRegionHideOnCapture = it }
                 SwitchRow(
                     stringResource(R.string.settings_capture_region_move_enabled),
-                    captureRegionAdjustmentEnabled,
+                    selectionDraft.captureRegionAdjustmentEnabled,
                     helpText = stringResource(R.string.settings_capture_region_move_help),
-                ) { enabled ->
-                    captureRegionAdjustmentEnabled = enabled
-                    launchSettingsWrite { viewModel.saveCaptureRegionAdjustmentEnabled(enabled) }
-                }
+                ) { selectionDraft.captureRegionAdjustmentEnabled = it }
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -6470,6 +6438,16 @@ fun SettingsScreen(
                         },
                         dockSummary = stringResource(if (floatingSnapEdge) R.string.main_status_enabled else R.string.common_close),
                         quickPanelEnabled = quickPanelEnabled,
+                        compatibility = {
+                            SettingsSearchTarget(searchTargetRegistry, R.string.settings_floating_button_compatibility) {
+                                SwitchRow(
+                                    label = stringResource(R.string.settings_floating_button_compatibility),
+                                    checked = floatingCompatibilityEnabled,
+                                    enabled = initialSettings != null,
+                                    helpText = stringResource(R.string.settings_floating_button_compatibility_hint),
+                                ) { floatingCompatibilityEnabled = it }
+                            }
+                        },
                         onOpen = { page ->
                             if (canOpenFloatingSettingsPage(page, quickPanelEnabled)) floatingSettingsPage = page
                         },
@@ -9225,6 +9203,7 @@ private val SEARCH_TARGET_FLOATING = intArrayOf(
     R.string.settings_search_item_floating_snap,
     R.string.settings_search_item_floating_auto_dock,
     R.string.settings_search_item_floating_dock_inset,
+    R.string.settings_floating_button_compatibility,
     R.string.settings_search_item_input_translation,
 )
 private val SEARCH_TARGET_ARC_MENU = intArrayOf(
@@ -9721,6 +9700,7 @@ private val SETTING_ITEMS: List<SearchEntry> = listOfNotNull(
     SearchEntry(SectionKeys.FLOATING, R.string.settings_section_floating, R.string.settings_search_item_floating_snap, listOf("snap", "贴边", "edge")),
     SearchEntry(SectionKeys.FLOATING, R.string.settings_section_floating, R.string.settings_search_item_floating_auto_dock, listOf("auto dock", "自动停靠", "停靠", "藏边")),
     SearchEntry(SectionKeys.FLOATING, R.string.settings_section_floating, R.string.settings_search_item_floating_dock_inset, listOf("inset", "贴边距离", "手势", "全面屏", "gesture")),
+    SearchEntry(SectionKeys.FLOATING, R.string.settings_section_floating, R.string.settings_floating_button_compatibility, listOf("点不动", "无法拖动", "悬浮按钮兼容模式", "无障碍", "overlay", "compatibility")),
     SearchEntry(SectionKeys.INPUT_TRANSLATION, R.string.settings_section_input_translation, R.string.settings_search_item_input_translation, listOf("input translation", "输入翻译", "输入框", "双击", "full screen", "word select", "全屏翻译", "划词翻译")),
 
     // —— 弧菜单按钮顺序 ——
@@ -12401,6 +12381,26 @@ private fun ArcMenuOrderEditor(
             }
             Box(modifier = Modifier.height(itemSpacing))
         }
+    }
+}
+
+private class SelectionSettingsDraft {
+    var captureRegionBorderEnabled by mutableStateOf(true)
+    var captureRegionHideOnCapture by mutableStateOf(true)
+    var captureRegionAdjustmentEnabled by mutableStateOf(false)
+    var wordSelectPreciseAdjust by mutableStateOf(true)
+    var wordSelectCardMode by mutableStateOf(true)
+    var wordSelectExtractOnly by mutableStateOf(false)
+    var wordSelectRememberRegion by mutableStateOf(false)
+
+    fun load(settings: Settings) {
+        captureRegionBorderEnabled = settings.captureRegionBorderEnabled
+        captureRegionHideOnCapture = settings.captureRegionHideOnCapture
+        captureRegionAdjustmentEnabled = settings.captureRegionAdjustmentEnabled
+        wordSelectPreciseAdjust = settings.wordSelectPreciseAdjust
+        wordSelectCardMode = settings.wordSelectCardMode
+        wordSelectExtractOnly = settings.wordSelectExtractOnly
+        wordSelectRememberRegion = settings.wordSelectRememberRegion
     }
 }
 

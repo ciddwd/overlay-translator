@@ -174,6 +174,7 @@ class SettingsRepository internal constructor(
         val NiuTransMemoryLibraryId = stringPreferencesKey("niutrans_memory_library_id")
         val FloatingSize = intPreferencesKey("floating_button_size_dp")
         val FloatingAlpha = floatPreferencesKey("floating_button_alpha")
+        val FloatingAccessibilityOverlay = booleanPreferencesKey("floating_button_accessibility_overlay")
         val FloatingX = intPreferencesKey("floating_button_x")
         val FloatingY = intPreferencesKey("floating_button_y")
         val FloatingSnapEdge = booleanPreferencesKey("floating_button_snap_edge")
@@ -1007,6 +1008,7 @@ class SettingsRepository internal constructor(
             prefs[Keys.NiuTransMemoryLibraryId] = next.niuTransMemoryLibraryId
             prefs[Keys.FloatingSize] = next.floatingButtonSizeDp
             prefs[Keys.FloatingAlpha] = normalizedFloatingButtonAlpha(next.floatingButtonAlpha)
+            prefs[Keys.FloatingAccessibilityOverlay] = next.floatingButtonAccessibilityOverlay
             prefs[Keys.FloatingX] = next.floatingButtonX
             prefs[Keys.FloatingY] = next.floatingButtonY
             prefs[Keys.FloatingSnapEdge] = next.floatingButtonSnapToEdge
@@ -1405,6 +1407,7 @@ class SettingsRepository internal constructor(
                 ?: default.niuTransMemoryLibraryId,
             floatingButtonSizeDp = this[Keys.FloatingSize] ?: default.floatingButtonSizeDp,
             floatingButtonAlpha = normalizedFloatingButtonAlpha(this[Keys.FloatingAlpha] ?: default.floatingButtonAlpha),
+            floatingButtonAccessibilityOverlay = this[Keys.FloatingAccessibilityOverlay] ?: default.floatingButtonAccessibilityOverlay,
             floatingButtonX = this[Keys.FloatingX] ?: default.floatingButtonX,
             floatingButtonY = this[Keys.FloatingY] ?: default.floatingButtonY,
             floatingButtonSnapToEdge = this[Keys.FloatingSnapEdge] ?: default.floatingButtonSnapToEdge,

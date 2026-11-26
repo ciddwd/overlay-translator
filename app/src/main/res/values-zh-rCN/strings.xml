@@ -1169,6 +1169,8 @@
     <string name="menu_open_main">返回主应用</string>
     <string name="loop_countdown_hint">自动翻译开启中…</string>
     <string name="settings_floating_snap_edge_label">悬浮球吸附边缘</string>
+    <string name="settings_floating_button_compatibility">兼容模式</string>
+    <string name="settings_floating_button_compatibility_hint">悬浮按钮点击、长按或拖动无反应时，请开启此模式。需要在系统「无障碍」设置中开启「屏译」。</string>
     <string name="settings_floating_snap_edge_hint">松手后弹性贴边并 1/3 藏到屏外（待机半透明），按下时自动唤醒拉回。关闭后松手停在原位、不藏边。</string>
     <string name="settings_floating_auto_dock_label">3 秒无操作自动贴边</string>
     <string name="settings_floating_auto_dock_hint">长按菜单关闭后若 3 秒内未再次触摸悬浮球，自动吸到最近边。仅在「悬浮球吸附边缘」开启时生效。</string>

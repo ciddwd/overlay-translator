@@ -96,21 +96,17 @@ class WordSelectExtractionTest {
     }
 
     @Test
-    fun settingsWiring_tableDriven_autoSaveSearchAndReload() {
+    fun settingsWiring_tableDriven_explicitSaveSearchAndReload() {
         val screen = source("ui/SettingsScreen.kt")
         val repo = source("data/SettingsRepository.kt")
-        val viewModel = source("ui/SettingsViewModel.kt")
         val selector = source("overlay/WordSelectOverlay.kt")
         listOf(
             "writes preferences" to repo.contains("prefs[Keys.WordSelectExtractOnly] = next.wordSelectExtractOnly"),
             "reads preferences with default" to repo.contains("wordSelectExtractOnly = this[Keys.WordSelectExtractOnly] ?: default.wordSelectExtractOnly"),
-            "updates only this field" to viewModel.contains("repo.update { it.copy(wordSelectExtractOnly = enabled) }"),
-            "saves on switch" to screen.contains("viewModel.saveWordSelectExtractOnly(enabled)"),
-            "updates saved baseline" to screen.contains("initialSettings = initialSettings?.copy(wordSelectExtractOnly = enabled)"),
-            "snapshot includes immediate value" to screen.contains("wordSelectExtractOnly = wordSelectExtractOnly,"),
-            "load and import refresh" to screen.contains("wordSelectExtractOnly = s.wordSelectExtractOnly"),
-            "prior card choice not overwritten" to screen.contains("wordSelectCardMode || wordSelectExtractOnly"),
-            "irrelevant display form disabled" to screen.contains("enabled = !wordSelectExtractOnly"),
+            "snapshot includes draft" to screen.contains("wordSelectExtractOnly = selectionDraft.wordSelectExtractOnly,"),
+            "load and import refresh" to screen.contains("wordSelectExtractOnly = settings.wordSelectExtractOnly"),
+            "prior card choice not overwritten" to screen.contains("selectionDraft.wordSelectCardMode || selectionDraft.wordSelectExtractOnly"),
+            "irrelevant display form disabled" to screen.contains("enabled = !selectionDraft.wordSelectExtractOnly"),
             "search entry exists" to screen.contains("R.string.settings_word_select_extract_only, listOf("),
             "existing precise action renamed" to selector.contains("if (extractTextOnly) R.string.word_select_btn_extract else R.string.word_select_btn_translate"),
             "quick selection still skips adjustment" to selector.contains("skipAdjustment = skipAdjustment"),

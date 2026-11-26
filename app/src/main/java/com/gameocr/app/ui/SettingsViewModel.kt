@@ -415,6 +415,13 @@ class SettingsViewModel @Inject constructor(
         textSize: Int,
         overlayTextStyle: OverlayTextStyle,
         alpha: Float,
+        captureRegionBorderEnabled: Boolean,
+        captureRegionHideOnCapture: Boolean,
+        captureRegionAdjustmentEnabled: Boolean,
+        wordSelectPreciseAdjust: Boolean,
+        wordSelectCardMode: Boolean,
+        wordSelectExtractOnly: Boolean,
+        wordSelectRememberRegion: Boolean,
         loopMs: Long,
         loopTriggerMode: com.gameocr.app.data.LoopTriggerMode,
         loopTextStableDurationMs: Long,
@@ -498,6 +505,7 @@ class SettingsViewModel @Inject constructor(
         floatingButtonSizeDp: Int,
         floatingButtonAlpha: Float,
         floatingButtonSnapToEdge: Boolean,
+        floatingButtonAccessibilityOverlay: Boolean,
         floatingButtonAutoDock: Boolean,
         floatingButtonDockInsetDp: Int,
         allowWrap: Boolean,
@@ -547,6 +555,13 @@ class SettingsViewModel @Inject constructor(
                 overlayTextSizeSp = textSize.coerceIn(10, 28),
                 overlayTextStyle = overlayTextStyle.normalized(),
                 overlayAlpha = alpha.coerceIn(0.3f, 1f),
+                captureRegionBorderEnabled = captureRegionBorderEnabled,
+                captureRegionHideOnCapture = captureRegionHideOnCapture,
+                captureRegionAdjustmentEnabled = captureRegionAdjustmentEnabled,
+                wordSelectPreciseAdjust = wordSelectPreciseAdjust,
+                wordSelectCardMode = wordSelectCardMode,
+                wordSelectExtractOnly = wordSelectExtractOnly,
+                wordSelectRememberRegion = wordSelectRememberRegion,
                 captureLoopIntervalMs = loopMs.coerceAtLeast(200),
                 loopTriggerMode = loopTriggerMode,
                 loopTextStableDurationMs = loopTextStableDurationMs.coerceIn(100L, 2000L),
@@ -635,6 +650,7 @@ class SettingsViewModel @Inject constructor(
                 floatingButtonSizeDp = floatingButtonSizeDp.coerceIn(32, 96),
                 floatingButtonAlpha = normalizedFloatingButtonAlpha(floatingButtonAlpha),
                 floatingButtonSnapToEdge = floatingButtonSnapToEdge,
+                floatingButtonAccessibilityOverlay = floatingButtonAccessibilityOverlay,
                 floatingButtonAutoDock = floatingButtonAutoDock,
                 floatingButtonDockInsetDp = floatingButtonDockInsetDp.coerceIn(0, 40),
                 overlayAllowWrap = allowWrap,
@@ -702,14 +718,6 @@ class SettingsViewModel @Inject constructor(
         repo.update { it.copy(customBorderStyle = style) }
     }
 
-    suspend fun saveCaptureRegionBorderEnabled(enabled: Boolean) {
-        repo.update { it.copy(captureRegionBorderEnabled = enabled) }
-    }
-
-    suspend fun saveCaptureRegionHideOnCapture(enabled: Boolean) {
-        repo.update { it.copy(captureRegionHideOnCapture = enabled) }
-    }
-
     suspend fun saveCaptureRegionBorderColor(color: Int) {
         repo.update { it.copy(captureRegionBorderColor = color) }
     }
@@ -722,26 +730,6 @@ class SettingsViewModel @Inject constructor(
 
     suspend fun saveCaptureRegionBorderStyle(style: CaptureRegionBorderStyle) {
         repo.update { it.copy(captureRegionBorderStyle = style) }
-    }
-
-    suspend fun saveCaptureRegionAdjustmentEnabled(enabled: Boolean) {
-        repo.update { it.copy(captureRegionAdjustmentEnabled = enabled) }
-    }
-
-    suspend fun saveWordSelectPreciseAdjust(enabled: Boolean) {
-        repo.update { it.copy(wordSelectPreciseAdjust = enabled) }
-    }
-
-    suspend fun saveWordSelectCardMode(enabled: Boolean) {
-        repo.update { it.copy(wordSelectCardMode = enabled) }
-    }
-
-    suspend fun saveWordSelectExtractOnly(enabled: Boolean) {
-        repo.update { it.copy(wordSelectExtractOnly = enabled) }
-    }
-
-    suspend fun saveWordSelectRememberRegion(enabled: Boolean) {
-        repo.update { it.copy(wordSelectRememberRegion = enabled) }
     }
 
     suspend fun saveFloatingWindowAutoHideWhenObstructing(enabled: Boolean) {

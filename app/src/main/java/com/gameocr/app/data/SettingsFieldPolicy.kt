@@ -261,6 +261,7 @@ object SettingsFieldPolicy {
         credential("baiduFanyiSecretKey", R.string.settings_search_item_baidu_fanyi),
         portable("floatingButtonSizeDp", R.string.settings_search_item_floating_size),
         portable("floatingButtonAlpha", R.string.settings_search_item_floating_alpha),
+        deviceLocal("floatingButtonAccessibilityOverlay", R.string.settings_floating_button_compatibility),
         deviceLocal("floatingButtonX"),
         deviceLocal("floatingButtonY"),
         portable("floatingButtonSnapToEdge", R.string.settings_search_item_floating_snap),
